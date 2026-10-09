@@ -4,6 +4,8 @@
 
 - Moved “Back to projects” into the app header while viewing a project.
 
+- Project details can now be edited, including the name, customer and status; the status badge sits beside the project title.
+
 - Project threads show a small accent dot for unread messages and clear it after you reach the latest message.
 
 - Added an animated crane below the latest chat response to show when project agents are working.

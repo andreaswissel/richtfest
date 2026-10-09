@@ -1,10 +1,20 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { list } from "../api";
-import { useApi, useWrite } from "../query";
+import { useMutation } from "@tanstack/react-query";
+import { api, list } from "../api";
+import { queryClient, useApi, useWrite } from "../query";
 import { useT } from "../i18n";
 import { Page, PageHeader } from "../components/layout";
-import { Badge, Callout } from "../components/ui/primitives";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { NativeSelect } from "../components/ui/native-select";
+import {
+  Badge,
+  Callout,
+  Field,
+  Form,
+  Modal,
+} from "../components/ui/primitives";
 import { ThreadRail } from "../components/project-workspace/thread-rail";
 import { LoadState, Sources, SharedWork, Knowledge } from "./foundation";
 import { Transcript } from "../components/project-workspace/transcript";
@@ -84,9 +94,11 @@ export function ProjectWorkspace() {
   const { id } = useParams(),
     t = useT(),
     [params, setParams] = useSearchParams();
-  const project = useApi(`/projects/${id}`),
-    workspace = useApi(`/knowledge/workspaces/${id}`);
   const view = params.get("view") || "workspace";
+  const [editingDetails, setEditingDetails] = useState(false);
+  const project = useApi(`/projects/${id}`),
+    workspace = useApi(`/knowledge/workspaces/${id}`),
+    customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
   const selected =
     conversations.find((c) => c.id === params.get("conversation")) ||
@@ -114,17 +126,36 @@ export function ProjectWorkspace() {
     next.delete("agentRun");
     setParams(next);
   });
+  const updateProject = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      api(`/projects/${id}`, body, "PATCH"),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: [`/projects/${id}`] });
+      await queryClient.invalidateQueries({ queryKey: ["/projects"] });
+      setEditingDetails(false);
+    },
+  });
   const [width, setWidth] = useState(38);
-  const title = (project.data?.project || project.data)?.name || t("project");
+  const details = project.data?.project || project.data || {};
+  const title = details.name || t("project");
   return (
     <Page>
       <PageHeader
         title={title}
+        titleAside={<Badge>{details.status || t("active")}</Badge>}
         eyebrow={project.data?.customerName}
         actions={
-          <Badge>
-            {(project.data?.project || project.data)?.status || t("active")}
-          </Badge>
+          view === "details" && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                updateProject.reset();
+                setEditingDetails(true);
+              }}
+            >
+              {t("editProject")}
+            </Button>
+          )
         }
       />
       <nav className="workspace-view-links" aria-label={t("projectDetails")}>
@@ -239,10 +270,75 @@ export function ProjectWorkspace() {
           <dt>{t("name")}</dt>
           <dd>{title}</dd>
           <dt>{t("customer")}</dt>
-          <dd>{project.data?.customerName || "—"}</dd>
+          <dd>{project.data?.customerName || t("noCustomer")}</dd>
           <dt>{t("status")}</dt>
-          <dd>{(project.data?.project || project.data)?.status}</dd>
+          <dd>{details.status || t("active")}</dd>
         </dl>
+      )}
+      {editingDetails && (
+        <Modal
+          title={t("editProject")}
+          onClose={() => setEditingDetails(false)}
+        >
+          <Form
+            label={t("save")}
+            pending={updateProject.isPending}
+            error={updateProject.error}
+            onSubmit={(form) => {
+              const values = Object.fromEntries(form.entries());
+              const body: Record<string, unknown> = {
+                name: values.name,
+                status: values.status,
+              };
+              if (typeof values.customerId === "string")
+                body.customerId = values.customerId || null;
+              updateProject.mutate(body);
+            }}
+          >
+            <Field label={t("name")}>
+              <Input
+                autoFocus
+                required
+                maxLength={200}
+                name="name"
+                defaultValue={details.name || ""}
+              />
+            </Field>
+            <Field label={t("customer")}>
+              <NativeSelect
+                name="customerId"
+                defaultValue={details.customerId || ""}
+                disabled={customers.isPending || customers.isError}
+              >
+                <option value="">{t("noCustomer")}</option>
+                {details.customerId &&
+                  !list(customers.data, "customers").some(
+                    (customer) => customer.id === details.customerId,
+                  ) && (
+                    <option value={details.customerId}>
+                      {project.data?.customerName || details.customerId}
+                    </option>
+                  )}
+                {list(customers.data, "customers").map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+            {customers.isError && (
+              <Callout tone="error">{customers.error.message}</Callout>
+            )}
+            <Field label={t("status")}>
+              <Input
+                required
+                maxLength={40}
+                name="status"
+                defaultValue={details.status || "planning"}
+              />
+            </Field>
+          </Form>
+        </Modal>
       )}
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />

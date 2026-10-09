@@ -13,6 +13,13 @@ const projectInput = z.object({
   customerId: z.string().uuid().optional(),
   status: z.string().max(40).optional(),
 });
+const projectUpdateInput = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    customerId: z.string().uuid().nullable().optional(),
+    status: z.string().trim().min(1).max(40).optional(),
+  })
+  .strict();
 const initiateInput = z.object({
   name: z.string().trim().min(1).max(300),
   mimeType: z.string().trim().min(1).max(200),
@@ -109,6 +116,54 @@ export function createRouter(getDeps: GetDeps) {
         return created;
       });
       return send(res, 201, ok(row, "Project created"));
+    } catch (e) {
+      return next(e);
+    }
+  });
+  router.patch("/projects/:projectId", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      const input = projectUpdateInput.parse(req.body);
+      if (!Object.keys(input).length)
+        return send(res, 400, {
+          data: null,
+          error: { code: "invalid_input" },
+          message: "Provide project details to update",
+        });
+      if (
+        input.customerId &&
+        !(await d.validateCustomer(input.customerId))
+      )
+        throw Object.assign(new Error("Customer not found"), {
+          status: 404,
+          code: "not_found",
+        });
+      const row = await d.db.transaction(async (tx: any) => {
+        const [updated] = await tx
+          .update(projects)
+          .set(input)
+          .where(
+            and(
+              eq(projects.id, projectId),
+              eq(projects.tenantId, d.tenantId),
+            ),
+          )
+          .returning();
+        if (updated)
+          await d.audit(tx, "projects.project.updated", "project", projectId, {
+            fields: Object.keys(input),
+          });
+        return updated;
+      });
+      if (!row)
+        return send(res, 404, {
+          data: null,
+          error: { code: "not_found" },
+          message: "Project not found",
+        });
+      return send(res, 200, ok(row, "Project updated"));
     } catch (e) {
       return next(e);
     }

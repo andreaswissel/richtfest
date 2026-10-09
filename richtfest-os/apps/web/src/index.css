@@ -231,6 +231,8 @@ nav a:hover .nav-arrow, nav a.active .nav-arrow { opacity: .65; }
 .topbar i { width: 6px; height: 6px; border-radius: 50%; background: oklch(.7 .16 145); }
 .page { display: flex; max-width: 1500px; min-height: calc(100vh - 52px); flex-direction: column; gap: var(--section); margin: auto; }
 .page-header { display: flex; min-height: 60px; align-items: center; justify-content: space-between; gap: 24px; }
+.page-header-title { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.page-header-title h1 { min-width: 0; }
 .page-header p { margin-top: 7px; color: var(--muted-foreground); font-size: var(--ui-sm); }
 .eyebrow { margin-bottom: 9px; color: var(--muted-foreground); letter-spacing: .08em; text-transform: uppercase; }
 .header-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }

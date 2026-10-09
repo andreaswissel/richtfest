@@ -5,11 +5,13 @@ export function Page({ children }: { children: ReactNode }) {
 export function PageHeader({
   eyebrow,
   title,
+  titleAside,
   description,
   actions,
 }: {
   eyebrow?: string;
   title: string;
+  titleAside?: ReactNode;
   description?: string;
   actions?: ReactNode;
 }) {
@@ -17,7 +19,10 @@ export function PageHeader({
     <header className="page-header">
       <div>
         {eyebrow && <div className="eyebrow">{eyebrow}</div>}
-        <h1>{title}</h1>
+        <div className="page-header-title">
+          <h1>{title}</h1>
+          {titleAside}
+        </div>
         {description && <p className="muted">{description}</p>}
       </div>
       {actions && <div className="header-actions">{actions}</div>}
