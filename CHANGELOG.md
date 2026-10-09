@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2026-10-10
+
 - Added a Docs changelog page with the current release history in the Docs sidebar.
 
 - Moved “Back to projects” into the app header while viewing a project.
@@ -69,5 +73,5 @@
 - Added the persisted project-onboarding workflow: customers, projects, direct file attachment and download, shared conversations and tasks, source-linked knowledge review, and tenant-scoped activity history.
 - Added invite-only accounts with magic-link entry, password and passkey enrollment, secure sessions, role management, offboarding, and a development-only email outbox when Resend is not configured.
 - Added encrypted personal and workspace AI connection settings with an explicit provider choice and an honest unavailable-execution state.
-- Added Fumadocs documentation behind sign-in and Railway-ready packaging for Postgres, private Bucket direct uploads, and local backup/recovery checks. No deployment was performed.
+- Added Fumadocs documentation behind sign-in and Railway-ready packaging for Postgres, private Bucket direct uploads, and local backup/recovery checks.
 - Extracted the 24-file local reference project into a reproducible page-level evidence set, retaining duplicate, bundle, and unsupported-format findings without uploading source material.
