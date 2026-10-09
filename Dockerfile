@@ -16,7 +16,10 @@ COPY richtfest-apps/projects/package.json ./richtfest-apps/projects/package.json
 
 # Fumadocs uses platform-optional native parsing bindings. Install the Linux
 # variants for both Railway's x64 builders and local ARM64 Docker builders.
-RUN bun install --frozen-lockfile --linker=hoisted --os=linux --cpu='*'
+# Use the isolated linker, as in local development: workspaces depend on
+# different zod majors, and hoisting resolves peer dependencies (e.g. the web
+# app's OpenUI library) against the wrong one.
+RUN bun install --frozen-lockfile --linker=isolated --os=linux --cpu='*'
 
 FROM dependencies AS build
 
@@ -33,7 +36,7 @@ COPY . .
 # is the build gate; the web and docs packages emit the two served bundles.
 RUN bun run typecheck
 RUN bun run --filter @richtfest/web build
-RUN cd richtfest-os/apps/docs && /app/node_modules/.bin/next build --webpack
+RUN cd richtfest-os/apps/docs && node_modules/.bin/next build --webpack
 
 FROM oven/bun:1.3.8 AS runtime
 
@@ -43,6 +46,7 @@ ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/richtfest-shared/package.json ./richtfest-shared/package.json
+COPY --from=build /app/richtfest-shared/node_modules ./richtfest-shared/node_modules
 COPY --from=build /app/richtfest-shared/src ./richtfest-shared/src
 COPY --from=build /app/richtfest-apps ./richtfest-apps
 COPY --from=build /app/richtfest-os/apps/api ./richtfest-os/apps/api
