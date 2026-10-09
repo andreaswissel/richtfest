@@ -1,0 +1,55 @@
+.shared-work-view {
+  display: grid;
+  gap: var(--section);
+}
+.shared-work-view .section {
+  margin: 0;
+  min-width: 0;
+}
+.shared-work-view .section-heading {
+  margin-bottom: var(--stack);
+}
+.shared-conversation-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-block: 1px solid var(--border);
+}
+.shared-conversation-row {
+  display: flex;
+  align-items: center;
+  gap: var(--stack);
+  padding-block: var(--cell);
+}
+.shared-conversation-row + .shared-conversation-row {
+  border-top: 1px solid var(--border);
+}
+.shared-conversation-link {
+  display: flex;
+  align-items: center;
+  gap: var(--stack);
+  flex: 1;
+  min-width: 0;
+  color: var(--foreground);
+  border-radius: var(--radius);
+  font-size: var(--ui);
+  font-weight: 500;
+  text-decoration: none;
+}
+.shared-conversation-link svg {
+  flex-shrink: 0;
+}
+.shared-conversation-title {
+  overflow-wrap: anywhere;
+}
+.shared-conversation-link:hover .shared-conversation-title {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.shared-conversation-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.shared-conversation-row > button {
+  flex-shrink: 0;
+}

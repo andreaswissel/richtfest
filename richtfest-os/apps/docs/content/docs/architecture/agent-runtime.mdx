@@ -1,0 +1,61 @@
+---
+title: Mastra supervisor and agent runtime
+description: The gated V1 supervisor workflow for project conversations and bounded specialist work.
+---
+
+<img
+  src="/docs/architecture/mastra-supervisor.svg"
+  alt="Gated V1 architecture diagram: project chat passes through OS authentication to a Mastra supervisor, which routes source and requirements review assignments; calculation work is marked future and unavailable."
+  width="1200"
+  height="700"
+/>
+
+## Gated V1
+
+Project chat is the entry point for agentic work. The Richtfest OS host authenticates the actor, applies workspace and role access, and passes the approved context to a Mastra supervisor. The supervisor uses its configured model to interpret the request, create bounded assignments and review returned results. A human can steer, approve or cancel the run at the review boundary.
+
+The enabled V1 delegates only to the `source_reviewer` and `requirements_reviewer` specialist roles. Their assignments are bounded by the source versions supplied to the run and return structured summaries, rationale and citations. Calculation specialists and deterministic calculation tools are future work; no engineering calculation is performed by this workflow.
+
+## Delegation shape
+
+The supervisor owns coordination and revision. It delegates focused source extraction and requirements structuring, then reviews the returned evidence. The calculation branch shown in the diagram is a future domain capability and is unavailable in V1. Any eventual deterministic calculation tool remains versioned and requires explicit review before consequential use.
+
+Mastra workflow checkpoints and workflow run IDs use the Mastra Postgres store. Richtfest domain Postgres records hold conversations, assignments, tasks, evidence links, approvals, events and the policy snapshot. Lease state, replica coordination through Postgres advisory locks, row locks and generation fences make cancellation, restart and resume durable; restart and generation-fencing behavior is covered by the runtime tests. Project source files and revisions remain in private Railway Buckets, while Postgres stores their metadata and references.
+
+## Review and control
+
+The supervisor may propose a plan and ask specialists to work, but it does not silently approve consequential outcomes. Project participants can steer an active run, revise its direction or cancel it. Results should remain attributable to the assignment and source evidence that produced them. Unconfigured providers, tools or external actions stay explicit in the UI.
+
+Each completed supervisor review saves a draft artifact and immutable revision alongside the assistant response. The conversation displays a registered OpenUI artifact preview that opens that exact revision. Reviewing the supervisor run and approving the artifact are separate actions; completion does not publish reviewed knowledge. A follow-up result creates a new draft, while retrying the same completed generation reuses its saved result.
+
+The project workspace keeps the main conversation focused on the request and result. Its Subagents panel lists each specialist by a readable name and status; prior cancelled work is collapsed. Open a row to inspect that specialist's dedicated, read-only thread with its assignment, result and source links. These threads use the durable run and activity records, not a second editable conversation. Return to the main conversation to steer the coordinator. The coordinator's latest result exposes the explicit review action, while specialist threads cannot independently approve, retry or cancel managed work. Shared work provides a compact list of conversations and agent assignments. Conversation links open the main workspace, and each conversation retains an Add task action. Agent results and lifecycle controls are available on demand; specialist rows link to their read-only threads. Provider configuration stays in Settings; the work list only calls out unavailable execution when action is needed.
+
+## Supervisor presets
+
+Workspace administrators can configure a provider's `Low`, `Medium`, `High` and `Ultra` presets. Each preset names the supervisor model and bounded reasoning effort, then sets independent model and effort values for the source and requirements specialists. Limits for parallel specialists, total assignments and supervisor revisions are stored with the preset. The selected preset is resolved when a run starts and its policy is snapshotted with the durable run record, so later configuration changes do not rewrite history.
+
+The workspace provider setting selects the active provider for direct and supervisor execution. Empty model IDs leave Anthropic and Vercel presets unconfigured; OpenAI retains its `gpt-4.1-mini` direct default when no model environment value is supplied. The UI does not invent or silently switch providers. Vercel presets use `provider/model` Gateway IDs at `https://ai-gateway.vercel.sh/v1` and do not fall back to OpenAI or Anthropic on a gateway failure. Vendor defaults can be restored by an administrator through Settings.
+
+## Runtime setup
+
+The supervisor worker is disabled by default. Apply the standard application migrations first, then initialize the Mastra workflow store, and only then enable the worker:
+
+```sh
+bun run --filter '@richtfest/api' db:migrate
+bun run --filter '@richtfest/api' db:migrate-agent-runtime
+AGENT_SUPERVISOR_ENABLED=true bun run --filter '@richtfest/api' dev
+```
+
+The enablement flag only turns on the worker. A workspace administrator must configure a valid model ID and bounded preset values for the selected provider and effort in Settings before starting a run. Vendor model environment variables may provide defaults, but Richtfest does not automatically choose a frontier model, infer a paid model or treat a provider API key as a complete preset. Anthropic presets omit reasoning effort because that adapter does not accept the field.
+
+The runtime policy snapshot answers which supervisor and specialist models, limits and preset version governed a run. Domain records answer what the specialists found, which source revisions support it and whether a person approved it. These are separate records: a valid runtime snapshot does not make a calculation tool available, approve a result or certify engineering or regulatory compliance.
+
+The runtime verification uses synthetic Mastra/provider fixtures and Postgres restart and fencing tests. It does not claim a live provider execution or a completed calculation workflow.
+
+## Text equivalent of the diagram
+
+1. Project chat sends a prompt and project context to OS authentication and access checks.
+2. The Mastra supervisor receives the authorized context and routes durable assignments to `source_reviewer` and `requirements_reviewer`.
+3. Those two specialists perform bounded work and return structured results with evidence.
+4. The supervisor reviews and revises the result set, while a human may steer, approve or cancel. Calculation work is unavailable in V1 and remains a future capability.
+5. Mastra Postgres stores workflow checkpoints and run IDs; Richtfest Postgres stores conversations, tasks, evidence, events, approvals and policy snapshots. Private Railway Buckets store source files and revisions.

@@ -1,0 +1,211 @@
+import { describe, expect, test } from "bun:test";
+import { callProvider, reasoningEffortForModel, redactProviderText, supportsReasoningModel } from "./provider-runtime";
+import {
+  validateTool,
+  outputInput,
+} from "../../../../richtfest-apps/knowledge/src/runs";
+const output = {
+  summary: "Review the IFC excerpt",
+  rationale: "Source content requires human review",
+  citations: [],
+  tools: [],
+  artifact: {
+    title: "Review",
+    content: "Proposed IFC review",
+    type: "draft" as const,
+  },
+};
+describe("trusted provider adapter", () => {
+  for (const provider of ["openai", "anthropic"] as const)
+    test(`${provider} sends explicit provider request and reads only public text`, async () => {
+      let observed: any;
+      const result = await callProvider(
+        {
+          provider,
+          modelId: provider === "openai" ? "o3-mini" : "custom-anthropic-model",
+          maxOutputTokens: 777,
+          reasoningEffort: provider === "openai" ? "high" : undefined,
+          goal: "Review source",
+          context: { text: "ISO-IFC-SOURCE" },
+        },
+        "sk-private-secret",
+        async (url, init) => {
+          observed = { url, init };
+          return Response.json(
+            provider === "openai"
+              ? {
+                  output: [
+                    { type: "reasoning", summary: [{ text: "hidden" }] },
+                    {
+                      type: "message",
+                      content: [
+                        { type: "output_text", text: JSON.stringify(output) },
+                      ],
+                    },
+                  ],
+                }
+              : {
+                  content: [
+                    { type: "thinking", thinking: "hidden" },
+                    { type: "text", text: JSON.stringify(output) },
+                  ],
+                },
+          );
+        },
+      );
+      expect(outputInput.parse(result)).toEqual(output);
+      expect(observed.url).toContain(
+        provider === "openai" ? "api.openai.com" : "api.anthropic.com",
+      );
+      expect(observed.init.body).toContain("ISO-IFC-SOURCE");
+      const body = JSON.parse(observed.init.body);
+      expect(body.model).toBe(provider === "openai" ? "o3-mini" : "custom-anthropic-model");
+      expect(provider === "openai" ? body.max_output_tokens : body.max_tokens).toBe(777);
+      if (provider === "openai") expect(body.reasoning).toEqual({ effort: "high" });
+      else expect(body.reasoning).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    });
+  test("vercel uses the AI Gateway model and never falls back", async () => {
+    let observed: any;
+    const result = await callProvider(
+      { provider: "vercel", modelId: "openai/o3", reasoningEffort: "high", goal: "Review source", context: {} },
+      "gateway-secret",
+      async (url, init) => {
+        observed = { url, init };
+        return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] });
+      },
+    );
+    expect(outputInput.parse(result)).toEqual(output);
+    expect(observed.url).toBe("https://ai-gateway.vercel.sh/v1/responses");
+    expect(observed.init.headers.authorization).toBe("Bearer gateway-secret");
+    expect(observed.init.body).toContain('"model":"openai/o3"');
+    expect(observed.init.body).toContain('"reasoning":{"effort":"high"}');
+    await expect(callProvider(
+      { provider: "vercel", modelId: "anthropic/claude-sonnet-4", goal: "x", context: {} },
+      "gateway-secret",
+      async () => new Response("secret body", { status: 402 }),
+    )).rejects.toThrow("HTTP 402");
+  });
+  test("upstream error bodies never propagate", async () => {
+    await expect(
+      callProvider(
+        { provider: "openai", goal: "x", context: {} },
+        "sk-private-secret",
+        async () => new Response("sk-private-secret", { status: 401 }),
+      ),
+    ).rejects.toThrow("HTTP 401");
+  });
+  test("suppresses reasoning for ordinary models", async () => {
+    expect(supportsReasoningModel("openai", "gpt-4.1-mini")).toBe(false);
+    expect(supportsReasoningModel("vercel", "openai/gpt-4.1-mini")).toBe(false);
+    expect(supportsReasoningModel("vercel", "openai/o3")).toBe(true);
+    expect(supportsReasoningModel("openai", "gpt-5.1")).toBe(true);
+    expect(supportsReasoningModel("vercel", "openai/gpt-6.0")).toBe(true);
+    expect(supportsReasoningModel("openai", "gpt-5-chat-latest")).toBe(false);
+    expect(reasoningEffortForModel("openai", "o3", "xhigh")).toBeUndefined();
+    expect(reasoningEffortForModel("openai", "gpt-5", "xhigh")).toBeUndefined();
+    expect(reasoningEffortForModel("openai", "gpt-5-mini", "xhigh")).toBeUndefined();
+    expect(reasoningEffortForModel("openai", "gpt-5.1", "xhigh")).toBe("xhigh");
+    let observed: any;
+    await callProvider({ provider: "openai", modelId: "gpt-4.1-mini", reasoningEffort: "high", goal: "x", context: {} }, "secret", async (_url, init) => {
+      observed = JSON.parse(String(init.body));
+      return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] });
+    });
+    expect(observed.reasoning).toBeUndefined();
+  });
+  test("provider echo secrets are redacted before parsing", async () => {
+    const result = await callProvider(
+      { provider: "openai", goal: "x", context: {} },
+      "custom-secret-value",
+      async () =>
+        Response.json({
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: JSON.stringify({
+                    ...output,
+                    summary: "custom-secret-value sk-another-secret",
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+    );
+    expect(JSON.stringify(result)).not.toContain("custom-secret-value");
+    expect(JSON.stringify(result)).not.toContain("sk-another-secret");
+    expect(redactProviderText("Bearer testsecret")).toBe("Bearer [redacted]");
+  });
+  test("tools are strictly allowlisted and cannot accept arbitrary URLs or writes", () => {
+    expect(() =>
+      validateTool("fetch_url", { url: "https://example.com" }),
+    ).toThrow();
+    expect(() =>
+      validateTool("resolve_project_source", { url: "https://example.com" }),
+    ).toThrow();
+    expect(() =>
+      validateTool("create_draft", {
+        title: "x",
+        content: "y",
+        status: "approved",
+      }),
+    ).toThrow();
+    expect(
+      validateTool("validated_calculation", {
+        request: "Calculate sound insulation",
+      }),
+    ).toEqual({ request: "Calculate sound insulation" });
+  });
+});
+for (const provider of ["openai", "anthropic"] as const)
+  test(`${provider} streams decoded summary deltas only`, async () => {
+    const deltas: string[] = [];
+    const full = JSON.stringify({
+      ...output,
+      summary: "First sentence. Second sentence. Safe ending.",
+    });
+    const pieces = [full.slice(0, 32), full.slice(32, 52), full.slice(52)];
+    const result = await callProvider(
+      {
+        provider,
+        goal: "Review",
+        context: {},
+        onSummaryDelta: async (delta) => {
+          deltas.push(delta);
+        },
+      },
+      "sk-private-key",
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const piece of pieces) {
+                const event =
+                  provider === "openai"
+                    ? { type: "response.output_text.delta", delta: piece }
+                    : {
+                        type: "content_block_delta",
+                        delta: { type: "text_delta", text: piece },
+                      };
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify(event)}\n\n`,
+                  ),
+                );
+              }
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.join("")).toBe(
+      "First sentence. Second sentence. Safe ending.",
+    );
+    expect(JSON.stringify(deltas)).not.toContain("rationale");
+    expect(outputInput.parse(result).summary).toBe(deltas.join(""));
+  });

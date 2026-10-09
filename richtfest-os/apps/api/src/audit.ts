@@ -1,0 +1,2 @@
+import { auditEvents } from "./db/schema";
+export const recordAudit = async (tx: any, actorId: string | null, tenantId: string, action: string, entityType: string, entityId: string | null, metadata?: unknown, options?: { actorType?: "user" | "agent" | "system"; correlationId?: string; runId?: string }) => { await tx.insert(auditEvents).values({ actorId, tenantId, actorType: options?.actorType ?? "user", action, entityType, entityId, correlationId: options?.correlationId, runId: options?.runId, metadata: metadata ?? {} }); };

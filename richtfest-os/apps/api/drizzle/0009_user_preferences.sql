@@ -1,0 +1,2 @@
+ALTER TABLE os_users ADD COLUMN IF NOT EXISTS ui_density text NOT NULL DEFAULT 'dense';
+ALTER TABLE os_users ADD COLUMN IF NOT EXISTS language text NOT NULL DEFAULT 'en';

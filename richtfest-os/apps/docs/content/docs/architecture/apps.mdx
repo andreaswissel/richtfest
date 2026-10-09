@@ -1,0 +1,31 @@
+---
+title: Platform and business apps
+description: One company workspace, with explicit ownership and host contracts.
+---
+
+## Ownership
+
+Richtfest OS owns identity, sessions, roles and access, audit, provider connections, the agent runtime, the app shell and documentation. Business capabilities live in separate packages.
+
+| Package | Responsibility |
+| --- | --- |
+| `richtfest-apps/crm` | Customers and contacts |
+| `richtfest-apps/projects` | Projects, source files and revisions |
+| `richtfest-apps/knowledge` | Conversations, tasks and reviewed knowledge |
+| `richtfest-shared` | Shared domain types, validation and permission definitions |
+
+A business app imports its own code, shared code and external dependencies. Platform services and cross-app lookups arrive through its `src/deps.ts` host contract. App code does not import another app or OS internals.
+
+App schemas live with their packages and are listed in the API's Drizzle configuration. User IDs in app records are plain UUIDs, not foreign keys into identity tables. Validate references against accessible workspace records before creating relationships.
+
+The API adapts host contracts and mounts routers. One React application supplies all screens, registered through the route manifest. Boundary tests enforce this separation.
+
+## Persistence and evidence
+
+Postgres stores operational state, access, records, metadata, tasks and audit history. Original file contents require durable storage as well; storing only metadata does not preserve a source document.
+
+TanStack Query owns server-state caching. Zustand holds local UI state. Browser caches are disposable views, never the authoritative copy of company knowledge or workflow state.
+
+## Engineering references
+
+The repository's `AGENTS.md`, `CONVENTIONS.md`, `DESIGN-PRINCIPLES.md` and `PERFORMANCE.md` contain the detailed engineering rules. This documentation explains the architecture; it does not replace the enforceable conventions.

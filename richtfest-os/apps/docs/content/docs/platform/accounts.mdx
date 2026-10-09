@@ -1,0 +1,35 @@
+---
+title: Accounts and connections
+description: The agreed identity and provider-connection model for the prototype.
+---
+
+## Invitations and sign-in
+
+The prototype uses invite-only membership. An administrator invites a person by email; a time-limited, single-use magic link verifies first access. Resend is the selected delivery provider. An unconfigured delivery service must not report that it sent an email.
+
+After first access, a person can enroll a password or passkey for subsequent sign-in. Enrollment belongs to that verified account and requires an authenticated, appropriately verified session. Google sign-in is a later extension, not a prerequisite for this prototype.
+
+Email-link sign-in is the primary login path. Password sign-in and an explicit passkey action remain available as secondary options. On browsers that confirm WebAuthn conditional mediation, the login email field can offer a saved passkey through the browser's own credential UI; Richtfest does not enumerate or report which passkeys exist.
+
+Roles control application permissions. Removing access must revoke active sessions and outstanding invitations. Authentication establishes identity; business routes still enforce workspace scope and capability checks.
+
+## Account settings
+
+Open your name in the sidebar to reach Account settings. The Preferences section contains language (English or German), display density (Dense or Normal) and appearance (Light or Dark); changes are saved to your account and restored when you return. Passwords, passkeys and active sessions are managed on the same page.
+
+## AI connections
+
+OpenAI, Anthropic and Vercel AI Gateway are supported connection choices. The workspace selects one active provider; when no setting exists, OpenAI remains the default. Live provider execution remains unconfigured until an execution adapter, credential and effort preset are available.
+
+Each provider has two credential scopes:
+
+| Scope | Managed by | Used for |
+| --- | --- | --- |
+| Workspace | Workspace administrator | Shared fallback for permitted workspace work |
+| Personal | The individual user | That user's work with the selected provider |
+
+For the active provider, use the personal key when present, otherwise its workspace key. Do not silently switch providers. Show the effective scope without revealing the secret. Vercel uses an encrypted AI Gateway key from Railway or another external runtime at `https://ai-gateway.vercel.sh/v1`; gateway model IDs use `provider/model` form and gateway failures never fall back to a direct provider.
+
+Store credentials encrypted on the server. Never return saved keys to the browser or include them in logs or audit records. If encryption is unavailable, saving secrets must fail with an actionable setup state.
+
+A saved key does not prove that it is valid, funded or executable. Connection configuration and execution readiness must be displayed separately.

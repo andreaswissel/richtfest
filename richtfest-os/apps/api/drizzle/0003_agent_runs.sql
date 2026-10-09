@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS knowledge_agent_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, project_id uuid, conversation_id uuid, task_id uuid, goal text NOT NULL, source_version_ids jsonb NOT NULL DEFAULT '[]'::jsonb, provider text NOT NULL, status text NOT NULL DEFAULT 'queued', output_summary text, rationale text, error text, correlation_id uuid NOT NULL, requested_by uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS knowledge_agent_run_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, run_id uuid NOT NULL, event_type text NOT NULL, tool_name text, params_summary text, result_summary text, created_by uuid, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS knowledge_agent_run_approvals (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, run_id uuid NOT NULL, decision text NOT NULL, note text, decided_by uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE os_audit_events ADD COLUMN IF NOT EXISTS actor_type text NOT NULL DEFAULT 'user';
+ALTER TABLE os_audit_events ADD COLUMN IF NOT EXISTS correlation_id uuid;
+ALTER TABLE os_audit_events ADD COLUMN IF NOT EXISTS run_id uuid;

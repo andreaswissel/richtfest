@@ -1,0 +1,34 @@
+---
+title: Reusable design system
+description: Shared controls and layout patterns keep the workspace consistent.
+---
+
+The single web app owns the design system. Use shared shadcn/ui primitives and Richtfest semantic components rather than copying bespoke controls into each screen.
+
+## Approved baseline
+
+Use the official [shadcn/ui preset `b6F9Mslb0`](https://ui.shadcn.com/create?preset=b6F9Mslb0): Nova components, neutral base, indigo theme, yellow chart palette, Inter for body and inherited headings, Lucide icons, default radius, subtle menu accents and default translucent menus.
+
+Generate primitives from this preset and preserve their theme tokens and interaction behavior. Richtfest wrappers add product meaning and density sizing; they must not replace the preset with unrelated fonts, colors or bespoke control styling. Keep preset metadata in the web app's `components.json` so future additions use the same baseline.
+
+## Compose existing components
+
+Use `Page`, `PageHeader` and `Section` for screen structure. Shared buttons, inputs, dialogs and tables handle interaction; `Field`, `Callout`, `Badge` and segmented controls express recurring product meanings.
+
+Layouts follow the task: establish context, surface missing information, accept input and then present the decision. Keep one primary action per view or panel. Use actual links for navigation so keyboard access and opening in a new tab remain available.
+
+## Density and language
+
+Dense and Normal modes share the same components. Use the documented density and spacing tokens instead of fixed one-off sizes. Verify both modes when adding or changing a reusable component.
+
+Application UI strings belong in both English and German locale files. Reuse shared labels where their meaning is the same.
+
+## Agentic workspace components
+
+The project conversation uses shadcn's `MessageScroller`, `Message`, `Bubble`, `Attachment` and `Marker`. OpenUI renders the registered Richtfest components inside conversation turns and artifacts; it cannot generate arbitrary HTML, URLs or mutations. The registry snapshot is generated from the web library and checked against the server parser.
+
+Reading-position, selection, history-restoration and keyboard acceptance criteria are maintained in `DESIGN-PRINCIPLES.md`. Keep route and OpenUI code lazy so the initial bundle remains within budget.
+
+Before introducing a new component, check whether an existing primitive or semantic wrapper covers the need. Extend the shared component when the behavior is reusable. Keep workflow-specific composition inside its feature.
+
+The detailed token and interaction rules remain in `CONVENTIONS.md` and `DESIGN-PRINCIPLES.md`; avoid maintaining a second competing specification here.

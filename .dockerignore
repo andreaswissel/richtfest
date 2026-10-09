@@ -1,0 +1,29 @@
+.git
+.gitignore
+.dockerignore
+
+# Never send customer reference material or working context to the builder.
+reference-project
+context
+
+# Local state and credentials stay outside the image build context.
+.env
+.env.*
+!.env.example
+.data
+**/.data
+
+# Dependencies and generated output are recreated in the image.
+node_modules
+**/node_modules
+dist
+**/dist
+out
+**/out
+.next
+**/.next
+coverage
+**/coverage
+
+*.log
+.DS_Store

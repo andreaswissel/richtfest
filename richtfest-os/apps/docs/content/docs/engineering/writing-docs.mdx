@@ -1,0 +1,26 @@
+---
+title: Writing documentation and release notes
+description: Keep durable rules compact and explain current behavior in the right place.
+---
+
+## Where information belongs
+
+| Information | Location |
+| --- | --- |
+| Durable agent rules and project constraints | Root `AGENTS.md` |
+| Detailed engineering conventions, design and performance budgets | Existing root convention documents |
+| Current workflows, architecture and setup | These Fumadocs pages |
+| Completed user-facing or operational changes | `CHANGELOG.md`, under Unreleased until release |
+| Raw meeting notes and project evidence | Their source/context records, not agent instructions |
+
+## Writing a change
+
+Update the page that already owns the topic instead of appending a parallel account. Rewrite outdated behavior, remove obsolete setup and use links when detail already exists elsewhere. Clearly identify decisions awaiting implementation; never describe a mocked or unconfigured integration as available.
+
+Keep procedures concrete: who acts, what they do, what they should see and what remains to be configured. Do not include credentials, private customer files or copied transcripts in shipped docs.
+
+Record meaningful completed work in the changelog as it happens, not only at deployment. Group rapid iterations into one concise item. The changelog records what changed; these docs explain how things work now.
+
+## Verification
+
+Build the docs and inspect the affected pages in the signed-in application. Check navigation, readability and links, and verify that signed-out visitors cannot fetch pages or their static data. Documentation changes ship with the behavior they describe.

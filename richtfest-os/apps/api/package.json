@@ -1,0 +1,43 @@
+{
+  "name": "@richtfest/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "auth:dev-link": "bun src/scripts/dev-magic-link.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "db:migrate": "drizzle-kit migrate",
+    "db:seed": "bun src/seed.ts",
+    "db:migrate-agent-runtime": "bun src/scripts/migrate-agent-runtime.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.922.0",
+    "@aws-sdk/s3-request-presigner": "^3.922.0",
+    "@better-auth/passkey": "^1.7.7",
+    "@mastra/core": "1.75.0",
+    "@mastra/pg": "1.30.0",
+    "@openuidev/lang-core": "^0.3.2",
+    "@richtfest/crm": "workspace:*",
+    "@richtfest/knowledge": "workspace:*",
+    "@richtfest/projects": "workspace:*",
+    "@richtfest/shared": "workspace:*",
+    "better-auth": "^1.7.7",
+    "cookie-parser": "^1.4.7",
+    "drizzle-kit": "^0.30.4",
+    "drizzle-orm": "^0.38.4",
+    "express": "^4.21.2",
+    "pdfjs-dist": "^5.4.624",
+    "pg": "^8.13.1",
+    "resend": "^6.32.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2"
+  }
+}

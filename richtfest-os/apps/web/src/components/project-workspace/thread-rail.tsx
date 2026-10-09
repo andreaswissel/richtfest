@@ -1,0 +1,198 @@
+import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Archive,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
+import { api, type RecordData } from "../../api";
+import { useT } from "../../i18n";
+import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
+import { Callout } from "../ui/primitives";
+import "./thread-rail.css";
+
+export function ThreadRail({
+  projectId,
+  conversations,
+  selectedId,
+  onCreate,
+  creating = false,
+  onArchived,
+}: {
+  projectId: string;
+  conversations: RecordData[];
+  selectedId?: string;
+  onCreate: () => void;
+  creating?: boolean;
+  onArchived?: (id: string, archived: boolean) => void;
+}) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const [params] = useSearchParams();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const archive = useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
+      api(`/knowledge/conversations/${id}/archive`, { archived }, "PATCH"),
+    onSuccess: async (data, variables) => {
+      queryClient.setQueryData(
+        [`/knowledge/workspaces/${projectId}`],
+        (old: RecordData | undefined) => {
+          if (!old || !Array.isArray(old.conversations)) return old;
+          const returned = data?.conversation || data;
+          return {
+            ...old,
+            conversations: old.conversations.map((conversation: RecordData) =>
+              conversation.id === variables.id
+                ? {
+                    ...conversation,
+                    archivedAt: variables.archived
+                      ? returned?.archivedAt || new Date().toISOString()
+                      : null,
+                  }
+                : conversation,
+            ),
+          };
+        },
+      );
+      onArchived?.(variables.id, variables.archived);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [`/knowledge/workspaces/${projectId}`],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: [`/knowledge/conversations?projectId=${projectId}`],
+        }),
+      ]);
+    },
+  });
+  const active = conversations.filter(
+    (conversation) => !conversation.archivedAt,
+  );
+  const archived = conversations.filter((conversation) =>
+    Boolean(conversation.archivedAt),
+  );
+  const hrefFor = (id: string) => {
+    const next = new URLSearchParams(params);
+    next.set("conversation", id);
+    next.delete("view");
+    next.delete("agentRun");
+    next.delete("message");
+    const query = next.toString();
+    return `/projects/${projectId}${query ? `?${query}` : ""}`;
+  };
+  const titleFor = (conversation: RecordData) =>
+    conversation.title || t("workspaceUiConversation");
+  const row = (conversation: RecordData) => {
+    const isSelected = selectedId === conversation.id;
+    const archivedState = Boolean(conversation.archivedAt);
+    return (
+      <div
+        className={`thread-rail-row${isSelected ? " is-selected" : ""}`}
+        key={conversation.id}
+      >
+        <Link
+          className="thread-rail-link"
+          title={titleFor(conversation)}
+          to={hrefFor(conversation.id)}
+          aria-current={isSelected ? "page" : undefined}
+          onClick={() => setMobileOpen(false)}
+        >
+          <span className="thread-rail-title">{titleFor(conversation)}</span>
+          {conversation.unreadCount > 0 && (
+            <Badge tone="neutral">{conversation.unreadCount}</Badge>
+          )}
+        </Link>
+        <button
+          type="button"
+          className="thread-rail-action"
+          disabled={archive.isPending}
+          aria-label={
+            archivedState ? t("sharedWorkRestore") : t("sharedWorkArchive")
+          }
+          title={
+            archivedState ? t("sharedWorkRestore") : t("sharedWorkArchive")
+          }
+          onClick={() =>
+            archive.mutate({ id: conversation.id, archived: !archivedState })
+          }
+        >
+          {archivedState ? (
+            <RotateCcw aria-hidden="true" />
+          ) : (
+            <Archive aria-hidden="true" />
+          )}
+        </button>
+      </div>
+    );
+  };
+  return (
+    <aside className="thread-rail" aria-label={t("sharedWorkThreads")}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="thread-rail-toggle"
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((open) => !open)}
+      >
+        <MessageSquare aria-hidden="true" />
+        {t("sharedWorkThreads")}
+        {mobileOpen ? (
+          <ChevronDown aria-hidden="true" />
+        ) : (
+          <ChevronRight aria-hidden="true" />
+        )}
+      </Button>
+      <div className={`thread-rail-content${mobileOpen ? " is-open" : ""}`}>
+        <div className="thread-rail-header">
+          <h2>{t("sharedWorkThreads")}</h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={creating}
+            aria-label={t("threadRailNew")}
+            title={t("threadRailNew")}
+            onClick={onCreate}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+        </div>
+        <nav className="thread-rail-list" aria-label={t("sharedWorkThreads")}>
+          {active.map(row)}
+          {!active.length && (
+            <p className="thread-rail-empty">{t("threadRailEmpty")}</p>
+          )}
+        </nav>
+        {archived.length > 0 && (
+          <details
+            className="thread-rail-archived"
+            open={
+              archived.some((conversation) => conversation.id === selectedId) ||
+              undefined
+            }
+          >
+            <summary>
+              <span>{t("sharedWorkArchived")}</span>
+              <Badge tone="neutral">{archived.length}</Badge>
+            </summary>
+            <nav
+              className="thread-rail-list"
+              aria-label={t("sharedWorkArchived")}
+            >
+              {archived.map(row)}
+            </nav>
+          </details>
+        )}
+        {archive.error && (
+          <Callout tone="error">{archive.error.message}</Callout>
+        )}
+      </div>
+    </aside>
+  );
+}

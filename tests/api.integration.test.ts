@@ -1,0 +1,788 @@
+import { describe, expect, test } from "bun:test";
+import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
+import { createApp } from "../richtfest-os/apps/api/src/server";
+
+const databaseUrl = process.env.DATABASE_URL;
+const run = databaseUrl ? test : test.skip;
+
+describe("accepted API workflow (PostgreSQL)", () => {
+  run(
+    "creates and reads tenant-scoped customer, project, file, knowledge and approval records",
+    async () => {
+      const { db, pool } = createDatabase(databaseUrl!);
+      const providerRequests: any[] = [];
+      let providerMode = "success";
+      const server = createApp(db, {
+        allowDevAuth: true,
+        providerFetch: async (_url, init) => {
+          providerRequests.push(JSON.parse(String(init.body)));
+          if (providerMode === "failure")
+            return new Response("upstream secret sk-do-not-store", {
+              status: 500,
+            });
+          const prompt = JSON.parse(
+            providerRequests.at(-1).input ??
+              providerRequests.at(-1).messages[0].content,
+          );
+          const output = {
+            summary: "The immutable source excerpt is ready for review.",
+            rationale: "Review uses the selected source version.",
+            citations: prompt.context.sourceVersionIds,
+            tools:
+              providerMode === "forbidden"
+                ? [{ name: "fetch_url", input: { url: "https://example.com" } }]
+                : [],
+            artifact: {
+              title: "Proposed source review",
+              content:
+                "The source says ISO-IFC-SOURCE. This is a proposed note requiring review.",
+              type: "draft",
+            },
+          };
+          return Response.json({
+            output: [
+              {
+                type: "message",
+                content: [
+                  { type: "output_text", text: JSON.stringify(output) },
+                ],
+              },
+            ],
+            content: [{ type: "text", text: JSON.stringify(output) }],
+          });
+        },
+      }).listen(0);
+      const address = server.address() as { port: number };
+      const base = `http://127.0.0.1:${address.port}`;
+      const request = async (
+        path: string,
+        init: RequestInit = {},
+        cookie?: string,
+      ) => {
+        const headers = new Headers(init.headers);
+        headers.set("content-type", "application/json");
+        if (cookie) headers.set("cookie", cookie);
+        const response = await fetch(base + path, { ...init, headers });
+        const body = await response.json();
+        return {
+          response,
+          body,
+          cookie: response.headers.get("set-cookie")?.split(";")[0],
+        };
+      };
+      const upload = async (projectId: string, cookie: string) => {
+        const initiated = await request(
+          `/api/projects/${projectId}/files/initiate`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: "plan.ifc",
+              mimeType: "text/plain",
+              sizeBytes: 14,
+              sourceMetadata: { source: "integration" },
+            }),
+          },
+          cookie,
+        );
+        expect(initiated.response.status).toBe(201);
+        const uploadResponse = await fetch(
+          base + initiated.body.data.uploadUrl,
+          {
+            method: "PUT",
+            headers: { cookie, "content-type": "text/plain" },
+            body: "ISO-IFC-SOURCE",
+          },
+        );
+        expect(uploadResponse.status).toBe(200);
+        const completed = await request(
+          initiated.body.data.completeUrl,
+          { method: "POST", body: "{}" },
+          cookie,
+        );
+        completed.body.data.versionId = initiated.body.data.versionId;
+        return completed;
+      };
+      const login = async (email: string) => {
+        const requested = await request("/api/auth/sign-in/magic-link", {
+          method: "POST",
+          body: JSON.stringify({ email, callbackURL: "/" }),
+        });
+        expect(requested.response.status).toBe(200);
+        const outbox = (
+          await pool.query(
+            "select url from os_auth_dev_outbox where email = $1 order by created_at desc limit 1",
+            [email],
+          )
+        ).rows[0] as { url?: string } | undefined;
+        expect(outbox?.url).toBeTruthy();
+        const issued = new URL(outbox!.url!);
+        const verified = await fetch(base + issued.pathname + issued.search, {
+          redirect: "manual",
+        });
+        expect(verified.status).toBe(302);
+        return verified.headers.get("set-cookie")?.split(";")[0] ?? "";
+      };
+      const cookie = await login("andreas@richtfest.local");
+      expect(cookie).toContain("better-auth.session_token");
+      const customer = await request(
+        "/api/crm/customers",
+        {
+          method: "POST",
+          body: JSON.stringify({ name: `Integration customer ${Date.now()}` }),
+        },
+        cookie,
+      );
+      expect(customer.response.status).toBe(201);
+      const project = await request(
+        "/api/projects",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: `Integration project ${Date.now()}`,
+            customerId: customer.body.data.id,
+          }),
+        },
+        cookie,
+      );
+      expect(project.response.status).toBe(201);
+      const file = await upload(project.body.data.id, cookie);
+      expect(file.response.status).toBe(200);
+      expect(file.body.data.sizeBytes).toBeGreaterThan(0);
+      expect(file.body.data.downloadUrl).toContain("/download");
+      const conversation = await request(
+        "/api/knowledge/conversations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Jour fixe",
+            projectId: project.body.data.id,
+          }),
+        },
+        cookie,
+      );
+      expect(conversation.response.status).toBe(201);
+      const message = await request(
+        `/api/knowledge/conversations/${conversation.body.data.id}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: "Use the source plan",
+            sourceRef: "drive://plan.ifc",
+          }),
+        },
+        cookie,
+      );
+      expect(message.response.status).toBe(201);
+      const conversationId = conversation.body.data.id;
+      const projectId = project.body.data.id;
+      const versionId = file.body.data.versionId;
+      const secondMessage = await request(
+        `/api/knowledge/conversations/${conversationId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            body: "Follow-up exact version",
+            parentMessageId: message.body.data.id,
+            sourceVersionIds: [versionId],
+          }),
+        },
+        cookie,
+      );
+      expect(secondMessage.response.status).toBe(201);
+      const paged = await request(
+        `/api/knowledge/conversations/${conversationId}/messages?limit=1`,
+        {},
+        cookie,
+      );
+      expect(paged.body.data.items).toHaveLength(1);
+      expect(paged.body.data.nextCursor).toBe(secondMessage.body.data.id);
+      const older = await request(
+        `/api/knowledge/conversations/${conversationId}/messages?before=${paged.body.data.nextCursor}&limit=1`,
+        {},
+        cookie,
+      );
+      expect(older.body.data.items[0].id).toBe(message.body.data.id);
+      const searched = await request(
+        `/api/knowledge/conversations/${conversationId}/messages?q=Follow-up`,
+        {},
+        cookie,
+      );
+      expect(searched.body.data.items).toHaveLength(1);
+      const direct = await request(
+        `/api/knowledge/conversations/${conversationId}/messages/${message.body.data.id}`,
+        {},
+        cookie,
+      );
+      expect(direct.body.data.id).toBe(message.body.data.id);
+      const read = await request(
+        `/api/knowledge/conversations/${conversationId}/read`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            lastReadMessageId: secondMessage.body.data.id,
+            meaningfulMessageId: message.body.data.id,
+            composerDraft: "Keep this draft",
+          }),
+        },
+        cookie,
+      );
+      expect(read.response.status).toBe(200);
+      const restored = await request(
+        `/api/knowledge/conversations/${conversationId}/messages`,
+        {},
+        cookie,
+      );
+      expect(restored.body.data.readState.meaningfulMessageId).toBe(
+        message.body.data.id,
+      );
+      expect(restored.body.data.readState.composerDraft).toBe(
+        "Keep this draft",
+      );
+      const artifact = await request(
+        "/api/knowledge/artifacts",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId,
+            title: "Review note",
+            type: "document",
+            content: "Revision one",
+            sourceVersionIds: [versionId],
+          }),
+        },
+        cookie,
+      );
+      expect(artifact.response.status).toBe(201);
+      const revision = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/revisions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Review note",
+            content: "Revision two",
+            sourceVersionIds: [versionId],
+          }),
+        },
+        cookie,
+      );
+      expect(revision.body.data.version).toBe(2);
+      const staleReview = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expectedRevisionId: artifact.body.data.revision.id,
+          }),
+        },
+        cookie,
+      );
+      expect(staleReview.response.status).toBe(409);
+      const foreignProjectForReview = await request(
+        "/api/projects",
+        {
+          method: "POST",
+          body: JSON.stringify({ name: `Review boundary ${Date.now()}` }),
+        },
+        cookie,
+      );
+      const foreignArtifact = await request(
+        "/api/knowledge/artifacts",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId: foreignProjectForReview.body.data.id,
+            title: "Different project finding",
+            type: "document",
+            content: "Must not approve the other artifact",
+            sourceVersionIds: [],
+          }),
+        },
+        cookie,
+      );
+      const crossProjectReview = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expectedRevisionId: foreignArtifact.body.data.revision.id,
+          }),
+        },
+        cookie,
+      );
+      expect(crossProjectReview.response.status).toBe(409);
+      const reviewedArtifact = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedRevisionId: revision.body.data.id }),
+        },
+        cookie,
+      );
+      expect(reviewedArtifact.response.status).toBe(200);
+      expect(reviewedArtifact.body.data.artifact.status).toBe("approved");
+      expect(reviewedArtifact.body.data.reviewedKnowledge.status).toBe(
+        "approved",
+      );
+      expect(
+        reviewedArtifact.body.data.reviewedKnowledge.sourceRefs[0],
+      ).toEqual({
+        kind: "source_version",
+        sourceVersionId: versionId,
+        artifactId: artifact.body.data.artifact.id,
+        artifactRevisionId: revision.body.data.id,
+      });
+      const foreignDraft = await request(
+        "/api/knowledge/drafts",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Different project draft",
+            body: "Must stay outside this project's reviewed knowledge.",
+            projectId: foreignProjectForReview.body.data.id,
+            sourceRefs: [],
+          }),
+        },
+        cookie,
+      );
+      expect(foreignDraft.response.status).toBe(201);
+      const projectKnowledge = await request(
+        `/api/knowledge/drafts?projectId=${projectId}`,
+        {},
+        cookie,
+      );
+      expect(
+        projectKnowledge.body.data.some(
+          (item: any) =>
+            item.id === reviewedArtifact.body.data.reviewedKnowledge.id,
+        ),
+      ).toBe(true);
+      expect(
+        projectKnowledge.body.data.some(
+          (item: any) => item.id === foreignDraft.body.data.id,
+        ),
+      ).toBe(false);
+      const repeatedReview = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedRevisionId: revision.body.data.id }),
+        },
+        cookie,
+      );
+      expect(repeatedReview.response.status).toBe(409);
+      const annotation = await request(
+        "/api/knowledge/annotations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId,
+            artifactRevisionId: artifact.body.data.revision.id,
+            page: 1,
+            quote: "Revision one",
+            body: "Review this selection",
+            conversationId,
+          }),
+        },
+        cookie,
+      );
+      expect(annotation.response.status).toBe(201);
+      expect(annotation.body.data.message.annotationId).toBe(
+        annotation.body.data.annotation.id,
+      );
+      const annotatedArtifact = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}`,
+        {},
+        cookie,
+      );
+      expect(annotatedArtifact.body.data.revisions).toHaveLength(2);
+      expect(
+        annotatedArtifact.body.data.annotations[0].artifactRevisionId,
+      ).toBe(artifact.body.data.revision.id);
+      const newVersion = await request(
+        `/api/projects/${projectId}/files/${file.body.data.id}/versions/initiate`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            mimeType: "text/plain",
+            sizeBytes: 11,
+            sourceMetadata: { source: "revision" },
+          }),
+        },
+        cookie,
+      );
+      expect(newVersion.response.status).toBe(201);
+      expect(newVersion.body.data.version).toBe(2);
+      expect(newVersion.body.data.versionId).not.toBe(versionId);
+      expect(
+        (
+          await fetch(base + newVersion.body.data.uploadUrl, {
+            method: "PUT",
+            headers: { cookie, "content-type": "text/plain" },
+            body: "VERSION-TWO",
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await request(
+            newVersion.body.data.completeUrl,
+            { method: "POST", body: "{}" },
+            cookie,
+          )
+        ).response.status,
+      ).toBe(200);
+      expect(
+        await (
+          await fetch(base + file.body.data.downloadUrl, {
+            headers: { cookie },
+          })
+        ).text(),
+      ).toBe("ISO-IFC-SOURCE");
+      expect(
+        await (
+          await fetch(
+            base +
+              `/api/projects/${projectId}/files/${file.body.data.id}/versions/2/download`,
+            { headers: { cookie } },
+          )
+        ).text(),
+      ).toBe("VERSION-TWO");
+      const unavailable = await request(
+        "/api/knowledge/runs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId,
+            conversationId,
+            goal: "Calculate external sound insulation",
+            provider: "openai",
+            intent: "calculation",
+          }),
+        },
+        cookie,
+      );
+      expect(unavailable.body.data.status).toBe("validated_tool_unavailable");
+      const deniedApproval = await request(
+        `/api/knowledge/runs/${unavailable.body.data.id}/approve`,
+        { method: "POST", body: JSON.stringify({ decision: "approved" }) },
+        cookie,
+      );
+      expect(deniedApproval.response.status).toBe(409);
+      const otherProject = await request(
+        "/api/projects",
+        { method: "POST", body: JSON.stringify({ name: "Other project" }) },
+        cookie,
+      );
+      const crossProject = await request(
+        "/api/knowledge/runs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId: otherProject.body.data.id,
+            conversationId,
+            goal: "Review",
+            provider: "openai",
+          }),
+        },
+        cookie,
+      );
+      expect(crossProject.response.status).toBe(404);
+      const crossSource = await request(
+        "/api/knowledge/annotations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            projectId: otherProject.body.data.id,
+            sourceVersionId: versionId,
+            body: "Wrong project",
+          }),
+        },
+        cookie,
+      );
+      expect(crossSource.response.status).toBe(404);
+      const task = await request(
+        "/api/knowledge/tasks",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Verify source plan",
+            conversationId: conversation.body.data.id,
+          }),
+        },
+        cookie,
+      );
+      expect(task.response.status).toBe(201);
+      const draft = await request(
+        "/api/knowledge/drafts",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title: "Manual source note",
+            body: "Review the IFC source.",
+            projectId: project.body.data.id,
+            sourceRefs: [file.body.data.id],
+          }),
+        },
+        cookie,
+      );
+      expect(draft.response.status).toBe(201);
+      const approved = await request(
+        `/api/knowledge/drafts/${draft.body.data.id}/approve`,
+        { method: "POST", body: "{}" },
+        cookie,
+      );
+      expect(approved.response.status).toBe(200);
+      expect(approved.body.data.status).toBe("approved");
+      const lucaCookie = await login("luca@richtfest.local");
+      const lucaDrafts = await request(
+        `/api/knowledge/drafts?projectId=${project.body.data.id}`,
+        {},
+        lucaCookie,
+      );
+      expect(lucaDrafts.response.status).toBe(200);
+      expect(
+        lucaDrafts.body.data.some(
+          (item: any) =>
+            item.id === draft.body.data.id && item.status === "approved",
+        ),
+      ).toBe(true);
+      const outsiderCookie = await login("outsider@other.local");
+      const outsiderProject = await request(
+        `/api/projects/${project.body.data.id}`,
+        {},
+        outsiderCookie,
+      );
+      expect([403, 404]).toContain(outsiderProject.response.status);
+      const outsiderReview = await request(
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedRevisionId: revision.body.data.id }),
+        },
+        outsiderCookie,
+      );
+      expect([403, 404]).toContain(outsiderReview.response.status);
+      for (const path of [
+        `/api/knowledge/workspaces/${projectId}`,
+        `/api/knowledge/conversations/${conversationId}/messages`,
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}`,
+      ])
+        expect([403, 404]).toContain(
+          (await request(path, {}, outsiderCookie)).response.status,
+        );
+      const settingsBefore = await request(
+        "/api/settings/ai-connections",
+        {},
+        cookie,
+      );
+      expect(settingsBefore.response.status).toBe(200);
+      if (process.env.AI_CONNECTION_ENCRYPTION_KEY) {
+        const workspace = await request(
+          "/api/settings/ai-connections/openai/workspace",
+          {
+            method: "PUT",
+            body: JSON.stringify({ apiKey: "sk-test-workspace-secret" }),
+          },
+          cookie,
+        );
+        expect(workspace.response.status).toBe(200);
+        const settingsAfter = await request(
+          "/api/settings/ai-connections",
+          {},
+          cookie,
+        );
+        expect(JSON.stringify(settingsAfter.body)).not.toContain(
+          "sk-test-workspace-secret",
+        );
+        expect(
+          settingsAfter.body.data.providers.find(
+            (p: any) => p.provider === "openai",
+          ).effectiveSource,
+        ).toBe("workspace");
+        const personal = await request(
+          "/api/settings/ai-connections/anthropic/personal",
+          {
+            method: "PUT",
+            body: JSON.stringify({ apiKey: "sk-test-personal-secret" }),
+          },
+          lucaCookie,
+        );
+        expect(personal.response.status).toBe(200);
+        const lucaSettings = await request(
+          "/api/settings/ai-connections",
+          {},
+          lucaCookie,
+        );
+        expect(
+          lucaSettings.body.data.providers.find(
+            (p: any) => p.provider === "anthropic",
+          ).effectiveSource,
+        ).toBe("personal");
+        const outsiderWorkspace = await request(
+          "/api/settings/ai-connections/openai/workspace",
+          {
+            method: "PUT",
+            body: JSON.stringify({ apiKey: "sk-outsider-secret" }),
+          },
+          outsiderCookie,
+        );
+        expect(outsiderWorkspace.response.status).toBe(403);
+        const ready = await request(
+          "/api/agent/readiness?provider=anthropic",
+          {},
+          lucaCookie,
+        );
+        expect(ready.response.status).toBe(200);
+        expect(ready.body.data.credentialsConfigured).toBe(true);
+        expect(ready.body.data.executionAvailable).toBe(true);
+        const run = await request(
+          "/api/agent/run",
+          { method: "POST", body: JSON.stringify({ provider: "anthropic" }) },
+          lucaCookie,
+        );
+        expect(run.response.status).toBe(400);
+        const runRequest = {
+          projectId,
+          conversationId,
+          messageId: secondMessage.body.data.id,
+          goal: "Review the selected source",
+          provider: "openai",
+          sourceVersionIds: [versionId],
+        };
+        const completedRun = async (mode: string) => {
+          providerMode = mode;
+          const started = await request(
+            "/api/knowledge/runs",
+            { method: "POST", body: JSON.stringify(runRequest) },
+            cookie,
+          );
+          expect(started.response.status).toBe(201);
+          let result: any;
+          for (let i = 0; i < 100; i++) {
+            result = await request(
+              `/api/knowledge/runs/${started.body.data.id}`,
+              {},
+              cookie,
+            );
+            if (!["queued", "running"].includes(result.body.data.run.status))
+              return result.body.data;
+            await Bun.sleep(20);
+          }
+          throw new Error("Run did not finish");
+        };
+        const proposed = await completedRun("success");
+        expect(proposed.run.status).toBe("needs_review");
+        expect(proposed.artifacts).toHaveLength(1);
+        expect(proposed.artifacts[0].status).toBe("draft");
+        expect(JSON.stringify(providerRequests)).toContain("ISO-IFC-SOURCE");
+        expect(JSON.stringify(providerRequests)).not.toContain("VERSION-TWO");
+        const unread = await request(
+          `/api/knowledge/workspaces/${projectId}`,
+          {},
+          cookie,
+        );
+        expect(
+          unread.body.data.conversations.find(
+            (c: any) => c.id === conversationId,
+          ).unreadCount,
+        ).toBeGreaterThan(0);
+        const stream = await fetch(
+          base + `/api/knowledge/runs/${proposed.run.id}/events/stream`,
+          { headers: { cookie } },
+        );
+        expect(await stream.text()).toContain("event: activity");
+        expect((await completedRun("forbidden")).run.status).toBe("failed");
+        const failed = await completedRun("failure");
+        expect(failed.run.status).toBe("failed");
+        expect(JSON.stringify(failed)).not.toContain("sk-do-not-store");
+        const review = await request(
+          `/api/knowledge/runs/${proposed.run.id}/approve`,
+          { method: "POST", body: JSON.stringify({ decision: "approved" }) },
+          cookie,
+        );
+        expect(review.body.data.run.status).toBe("approved");
+        const audit = (
+          await pool.query(
+            "select actor_type, metadata from os_audit_events where run_id=$1",
+            [proposed.run.id],
+          )
+        ).rows;
+        expect(audit.some((r) => r.actor_type === "agent")).toBe(true);
+        expect(JSON.stringify(audit)).not.toContain("sk-test-workspace-secret");
+      } else {
+        const save = await request(
+          "/api/settings/ai-connections/openai/personal",
+          { method: "PUT", body: JSON.stringify({ apiKey: "sk-test-secret" }) },
+          cookie,
+        );
+        expect(save.response.status).toBe(503);
+        expect(save.body.error.code).toBe("encryption_unconfigured");
+      }
+      const team = await request("/api/access/team", {}, cookie);
+      expect(team.response.status).toBe(200);
+      const invitedEmail = `invite-${Date.now()}@richtfest.local`;
+      const invitation = await request(
+        "/api/access/invitations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: invitedEmail,
+            roleId: team.body.data.roles[0].id,
+            expiresInDays: 1,
+          }),
+        },
+        cookie,
+      );
+      expect(invitation.response.status).toBe(201);
+      const invitationState = (
+        await pool.query(
+          "select m.status, i.id from os_memberships m join os_users u on u.id = m.user_id join os_invitations i on i.email = u.email and i.tenant_id = m.tenant_id where u.email = $1 order by i.created_at desc limit 1",
+          [invitedEmail],
+        )
+      ).rows[0];
+      expect(invitationState.status).toBe("invited");
+      const issuedLink = (
+        await pool.query(
+          "select url from os_auth_dev_outbox where email = $1 order by created_at desc limit 1",
+          [invitedEmail],
+        )
+      ).rows[0].url as string;
+      const cancelled = await request(
+        `/api/access/invitations/${invitationState.id}/cancel`,
+        { method: "POST", body: "{}" },
+        cookie,
+      );
+      expect(cancelled.response.status).toBe(200);
+      const cancelledLink = new URL(issuedLink);
+      const redeemedAfterCancellation = await fetch(
+        base + cancelledLink.pathname + cancelledLink.search,
+        { redirect: "manual" },
+      );
+      const cancelledCookie =
+        redeemedAfterCancellation.headers.get("set-cookie")?.split(";")[0] ??
+        "";
+      const cancelledMe = await request("/api/auth/me", {}, cancelledCookie);
+      expect(cancelledMe.response.status).toBe(401);
+      const luca = team.body.data.members.find(
+        (member: any) => member.email === "luca@richtfest.local",
+      );
+      const offboarded = await request(
+        `/api/access/members/${luca.userId}/offboard`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: "Integration verification" }),
+        },
+        cookie,
+      );
+      expect(offboarded.response.status).toBe(200);
+      const lucaAfterOffboarding = await request(
+        "/api/auth/me",
+        {},
+        lucaCookie,
+      );
+      expect(lucaAfterOffboarding.response.status).toBe(401);
+      server.close();
+      await pool.end();
+    },
+  );
+});

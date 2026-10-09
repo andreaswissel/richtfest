@@ -1,0 +1,50 @@
+import type { PermissionKey } from "@richtfest/shared";
+export type StoredObject = {
+  sizeBytes: number;
+  checksum: string;
+  mimeType: string;
+};
+export type FileStorage = {
+  kind: "local" | "bucket" | "unconfigured";
+  initiate: (
+    key: string,
+    mimeType: string,
+    localUploadUrl: string,
+  ) => Promise<{
+    uploadUrl: string;
+    headers: Record<string, string>;
+    expiresAt: string;
+  }>;
+  saveStream: (
+    key: string,
+    stream: NodeJS.ReadableStream,
+    mimeType: string,
+  ) => Promise<StoredObject>;
+  head: (key: string) => Promise<StoredObject | null>;
+  remove: (key: string) => Promise<void>;
+  download: (
+    key: string,
+    mimeType: string,
+    localDownloadUrl: string,
+  ) => Promise<{
+    redirectUrl?: string;
+    stream?: NodeJS.ReadableStream;
+    sizeBytes?: number;
+  } | null>;
+};
+export type AppDeps = {
+  db: any;
+  tenantId: string;
+  actorId: string;
+  requirePermission: (key: PermissionKey) => void;
+  audit: (
+    tx: any,
+    action: string,
+    entityType: string,
+    entityId: string,
+    metadata?: unknown,
+  ) => Promise<void>;
+  validateCustomer: (customerId: string) => Promise<boolean>;
+  customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
+  fileStorage: FileStorage;
+};

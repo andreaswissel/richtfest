@@ -1,0 +1,28 @@
+---
+title: Agent governance and activity
+description: Explain actions through evidence, tool records and attributable approvals.
+---
+
+## An accountable work record
+
+The governance contract preserves the assigned request, source IDs and versions, initiating user, executing actor, tool actions and safe result summaries. Record relevant policy checks, approval decisions, outcome and errors with a stable run or correlation ID.
+
+A concise decision rationale should explain the evidence and criteria supporting an action. Hidden model reasoning is not an audit artifact. Do not store credentials, authentication tokens or unnecessary private content in event metadata.
+
+The model proposing a tool call does not authorize it. The platform checks the current actor, workspace and capability before executing. Consequential external actions require the appropriate human approval.
+
+Provider output is constrained to a small allowlist: exact project-source reads, proposed drafts, missing-input questions and one bounded source-review delegation. A specialist child run has its own task, source scope, status and output, and cannot delegate again. Unknown tools and invented source or artifact references are rejected.
+
+OpenUI uses a generated registry shared by the provider prompt, server parser and web renderer. Generated UI can display only registered Richtfest components. Query, mutation, dynamic action, external URL and executable markup paths are disabled. Model-generated status UI is always presented as proposed; approval comes from the review record.
+
+## Activity without clutter
+
+Contextual activity is a filtered view of the audit record. A project shows relevant project events; a knowledge item shows its drafting and review history. Broader audit inspection supports filtering and pagination for permitted users.
+
+An event can be important for auditing without being useful in every screen's activity feed. Filtering presentation must not discard the underlying record or bypass access checks.
+
+## Processing and recovery
+
+Long-running work needs durable status: queued, running, requiring review, failed or finished as applicable. Provider summary text streams into a stable run turn while bounded checkpoints preserve progress for reloads and interruptions. Stopping a run aborts the active request when possible and prevents late output from being committed. Preserve actionable failure information and the relationship to the source input. Offer retries only for implemented operations, and make repeated processing safe.
+
+Providers and tools that have not been enabled must remain visibly unavailable. Do not populate success histories with simulated agent execution.

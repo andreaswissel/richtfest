@@ -1,0 +1,36 @@
+# Dependencies and generated output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+out/
+**/out/
+.next/
+**/.next/
+coverage/
+**/coverage/
+.turbo/
+**/.turbo/
+.vite/
+**/.vite/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Python tooling
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+**/.pytest_cache/
+*.py[cod]
+
+# Local credentials and application state
+.env
+.env.*
+!.env.example
+.data/
+**/.data/
+
+# Customer reference material and temporary planning context stay local.
+reference-project/
+context/

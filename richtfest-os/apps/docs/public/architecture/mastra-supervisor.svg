@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" role="img" aria-labelledby="title description">
+  <title id="title">Richtfest Mastra supervisor gated V1</title>
+  <desc id="description">A project chat passes through OS authentication and access to a Mastra supervisor. The gated V1 supervisor creates durable assignments for source and requirements specialists. Calculation work is unavailable in V1 and shown as a future capability. Structured results return to the supervisor for review, while a human can steer or cancel. Mastra and Richtfest Postgres stores retain workflow and domain state. Private Railway Buckets store source files.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4f46e5"/>
+    </marker>
+    <style>
+      .title { font: 700 22px system-ui, sans-serif; fill: #172033; }
+      .label { font: 600 16px system-ui, sans-serif; fill: #172033; }
+      .small { font: 14px system-ui, sans-serif; fill: #42506a; }
+      .node { fill: #fff; stroke: #aeb8cb; stroke-width: 2; }
+      .supervisor { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2.5; }
+      .human { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; }
+      .store { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+      .future { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; stroke-dasharray: 7 6; }
+      .flow { fill: none; stroke: #4f46e5; stroke-width: 2.5; marker-end: url(#arrow); }
+      .steer { fill: none; stroke: #c2410c; stroke-width: 2; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+      .rule { stroke: #cbd5e1; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="700" rx="18" fill="#f8fafc"/>
+  <text x="48" y="52" class="title">Mastra supervisor — gated V1</text>
+  <text x="48" y="78" class="small">Durable, reviewable delegation for project workspaces</text>
+
+  <rect x="48" y="130" width="190" height="88" rx="12" class="node"/>
+  <text x="143" y="168" text-anchor="middle" class="label">Project chat</text>
+  <text x="143" y="193" text-anchor="middle" class="small">prompt + context</text>
+
+  <rect x="285" y="130" width="190" height="88" rx="12" class="node"/>
+  <text x="380" y="168" text-anchor="middle" class="label">OS auth / access</text>
+  <text x="380" y="193" text-anchor="middle" class="small">tenant + role scope</text>
+
+  <rect x="522" y="112" width="240" height="124" rx="14" class="supervisor"/>
+  <text x="642" y="158" text-anchor="middle" class="label">Mastra supervisor</text>
+  <text x="642" y="184" text-anchor="middle" class="small">configured model</text>
+  <text x="642" y="207" text-anchor="middle" class="small">review, revise, route</text>
+
+  <rect x="809" y="130" width="190" height="88" rx="12" class="node"/>
+  <text x="904" y="168" text-anchor="middle" class="label">Durable assignments</text>
+  <text x="904" y="193" text-anchor="middle" class="small">Mastra Pg IDs + checkpoints</text>
+
+  <path d="M238 174 H285" class="flow"/>
+  <path d="M475 174 H522" class="flow"/>
+  <path d="M762 174 H809" class="flow"/>
+
+  <rect x="258" y="330" width="190" height="92" rx="12" class="node"/>
+  <text x="353" y="367" text-anchor="middle" class="label">Source reviewer</text>
+  <text x="353" y="392" text-anchor="middle" class="small">extract evidence</text>
+
+  <rect x="505" y="330" width="190" height="92" rx="12" class="node"/>
+  <text x="600" y="367" text-anchor="middle" class="label">Requirements reviewer</text>
+  <text x="600" y="392" text-anchor="middle" class="small">structure constraints</text>
+
+  <rect x="752" y="330" width="190" height="92" rx="12" class="future"/>
+  <text x="847" y="367" text-anchor="middle" class="label">Calculation</text>
+  <text x="847" y="392" text-anchor="middle" class="small">future · unavailable in V1</text>
+
+  <path d="M904 218 V274 H353 V330" class="flow"/>
+  <path d="M904 218 V274 H600 V330" class="flow"/>
+  <path d="M904 218 V274 H847 V330" class="flow"/>
+  <path d="M353 422 V470 H642 V236" class="flow"/>
+  <path d="M600 422 V470 H642 V236" class="flow"/>
+  <path d="M847 422 V470 H642 V236" class="flow"/>
+  <text x="642" y="505" text-anchor="middle" class="small">structured results + evidence return to supervisor</text>
+
+  <rect x="48" y="555" width="282" height="88" rx="12" class="human"/>
+  <text x="189" y="591" text-anchor="middle" class="label">Human review</text>
+  <text x="189" y="616" text-anchor="middle" class="small">steer, approve, or cancel</text>
+
+  <rect x="432" y="555" width="300" height="88" rx="12" class="store"/>
+  <text x="582" y="591" text-anchor="middle" class="label">Postgres</text>
+  <text x="582" y="616" text-anchor="middle" class="small">Domain: evidence · tasks · review</text>
+  <text x="582" y="636" text-anchor="middle" class="small">Mastra: workflow checkpoints</text>
+
+  <rect x="834" y="555" width="318" height="88" rx="12" class="store"/>
+  <text x="993" y="591" text-anchor="middle" class="label">Private Railway Buckets</text>
+  <text x="993" y="616" text-anchor="middle" class="small">source files + revisions</text>
+
+  <path d="M522 236 V520 H330" class="steer"/>
+  <path d="M330 599 H432" class="steer"/>
+  <path d="M762 236 V510 H732" class="flow"/>
+  <path d="M732 599 H834" class="flow"/>
+  <path d="M642 236 V555" class="flow"/>
+
+  <line x1="48" y1="675" x2="1152" y2="675" class="rule"/>
+  <text x="48" y="691" class="small">Dashed calculation path is a future capability; V1 runs source and requirements review only.</text>
+</svg>

@@ -1,0 +1,42 @@
+---
+title: Deployment preparation
+description: Prepare the Railway prototype without deploying or provisioning it implicitly.
+---
+
+## Hosting shape
+
+The selected Railway project is `richtfest-os`, with `richtfest-monorepo` serving API and web on one origin and a separate `Postgres` service. Connect through Railway's private `DATABASE_URL` reference. AWS and Neon are not part of this architecture.
+
+Fumadocs exports a static site. The API serves its output under `/docs` behind sign-in, including document data and assets. No separate production Next.js server is required.
+
+## Configuration before a live release
+
+Configure the database connection, canonical HTTPS origin, authentication secrets, allowed origin and passkey relying-party settings, server-side credential encryption, Resend API key and verified sender. Follow the repository environment example for the exact variable names.
+
+Choose the canonical origin before enrolling production passkeys. Keep local/test identities and preview mail delivery out of production. Missing delivery or provider configuration must remain explicit.
+
+Use a private Railway Bucket for original uploaded files and revisions. Stream or upload directly to the bucket; the prototype does not impose an arbitrary application-level file-size cap. Platform and transport failures must still be handled explicitly. A local storage adapter is for development, and a service's temporary filesystem is not a production file store.
+
+Configure bucket credentials and browser CORS for the application origin. Authorize access before creating short-lived upload or download URLs, and retain immutable object/version references in Postgres. Back up the database and bucket objects as a coherent recovery set, protect backup access and encryption keys, and test restoration in an isolated environment.
+
+## First customer pilot preflight
+
+Create the first real workspace administrator through an explicit production bootstrap before inviting customer users. Local seed identities and development sign-in helpers are test fixtures and must not be used to establish production access.
+
+Before running an agent, the administrator selects the workspace provider in Settings, configures the model IDs for each enabled effort level, and saves a workspace credential or confirms that the pilot user has a personal credential. For Vercel AI Gateway, use `provider/model` model IDs. Verify provider selection and readiness without sending a paid request, then use the intended Railway deployment to run the first credited call.
+
+Complete the pilot with a real project source: upload the original file, start the project conversation, inspect the agent's source references, and publish only the reviewed artifact revision. This walkthrough checks the customer workflow and its audit trail rather than treating a successful provider response as completion.
+
+## Release procedure
+
+Preparing configuration does not authorize deployment. On an explicit deploy request, follow `AGENTS.md`: review the intended changes, update release notes and affected docs, run required checks, commit on local `main`, then push that branch to `origin/main`.
+
+Report included database migrations. Do not automatically poll Railway after the push; the user monitors the deployment. The initial prototype is being prepared locally and has not been deployed.
+
+## Docs build
+
+Run `bun run --filter '@richtfest/docs' build`. The generated `out` directory belongs to the deploy artifact. The production API must apply its session/access guard before serving the entire docs directory.
+
+See [Railway Storage Buckets](https://docs.railway.com/storage-buckets) for the selected file storage service.
+
+The implementation follows the [Fumadocs Next.js guide](https://www.fumadocs.dev/docs/manual-installation/next) and [static export guide](https://www.fumadocs.dev/docs/deploying/static).

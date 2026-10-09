@@ -1,0 +1,1 @@
+ALTER TABLE os_users ADD COLUMN IF NOT EXISTS theme text NOT NULL DEFAULT 'light';
