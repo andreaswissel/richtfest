@@ -22,6 +22,25 @@ test("real Mastra agent returns a valid focused plan", async () => {
   })).toEqual(plan);
 });
 
+test("independent review requires evidence findings and does not inherit the supervisor conclusion", async () => {
+  let request: any;
+  const finding = {
+    summary: "The draft is supported with one scope note.",
+    rationale: "Checked the supplied source excerpts independently.",
+    citations: [crypto.randomUUID()],
+    decision: "accept",
+    findings: [{ severity: "note", issue: "One source excludes balcony doors.", recommendation: "Keep that exclusion visible.", citations: [crypto.randomUUID()] }],
+    revisions: [],
+  };
+  const output = await callMastraSupervisor({ ...base, phase: "independent_review", context: { role: "independent_reviewer", proposedResult: "Draft" } }, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: finding, spyGenerate: value => { request = value; } }),
+  });
+  expect(output).toEqual(finding);
+  const prompt = JSON.stringify(request);
+  expect(prompt).toContain("fresh, independent reviewer");
+  expect(prompt).toContain("Re-read the supplied immutable source excerpts");
+});
+
 test("source review plans treat unreviewed files as readable and honor all-source requests", async () => {
   let request: any;
   await callMastraSupervisor({

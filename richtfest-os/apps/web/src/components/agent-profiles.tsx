@@ -12,6 +12,7 @@ const roleLabels: Record<string, Parameters<ReturnType<typeof useT>>[0]> = {
   supervisor: "supervisorRole",
   source_reviewer: "supervisorSourceReviewer",
   requirements_reviewer: "supervisorRequirementsReviewer",
+  independent_reviewer: "supervisorIndependentReviewer",
 };
 type Profile = {
   key: string;

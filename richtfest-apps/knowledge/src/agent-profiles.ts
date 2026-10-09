@@ -6,8 +6,8 @@ import type { AppDeps } from "./deps";
 import { agentProfiles, drafts } from "./schema";
 import { conflict, missing } from "./workspace";
 
-export const profileKey = z.enum(["supervisor", "source_reviewer", "requirements_reviewer"]);
-const labels = { supervisor: "Supervisor", source_reviewer: "Source reviewer", requirements_reviewer: "Requirements reviewer" };
+export const profileKey = z.enum(["supervisor", "source_reviewer", "requirements_reviewer", "independent_reviewer"]);
+const labels = { supervisor: "Supervisor", source_reviewer: "Source reviewer", requirements_reviewer: "Requirements reviewer", independent_reviewer: "Independent reviewer" };
 export const profileInput = z.object({
   instructions: z.string().trim().max(10000),
   triggerPhrases: z.array(z.string().trim().min(1).max(200)).max(50),

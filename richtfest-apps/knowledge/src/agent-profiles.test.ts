@@ -4,7 +4,7 @@ import { agentProfiles } from "./schema";
 import type { AppDeps } from "./deps";
 
 test("only existing roles and bounded profile fields are configurable", () => {
-  expect(defaultProfiles().map(profile => profile.key)).toEqual(["supervisor", "source_reviewer", "requirements_reviewer"]);
+  expect(defaultProfiles().map(profile => profile.key)).toEqual(["supervisor", "source_reviewer", "requirements_reviewer", "independent_reviewer"]);
   expect(profileKey.safeParse("admin").success).toBe(false);
   expect(profileInput.safeParse({ instructions: "", triggerPhrases: [], knowledgeIds: [], permissions: ["access:manage"] }).success).toBe(false);
   expect(profileInput.safeParse({ instructions: "", triggerPhrases: [" "], knowledgeIds: [] }).success).toBe(false);

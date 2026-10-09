@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { agentPresetConfigSchema } from "@richtfest/shared";
 import { isConfiguredPreset, isGatewayModelId, vendorPreset } from "./agent-presets";
 
 describe("agent provider presets", () => {
@@ -26,6 +27,10 @@ describe("agent provider presets", () => {
       if (previous === undefined) delete process.env.OPENAI_PROJECT_MODEL;
       else process.env.OPENAI_PROJECT_MODEL = previous;
     }
+  });
+  test("defaults legacy saved presets to independent review disabled", () => {
+    const { independentReviewEnabled: _independentReviewEnabled, ...legacyPreset } = vendorPreset("openai", "medium");
+    expect(agentPresetConfigSchema.parse(legacyPreset).independentReviewEnabled).toBe(false);
   });
   test("keeps the direct OpenAI default when the env model is unset", () => {
     const previous = process.env.OPENAI_PROJECT_MODEL;

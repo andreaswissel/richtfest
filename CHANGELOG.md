@@ -14,6 +14,7 @@
 - Project agent work groups active and done runs, shows live runtime and per-agent token usage, and estimates cost where model pricing is known.
 - Project thread hover highlights now span the row behind rename and archive actions.
 - Local development can sign in with seeded test identities when the non-production `ALLOW_DEV_AUTH` flag is enabled.
+- Agent model presets can opt into a separate independent source review before a draft is saved; it remains off by default.
 
 - Project agents now assign source reviews for file-based work and distinguish readable unreviewed sources from findings awaiting human review.
 

@@ -7,7 +7,7 @@ export type AppDeps = {
     provider: AgentProvider,
   ) => Promise<AgentPresetSnapshot>;
   executeSupervisor?: (input: {
-    phase: "plan" | "specialist" | "review";
+    phase: "plan" | "specialist" | "review" | "independent_review";
     provider: AgentProvider;
     runId: string;
     goal: string;

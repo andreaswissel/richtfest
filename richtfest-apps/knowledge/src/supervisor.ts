@@ -43,6 +43,21 @@ export const supervisorReview = specialistOutput.extend({
     )
     .max(4),
 });
+export const independentReview = specialistOutput.extend({
+  decision: z.enum(["accept", "revise"]),
+  findings: z.array(z.object({
+    severity: z.enum(["blocking", "note"]),
+    issue: z.string().min(1).max(2000),
+    recommendation: z.string().min(1).max(2000),
+    citations: z.array(z.string().uuid()).max(20),
+  }).strict()).max(20),
+  revisions: z.array(
+    z.object({
+      taskId: z.string().uuid(),
+      goal: z.string().min(1).max(2000),
+    }).strict(),
+  ).max(4),
+}).strict();
 export type Assignment = {
   taskId: string;
   runId: string;
@@ -51,6 +66,82 @@ export type Assignment = {
   sourceVersionIds: string[];
   output?: z.infer<typeof specialistOutput>;
 };
+export function assertIndependentReviewCitations(
+  review: z.infer<typeof independentReview>,
+  readableSourceIds: ReadonlySet<string>,
+) {
+  const citations = [
+    ...review.citations,
+    ...review.findings.flatMap((finding) => finding.citations),
+  ];
+  if (citations.some((versionId) => !readableSourceIds.has(versionId)))
+    throw conflict("Independent review cited a source without readable resolved text");
+}
+export function assertIndependentReviewDecision(
+  review: z.infer<typeof independentReview>,
+  assignments: Assignment[],
+) {
+  if (review.decision === "accept" && (review.revisions.length || review.findings.some((finding) => finding.severity === "blocking")))
+    throw conflict("Accepted independent review cannot contain blocking findings or request revisions");
+  if (review.revisions.length)
+    assertRevisionAssignments(review.revisions, assignments, review.decision === "revise");
+}
+export const INDEPENDENT_REVIEW_SOURCE_SLICE_SIZE = 3;
+export function chunkSourceVersionIds(versionIds: string[], size = INDEPENDENT_REVIEW_SOURCE_SLICE_SIZE) {
+  if (!Number.isInteger(size) || size < 1) throw new Error("Source slice size must be a positive integer");
+  const unique = [...new Set(versionIds)];
+  return Array.from({ length: Math.ceil(unique.length / size) }, (_, index) =>
+    unique.slice(index * size, (index + 1) * size),
+  );
+}
+export function aggregateIndependentReviews(
+  results: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[],
+) {
+  const findings = new Map<string, z.infer<typeof independentReview>["findings"][number]>();
+  const revisions = new Map<string, { taskId: string; goal: string }>();
+  for (const { output } of results) {
+    for (const finding of output.findings)
+      findings.set(JSON.stringify(finding), finding);
+    for (const revision of output.revisions) {
+      const previous = revisions.get(revision.taskId);
+      const goals = [previous?.goal, revision.goal].filter((goal): goal is string => typeof goal === "string" && goal.length > 0);
+      revisions.set(revision.taskId, {
+        taskId: revision.taskId,
+        goal: [...new Set(goals)].join("\nAdditional review guidance: ").slice(0, 2000),
+      });
+    }
+  }
+  const allFindings = [...findings.values()];
+  const maxFindings = 20;
+  const omittedFindings = Math.max(0, allFindings.length - maxFindings);
+  const includedFindings = allFindings.slice(0, maxFindings);
+  const summarize = (key: "summary" | "rationale", maxLength: number) => {
+    let value = results.map(({ sourceVersionIds, output }, index) =>
+      `Source slice ${index + 1} (${sourceVersionIds.length} versions): ${output[key]}`,
+    ).join("\n\n");
+    if (omittedFindings) value += `\n\n${omittedFindings} additional findings were omitted from the bounded result.`;
+    return value.slice(0, maxLength);
+  };
+  return independentReview.parse({
+    summary: summarize("summary", 10000) || "No readable assigned sources were available for independent review.",
+    rationale: summarize("rationale", 2000) || "No review call could be made without readable source excerpts.",
+    citations: [...new Set(results.flatMap(({ output }) => output.citations))],
+    decision: results.some(({ output }) => output.decision === "revise") ? "revise" : "accept",
+    findings: includedFindings,
+    revisions: [...revisions.values()].slice(0, 4),
+  });
+}
+export function assertRevisionAssignments(
+  revisions: { taskId: string; goal: string }[],
+  assignments: Assignment[],
+  required = true,
+) {
+  if (
+    (required && !revisions.length) ||
+    new Set(revisions.map((revision) => revision.taskId)).size !== revisions.length ||
+    revisions.some((revision) => !assignments.some((assignment) => assignment.taskId === revision.taskId))
+  ) throw conflict("Invalid revision assignments");
+}
 async function log(d: AppDeps, tx: any, run: any, type: string) {
   await tx.insert(agentRunEvents).values({
     tenantId: d.tenantId,
@@ -173,7 +264,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       if (!saved) throw conflict("Supervisor no longer active");
     };
     const call = async (
-      phase: "plan" | "specialist" | "review",
+      phase: "plan" | "specialist" | "review" | "independent_review",
       goal: string,
       context: unknown,
       runId = id,
@@ -190,9 +281,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           workspaceGuidance: (() => {
             // Pre-existing runs retain original defaults rather than adopting later settings.
             const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
-            const role = phase === "specialist" ? (context as { role: string }).role : "supervisor";
+            const role = phase === "specialist" || phase === "independent_review"
+              ? (context as { role: string }).role
+              : "supervisor";
+            const profile = profiles.find(profile => profile.key === role) ?? (
+              role === "independent_reviewer"
+                ? { ...defaultProfiles().find(profile => profile.key === role)!, knowledge: [] }
+                : undefined
+            );
             return {
-              profile: profiles.find(profile => profile.key === role),
+              profile,
               routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
             };
           })(),
@@ -435,18 +533,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         review.decision === "revise" &&
         state.revision < policy.maxRevisions
       ) {
-        if (
-          !review.revisions.length ||
-          new Set(review.revisions.map((r) => r.taskId)).size !==
-            review.revisions.length ||
-          review.revisions.some(
-            (r) =>
-              !(state.assignments as Assignment[]).some(
-                (a) => a.taskId === r.taskId,
-              ),
-          )
-        )
-          throw conflict("Invalid revision assignments");
+        assertRevisionAssignments(review.revisions, state.assignments as Assignment[]);
         await commit(d, run, token, async (tx) => {
           const assignments = (state.assignments as Assignment[]).map((a) => {
             const revision = review.revisions.find(
@@ -485,6 +572,25 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             })
             .where(eq(supervisorRuns.runId, id));
           await log(d, tx, run, "supervisor_revision_requested");
+        });
+      } else if (
+        review.decision === "accept" &&
+        state.modelPolicy?.independentReviewEnabled === true
+      ) {
+        await commit(d, run, token, async (tx) => {
+          await tx
+            .update(supervisorRuns)
+            .set({
+              phase: "independent_review",
+              review,
+              history: [
+                ...state.history,
+                { phase: "review", revision: state.revision, output: review },
+              ],
+            })
+            .where(eq(supervisorRuns.runId, id));
+          await log(d, tx, run, "supervisor_review_completed");
+          await log(d, tx, run, "independent_review_started");
         });
       } else {
         await commit(d, run, token, async (tx) => {
@@ -567,6 +673,200 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               sourceVersionIds: review.citations,
             });
           await log(d, tx, run, "supervisor_review_completed");
+        });
+      }
+    } else if (state.phase === "independent_review") {
+      const assignments = state.assignments as Assignment[];
+      const sourceVersionIds = [...new Set(assignments.flatMap((a) => a.sourceVersionIds))];
+      await sources(d, run.projectId, sourceVersionIds);
+      const resolvedExcerpts = await Promise.all(sourceVersionIds.map(async (versionId) => {
+        await assertActive();
+        return { versionId, resolution: await d.resolveSource(run.projectId, { versionId }) };
+      }));
+      const readableSourceIds = new Set(resolvedExcerpts.flatMap(({ versionId, resolution }: any) =>
+        resolution?.status === "resolved" &&
+        resolution?.source?.versionId === versionId &&
+        resolution?.content?.status === "available" &&
+        typeof resolution.content.text === "string" &&
+        resolution.content.text.trim().length > 0
+          ? [versionId]
+          : [],
+      ));
+      const unreadableSources = resolvedExcerpts
+        .filter(({ versionId }) => !readableSourceIds.has(versionId))
+        .map(({ versionId, resolution }: any) => ({ versionId, name: resolution?.source?.name ?? null }));
+      const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
+      const firstPassReview = state.review;
+      const sourceSlices = chunkSourceVersionIds([...readableSourceIds]);
+      const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
+      for (let index = 0; index < sourceSlices.length; index++) {
+        const sliceIds = sourceSlices[index];
+        const sliceIdSet = new Set(sliceIds);
+        const sourceExcerpts = resolvedExcerpts.filter(({ versionId }) => sliceIdSet.has(versionId));
+        const sliceAssignments = assignments.filter((assignment) =>
+          assignment.sourceVersionIds.some((versionId) => sliceIdSet.has(versionId)) ||
+          (index === 0 && assignment.sourceVersionIds.length === 0),
+        );
+        const sliceReview = firstPassReview && typeof firstPassReview === "object"
+          ? { ...firstPassReview, citations: Array.isArray((firstPassReview as any).citations) ? (firstPassReview as any).citations.filter((versionId: string) => sliceIdSet.has(versionId)) : [] }
+          : firstPassReview;
+        const output = independentReview.parse(await call("independent_review", goal, {
+          role: "independent_reviewer",
+          originalGoal: run.goal,
+          assignments: sliceAssignments.map((assignment) => ({
+            taskId: assignment.taskId,
+            role: assignment.role,
+            goal: assignment.goal,
+            sourceVersionIds: assignment.sourceVersionIds.filter((versionId) => sliceIdSet.has(versionId)),
+            result: assignment.output ? {
+              ...assignment.output,
+              citations: assignment.output.citations.filter((versionId) => sliceIdSet.has(versionId)),
+            } : undefined,
+          })),
+          specialistResults: sliceAssignments.map((assignment) => ({
+            taskId: assignment.taskId,
+            role: assignment.role,
+            goal: assignment.goal,
+            sourceVersionIds: assignment.sourceVersionIds.filter((versionId) => sliceIdSet.has(versionId)),
+            output: assignment.output ? {
+              ...assignment.output,
+              citations: assignment.output.citations.filter((versionId) => sliceIdSet.has(versionId)),
+            } : undefined,
+          })),
+          firstPassReview: sliceReview,
+          sourceExcerpts,
+          sourceCoverage: {
+            slice: index + 1,
+            sliceCount: sourceSlices.length,
+            assignedVersionCount: sourceVersionIds.length,
+            readableVersionCount: readableSourceIds.size,
+            sliceVersionIds: sliceIds,
+            unreadableSources,
+          },
+          revision: state.revision,
+        }));
+        assertIndependentReviewCitations(output, sliceIdSet);
+        sliceResults.push({ sourceVersionIds: sliceIds, output });
+      }
+      const aggregated = aggregateIndependentReviews(sliceResults);
+      const output = independentReview.parse({
+        ...aggregated,
+        decision: coverageIncomplete ? "revise" : aggregated.decision,
+        findings: coverageIncomplete
+          ? [{
+              severity: "blocking",
+              issue: sourceVersionIds.length === 0
+                ? "No source versions were assigned for independent review."
+                : `Independent review could not reread ${unreadableSources.length} assigned source version(s): ${unreadableSources.map((source: any) => source.name ?? source.versionId).join(", ")}.`,
+              recommendation: sourceVersionIds.length === 0
+                ? "Assign the relevant immutable source versions and rerun independent review."
+                : "Restore readable source content and rerun independent review before relying on complete source coverage.",
+              citations: [],
+            }, ...aggregated.findings].slice(0, 20)
+          : aggregated.findings,
+      });
+      assertIndependentReviewCitations(output, readableSourceIds);
+      assertIndependentReviewDecision(output, assignments);
+      if (output.decision === "revise" && output.revisions.length && state.revision < policy.maxRevisions) {
+        assertRevisionAssignments(output.revisions, assignments);
+        await commit(d, run, token, async (tx) => {
+          const revisedAssignments = assignments.map((assignment) => {
+            const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
+            return revision ? { ...assignment, goal: revision.goal, output: undefined } : assignment;
+          });
+          for (const assignment of revisedAssignments.filter((item) => !item.output)) {
+            await tx.update(agentRuns).set({
+              status: "queued",
+              goal: assignment.goal,
+              outputSummary: null,
+              updatedAt: new Date(),
+            }).where(eq(agentRuns.id, assignment.runId));
+            await tx.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, assignment.taskId));
+          }
+          await tx.update(supervisorRuns).set({
+            assignments: revisedAssignments,
+            phase: "specialists",
+            revision: state.revision + 1,
+            review: { firstPassReview, independentReview: output },
+            history: [
+              ...state.history,
+              { phase: "independent_review", revision: state.revision, output },
+            ],
+          }).where(eq(supervisorRuns.runId, id));
+          await log(d, tx, run, "independent_review_completed");
+          await log(d, tx, run, "independent_review_revision_requested");
+        });
+      } else {
+        await commit(d, run, token, async (tx) => {
+          const unresolved = output.decision === "revise";
+          const coverageNote = coverageIncomplete
+            ? sourceVersionIds.length === 0
+              ? "Independent review source coverage incomplete: no source versions were assigned."
+              : `Independent review source coverage incomplete: ${unreadableSources.length} assigned source version(s) could not be reread (${unreadableSources.map((source: any) => source.name || source.versionId).join(", ")}).`
+            : "Independent review source coverage complete for every assigned source version.";
+          const findingsSummary = output.findings.map((finding) => `${finding.severity === "blocking" ? "Issue" : "Note"}: ${finding.issue} Recommendation: ${finding.recommendation}`);
+          const summary = [
+            firstPassReview?.summary,
+            `Independent review: ${output.summary}`,
+            ...findingsSummary,
+            coverageNote,
+            unresolved ? "Revision limit reached. Unresolved independent-review issues require human review." : "",
+          ].filter(Boolean).join("\n\n");
+          const rationale = [
+            firstPassReview?.rationale,
+            `Independent review rationale\n\n${output.rationale}`,
+            findingsSummary.length ? `Independent review findings\n\n${findingsSummary.join("\n\n")}` : "",
+            coverageNote,
+          ].filter(Boolean).join("\n\n");
+          const reviewCitations = [...new Set([
+            ...output.citations,
+            ...output.findings.flatMap((finding) => finding.citations),
+          ])];
+          d.requirePermission("knowledge:write");
+          const resultArtifact = await createArtifact({
+            ...d,
+            audit: (tx, action, type, entityId, metadata) => d.auditRun(tx, action, type, entityId, id, run.correlationId, metadata),
+          }, tx, {
+            projectId: run.projectId,
+            title: run.goal.slice(0, 200),
+            type: "draft",
+            content: `${summary}\n\n${rationale}`,
+            payload: { kind: "summary", data: [{ summary, rationale }] },
+            sourceVersionIds: reviewCitations,
+          }, id);
+          const resultReference = {
+            kind: "supervisor_result",
+            artifactId: resultArtifact.artifact.id,
+            revisionId: resultArtifact.revision.id,
+            generation: state.generation,
+          };
+          await tx.update(agentRuns).set({
+            status: "needs_review",
+            outputSummary: summary,
+            partialOutput: summary,
+            rationale,
+            updatedAt: new Date(),
+          }).where(eq(agentRuns.id, id));
+          await tx.update(supervisorRuns).set({
+            phase: "done",
+            review: { ...output, firstPassReview, unresolved, result: resultReference },
+            history: [
+              ...state.history,
+              { phase: "independent_review", revision: state.revision, generation: state.generation, output, result: resultReference },
+            ],
+          }).where(eq(supervisorRuns.runId, id));
+          if (run.conversationId) await tx.insert(messages).values({
+            tenantId: d.tenantId,
+            conversationId: run.conversationId,
+            authorId: d.actorId,
+            actorKind: "agent",
+            runId: id,
+            parentMessageId: run.messageId,
+            body: summary,
+            openui: `root = ArtifactPreview(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
+            sourceVersionIds: reviewCitations,
+          });
+          await log(d, tx, run, "independent_review_completed");
         });
       }
     }

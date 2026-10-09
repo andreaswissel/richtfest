@@ -14,6 +14,7 @@ const reasoningEfforts = ["low", "medium", "high", "xhigh"];
 const roleLabels: Record<string, string> = {
   source_reviewer: "supervisorSourceReviewer",
   requirements_reviewer: "supervisorRequirementsReviewer",
+  independent_reviewer: "supervisorIndependentReviewer",
   synthesizer: "supervisorSynthesizer",
 };
 
@@ -141,6 +142,25 @@ export function SupervisorPresets({
               value,
               label: t(`effort_${value}` as never),
             }))}
+          />
+        </Field>
+        <Field
+          label={t("supervisorIndependentReview")}
+          hint={t("supervisorIndependentReviewDescription")}
+        >
+          <Segmented
+            value={
+              activeDraft.independentReviewEnabled === true
+                ? "enabled"
+                : "disabled"
+            }
+            onChange={(value) =>
+              updateConfig(["independentReviewEnabled"], value === "enabled")
+            }
+            items={[
+              { value: "disabled", label: t("disabled") },
+              { value: "enabled", label: t("enabled") },
+            ]}
           />
         </Field>
       </div>

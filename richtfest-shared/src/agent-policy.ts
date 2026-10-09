@@ -20,6 +20,8 @@ export const agentPresetConfigSchema = z.object({
     source_reviewer: agentModelConfigSchema,
     requirements_reviewer: agentModelConfigSchema,
   }).strict(),
+  // Opt-in to a fresh reviewer pass after the supervisor's own evidence review.
+  independentReviewEnabled: z.boolean().default(false),
   maxParallel: z.number().int().min(1).max(3),
   maxTasks: z.number().int().min(1).max(4),
   maxRevisions: z.number().int().min(0).max(2),
