@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
 import { z } from "zod";
@@ -78,8 +79,11 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
   app.use("/api", (_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   if (env.NODE_ENV === "production") {
     const webDirectory = path.resolve(import.meta.dir, "../../web/dist");
+    const webHtml = readFileSync(path.join(webDirectory, "index.html"), "utf8")
+      .replaceAll("__PUBLIC_ORIGIN__", new URL(env.BETTER_AUTH_URL).origin);
+    app.get("/index.html", (_req, res) => res.type("html").send(webHtml));
     app.use(express.static(webDirectory, { index: false }));
-    app.get("*", (_req, res) => res.sendFile(path.join(webDirectory, "index.html")));
+    app.get("*", (_req, res) => res.type("html").send(webHtml));
   }
   app.use((_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => { if (error instanceof z.ZodError) return res.status(400).json(fail("validation_error", "Request validation failed", error.flatten())); if (error instanceof HttpError || (error as any)?.status) { const e = error as any; return res.status(e.status ?? 500).json(fail(e.code ?? "request_error", e.message)); } console.error(error); return res.status(500).json(fail("internal_error", "An unexpected error occurred")); });

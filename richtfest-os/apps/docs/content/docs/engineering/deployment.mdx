@@ -19,6 +19,16 @@ Configure the database connection, canonical HTTPS origin, authentication secret
 
 Choose the canonical origin before enrolling production passkeys. Keep local/test identities and preview mail delivery out of production. Missing delivery or provider configuration must remain explicit.
 
+## Social link previews
+
+The web HTML includes Open Graph and large-image Twitter card metadata, so crawlers do not need JavaScript or a session. In production, the API resolves preview URLs against the origin in `BETTER_AUTH_URL` at startup; set it to the public HTTPS origin, not a private Railway hostname. The image is the public, bundled 1200 × 630 JPEG at `/social-preview-v1.jpg`, not a private Bucket upload.
+
+App links use the same Richtfest title, description and image. Preview metadata never includes project names, document content or authentication tokens. Docs remain behind sign-in and are not a public preview surface. When replacing the image, version its filename and update the HTML metadata to avoid stale image caches. Messaging services may retain previews of links already posted; existing messages are not automatically refreshed by a deployment.
+
+Run `bun test tests/social-preview.test.ts` to build the web bundle and verify unauthenticated crawler responses and image delivery through the production API without a database connection.
+
+## File storage
+
 Use a private Railway Bucket for original uploaded files and revisions. Stream or upload directly to the bucket; the prototype does not impose an arbitrary application-level file-size cap. Platform and transport failures must still be handled explicitly. A local storage adapter is for development, and a service's temporary filesystem is not a production file store.
 
 Configure bucket credentials and browser CORS for the application origin. Authorize access before creating short-lived upload or download URLs, and retain immutable object/version references in Postgres. Back up the database and bucket objects as a coherent recovery set, protect backup access and encryption keys, and test restoration in an isolated environment.
