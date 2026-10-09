@@ -67,6 +67,11 @@ integration(
       cancelExecution: () => {},
       providerConfigured: async () => true,
       executeProvider: async () => ({ status: "unconfigured" }),
+      listProjectSources: async () => ({
+        sources: [],
+        truncated: false,
+        authority: "unreviewed_source_inventory",
+      }),
       resolveSource: async () => ({ text: "test evidence" }),
       executeSupervisor: async (input) => {
         calls.push({ phase: input.phase, runId: input.runId });

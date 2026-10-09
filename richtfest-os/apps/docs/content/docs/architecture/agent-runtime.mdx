@@ -12,9 +12,9 @@ description: The gated V1 supervisor workflow for project conversations and boun
 
 ## Gated V1
 
-Project chat is the entry point for agentic work. The Richtfest OS host authenticates the actor, applies workspace and role access, and passes the approved context to a Mastra supervisor. The supervisor uses its configured model to interpret the request, create bounded assignments and review returned results. A human can steer, approve or cancel the run at the review boundary.
+Project chat is the entry point for agentic work. The Richtfest OS host authenticates the actor, applies workspace and role access, and passes the approved context to a Mastra supervisor. Context includes a bounded inventory of the project's latest ready file versions so the planner can select relevant exact versions even when the user has not attached them. Inventory metadata is discovery-only; specialists resolve assigned versions into bounded excerpts before they can support citations. The supervisor uses its configured model to interpret the request, create bounded assignments and review returned results. A human can steer, approve or cancel the run at the review boundary.
 
-The enabled V1 delegates only to the `source_reviewer` and `requirements_reviewer` specialist roles. Their assignments are bounded by the source versions supplied to the run and return structured summaries, rationale and citations. Calculation specialists and deterministic calculation tools are future work; no engineering calculation is performed by this workflow.
+The enabled V1 delegates only to the `source_reviewer` and `requirements_reviewer` specialist roles. Their assignments are bounded by exact versions in the project inventory or explicitly attached to the run, and return structured summaries, rationale and citations. Uploaded files remain unreviewed evidence until a person reviews them; that status does not prevent an agent from reading them. Calculation specialists and deterministic calculation tools are future work; no engineering calculation is performed by this workflow.
 
 ## Delegation shape
 

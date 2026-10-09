@@ -79,6 +79,10 @@ export function recordResolvedEvidence(evidence: Set<string>, result: unknown) {
     .object({
       status: z.literal("resolved"),
       source: z.object({ versionId: z.string().uuid() }),
+      content: z.object({
+        status: z.literal("available"),
+        text: z.string().trim().min(1),
+      }),
     })
     .safeParse(result);
   if (resolved.success) evidence.add(resolved.data.source.versionId);
@@ -184,10 +188,13 @@ export async function executeRun(d: AppDeps, run: any) {
       return true;
     });
     if (!claimed) return;
-    const evidence = new Set<string>(run.sourceVersionIds as string[]);
+    const sourceInventory = await d.listProjectSources(run.projectId);
+    const evidence = new Set<string>();
     const sourceContent = [];
     for (const versionId of run.sourceVersionIds as string[]) {
-      sourceContent.push(await d.resolveSource(run.projectId, { versionId }));
+      const resolved = await d.resolveSource(run.projectId, { versionId });
+      sourceContent.push(resolved);
+      recordResolvedEvidence(evidence, resolved);
     }
     const history = run.conversationId
       ? await d.db
@@ -268,6 +275,7 @@ export async function executeRun(d: AppDeps, run: any) {
       specialistRole: run.specialistRole ?? null,
       delegationAllowed: !run.parentRunId,
       sources: sourceContent,
+      sourceInventory,
       projectId: run.projectId,
       sourceVersionIds: run.sourceVersionIds,
       capabilities:

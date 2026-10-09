@@ -408,6 +408,25 @@ export const knowledgeDeps = (
         correlationId,
       }),
     ...runtimeOverrides,
+    listProjectSources: async (projectId) => {
+      // Fetch one extra row to expose truncation without an unbounded count or
+      // sending private storage/provenance fields to the provider.
+      const result = await db.execute(
+        sql`select "fileId", name, "versionId", version, "mimeType" from (select distinct on (f.id) f.id as "fileId", left(f.name, 500) as name, v.id as "versionId", v.version, v.mime_type as "mimeType", v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready' order by f.id,v.version desc) latest order by "createdAt" desc limit 101`,
+      );
+      const rows = result.rows as {
+        fileId: string;
+        name: string;
+        versionId: string;
+        version: number;
+        mimeType: string;
+      }[];
+      return {
+        sources: rows.slice(0, 100),
+        truncated: rows.length > 100,
+        authority: "unreviewed_source_inventory",
+      };
+    },
     resolveSource: async (projectId, input) => {
       const result = await db.execute(
         sql`select distinct on (f.id) f.id as "fileId", f.name, v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,

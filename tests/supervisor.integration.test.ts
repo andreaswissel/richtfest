@@ -33,7 +33,8 @@ integration(
     const { db, pool } = createDatabase(process.env.DATABASE_URL!);
     const tenantId = crypto.randomUUID(),
       actorId = crypto.randomUUID(),
-      projectId = crypto.randomUUID();
+      projectId = crypto.randomUUID(),
+      inventoryVersionId = crypto.randomUUID();
     const calls: { phase: string; context: any }[] = [];
     let reviewCount = 0;
     const d: AppDeps = {
@@ -52,6 +53,17 @@ integration(
       cancelExecution: () => {},
       providerConfigured: async () => true,
       executeProvider: async () => ({ status: "unconfigured" }),
+      listProjectSources: async () => ({
+        sources: [{
+          fileId: crypto.randomUUID(),
+          name: "DIN 4109 2025 159 Calculation IL.pdf",
+          versionId: inventoryVersionId,
+          version: 1,
+          mimeType: "application/pdf",
+        }],
+        truncated: false,
+        authority: "unreviewed_source_inventory",
+      }),
       resolveSource: async () => ({ text: "source" }),
       executeSupervisor: async (input) => {
         calls.push({ phase: input.phase, context: input.context });
@@ -63,7 +75,7 @@ integration(
                 {
                   role: "source_reviewer",
                   goal: "Review A",
-                  sourceVersionIds: [],
+                  sourceVersionIds: [inventoryVersionId],
                 },
                 {
                   role: "requirements_reviewer",
@@ -125,12 +137,17 @@ integration(
       id = run!.id;
       await createSupervisor(d, db, run, "medium", policy);
       await stepSupervisor(d, id); // durable plan
+      const planCall = calls.find((call) => call.phase === "plan");
+      expect(
+        (planCall!.context as any).sourceInventory.sources[0].versionId,
+      ).toBe(inventoryVersionId);
       // Simulate one successfully committed specialist and process death before its sibling.
       const [state] = await db
         .select()
         .from(supervisorRuns)
         .where(eq(supervisorRuns.runId, id));
       const assignments = state!.assignments as any[];
+      expect(assignments[0]!.sourceVersionIds).toEqual([inventoryVersionId]);
       assignments[0].output = {
         summary: "Evidence recovered from prior process",
         rationale: "saved",
@@ -198,6 +215,11 @@ integration(
       actorId,
       requirePermission: () => {},
       validateProject: async () => true,
+      listProjectSources: async () => ({
+        sources: [],
+        truncated: false,
+        authority: "unreviewed_source_inventory",
+      }),
       auditRun: async () => {},
       executeSupervisor: async () => {
         await db
@@ -271,6 +293,11 @@ integration(
       actorId,
       requirePermission: () => {},
       validateProject: async () => true,
+      listProjectSources: async () => ({
+        sources: [],
+        truncated: false,
+        authority: "unreviewed_source_inventory",
+      }),
       auditRun: async () => {},
       executeSupervisor: async (input: any) => {
         expect(input.modelPolicy.version).toBe(1);
@@ -448,6 +475,11 @@ integration(
       actorId,
       requirePermission: () => {},
       validateProject: async () => true,
+      listProjectSources: async () => ({
+        sources: [],
+        truncated: false,
+        authority: "unreviewed_source_inventory",
+      }),
       auditRun: async () => {},
       executeSupervisor: async (input: any) => {
         if (input.phase === "plan")

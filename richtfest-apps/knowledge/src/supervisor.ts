@@ -198,6 +198,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
     if (state.phase === "plan") {
+      const sourceInventory = await d.listProjectSources(run.projectId);
+      const availableSourceIds = new Set<string>([
+        ...run.sourceVersionIds,
+        ...sourceInventory.sources.map((source) => source.versionId),
+      ]);
       const history = run.conversationId
         ? await d.db
             .select({
@@ -246,6 +251,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await call("plan", goal, {
           projectId: run.projectId,
           sourceVersionIds: run.sourceVersionIds,
+          sourceInventory,
           history: history
             .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) }))
             .reverse(),
@@ -256,7 +262,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         throw conflict("Plan exceeds effort task budget");
       for (const task of plan.tasks) {
         if (
-          task.sourceVersionIds.some((v) => !run.sourceVersionIds.includes(v))
+          task.sourceVersionIds.some((v) => !availableSourceIds.has(v))
         )
           throw conflict("Assignment exceeds source scope");
         await sources(d, run.projectId, task.sourceVersionIds);
@@ -325,6 +331,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   return d.resolveSource(run.projectId, { versionId });
                 }),
               );
+              const readableSourceIds = new Set(
+                excerpts.flatMap((excerpt: any) =>
+                  excerpt?.status === "resolved" &&
+                  excerpt?.content?.status === "available" &&
+                  typeof excerpt.content.text === "string" &&
+                  excerpt.content.text.trim().length > 0
+                    ? [excerpt.source?.versionId].filter(
+                        (versionId: unknown): versionId is string =>
+                          typeof versionId === "string",
+                      )
+                    : [],
+                ),
+              );
               const output = specialistOutput.parse(
                 await call(
                   "specialist",
@@ -339,10 +358,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               );
               if (
                 output.citations.some(
-                  (v) => !assignment.sourceVersionIds.includes(v),
+                  (v) => !readableSourceIds.has(v),
                 )
               )
-                throw conflict("Citation exceeds assignment scope");
+                throw conflict("Citation has no readable source text");
               await commit(d, run, token, async (tx, current) => {
                 const assignments = (current.assignments as Assignment[]).map(
                   (a) => (a.runId === assignment.runId ? { ...a, output } : a),

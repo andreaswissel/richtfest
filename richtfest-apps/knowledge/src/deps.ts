@@ -21,6 +21,7 @@ export type AppDeps = {
   executeProvider: (input: ProviderRequest) => Promise<ProviderResult>;
   /** Generate a title from the first user message using the active provider. */
   generateConversationTitle?: (input: { message: string }) => Promise<string | null>;
+  listProjectSources: (projectId: string) => Promise<ProjectSourceInventory>;
   resolveSource: (
     projectId: string,
     input: {
@@ -72,3 +73,16 @@ export type ProviderRequest = {
 };
 export type ProviderResult =
   { status: "unconfigured" } | { status: "completed"; output: unknown };
+
+/** Discovery metadata only; a source must be resolved before it can be cited. */
+export type ProjectSourceInventory = {
+  sources: {
+    fileId: string;
+    name: string;
+    versionId: string;
+    version: number;
+    mimeType: string;
+  }[];
+  truncated: boolean;
+  authority: "unreviewed_source_inventory";
+};

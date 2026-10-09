@@ -22,7 +22,7 @@ test("project-owned but unread versions cannot be cited in prose or OpenUI", () 
   ).toThrow("not supplied or resolved");
 });
 
-test("only successful source resolution extends this run's citation scope", () => {
+test("only readable source text extends this run's citation scope", () => {
   const evidence = new Set([supplied]);
   recordResolvedEvidence(evidence, {
     status: "missing_input",
@@ -32,10 +32,26 @@ test("only successful source resolution extends this run's citation scope", () =
     status: "failed",
     source: { versionId: unreadProjectVersion },
   });
+  recordResolvedEvidence(evidence, {
+    status: "resolved",
+    source: { versionId: unreadProjectVersion },
+    content: { status: "unsupported", reason: "Scanned document" },
+  });
+  recordResolvedEvidence(evidence, {
+    status: "resolved",
+    source: { versionId: unreadProjectVersion },
+    content: { status: "available", text: "" },
+  });
+  recordResolvedEvidence(evidence, {
+    status: "resolved",
+    source: { versionId: unreadProjectVersion },
+    content: { status: "available", text: "   " },
+  });
   expect(evidence.has(unreadProjectVersion)).toBe(false);
   recordResolvedEvidence(evidence, {
     status: "resolved",
     source: { versionId: unreadProjectVersion },
+    content: { status: "available", text: "Extracted source evidence" },
   });
   expect(() =>
     assertEvidenceCitations(

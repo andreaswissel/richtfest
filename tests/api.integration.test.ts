@@ -24,21 +24,48 @@ describe("accepted API workflow (PostgreSQL)", () => {
             providerRequests.at(-1).input ??
               providerRequests.at(-1).messages[0].content,
           );
-          const output = {
-            summary: "The immutable source excerpt is ready for review.",
-            rationale: "Review uses the selected source version.",
-            citations: prompt.context.sourceVersionIds,
-            tools:
-              providerMode === "forbidden"
-                ? [{ name: "fetch_url", input: { url: "https://example.com" } }]
-                : [],
-            artifact: {
-              title: "Proposed source review",
-              content:
-                "The source says ISO-IFC-SOURCE. This is a proposed note requiring review.",
-              type: "draft",
-            },
-          };
+          const inventorySource = prompt.context.sourceInventory?.sources?.find(
+            (source: any) => source.name === "plan.ifc",
+          );
+          const resolvedSourceId =
+            prompt.toolResults?.[0]?.result?.source?.versionId;
+          const output =
+            providerMode === "discover"
+              ? prompt.toolResults?.length
+                ? {
+                    summary: "The project source was read and is ready for review.",
+                    rationale: "The exact immutable version was resolved.",
+                    citations: resolvedSourceId ? [resolvedSourceId] : [],
+                    tools: [],
+                    artifact: null,
+                  }
+                : {
+                    summary: "Resolving the relevant project source.",
+                    rationale: "The project inventory identifies the source.",
+                    citations: [],
+                    tools: [
+                      {
+                        name: "resolve_project_source",
+                        input: { versionId: inventorySource?.versionId },
+                      },
+                    ],
+                    artifact: null,
+                  }
+              : {
+                  summary: "The immutable source excerpt is ready for review.",
+                  rationale: "Review uses the selected source version.",
+                  citations: prompt.context.sourceVersionIds,
+                  tools:
+                    providerMode === "forbidden"
+                      ? [{ name: "fetch_url", input: { url: "https://example.com" } }]
+                      : [],
+                  artifact: {
+                    title: "Proposed source review",
+                    content:
+                      "The source says ISO-IFC-SOURCE. This is a proposed note requiring review.",
+                    type: "draft",
+                  },
+                };
           return Response.json({
             output: [
               {
@@ -721,6 +748,48 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect(proposed.artifacts[0].status).toBe("draft");
         expect(JSON.stringify(providerRequests)).toContain("ISO-IFC-SOURCE");
         expect(JSON.stringify(providerRequests)).not.toContain("VERSION-TWO");
+        providerMode = "discover";
+        const discoveryStart = providerRequests.length;
+        const discoveryRun = await request(
+          "/api/knowledge/runs",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              ...runRequest,
+              goal: "Inspect the relevant project data",
+              sourceVersionIds: [],
+            }),
+          },
+          cookie,
+        );
+        expect(discoveryRun.response.status).toBe(201);
+        let discoveryResult: any;
+        for (let i = 0; i < 100; i++) {
+          discoveryResult = await request(
+            `/api/knowledge/runs/${discoveryRun.body.data.id}`,
+            {},
+            cookie,
+          );
+          if (!['queued', 'running'].includes(discoveryResult.body.data.run.status))
+            break;
+          await Bun.sleep(20);
+        }
+        const discoveryRequests = providerRequests.slice(discoveryStart).map((body) =>
+          JSON.parse(body.input ?? body.messages[0].content),
+        );
+        expect(discoveryRequests).toHaveLength(2);
+        expect(discoveryRequests[0]!.context.sources).toEqual([]);
+        expect(
+          discoveryRequests[0]!.context.sourceInventory.sources[0],
+        ).toMatchObject({
+          name: "plan.ifc",
+          versionId: newVersion.body.data.versionId,
+          version: 2,
+        });
+        expect(JSON.stringify(discoveryRequests[1]!.toolResults)).toContain(
+          "VERSION-TWO",
+        );
+        expect(discoveryResult.body.data.run.status).toBe("needs_review");
         const unread = await request(
           `/api/knowledge/workspaces/${projectId}`,
           {},

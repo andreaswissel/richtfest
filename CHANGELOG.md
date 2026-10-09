@@ -10,6 +10,8 @@
 
 - Project workspace can show an embedded visual preview for Affinity Publisher files while keeping the original download available.
 
+- Project agents can discover the latest ready source files from a bounded project inventory and review exact versions without requiring them to be attached first.
+
 - Kept the project message send button in place while the draft save status changes.
 
 - Send project workspace messages with Enter; use Shift+Enter for a new line.
