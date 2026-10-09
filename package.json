@@ -16,5 +16,9 @@
     "backup": "./scripts/backup.sh",
     "restore": "./scripts/restore.sh"
   },
-  "devDependencies": { "@types/bun": "latest", "typescript": "^5.7.2" }
+  "devDependencies": {
+    "@types/bun": "latest",
+    "railway": "^3.13.1",
+    "typescript": "^5.7.2"
+  }
 }

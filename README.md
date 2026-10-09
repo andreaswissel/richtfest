@@ -24,9 +24,20 @@ Keep `reference-project/`, `context/`, `.data/`, `.env`, and generated output lo
 
 ## Railway setup
 
-Create the Railway project `richtfest-os` with one service named `richtfest-monorepo`, a Railway Postgres service, and a private Railway Bucket. Connect the service variable `DATABASE_URL` to `${{Postgres.DATABASE_URL}}`. Railway builds the root `Dockerfile`; the container runs database migrations and then starts the API. The API serves the built web bundle and the exported Fumadocs site at `/docs` after the backend static/auth mount is present.
+The Railway project `richtfest-os` is defined in `.railway/railway.ts` (Railway Infrastructure as Code): one service named `richtfest-monorepo`, a Railway Postgres service, and the private Railway Bucket `richtfest-files`, all in EU West (Amsterdam). Railway does not read this file during deploys, so do not create services from the Railway dashboard's GitHub import; it stages one failing service per workspace package. Apply the file with the Railway CLI instead:
 
-Set `PORT` to Railway's injected port, `NODE_ENV=production`, `BETTER_AUTH_URL` to the public service URL, and a strong `BETTER_AUTH_SECRET`. Configure the Bucket variables `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`, and `ENDPOINT` from the Railway Bucket. The bucket remains private; the API uses presigned downloads and multipart uploads with virtual-host-style endpoint URLs. There is no production volume mount and no AWS or Neon dependency. The CLI aliases, when a provider-neutral S3-compatible tool requires them, are `AWS_S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL`.
+```bash
+railway login && railway init --name richtfest-os   # first time only; later: railway link
+railway config plan                                  # review; omitted resources are deleted
+railway config apply
+railway variables --service richtfest-monorepo --set "BETTER_AUTH_SECRET=$(openssl rand -base64 48)" \
+  --set "AI_CONNECTION_ENCRYPTION_KEY=$(openssl rand -base64 32)" --set "RESEND_API_KEY=…" --set "RESEND_FROM=…"
+railway domain --service richtfest-monorepo
+```
+
+After that, every push to `main` deploys `richtfest-monorepo` from the root `Dockerfile`; the container runs database migrations and then starts the API. The API serves the built web bundle and the exported Fumadocs site at `/docs` after the backend static/auth mount is present.
+
+The file wires `NODE_ENV=production`, `DATABASE_URL` to Postgres, `BETTER_AUTH_URL` to the generated public domain, and the Bucket variables `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`, and `ENDPOINT` to the Railway Bucket; Railway injects `PORT`. Secrets are marked `preserve()` and set once with `railway variables`, never committed. The bucket remains private; the API uses presigned downloads and multipart uploads with virtual-host-style endpoint URLs. There is no production volume mount and no AWS or Neon dependency. The CLI aliases, when a provider-neutral S3-compatible tool requires them, are `AWS_S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL`.
 
 Uploaded objects use application-generated unique keys and database file/version records. That pairing preserves revisions even though the bucket itself does not provide provider-side versioning, object locks, or server-side encryption. The database dump therefore preserves the object metadata and revision relationships; bucket bytes must be exported separately through the approved S3-compatible object tooling and stored with the database backup. This repository does not perform a live bucket transfer during backup or restore.
 

@@ -5,7 +5,11 @@ description: Prepare the Railway prototype without deploying or provisioning it 
 
 ## Hosting shape
 
-The selected Railway project is `richtfest-os`, with `richtfest-monorepo` serving API and web on one origin and a separate `Postgres` service. Connect through Railway's private `DATABASE_URL` reference. AWS and Neon are not part of this architecture.
+The selected Railway project is `richtfest-os`, with `richtfest-monorepo` serving API and web on one origin, a separate `Postgres` service and the private `richtfest-files` bucket, all in EU West (Amsterdam). Connect through Railway's private `DATABASE_URL` reference. AWS and Neon are not part of this architecture.
+
+The project is defined in `.railway/railway.ts` (Railway Infrastructure as Code); `railway.json` is deprecated and not read by new services. Railway evaluates the file only through `railway config plan` and `railway config apply`, not on deploy. Change services, variables or resources in that file and apply it; dashboard edits drift from it. A resource omitted from the file is deleted on the next apply, so always review the plan. Secrets stay `preserve()` in the file and are set with `railway variables`. The README lists the first-time setup commands.
+
+Do not create the services through the dashboard's GitHub import. It detects the Bun workspaces and stages one service per package, and each of those builds fails because the packages are not standalone deployables.
 
 Fumadocs exports a static site. The API serves its output under `/docs` behind sign-in, including document data and assets. No separate production Next.js server is required.
 
