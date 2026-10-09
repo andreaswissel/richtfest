@@ -1,7 +1,11 @@
 # Railway runs the API, web bundle, and exported Fumadocs site as one service.
 # Keep the build inputs explicit so local node_modules, customer references, and
 # generated output never become part of the Docker build context.
-FROM oven/bun:1.3.8 AS manifests
+# Docker Hub rate-limits shared builders. The public mirror serves the same
+# upstream Bun 1.3.8 multi-architecture digest; do not use an unpinned mirror tag.
+FROM mirror.gcr.io/oven/bun:1.3.8@sha256:371d30538b69303ced927bb5915697ac7e2fa8cb409ee332c66009de64de5aa3 AS bun
+
+FROM bun AS manifests
 
 WORKDIR /app
 
@@ -56,7 +60,7 @@ RUN apt-get update \
 COPY richtfest-os/apps/docs ./richtfest-os/apps/docs
 RUN cd richtfest-os/apps/docs && node_modules/.bin/next build --webpack
 
-FROM oven/bun:1.3.8 AS runtime
+FROM bun AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production

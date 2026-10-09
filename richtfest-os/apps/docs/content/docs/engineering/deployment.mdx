@@ -15,6 +15,8 @@ Fumadocs exports a static site. The API serves its output under `/docs` behind s
 
 Docker runs the typecheck, web build and docs export in independent stages, so Railway can build them in parallel and reuse unchanged stages. Only application source and build inputs invalidate these stages, not agent rules or infrastructure metadata. The runtime image installs production dependencies and only native bindings for its own architecture. All workspace typechecks still gate the image. The service pins `PORT=3000`, matching the public domain's target port.
 
+The base image comes from Google's public Docker Hub mirror, pinned to the identical upstream Bun 1.3.8 multi-architecture digest, to avoid Docker Hub rate limits on shared builders. Application hosting and storage remain on Railway.
+
 ## Configuration before a live release
 
 Configure the database connection, canonical HTTPS origin, authentication secrets, allowed origin and passkey relying-party settings, server-side credential encryption, Resend API key and verified sender. Follow the repository environment example for the exact variable names.
