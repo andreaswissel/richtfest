@@ -1,0 +1,76 @@
+---
+title: Changelog
+description: Recent Richtfest product and platform updates.
+---
+
+## Unreleased
+
+- Added a Docs changelog page with the current release history in the Docs sidebar.
+
+- Moved “Back to projects” into the app header while viewing a project.
+
+- Project details can now be edited, including the name, customer and status; the status badge sits beside the project title.
+
+- Project threads show a small accent dot for unread messages and clear it after you reach the latest message.
+
+- Added an animated crane below the latest chat response to show when project agents are working.
+
+- Users can rename project threads manually from the thread list.
+
+- Project threads receive a concise model-generated title after their first message, using the active provider's economical model.
+- Added Agent controls for workspace role instructions, routing hints and approved company knowledge; each supervisor run keeps the guidance it started with.
+
+- Project workspace can show an embedded visual preview for Affinity Publisher files while keeping the original download available.
+
+- Project agents can discover the latest ready source files from a bounded project inventory and review exact versions without requiring them to be attached first.
+
+- Kept the project message send button in place while the draft save status changes.
+
+- Send project workspace messages with Enter; use Shift+Enter for a new line.
+
+- Changed saved agent model settings confirmation to a compact neutral status badge.
+
+- Clarified saved AI credentials in Settings with a masked key placeholder and a quieter saved status.
+
+- Added editable customer company/contact details, addresses and separate billing details, including invoice email, tax IDs, payment terms and one-click address copying. Existing customers can keep these fields empty.
+
+- Project chat now clearly warns when agent replies are unavailable, confirms that sent messages were saved, and links to AI connection settings.
+
+- Added provider-backed model selectors to agent model settings, with GPT 6 and Claude Opus 5.5 / Sonnet 5.5 models surfaced first.
+
+- Refresh now shows workspace navigation immediately instead of a full-screen loading splash; protected content waits for session verification, and connection failures offer retry without losing the shell.
+
+- Added branded social link previews with a construction illustration, clear title and description; private project details stay out of shared previews.
+
+- Added safe first-administrator provisioning for a new production workspace and corrected the sign-in email-delivery status for configured Resend accounts.
+
+- Refreshed sign-in emails with Richtfest branding, a clear sign-in button and plain-text fallback. Sign-in now offers a reload action when an old tab cannot load its code after deployment.
+
+- Reduced the deployment image size and separated the typecheck, web and docs build stages for parallel builds and better caching. A pinned mirror of the same Bun image avoids Docker Hub rate limits. Production routing now uses the same port as the API.
+
+- Defined the Railway project in code (`.railway/railway.ts`): one `richtfest-monorepo` service built from the Dockerfile, Postgres and the private file bucket in EU West. This replaces the deprecated `railway.json` and avoids Railway's per-package monorepo import. The production image now installs dependencies the same way as local development, which fixes the failing web typecheck in the Docker build.
+
+- Project sources support selecting and uploading multiple files in one action, with per-file progress and failure results; browser uploads use a private bucket policy scoped to the app origin.
+
+- Added a saved light and dark appearance preference in Account settings.
+
+- Refined the overview metrics, project table sorting controls, and passive empty states for a calmer dashboard.
+
+- Replaced the project conversation selector with a thread rail, including durable archive and restore actions that preserve messages and agent work.
+
+- Added Vercel AI Gateway credentials and workspace provider selection in Settings; project agent controls now use the selected provider and expose only effort controls.
+
+- Moved language and density preferences into Account settings, removed duplicate shell controls, and made the sidebar profile open account settings.
+
+- Made email-link sign-in the primary login workflow, with password and explicit passkey actions as secondary fallbacks and lifecycle-safe browser passkey autofill.
+
+- Simplified project chat with a quieter composer, circular send control, on-demand search, contextual message actions and no repeated agent labels. Jump to latest now disappears at the bottom. Supervisor results include saved artifact previews that open the exact revision for review. Subagents appear as named status rows that open focused threads for their assignments and results. Shared work uses compact conversation and agent lists, with clear links and details on demand.
+
+- Added an opt-in Mastra supervisor for project chats: durable specialist assignments, restart recovery, follow-up steering, cancellation and human review. Workspace admins configure model presets; users choose effort through existing Richtfest controls. Added the runtime architecture diagram and setup guide to Docs.
+- Added the chat-first project workspace with durable conversations and reader position, exact document revisions and annotations, streamed provider runs, visible source-review delegation, and an explicit review action that publishes the exact artifact revision as a source-linked reviewed finding. Generated OpenUI is restricted to the registered Richtfest component library, while engineering calculations remain unavailable until a validated deterministic tool exists.
+- Applied the approved shadcn/ui `b6F9Mslb0` preset across the workspace, with neutral surfaces, indigo actions, Inter typography, Lucide icons, and reusable dense/normal controls; language and density preferences persist per user.
+- Added the persisted project-onboarding workflow: customers, projects, direct file attachment and download, shared conversations and tasks, source-linked knowledge review, and tenant-scoped activity history.
+- Added invite-only accounts with magic-link entry, password and passkey enrollment, secure sessions, role management, offboarding, and a development-only email outbox when Resend is not configured.
+- Added encrypted personal and workspace AI connection settings with an explicit provider choice and an honest unavailable-execution state.
+- Added Fumadocs documentation behind sign-in and Railway-ready packaging for Postgres, private Bucket direct uploads, and local backup/recovery checks. No deployment was performed.
+- Extracted the 24-file local reference project into a reproducible page-level evidence set, retaining duplicate, bundle, and unsupported-format findings without uploading source material.

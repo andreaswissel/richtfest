@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a Docs changelog page with the current release history in the Docs sidebar.
+
 - Moved “Back to projects” into the app header while viewing a project.
 
 - Project details can now be edited, including the name, customer and status; the status badge sits beside the project title.
