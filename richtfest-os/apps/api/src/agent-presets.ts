@@ -9,6 +9,8 @@ import type { Database } from "./db/client";
 import { HttpError, type Actor } from "./middleware/auth";
 import { recordAudit } from "./audit";
 import { env } from "./env";
+import { withProviderCredential } from "./ai-connections";
+import { z } from "zod";
 
 type Provider = AgentProvider;
 export const isGatewayModelId = (modelId: string) => /^[^/\s]+\/[^/\s]+$/.test(modelId);
@@ -53,9 +55,66 @@ export async function resolveAgentPreset(db: Database, tenantId: string, effort:
   return snapshot;
 }
 
+const modelListSchema = z.object({
+  data: z.array(z.object({ id: z.string().min(1), display_name: z.string().optional() })),
+  has_more: z.boolean().optional(),
+  last_id: z.string().nullable().optional(),
+});
+
+export async function listProviderModels(db: Database, current: Actor, provider: Provider) {
+  // Gateway's /v1/models is public, not an account-access discovery API.
+  if (provider === "vercel") throw new HttpError(409, "provider_models_unsupported", "Vercel AI Gateway does not provide a credential-backed account model catalog. Enter a provider/model ID manually.");
+  const models = await withProviderCredential(db, current.tenantId, current.id, provider, async key => {
+    const signal = AbortSignal.timeout(10_000);
+    const result = new Map<string, { id: string; name: string }>();
+    const cursors = new Set<string>();
+    let after: string | undefined;
+    try {
+      do {
+        const url = new URL(provider === "openai" ? "https://api.openai.com/v1/models" : "https://api.anthropic.com/v1/models");
+        if (provider === "anthropic") {
+          url.searchParams.set("limit", "1000");
+          if (after) url.searchParams.set("after_id", after);
+        }
+        const response = await fetch(url, {
+          headers: provider === "openai" ? { Authorization: `Bearer ${key}` } : { "x-api-key": key, "anthropic-version": "2023-06-01" },
+          signal,
+          redirect: "error",
+        });
+        if (!response.ok) {
+          // Provider bodies and raw fetch errors may contain secrets.
+          await response.body?.cancel();
+          if (response.status === 401 || response.status === 403) throw new HttpError(502, "provider_models_unauthorized", "The selected provider connection cannot list models. Check its API key and permissions.");
+          throw new HttpError(502, "provider_models_unavailable", "The provider could not list models. Try again later.");
+        }
+        const page = modelListSchema.parse(await response.json());
+        for (const model of page.data) result.set(model.id, { id: model.id, name: model.display_name || model.id });
+        after = provider === "anthropic" && page.has_more ? page.last_id ?? undefined : undefined;
+        if (provider === "anthropic" && page.has_more && (!after || cursors.has(after))) throw new HttpError(502, "provider_models_unavailable", "The provider returned an incomplete model catalog. Try again later.");
+        if (after) cursors.add(after);
+      } while (after);
+      return [...result.values()].sort((a, b) => a.id.localeCompare(b.id));
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (signal.aborted) throw new HttpError(504, "provider_models_timeout", "The provider took too long to list models. Try again.");
+      throw new HttpError(502, "provider_models_unavailable", "The provider could not list models. Try again later.");
+    }
+  });
+  if (models === null) throw new HttpError(409, "provider_unconfigured", "Connect a personal or workspace API key for this provider to list models.");
+  return models;
+}
+
 export function createAgentPresetsRouter(db: Database) {
   const router = Router();
   const actor = (req: Request) => (req as any).actor as Actor;
+  router.get("/agent/models", async (req, res, next) => {
+    try {
+      const current = actor(req);
+      const provider = agentProviderSchema.parse(req.query.provider ?? "openai");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.json(ok({ provider, models: await listProviderModels(db, current, provider) }));
+    } catch (error) { next(error); }
+  });
   router.get("/agent/presets", async (req, res, next) => {
     try {
       const current = actor(req);

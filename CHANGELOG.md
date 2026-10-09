@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added provider-backed model selectors to agent model settings, with GPT 6 and Claude Opus 5.5 / Sonnet 5.5 models surfaced first.
+
 - Refresh now shows workspace navigation immediately instead of a full-screen loading splash; protected content waits for session verification, and connection failures offer retry without losing the shell.
 
 - Added branded social link previews with a construction illustration, clear title and description; private project details stay out of shared previews.

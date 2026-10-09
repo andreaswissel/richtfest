@@ -16,6 +16,15 @@ const roleLabels: Record<string, string> = {
   synthesizer: "supervisorSynthesizer",
 };
 
+type ProviderModel = { id: string; name: string };
+
+function isRecommendedModel(provider: string, modelId: string) {
+  if (provider === "openai") return /^gpt-6(?:[.-]|$)/i.test(modelId);
+  if (provider === "anthropic")
+    return /^claude-(?:opus|sonnet)-5-5(?:-|$)/i.test(modelId);
+  return false;
+}
+
 function numberValue(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -29,6 +38,7 @@ export function SupervisorPresets({
   const t = useT();
   const [effort, setEffort] = useState("medium");
   const query = useApi(`/agent/presets?provider=${provider}`);
+  const modelsQuery = useApi(`/agent/models?provider=${provider}`);
   const data = query.data as RecordData | undefined;
   const presets = list(data?.presets);
   const selected = useMemo(
@@ -105,6 +115,7 @@ export function SupervisorPresets({
     );
   const supervisor = activeDraft.supervisor || {};
   const specialists = activeDraft.specialists || {};
+  const modelCatalog = modelsQuery.data as { models?: ProviderModel[] } | undefined;
   return (
     <SectionShell title={t("supervisorPresets")}>
       <p className="muted">{t("supervisorPresetsDescription")}</p>
@@ -146,11 +157,16 @@ export function SupervisorPresets({
           </span>
         )}
       </div>
+      {provider !== "vercel" && modelsQuery.error && (
+        <Callout>{modelsQuery.error.message}</Callout>
+      )}
       <div className="supervisor-preset-grid">
         <PresetConfig
           title={t("supervisorRole")}
           config={supervisor}
           provider={provider}
+          models={modelCatalog?.models || []}
+          modelsLoading={modelsQuery.isLoading}
           onChange={(key, value) => updateConfig(["supervisor", key], value)}
           t={t}
         />
@@ -162,6 +178,8 @@ export function SupervisorPresets({
             }
             config={config as RecordData}
             provider={provider}
+            models={modelCatalog?.models || []}
+            modelsLoading={modelsQuery.isLoading}
             onChange={(key, value) =>
               updateConfig(["specialists", role, key], value)
             }
@@ -238,12 +256,16 @@ function PresetConfig({
   title,
   config,
   provider,
+  models,
+  modelsLoading,
   onChange,
   t,
 }: {
   title: string;
   config: RecordData;
   provider: string;
+  models: ProviderModel[];
+  modelsLoading: boolean;
   onChange: (key: string, value: unknown) => void;
   t: ReturnType<typeof useT>;
 }) {
@@ -251,10 +273,35 @@ function PresetConfig({
     <div className="supervisor-preset-config">
       <h3>{title}</h3>
       <Field label={t("supervisorModel")}>
-        <Input
-          value={config.modelId || ""}
-          onChange={(event) => onChange("modelId", event.target.value)}
-        />
+        {provider === "vercel" ? (
+          <Input
+            value={config.modelId || ""}
+            onChange={(event) => onChange("modelId", event.target.value)}
+          />
+        ) : (
+          <NativeSelect
+            value={config.modelId || ""}
+            disabled={modelsLoading}
+            onChange={(event) => onChange("modelId", event.target.value)}
+          >
+            {config.modelId && !models.some((model) => model.id === config.modelId) && (
+              <option value={config.modelId}>{config.modelId} ({t("modelNotInCatalog")})</option>
+            )}
+            <option value="" disabled>{modelsLoading ? t("loadingModels") : t("selectModel")}</option>
+            {models.filter((model) => isRecommendedModel(provider, model.id)).length > 0 && (
+              <optgroup label={t("recommendedModels")}>
+                {models.filter((model) => isRecommendedModel(provider, model.id)).map((model) => (
+                  <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label={t("availableModels")}>
+              {models.filter((model) => !isRecommendedModel(provider, model.id)).map((model) => (
+                <option key={model.id} value={model.id}>{model.name || model.id}</option>
+              ))}
+            </optgroup>
+          </NativeSelect>
+        )}
       </Field>
       {provider !== "anthropic" && (
         <Field label={t("supervisorReasoningEffort")}>
