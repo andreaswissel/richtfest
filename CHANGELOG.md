@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-No unreleased changes.
+- Project details now edit inline on the page, with Save and Cancel actions.
 
 ## 2026-10-10
 

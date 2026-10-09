@@ -12,8 +12,6 @@ import {
   Badge,
   Callout,
   Field,
-  Form,
-  Modal,
 } from "../components/ui/primitives";
 import { ThreadRail } from "../components/project-workspace/thread-rail";
 import { LoadState, Sources, SharedWork, Knowledge } from "./foundation";
@@ -266,25 +264,12 @@ export function ProjectWorkspace() {
         </>
       )}
       {view === "details" && (
-        <dl className="project-details">
-          <dt>{t("name")}</dt>
-          <dd>{title}</dd>
-          <dt>{t("customer")}</dt>
-          <dd>{project.data?.customerName || t("noCustomer")}</dd>
-          <dt>{t("status")}</dt>
-          <dd>{details.status || t("active")}</dd>
-        </dl>
-      )}
-      {editingDetails && (
-        <Modal
-          title={t("editProject")}
-          onClose={() => setEditingDetails(false)}
-        >
-          <Form
-            label={t("save")}
-            pending={updateProject.isPending}
-            error={updateProject.error}
-            onSubmit={(form) => {
+        editingDetails ? (
+          <form
+            className="form project-details-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
               const values = Object.fromEntries(form.entries());
               const body: Record<string, unknown> = {
                 name: values.name,
@@ -337,8 +322,36 @@ export function ProjectWorkspace() {
                 defaultValue={details.status || "planning"}
               />
             </Field>
-          </Form>
-        </Modal>
+            {updateProject.error && (
+              <Callout tone="error">{updateProject.error.message}</Callout>
+            )}
+            <div className="form-footer">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={updateProject.isPending}
+                onClick={() => {
+                  updateProject.reset();
+                  setEditingDetails(false);
+                }}
+              >
+                {t("cancel")}
+              </Button>
+              <Button type="submit" disabled={updateProject.isPending}>
+                {updateProject.isPending ? t("saving") : t("save")}
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <dl className="project-details">
+            <dt>{t("name")}</dt>
+            <dd>{title}</dd>
+            <dt>{t("customer")}</dt>
+            <dd>{project.data?.customerName || t("noCustomer")}</dd>
+            <dt>{t("status")}</dt>
+            <dd>{details.status || t("active")}</dd>
+          </dl>
+        )
       )}
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />

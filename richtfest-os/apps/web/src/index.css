@@ -449,6 +449,8 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .workspace-runs > summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
 .workspace-start { padding:1rem; }
 .project-details { display:grid; grid-template-columns:auto 1fr; gap:1rem; }
+.project-details-form { width:min(100%, 34rem); }
+.project-details-form .form-footer { gap:var(--stack); }
 @media(max-width:850px) { .page:has(.project-workspace-content) { height:auto; min-height:calc(100dvh - 42px); overflow:visible; } .project-workspace-grid { grid-template-columns:1fr!important; height:auto; } .project-conversation { height:70dvh; } .project-artifacts { border-left:0; border-top:1px solid var(--border); min-height:20rem; max-height:70dvh; } .workspace-resize-handle { display:none; } }
 @media(prefers-reduced-motion:reduce) { [data-slot^="message-scroller"] { scroll-behavior:auto!important; transition:none!important; } }
 .composer-provider { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
