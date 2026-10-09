@@ -1025,7 +1025,9 @@ const MessageRow = memo(function MessageRow({
               <Button variant="ghost" onClick={() => onReply(message.id)}>
                 {t("workspaceReply")}
               </Button>
-              <Link to={link}>{t("workspaceMessageLink")}</Link>
+              <Button variant="ghost" asChild>
+                <Link to={link}>{t("workspaceMessageLink")}</Link>
+              </Button>
             </>
           )}
         </MessageFooter>
