@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
 import { runActivityLabel } from "./run-activity";
+import { RunActivityFeed } from "./run-activity-feed";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { AgentRunMetrics, isAgentRunActive } from "../agent-run-metrics";
 import {
@@ -59,6 +60,9 @@ function AgentIcon({
         : Sparkles;
   return <Icon className="size-icon" aria-hidden="true" />;
 }
+
+const sourceVersionIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function SubagentList({
   projectId,
@@ -189,6 +193,8 @@ export function SubagentThread({
   const query = useApi(`/knowledge/runs/${runId}`);
   const [params] = useSearchParams();
   const [review, setReview] = useState(false);
+  const [liveEvents, setLiveEvents] = useState<RecordData[]>([]);
+  const [streamStatus, setStreamStatus] = useState<string | undefined>();
   const approve = useWrite(`/knowledge/runs/${runId}/approve`, () =>
     setReview(false),
   );
@@ -203,6 +209,53 @@ export function SubagentThread({
         ),
       }
     : initialRun;
+  useEffect(() => {
+    setLiveEvents([]);
+    setStreamStatus(undefined);
+  }, [runId]);
+  useEffect(() => {
+    if (!run || !["queued", "running"].includes(run.status)) return;
+    const stream = new EventSource(
+      `/api/knowledge/runs/${runId}/events/stream`,
+      { withCredentials: true },
+    );
+    stream.addEventListener("activity", (event) => {
+      try {
+        const activity = JSON.parse((event as MessageEvent).data);
+        if (!activity?.id || !runActivityLabel(activity)) return;
+        setLiveEvents((old) =>
+          old.some((item) => item.id === activity.id)
+            ? old
+            : [...old, activity],
+        );
+        if (
+          [
+            "supervisor_planned",
+            "specialist_completed",
+            "supervisor_revision_requested",
+          ].includes(activity.eventType)
+        )
+          void query.refetch();
+      } catch {
+        // Ignore malformed activity frames; the persisted run remains available.
+      }
+    });
+    stream.addEventListener("status", (event) => {
+      try {
+        const status = JSON.parse((event as MessageEvent).data);
+        if (typeof status.status === "string") {
+          setStreamStatus(status.status);
+          if (!["queued", "running"].includes(status.status)) {
+            stream.close();
+            void query.refetch();
+          }
+        }
+      } catch {
+        // Ignore malformed status frames; the persisted run remains available.
+      }
+    });
+    return () => stream.close();
+  }, [runId, run?.status, query.refetch]);
   const back = new URLSearchParams(params);
   back.delete("agentRun");
   back.delete("message");
@@ -230,7 +283,32 @@ export function SubagentThread({
     );
   const managed = Boolean(run.parentRunId);
   const output = run.outputSummary || run.partialOutput;
-  const running = ["queued", "running"].includes(run.status);
+  const running = ["queued", "running"].includes(streamStatus ?? run.status);
+  const persistedEvents = list(query.data?.events).filter((event) =>
+    runActivityLabel(event),
+  );
+  const activityEvents = [...persistedEvents];
+  for (const event of liveEvents) {
+    if (!activityEvents.some((item) => item.id === event.id))
+      activityEvents.push(event);
+  }
+  activityEvents.sort((a, b) =>
+    String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")),
+  );
+  const sourceVersionIds: string[] = list(run.sourceVersionIds).flatMap(
+    (value) => {
+      const versionId = typeof value === "string" ? value : "";
+      return sourceVersionIdPattern.test(versionId) ? [versionId] : [];
+    },
+  );
+  const childRuns = list(query.data?.children);
+  const activeChild = childRuns.find((child) =>
+    ["queued", "running"].includes(child.status),
+  );
+  const currentTask = run.isSupervisor
+    ? activeChild?.goal ||
+      t(childRuns.length ? "workspaceTaskReviewing" : "workspaceTaskPlanning")
+    : run.goal;
   return (
     <section className="agent-thread" aria-label={agentName(run, t)}>
       <header className="agent-thread-header">
@@ -296,6 +374,11 @@ export function SubagentThread({
                         </MarkerContent>
                       </Marker>
                     )}
+                    <RunActivityFeed
+                      events={activityEvents}
+                      active={running}
+                      currentTask={currentTask}
+                    />
                     {run.rationale && (
                       <p className="agent-thread-rationale">{run.rationale}</p>
                     )}
@@ -310,77 +393,75 @@ export function SubagentThread({
                   </MessageContent>
                 </Message>
               </MessageScrollerItem>
-              {list(run.sourceVersionIds).length > 0 && (
+              {sourceVersionIds.length > 0 && (
                 <MessageScrollerItem messageId={`${runId}-sources`}>
                   <details className="agent-thread-details">
                     <summary>{t("agentThreadSources")}</summary>
                     <div className="agent-thread-sources">
-                      {(run.sourceVersionIds as string[]).map(
-                        (versionId, index) => {
-                          const target = new URLSearchParams(params);
-                          target.set("panel", "documents");
-                          target.set("sourceVersion", versionId);
-                          target.delete("file");
-                          return (
-                            <Link
-                              key={versionId}
-                              to={`/projects/${projectId}?${target}`}
-                            >
-                              {t("source")} {index + 1}
-                              <ArrowUpRight
-                                className="size-icon-sm"
-                                aria-hidden="true"
-                              />
-                            </Link>
-                          );
-                        },
-                      )}
+                      {sourceVersionIds.map((versionId, index) => {
+                        const target = new URLSearchParams(params);
+                        target.set("panel", "documents");
+                        target.set("sourceVersion", versionId);
+                        target.delete("file");
+                        return (
+                          <Link
+                            key={versionId}
+                            to={`/projects/${projectId}?${target}`}
+                          >
+                            {t("source")} {index + 1}
+                            <ArrowUpRight
+                              className="size-icon-sm"
+                              aria-hidden="true"
+                            />
+                          </Link>
+                        );
+                      })}
                     </div>
                   </details>
                 </MessageScrollerItem>
               )}
-              {list(query.data?.events).some(
-                (event) => runActivityLabel(event) || event.resultSummary,
-              ) && (
-                <MessageScrollerItem messageId={`${runId}-activity`}>
+              {list(query.data?.children).length > 0 && (
+                <MessageScrollerItem messageId={`${runId}-specialists`}>
                   <details className="agent-thread-details">
-                    <summary>{t("agentThreadActivity")}</summary>
-                    <ul>
-                      {list(query.data?.events).map((event) => {
-                        const label = runActivityLabel(event);
-                        if (!label && !event.resultSummary) return null;
-                        const timestamp = event.createdAt
-                          ? new Date(event.createdAt)
-                          : null;
+                    <summary>
+                      {t("agentThreadSpecialists")} · {list(query.data?.children).length}
+                    </summary>
+                    <div className="agent-thread-specialists">
+                      {list(query.data?.children).map((child) => {
+                        if (
+                          typeof child.id !== "string" ||
+                          !sourceVersionIdPattern.test(child.id)
+                        )
+                          return null;
+                        const target = new URLSearchParams(params);
+                        target.set("agentRun", child.id);
+                        if (conversationId || child.conversationId)
+                          target.set(
+                            "conversation",
+                            conversationId || child.conversationId,
+                          );
+                        target.delete("message");
                         return (
-                          <li
-                            key={event.id}
-                            className="flex items-baseline gap-2"
+                          <Link
+                            key={child.id}
+                            to={`/projects/${projectId}?${target}`}
                           >
-                            {timestamp &&
-                              !Number.isNaN(timestamp.getTime()) && (
-                                <time
-                                  className="shrink-0 tabular-nums"
-                                  dateTime={timestamp.toISOString()}
-                                >
-                                  {timestamp.toLocaleTimeString(undefined, {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
-                                </time>
-                              )}
-                            <span>
-                              {label ? t(label) : event.resultSummary}
-                              {label && event.resultSummary && (
-                                <span className="ml-2 text-muted-foreground">
-                                  {event.resultSummary}
-                                </span>
-                              )}
-                            </span>
-                          </li>
+                            <span>{agentName(child, t)}</span>
+                            <Badge>
+                              {t(
+                                `run_${child.status}` as Parameters<
+                                  typeof t
+                                >[0],
+                              ) || child.status}
+                            </Badge>
+                            <ArrowUpRight
+                              className="size-icon-sm"
+                              aria-hidden="true"
+                            />
+                          </Link>
                         );
                       })}
-                    </ul>
+                    </div>
                   </details>
                 </MessageScrollerItem>
               )}

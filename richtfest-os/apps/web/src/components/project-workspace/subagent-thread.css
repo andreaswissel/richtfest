@@ -150,6 +150,99 @@
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
+.run-activity-feed {
+  margin: 0.5rem 0 0 0.25rem;
+  border-left: 1px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--muted-foreground);
+  font-size: var(--ui-xs);
+}
+.run-activity-feed .run-activity-current {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0 0 0.5rem;
+  font-size: var(--ui-sm);
+}
+.run-activity-current-label {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.run-activity-current-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: transparent;
+  background: linear-gradient(
+    100deg,
+    var(--muted-foreground) 0%,
+    var(--foreground) 38%,
+    var(--muted-foreground) 68%
+  );
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  animation: run-activity-shimmer 2.4s linear infinite;
+}
+@keyframes run-activity-shimmer {
+  to {
+    background-position: -120% 0;
+  }
+}
+.run-activity-feed ol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-activity-feed li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.run-activity-feed time {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.run-activity-feed li span {
+  color: var(--foreground);
+}
+.run-activity-feed p {
+  margin: 0;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-activity-current-text {
+    color: var(--foreground);
+    background: none;
+    animation: none;
+  }
+}
+.agent-thread-specialists {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.5rem;
+}
+.agent-thread-specialists a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: var(--radius);
+  padding: 0.4rem 0.5rem;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.agent-thread-specialists a:hover {
+  background: var(--muted);
+}
+.agent-thread-specialists a > span:first-child {
+  flex: 1;
+}
 .agent-thread-sources {
   display: flex;
   flex-wrap: wrap;

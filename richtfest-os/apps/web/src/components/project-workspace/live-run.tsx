@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, type RecordData } from "../../api";
 import { queryClient } from "../../query";
@@ -7,29 +7,27 @@ import { Button } from "../ui/button";
 import { Badge, Callout } from "../ui/primitives";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { runActivityLabel } from "./run-activity";
+import { RunActivityFeed } from "./run-activity-feed";
 import { AgentRunMetrics } from "../agent-run-metrics";
 
 export function LiveRun({
   run,
   projectId,
-  showSupervisorActivity = true,
+  currentTask,
   silent = false,
 }: {
   run: RecordData;
   projectId: string;
-  showSupervisorActivity?: boolean;
+  currentTask?: string;
   silent?: boolean;
 }) {
   const t = useT(),
     [events, setEvents] = useState<RecordData[]>([]),
-    [offline, setOffline] = useState(false),
-    [expanded, setExpanded] = useState(false);
-  const activityId = useId();
+    [offline, setOffline] = useState(false);
   const plannedEvents = useRef(new Set<string>());
   const seenActivities = useRef(new Set<string>());
   useEffect(() => {
     setEvents([]);
-    setExpanded(false);
     setOffline(false);
     plannedEvents.current.clear();
     seenActivities.current.clear();
@@ -54,7 +52,11 @@ export function LiveRun({
         if (activity.id) seenActivities.current.add(activity.id);
         if (
           activity.id &&
-          ["supervisor_planned", "supervisor_revision_requested"].includes(
+          [
+            "supervisor_planned",
+            "specialist_completed",
+            "supervisor_revision_requested",
+          ].includes(
             activity.eventType,
           ) &&
           !plannedEvents.current.has(activity.id)
@@ -136,74 +138,8 @@ export function LiveRun({
             {t("workspaceStop")}
           </Button>
         )}
-        {showSupervisorActivity && (
-          <Button
-            variant="link"
-            size="sm"
-            aria-expanded={expanded}
-            aria-controls={activityId}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {t(
-              expanded
-                ? "workspaceHideSupervisorActivity"
-                : "workspaceShowSupervisorActivity",
-            )}
-          </Button>
-        )}
       </div>
-      {showSupervisorActivity && (
-        <div
-          id={activityId}
-          className="workspace-live-run-activity"
-          hidden={!expanded}
-        >
-          {expanded && (
-            <div
-              className="mt-2 max-h-60 overflow-y-auto border-l pl-3 text-ui-xs"
-              role="log"
-              aria-label={t("supervisorProgress")}
-              aria-live="polite"
-              aria-relevant="additions text"
-            >
-              {events.length ? (
-                <ol className="space-y-2 py-2">
-                  {events.map((activity) => {
-                    const label = runActivityLabel(activity);
-                    if (!label) return null;
-                    const timestamp = activity.createdAt
-                      ? new Date(activity.createdAt)
-                      : null;
-                    return (
-                      <li
-                        key={activity.id}
-                        className="flex items-baseline gap-2"
-                      >
-                        {timestamp && !Number.isNaN(timestamp.getTime()) && (
-                          <time
-                            className="shrink-0 text-muted-foreground tabular-nums"
-                            dateTime={timestamp.toISOString()}
-                          >
-                            {timestamp.toLocaleTimeString(undefined, {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </time>
-                        )}
-                        <span>{t(label)}</span>
-                      </li>
-                    );
-                  })}
-                </ol>
-              ) : (
-                <p className="py-2 text-muted-foreground">
-                  {t("workspaceActivityWaiting")}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      <RunActivityFeed events={events} active currentTask={currentTask} />
       {offline && (
         <span className="muted text-ui-xs">{t("workspaceReconnecting")}</span>
       )}
