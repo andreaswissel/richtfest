@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project workspace can show an embedded visual preview for Affinity Publisher files while keeping the original download available.
+
 - Kept the project message send button in place while the draft save status changes.
 
 - Send project workspace messages with Enter; use Shift+Enter for a new line.

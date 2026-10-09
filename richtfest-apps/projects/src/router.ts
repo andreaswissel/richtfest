@@ -4,6 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import { files, fileVersions, projectMembers, projects } from "./schema";
+import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -726,6 +727,52 @@ export function createRouter(getDeps: GetDeps) {
     "/projects/:projectId/files/:fileId/versions/:version/download",
     (req, res, next) =>
       download(req, res, next, Number(routeId(req.params.version))),
+  );
+  router.get(
+    "/projects/:projectId/files/:fileId/versions/:version/preview",
+    async (req, res, next) => {
+      try {
+        const d = getDeps(req);
+        d.requirePermission("projects:read");
+        const projectId = routeId(req.params.projectId);
+        const fileId = routeId(req.params.fileId);
+        const versionNumber = Number(routeId(req.params.version));
+        const row = await projectFile(d, projectId, fileId, versionNumber);
+        if (
+          !row ||
+          row.version.status !== "ready" ||
+          !row.version.storageKey ||
+          !/\.afpub$/i.test(row.file.name)
+        )
+          return send(res, 404, {
+            data: null,
+            error: { code: "preview_unavailable" },
+            message: "Affinity Publisher preview is unavailable",
+          });
+        const stream = await d.fileStorage.read(row.version.storageKey);
+        if (!stream)
+          return send(res, 404, {
+            data: null,
+            error: { code: "preview_unavailable" },
+            message: "Affinity Publisher preview is unavailable",
+          });
+        const preview = await extractAffinityPreview(stream);
+        if (!preview)
+          return send(res, 404, {
+            data: null,
+            error: { code: "preview_unavailable" },
+            message: "No embedded visual preview was found in this file",
+          });
+        return res
+          .status(200)
+          .type("image/png")
+          .set("Cache-Control", "private, no-store")
+          .set("X-Content-Type-Options", "nosniff")
+          .send(Buffer.from(preview));
+      } catch (e) {
+        return next(e);
+      }
+    },
   );
   router.get("/projects/:projectId/files/:fileId/download", (req, res, next) =>
     download(req, res, next),

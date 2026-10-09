@@ -142,6 +142,39 @@ describe("workspace records and navigation", () => {
     expect(html).toContain("panel=tasks");
     expect(html).toContain(`href="/projects/${projectId}?view=sources"`);
   });
+  test("Affinity Publisher sources use the visual preview endpoint and keep download access", () => {
+    const fileId = "550e8400-e29b-41d4-a716-446655440004";
+    const versionId = "550e8400-e29b-41d4-a716-446655440005";
+    const html = render(
+      <ArtifactPanel
+        projectId={projectId}
+        artifacts={[]}
+        runs={[]}
+        tasks={[]}
+      />,
+      `/projects/${projectId}?panel=documents&file=${fileId}&sourceVersion=${versionId}`,
+      {
+        [`/projects/${projectId}/files`]: [
+          { id: fileId, name: "site-plan.afpub", version: 1 },
+        ],
+        [`/projects/${projectId}/files/${fileId}/versions`]: [
+          {
+            id: versionId,
+            version: 1,
+            status: "ready",
+            mimeType: "application/octet-stream",
+          },
+        ],
+      },
+    );
+    expect(html).toContain(
+      `/api/projects/${projectId}/files/${fileId}/versions/1/preview`,
+    );
+    expect(html).toContain(
+      `/api/projects/${projectId}/files/${fileId}/versions/1/download`,
+    );
+    expect(html).toContain("Affinity Publisher preview: site-plan.afpub");
+  });
   test("unconfigured composer shows an actionable alert without claiming a message was saved", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,

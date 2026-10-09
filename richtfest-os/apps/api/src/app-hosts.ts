@@ -118,6 +118,14 @@ const localStorage = {
         }
       : null;
   },
+  read: async (key: string) => {
+    if (!(await localStorage.head(key))) return null;
+    try {
+      return openReadStream(safeStoragePath(key));
+    } catch {
+      return null;
+    }
+  },
 };
 const bucketReady = Boolean(
   env.BUCKET &&
@@ -197,6 +205,16 @@ const bucketStorage = bucketReady
             { expiresIn: 900 },
           ),
         }),
+        read: async (key: string) => {
+          try {
+            const object = await client.send(
+              new GetObjectCommand({ Bucket: env.BUCKET!, Key: key }),
+            );
+            return (object.Body as AsyncIterable<Uint8Array> | undefined) ?? null;
+          } catch {
+            return null;
+          }
+        },
       };
     })()
   : null;
@@ -225,6 +243,7 @@ const unavailableStorage = {
     );
   },
   download: async () => null,
+  read: async () => null,
 };
 const fileStorage =
   env.NODE_ENV === "production"

@@ -338,6 +338,7 @@
   "workspaceAttachRevision": "Attach open source revision",
   "workspaceWrongProject": "This artifact does not belong to this project.",
   "workspaceLatestUploaded": "Latest uploaded",
+  "workspaceAffinityPreview": "Affinity Publisher preview",
   "workspaceUnsupportedPreview": "Preview is unavailable for this file type. Download the original to inspect it.",
   "workspaceSourceText": "Source text",
   "workspaceUseSelection": "Quote selected text",

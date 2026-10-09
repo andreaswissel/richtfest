@@ -338,6 +338,7 @@
   "workspaceAttachRevision": "Geöffnete Quellrevision anhängen",
   "workspaceWrongProject": "Dieses Arbeitsergebnis gehört nicht zu diesem Projekt.",
   "workspaceLatestUploaded": "Zuletzt hochgeladen",
+  "workspaceAffinityPreview": "Affinity-Publisher-Vorschau",
   "workspaceUnsupportedPreview": "Für diesen Dateityp ist keine Vorschau verfügbar. Original zur Prüfung herunterladen.",
   "workspaceSourceText": "Quelltext",
   "workspaceUseSelection": "Markierten Text zitieren",

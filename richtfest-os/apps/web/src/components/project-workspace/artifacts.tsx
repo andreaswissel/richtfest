@@ -10,6 +10,12 @@ import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field } from "../ui/primitives";
 const ProjectOpenUI = lazy(() => import("./openui"));
+const IMAGE_PREVIEW_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+];
 export function ArtifactPanel({
   projectId,
   conversationId,
@@ -89,6 +95,9 @@ export function ArtifactPanel({
     }
   }, [artifactId, revisionId, artifact.data?.revisions]);
   const selectedFile = list(filesData, "files").find((f) => f.id === fileId);
+  const selectedFileName =
+    selectedFile?.name || exactSource.data?.fileName || "";
+  const isAffinityPublisher = /\.afpub$/i.test(selectedFileName);
   const tab = params.get("panel") || "documents";
   const target = (updates: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -247,19 +256,21 @@ export function ArtifactPanel({
                         {t("downloadFile")} · {version.version}
                       </a>
                     </Button>
-                    {version.mimeType === "application/pdf" && (
+                    {isAffinityPublisher ? (
+                      <AffinityPublisherPreview
+                        key={version.id}
+                        projectId={projectId}
+                        fileId={fileId}
+                        version={version.version}
+                        fileName={selectedFileName}
+                      />
+                    ) : version.mimeType === "application/pdf" ? (
                       <iframe
                         className="source-preview"
                         title={`${selectedFile?.name} · ${version.version}`}
                         src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download#page=${params.get("page") || 1}`}
                       />
-                    )}
-                    {[
-                      "image/png",
-                      "image/jpeg",
-                      "image/webp",
-                      "image/gif",
-                    ].includes(version.mimeType) && (
+                    ) : IMAGE_PREVIEW_MIME_TYPES.includes(version.mimeType) ? (
                       <img
                         className="source-image"
                         src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download`}
@@ -269,14 +280,7 @@ export function ArtifactPanel({
                           t("source")
                         }
                       />
-                    )}
-                    {![
-                      "application/pdf",
-                      "image/png",
-                      "image/jpeg",
-                      "image/webp",
-                      "image/gif",
-                    ].includes(version.mimeType) && (
+                    ) : (
                       <Callout>{t("workspaceUnsupportedPreview")}</Callout>
                     )}
                     <p className="muted text-ui-xs">
@@ -516,6 +520,33 @@ function Annotation({
     </form>
   );
 }
+
+function AffinityPublisherPreview({
+  projectId,
+  fileId,
+  version,
+  fileName,
+}: {
+  projectId: string;
+  fileId: string;
+  version: number;
+  fileName: string;
+}) {
+  const t = useT();
+  const [unavailable, setUnavailable] = useState(false);
+
+  if (unavailable) return <Callout>{t("workspaceUnsupportedPreview")}</Callout>;
+
+  return (
+    <img
+      className="source-image affinity-publisher-preview"
+      src={`/api/projects/${projectId}/files/${fileId}/versions/${version}/preview`}
+      alt={`${t("workspaceAffinityPreview")}: ${fileName || t("source")}`}
+      onError={() => setUnavailable(true)}
+    />
+  );
+}
+
 function VersionUpload({
   projectId,
   fileId,

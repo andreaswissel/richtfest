@@ -31,6 +31,7 @@ export type FileStorage = {
     stream?: NodeJS.ReadableStream;
     sizeBytes?: number;
   } | null>;
+  read: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
 };
 export type AppDeps = {
   db: any;
