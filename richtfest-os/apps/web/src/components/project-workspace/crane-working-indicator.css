@@ -31,6 +31,11 @@
   animation: crane-load-transfer 2.8s ease-in-out infinite;
 }
 
+.crane-working-indicator--waiting .crane-working-indicator__load {
+  animation: none;
+  transform: translate(0, 0);
+}
+
 .crane-working-indicator__block {
   fill: var(--muted);
   stroke-width: 1.25;

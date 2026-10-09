@@ -129,9 +129,14 @@ export function LiveRun({
               : run.status}
         </Badge>
         <AgentRunMetrics run={run} />
-        {run.status === "running" && (
-          <CraneWorkingIndicator label={t("workspaceUiSupervisorWorking")} />
-        )}
+        <CraneWorkingIndicator
+          label={
+            run.status === "running"
+              ? t("workspaceUiSupervisorWorking")
+              : t("agentRunWaitingForWorker")
+          }
+          working={run.status === "running"}
+        />
         {["queued", "running"].includes(run.status) && (
           <Button
             variant="link"

@@ -1,8 +1,18 @@
 import "./crane-working-indicator.css";
 
-export function CraneWorkingIndicator({ label }: { label: string }) {
+export function CraneWorkingIndicator({
+  label,
+  working = true,
+}: {
+  label: string;
+  working?: boolean;
+}) {
   return (
-    <span className="crane-working-indicator" role="status" aria-live="polite">
+    <span
+      className={`crane-working-indicator${working ? "" : " crane-working-indicator--waiting"}`}
+      role="status"
+      aria-live="polite"
+    >
       <svg
         className="crane-working-indicator__art"
         viewBox="0 0 72 42"
