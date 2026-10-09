@@ -226,9 +226,6 @@ export function SupervisorPresets({
         <Callout tone="error">{(save.error || reset.error)?.message}</Callout>
       )}
       {data.canManage !== true && <Callout>{t("supervisorAdminOnly")}</Callout>}
-      {save.isSuccess && (
-        <Callout tone="success">{t("supervisorPresetSaved")}</Callout>
-      )}
       <div className="inline-actions">
         <Button
           disabled={data.canManage !== true || save.isPending}
@@ -247,6 +244,11 @@ export function SupervisorPresets({
         >
           {t("resetSupervisorPreset")}
         </Button>
+        {save.isSuccess && (
+          <Badge tone="success" role="status">
+            {t("supervisorPresetSaved")}
+          </Badge>
+        )}
       </div>
     </SectionShell>
   );

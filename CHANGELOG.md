@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Changed saved agent model settings confirmation to a compact neutral status badge.
+
 - Clarified saved AI credentials in Settings with a masked key placeholder and a quieter saved status.
 
 - Added editable customer company/contact details, addresses and separate billing details, including invoice email, tax IDs, payment terms and one-click address copying. Existing customers can keep these fields empty.
