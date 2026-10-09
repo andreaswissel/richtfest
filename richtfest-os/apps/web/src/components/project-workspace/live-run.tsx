@@ -122,12 +122,16 @@ export function LiveRun({
     <div className="workspace-live-run">
       <div className="inline-actions">
         <Badge>
-          {["queued", "running"].includes(run.status)
-            ? t("workspaceLive")
-            : run.status}
+          {run.status === "queued"
+            ? t("run_queued")
+            : run.status === "running"
+              ? t("run_running")
+              : run.status}
         </Badge>
         <AgentRunMetrics run={run} />
-        <CraneWorkingIndicator label={t("workspaceUiSupervisorWorking")} />
+        {run.status === "running" && (
+          <CraneWorkingIndicator label={t("workspaceUiSupervisorWorking")} />
+        )}
         {["queued", "running"].includes(run.status) && (
           <Button
             variant="link"
@@ -139,7 +143,12 @@ export function LiveRun({
           </Button>
         )}
       </div>
-      <RunActivityFeed events={events} active currentTask={currentTask} />
+      <RunActivityFeed
+        events={events}
+        active
+        status={run.status}
+        currentTask={currentTask}
+      />
       {offline && (
         <span className="muted text-ui-xs">{t("workspaceReconnecting")}</span>
       )}

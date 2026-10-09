@@ -5,10 +5,12 @@ import { runActivityLabel } from "./run-activity";
 export function RunActivityFeed({
   events,
   active,
+  status,
   currentTask,
 }: {
   events: RecordData[];
   active: boolean;
+  status?: string;
   currentTask?: string;
 }) {
   const t = useT();
@@ -58,7 +60,11 @@ export function RunActivityFeed({
           })}
         </ol>
       ) : (
-        <p>{t("workspaceActivityWaiting")}</p>
+        <p>
+          {status === "queued"
+            ? t("agentRunWaitingForWorker")
+            : t("workspaceActivityWaiting")}
+        </p>
       )}
     </div>
   );
