@@ -4,6 +4,7 @@
 
 - Project status is selected from translated Planning, Active and Completed options.
 - Project agent conversations show live inline activity, source and specialist links, and a shimmering current-task line.
+- While a project agent run is active, the empty composer send control becomes Stop; typing a message restores Send.
 - Project message action links now share the same hover treatment as adjacent buttons.
 - Project chat steers only queued or running agent work; messages after a run finishes start a fresh run.
 - Copy your own project chat messages with a compact button.

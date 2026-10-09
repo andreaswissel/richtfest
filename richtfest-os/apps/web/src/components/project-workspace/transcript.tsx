@@ -17,7 +17,7 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
 import { AgentEffortControl } from "../agent-effort-control";
-import { ArrowUp, Check, Copy, Search, X } from "lucide-react";
+import { ArrowUp, Check, Copy, Search, Square, X } from "lucide-react";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -177,10 +177,19 @@ function Conversation({
     ? runs.find(
         (candidate) =>
           !candidate.parentRunId &&
+          candidate.conversationId === conversationId &&
           (!readinessProvider || candidate.provider === readinessProvider) &&
           ["queued", "running"].includes(candidate.status),
       )
     : undefined;
+  const stopRun = useMutation({
+    mutationFn: () =>
+      api(`/knowledge/runs/${activeSupervisorRun!.id}/cancel`, {}),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: [`/knowledge/workspaces/${projectId}`],
+      }),
+  });
   const query = useInfiniteQuery({
     queryKey: [path, "messages"],
     initialPageParam: "",
@@ -846,16 +855,31 @@ function Conversation({
                   ? t("workspaceSaving")
                   : ""}
             </span>
-            <Button
-              type="submit"
-              size="icon"
-              className="workspace-send-button"
-              aria-label={t("workspaceUiSendMessage")}
-              title={t("workspaceUiSendShortcut")}
-              disabled={send.isPending || !draft.trim()}
-            >
-              <ArrowUp aria-hidden="true" />
-            </Button>
+            {activeSupervisorRun && !draft.trim() ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon"
+                className="workspace-send-button"
+                aria-label={t("workspaceStop")}
+                title={t("workspaceStop")}
+                disabled={stopRun.isPending}
+                onClick={() => stopRun.mutate()}
+              >
+                <Square aria-hidden="true" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                className="workspace-send-button"
+                aria-label={t("workspaceUiSendMessage")}
+                title={t("workspaceUiSendShortcut")}
+                disabled={send.isPending || !draft.trim()}
+              >
+                <ArrowUp aria-hidden="true" />
+              </Button>
+            )}
           </div>
         </div>
         {readiness.error && (
@@ -895,6 +919,9 @@ function Conversation({
             steer.error.status !== 409) && (
             <Callout tone="error">{steer.error.message}</Callout>
           )}
+        {stopRun.error && (
+          <Callout tone="error">{stopRun.error.message}</Callout>
+        )}
         {send.error && <Callout tone="error">{send.error.message}</Callout>}
       </form>
     </div>
