@@ -903,7 +903,11 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         .from(supervisorRuns)
         .where(eq(supervisorRuns.runId, run.id))
         .for("update");
-      if (!d.supervisorEnabled || !state || run.status === "approved")
+      if (
+        !d.supervisorEnabled ||
+        !state ||
+        !["queued", "running"].includes(run.status)
+      )
         throw conflict("This run cannot be steered");
       if (!(await d.validateProject(run.projectId)))
         throw missing("Project not found");

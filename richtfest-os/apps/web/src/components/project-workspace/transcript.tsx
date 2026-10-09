@@ -178,7 +178,7 @@ function Conversation({
         (candidate) =>
           !candidate.parentRunId &&
           (!readinessProvider || candidate.provider === readinessProvider) &&
-          candidate.status !== "approved",
+          ["queued", "running"].includes(candidate.status),
       )
     : undefined;
   const query = useInfiniteQuery({

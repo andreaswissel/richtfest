@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Project chat steers only queued or running agent work; messages after a run finishes start a fresh run.
 - Copy your own project chat messages with a compact button.
 - Project details now edit inline on the page, with Save and Cancel actions.
 - Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.

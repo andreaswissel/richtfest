@@ -24,7 +24,7 @@ Mastra workflow checkpoints and workflow run IDs use the Mastra Postgres store. 
 
 ## Review and control
 
-The supervisor may propose a plan and ask specialists to work, but it does not silently approve consequential outcomes. Project participants can steer an active run, revise its direction or cancel it. Results should remain attributable to the assignment and source evidence that produced them. Unconfigured providers, tools or external actions stay explicit in the UI.
+The supervisor may propose a plan and ask specialists to work, but it does not silently approve consequential outcomes. Project participants can steer a queued or running run, revising its direction; steering cancels its current specialist assignments and starts a new planning generation. A message sent after a run has finished starts a new run. Participants can also cancel active work. Results should remain attributable to the assignment and source evidence that produced them. Unconfigured providers, tools or external actions stay explicit in the UI.
 
 Each completed supervisor review saves a draft artifact and immutable revision alongside the assistant response. The conversation displays a registered OpenUI artifact preview that opens that exact revision. Reviewing the supervisor run and approving the artifact are separate actions; completion does not publish reviewed knowledge. A follow-up result creates a new draft, while retrying the same completed generation reuses its saved result.
 
