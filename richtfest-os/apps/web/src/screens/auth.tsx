@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import {
+  AuthClientLoadError,
   authResult,
   cancelPasskeyCeremony,
   conditionalPasskeysAvailable,
@@ -239,12 +240,13 @@ export function Login() {
   }, [method]);
 
   const developmentLogin = useWrite("/auth/dev-login", signedIn);
+  const clientLoadFailed = login.error instanceof AuthClientLoadError;
   return (
     <AuthLayout title={t("signIn")}>
       <Form
         label={method === "magic" ? t("sendSignInLink") : t("signIn")}
         pending={login.isPending}
-        error={login.error}
+        error={login.error instanceof AuthClientLoadError ? null : login.error}
         onSubmit={(form) => submitLogin(form, method)}
       >
         <Field label={t("email")}>
@@ -270,6 +272,14 @@ export function Login() {
           </Field>
         )}
       </Form>
+      {clientLoadFailed && (
+        <Callout tone="error">
+          <p>{t("signInLoadFailed")}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => window.location.reload()}>
+            {t("reloadApp")}
+          </Button>
+        </Callout>
+      )}
       <div className="auth-help">
         <div className="flex flex-wrap items-center gap-2">
           <Button

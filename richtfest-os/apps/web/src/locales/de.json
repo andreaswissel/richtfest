@@ -181,6 +181,8 @@
   "saveRole": "Rolle speichern",
   "invitationCreated": "Einladung erstellt",
   "sendSignInLink": "Anmeldelink senden",
+  "signInLoadFailed": "Die Anmeldung konnte nicht geladen werden. Die App wurde möglicherweise aktualisiert. Laden Sie die App neu und versuchen Sie es erneut.",
+  "reloadApp": "App neu laden",
   "magicLinkRequested": "Wenn diese E-Mail-Adresse Zugang hat, ist ein Anmeldelink unterwegs.",
   "inviteOnlyHint": "Dieser Arbeitsplatz ist nur auf Einladung zugänglich. Bitten Sie die Administration um Zugang.",
   "deliveryConfigured": "Der E-Mail-Versand ist eingerichtet. Prüfen Sie bei berechtigten Anfragen Ihren Posteingang.",

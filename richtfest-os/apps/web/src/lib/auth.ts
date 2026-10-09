@@ -5,8 +5,15 @@ import {
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
 
-export const getAuthClient = async () =>
-  (await import("./auth-client")).authClient;
+export class AuthClientLoadError extends Error {}
+
+export const getAuthClient = async () => {
+  try {
+    return (await import("./auth-client")).authClient;
+  } catch (cause) {
+    throw new AuthClientLoadError("Sign-in could not load", { cause });
+  }
+};
 export function authResult<T>(result: {
   data?: T | null;
   error?: { message?: string } | null;

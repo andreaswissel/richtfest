@@ -181,6 +181,8 @@
   "saveRole": "Save role",
   "invitationCreated": "Invitation created",
   "sendSignInLink": "Send sign-in link",
+  "signInLoadFailed": "Sign-in could not load. The app may have updated. Reload the app and try again.",
+  "reloadApp": "Reload app",
   "magicLinkRequested": "If this email has access, a sign-in link is on its way.",
   "inviteOnlyHint": "This workspace is invitation-only. Ask your administrator for access.",
   "deliveryConfigured": "Email delivery is configured. Check your inbox for eligible requests.",

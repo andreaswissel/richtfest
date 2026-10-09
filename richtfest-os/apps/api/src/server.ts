@@ -81,9 +81,11 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
     const webDirectory = path.resolve(import.meta.dir, "../../web/dist");
     const webHtml = readFileSync(path.join(webDirectory, "index.html"), "utf8")
       .replaceAll("__PUBLIC_ORIGIN__", new URL(env.BETTER_AUTH_URL).origin);
-    app.get("/index.html", (_req, res) => res.type("html").send(webHtml));
+    app.get("/index.html", (_req, res) => res.set("Cache-Control", "no-store").type("html").send(webHtml));
     app.use(express.static(webDirectory, { index: false }));
-    app.get("*", (_req, res) => res.type("html").send(webHtml));
+    // A removed deployment chunk is not an app route. Never return HTML as JS.
+    app.use("/assets", (_req, res) => res.status(404).set("Cache-Control", "no-store").end());
+    app.get("*", (_req, res) => res.set("Cache-Control", "no-store").type("html").send(webHtml));
   }
   app.use((_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => { if (error instanceof z.ZodError) return res.status(400).json(fail("validation_error", "Request validation failed", error.flatten())); if (error instanceof HttpError || (error as any)?.status) { const e = error as any; return res.status(e.status ?? 500).json(fail(e.code ?? "request_error", e.message)); } console.error(error); return res.status(500).json(fail("internal_error", "An unexpected error occurred")); });

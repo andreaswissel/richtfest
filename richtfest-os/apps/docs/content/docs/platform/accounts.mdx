@@ -7,9 +7,13 @@ description: The agreed identity and provider-connection model for the prototype
 
 The prototype uses invite-only membership. An administrator invites a person by email; a time-limited, single-use magic link verifies first access. Resend is the selected delivery provider. An unconfigured delivery service must not report that it sent an email.
 
+Sign-in emails use a lightweight Richtfest-branded layout with a sign-in button, a copyable fallback link and a plain-text alternative. The sender must be an email address on a verified Resend domain; the default Resend sender is limited to testing with the Resend account owner's address. A configured status on the sign-in page confirms the environment variables are present, not that a particular message has been delivered.
+
 After first access, a person can enroll a password or passkey for subsequent sign-in. Enrollment belongs to that verified account and requires an authenticated, appropriately verified session. Google sign-in is a later extension, not a prerequisite for this prototype.
 
 Email-link sign-in is the primary login path. Password sign-in and an explicit passkey action remain available as secondary options. On browsers that confirm WebAuthn conditional mediation, the login email field can offer a saved passkey through the browser's own credential UI; Richtfest does not enumerate or report which passkeys exist.
+
+If an open tab cannot load the sign-in code after a deployment or network failure, use **Reload app** and try again. The app does not automatically reload or resend a sign-in request.
 
 Roles control application permissions. Removing access must revoke active sessions and outstanding invitations. Authentication establishes identity; business routes still enforce workspace scope and capability checks.
 

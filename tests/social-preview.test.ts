@@ -35,6 +35,7 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
       const response = await fetch(base + path, { headers });
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
       const html = (await response.text()).replace(/\s+/g, " ");
       expect(html).toContain(
         'property="og:title" content="Richtfest — Construction planning. Connected."',
@@ -62,6 +63,10 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
     const bytes = new Uint8Array(await image.arrayBuffer());
     expect([...bytes.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
     expect(bytes.length).toBeGreaterThan(10_000);
+    const missingChunk = await fetch(base + "/assets/auth-client-old-deployment.js");
+    expect(missingChunk.status).toBe(404);
+    expect(missingChunk.headers.get("cache-control")).toBe("no-store");
+    expect(missingChunk.headers.get("content-type") ?? "").not.toContain("text/html");
   } finally {
     Object.assign(env, previous);
     server?.close();

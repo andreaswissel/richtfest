@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { authDevOutbox, invitations, memberships, users } from "./db/schema";
 import type { Database } from "./db/client";
 import { env } from "./env";
+import { createMagicLinkEmail } from "./magic-link-email";
 
 export const createAuth = (db: Database) => betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema: { user: authUser, session: authSession, account: authAccount, verification: authVerification, rateLimit: authRateLimit, passkey: authPasskey } }),
@@ -33,7 +34,7 @@ export const createAuth = (db: Database) => betterAuth({
     const tenantId = [...eligibleTenants][0];
     if (env.RESEND_API_KEY && env.RESEND_FROM) {
       const resend = new Resend(env.RESEND_API_KEY);
-      const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: email, subject: "Your Richtfest sign-in link", html: `<p>Sign in to Richtfest: <a href="${url}">Continue</a></p>` });
+      const { error } = await resend.emails.send({ from: env.RESEND_FROM, to: email, ...createMagicLinkEmail(url) });
       if (error) throw new Error(`Magic-link delivery failed: ${error.message}`);
       return;
     }

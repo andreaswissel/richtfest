@@ -6,6 +6,8 @@
 
 - Added safe first-administrator provisioning for a new production workspace and corrected the sign-in email-delivery status for configured Resend accounts.
 
+- Refreshed sign-in emails with Richtfest branding, a clear sign-in button and plain-text fallback. Sign-in now offers a reload action when an old tab cannot load its code after deployment.
+
 - Reduced the deployment image size and separated the typecheck, web and docs build stages for parallel builds and better caching. A pinned mirror of the same Bun image avoids Docker Hub rate limits. Production routing now uses the same port as the API.
 
 - Defined the Railway project in code (`.railway/railway.ts`): one `richtfest-monorepo` service built from the Dockerfile, Postgres and the private file bucket in EU West. This replaces the deprecated `railway.json` and avoids Railway's per-package monorepo import. The production image now installs dependencies the same way as local development, which fixes the failing web typecheck in the Docker build.
