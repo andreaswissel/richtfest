@@ -106,7 +106,6 @@ Every deploy must:
 - commit on local `main`
 - push local `main` to `origin/main`
 - if the thread started from a Linear or JIRA issue, add a short deployment note and move that issue to `In Review` after the push succeeds
-- do not poll Railway, deployment status, production health, or frontend bundles after pushing; the user monitors Railway directly
 - report whether a database migration was included
 
 ## UI Defaults
