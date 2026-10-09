@@ -98,6 +98,13 @@
   border-radius: 50%;
   background: var(--primary);
   flex: 0 0 auto;
+  transform: translateX(calc(var(--control-sm) + var(--control-sm) + 0.3rem));
+  transition: transform 160ms ease;
+}
+
+.thread-rail-row:hover .thread-rail-unread,
+.thread-rail-row:focus-within .thread-rail-unread {
+  transform: translateX(0);
 }
 
 .thread-rail-action {
@@ -113,6 +120,7 @@
   cursor: pointer;
   opacity: 0;
   flex-shrink: 0;
+  transition: opacity 120ms ease;
 }
 .thread-rail-action:disabled {
   cursor: wait;
@@ -126,6 +134,17 @@
 @media (hover: none) {
   .thread-rail-action {
     opacity: 1;
+  }
+
+  .thread-rail-unread {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-rail-unread,
+  .thread-rail-action {
+    transition: none;
   }
 }
 
