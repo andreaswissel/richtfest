@@ -17,7 +17,6 @@ export default defineRailway(() => {
     // The container applies database migrations before starting the API.
     healthcheck: "/health",
     healthcheckTimeout: 100,
-    deploy: { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 10 },
     replicas: { [region]: 1 },
     env: {
       NODE_ENV: "production",
