@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Project details now edit inline on the page, with Save and Cancel actions.
+- Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.
+- Agent model settings now keep preset controls and shared limits aligned across screen sizes.
 
 ## 2026-10-10
 

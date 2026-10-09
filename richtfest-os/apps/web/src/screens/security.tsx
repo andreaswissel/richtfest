@@ -9,6 +9,7 @@ import { usePreferences } from "../store";
 import { Page, PageHeader, Section } from "../components/layout";
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
+import { SettingsNavigation } from "../components/settings-navigation";
 import {
   Badge,
   Callout,
@@ -91,12 +92,8 @@ export function Security() {
         eyebrow={t("settings")}
         title={t("accountSettings")}
         description={t("accountSettingsDescription")}
-        actions={
-          <Button asChild>
-            <Link to="/settings">{t("aiConnections")}</Link>
-          </Button>
-        }
       />
+      <SettingsNavigation />
       <Callout>{t("enrollmentHint")}</Callout>
       <Section title={t("preferences")}>
         {savePreference.error && (

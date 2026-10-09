@@ -8,6 +8,8 @@ import { Security } from "./screens/security";
 import { Team } from "./screens/team";
 import { Customers, Dashboard, Projects } from "./screens/foundation";
 import { Settings } from "./screens/settings";
+import { SettingsModels } from "./screens/settings-models";
+import { SettingsAgents } from "./screens/settings-agents";
 import { queryClient } from "./query";
 import { api } from "./api";
 import "./index.css";
@@ -27,6 +29,16 @@ const router = createBrowserRouter([
     hydrateFallbackElement: <App initializing />,
     children: [
       { path: "/settings/security", element: <Security /> },
+      {
+        path: "/settings/models",
+        element: <SettingsModels />,
+        loader: prefetch("/settings/ai-connections"),
+      },
+      {
+        path: "/settings/agents",
+        element: <SettingsAgents />,
+        loader: prefetch("/knowledge/agent-profiles"),
+      },
       { path: "/", element: <Dashboard />, loader: prefetch("/dashboard") },
       {
         path: "/projects",

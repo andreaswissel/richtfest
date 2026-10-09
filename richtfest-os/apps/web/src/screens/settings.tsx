@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -24,8 +23,7 @@ import {
   type ConnectionsState,
   type ProviderId,
 } from "../connection-policy";
-import { AgentProfiles } from "../components/agent-profiles";
-import { SupervisorPresets } from "../components/supervisor-presets";
+import { SettingsNavigation } from "../components/settings-navigation";
 
 export function Settings() {
   const t = useT();
@@ -106,13 +104,9 @@ export function Settings() {
       <PageHeader
         eyebrow={t("settings")}
         title={t("aiConnections")}
-        actions={
-          <Button asChild>
-            <Link to="/settings/security">{t("accountSettings")}</Link>
-          </Button>
-        }
         description={t("aiConnectionsDescription")}
       />
+      <SettingsNavigation />
       <LoadState query={query} />
       {data && (
         <>
@@ -282,8 +276,6 @@ export function Settings() {
               <p className="muted">{t("noProviderCall")}</p>
             </div>
           </Section>
-          <SupervisorPresets provider={activeProvider} />
-          <AgentProfiles />
         </>
       )}
     </Page>
