@@ -23,7 +23,7 @@ import {
   Field,
   Form,
 } from "../components/ui/primitives";
-import { list } from "../api";
+import { list, type RecordData } from "../api";
 import { useT } from "../i18n";
 import { queryClient, useApi, useWrite } from "../query";
 
@@ -69,6 +69,14 @@ function signedIn() {
   queryClient.clear();
   window.location.assign("/");
 }
+
+function developmentAuthAvailable(value: unknown, identities: RecordData[]) {
+  if (Array.isArray(value)) return identities.length > 0;
+  if (!value || typeof value !== "object") return false;
+  const payload = value as { available?: unknown; enabled?: unknown };
+  return payload.available === true || payload.enabled === true;
+}
+
 export function Login() {
   const t = useT();
   const identities = useApi("/auth/dev-identities");
@@ -241,6 +249,10 @@ export function Login() {
 
   const developmentLogin = useWrite("/auth/dev-login", signedIn);
   const clientLoadFailed = login.error instanceof AuthClientLoadError;
+  const developmentIdentities = list(identities.data, "identities");
+  const developmentAvailable =
+    import.meta.env.DEV ||
+    developmentAuthAvailable(identities.data, developmentIdentities);
   return (
     <AuthLayout title={t("signIn")}>
       <Form
@@ -329,32 +341,58 @@ export function Login() {
         />
       )}
       <p className="muted auth-help">{t("inviteOnlyHint")}</p>
-      {list(identities.data, "identities").length > 0 && (
-        <details className="development-access">
-          <summary>{t("devLogin")}</summary>
-          <p className="muted">{t("devNote")}</p>
-          <div className="identity-list">
-            {list(identities.data, "identities").map((user) => (
-              <Button
-                className="identity"
-                disabled={developmentLogin.isPending}
-                key={user.id || user.email}
-                onClick={() => developmentLogin.mutate({ email: user.email })}
-              >
-                <span className="avatar">{user.name?.slice(0, 1) || "R"}</span>
-                <span>
-                  <strong>{user.name}</strong>
-                  <small>{user.email}</small>
-                </span>
-                {user.role && <Badge>{user.role}</Badge>}
-                <span>→</span>
-              </Button>
-            ))}
+      {developmentAvailable && (
+        <section className="development-access" aria-labelledby="development-access-title">
+          <div className="development-access-heading">
+            <div>
+              <h3 id="development-access-title">{t("devLogin")}</h3>
+              <p className="muted">{t("devNote")}</p>
+            </div>
+            <Badge variant="outline">{t("devOnly")}</Badge>
           </div>
-          {developmentLogin.error && (
-            <Callout tone="error">{developmentLogin.error.message}</Callout>
+          {identities.isError ? (
+            <Callout tone="error">
+              <p>{t("devIdentityLoadError")}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void identities.refetch()}
+              >
+                {t("retry")}
+              </Button>
+            </Callout>
+          ) : developmentIdentities.length === 0 ? (
+            <Callout>{t("devIdentityEmpty")}</Callout>
+          ) : (
+            <div className="identity-list">
+              {developmentIdentities.map((user) => (
+                <Button
+                  type="button"
+                  className="identity"
+                  disabled={developmentLogin.isPending}
+                  key={user.id || user.email}
+                  onClick={() => developmentLogin.mutate({ email: user.email })}
+                  aria-label={`${t("devIdentityAction")} ${user.name || user.email}`}
+                >
+                  <span className="avatar">{user.name?.slice(0, 1) || "R"}</span>
+                  <span>
+                    <strong>{user.name || user.email}</strong>
+                    <small>{user.email}</small>
+                  </span>
+                  {user.role && <Badge>{user.role}</Badge>}
+                  <span className="identity-action">{t("devIdentityAction")}</span>
+                </Button>
+              ))}
+            </div>
           )}
-        </details>
+          {developmentLogin.error && (
+            <Callout tone="error">
+              <p>{t("devLoginFailed")}</p>
+              <p className="muted">{developmentLogin.error.message}</p>
+            </Callout>
+          )}
+        </section>
       )}
     </AuthLayout>
   );

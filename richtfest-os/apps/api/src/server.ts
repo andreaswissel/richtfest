@@ -26,8 +26,8 @@ import { recordAudit } from "./audit";
 
 export const createApp = (db: Database, options: { allowDevAuth?: boolean; providerFetch?: import("./provider-runtime").ProviderFetch; supervisorRuntime?: Partial<Pick<import("@richtfest/knowledge/deps").AppDeps, "supervisorEnabled" | "executeSupervisor">> } = {}) => {
   const app = express();
-  const auth = createAuth(db);
   const allowDevAuth = env.NODE_ENV !== "production" && (options.allowDevAuth ?? env.ALLOW_DEV_AUTH);
+  const auth = createAuth(db, { allowDevAuth });
   app.use(cookieParser());
   app.get("/health", (_req, res) => res.json(ok({ status: "ok" })));
   app.get("/api/health", (_req, res) => res.json(ok({ status: "ok" })));

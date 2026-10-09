@@ -13,6 +13,8 @@ After first access, a person can enroll a password or passkey for subsequent sig
 
 Email-link sign-in is the primary login path. Password sign-in and an explicit passkey action remain available as secondary options. On browsers that confirm WebAuthn conditional mediation, the login email field can offer a saved passkey through the browser's own credential UI; Richtfest does not enumerate or report which passkeys exist.
 
+Local development can enable **Local development access** for seeded `@richtfest.local` identities by setting `ALLOW_DEV_AUTH=true`. The server only creates development sessions for those seeded identities with one active workspace membership. This shortcut is opt-in for non-production environments and is always disabled when `NODE_ENV=production`; shared development environments should use synthetic data only.
+
 If an open tab cannot load the sign-in code after a deployment or network failure, use **Reload app** and try again. The app does not automatically reload or resend a sign-in request.
 
 Roles control application permissions. Removing access must revoke active sessions and outstanding invitations. Authentication establishes identity; business routes still enforce workspace scope and capability checks.

@@ -325,11 +325,13 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 .identity strong { font-size: var(--ui-sm); }
 .identity small { margin-top: 4px; color: var(--muted-foreground); font-size: var(--ui-2xs); }
 .identity > [data-slot="badge"] { margin-left: auto; }
-.identity > span:last-child { color: var(--muted-foreground); }
+.identity-action { color: var(--muted-foreground); font-size: var(--ui-xs); }
 .auth-help { font-size: var(--ui-xs); }
-.development-access { padding-top: var(--stack); border-top: 1px solid var(--border); font-size: var(--ui-xs); }
-.development-access summary { cursor: pointer; font-weight: 600; }
-.development-access p, .development-access .identity-list { margin-top: var(--stack); }
+.development-access { display: grid; gap: var(--stack); padding: var(--stack); border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); font-size: var(--ui-xs); }
+.development-access-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--stack); }
+.development-access h3 { font-size: var(--ui-sm); font-weight: 600; }
+.development-access p, .development-access .identity-list { margin-top: 0; }
+.development-access-heading p { max-width: 300px; }
 .entity-activity { display: grid; gap: 10px; margin-top: var(--stack); }
 .activity-list { margin-top: var(--stack); }
 .activity-item { padding: var(--cell) 0; border-bottom: 1px solid var(--border); }
@@ -466,15 +468,22 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .project-transcript [data-slot="message"]:hover [data-slot="message-footer"],
 .project-transcript [data-slot="message"]:focus-within [data-slot="message-footer"] { opacity:1; }
 @media(pointer:coarse) { .project-transcript [data-slot="message-footer"] { opacity:1; } }
-.supervisor-preset-controls { display:grid; grid-template-columns:minmax(12rem, 1fr) minmax(18rem, 1.5fr); gap:1rem; align-items:end; }
-.supervisor-preset-meta { display:flex; align-items:center; gap:.6rem; margin:.75rem 0; }
-.supervisor-preset-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(15rem, 1fr)); gap:1rem; }
+.supervisor-preset-content { display:grid; width:min(100%, 80rem); gap:var(--stack); }
+.supervisor-preset-content > .muted { max-width:74rem; line-height:1.5; }
+.supervisor-preset-content > .callout { max-width:74rem; }
+.supervisor-preset-controls { display:grid; width:max-content; max-width:100%; align-items:end; }
+.supervisor-preset-controls .field { gap:.6rem; }
+.supervisor-preset-meta { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; }
+.supervisor-preset-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:1rem; }
 .supervisor-preset-config .field > [data-slot="native-select-wrapper"] { width:100%; }
-.supervisor-preset-config { border:1px solid var(--border); border-radius:var(--radius); padding:.75rem; }
-.supervisor-preset-config h3 { margin:0 0 .75rem; font-size:var(--ui-sm); }
+.supervisor-preset-config { display:grid; min-width:0; align-content:start; gap:.85rem; padding:1rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--card); }
+.supervisor-preset-config h3 { margin:0; font-size:var(--ui-sm); }
+.supervisor-preset-config .field { gap:.55rem; }
 .supervisor-preset-numbers { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:.75rem; }
-.supervisor-preset-limits { display:grid; grid-template-columns:repeat(auto-fit, minmax(15rem, 1fr)); gap:1rem; margin-top:1rem; }
-@media(max-width:700px) { .supervisor-preset-controls, .supervisor-preset-numbers { grid-template-columns:1fr; } }
+.supervisor-preset-limits { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:1rem; }
+.supervisor-preset-content .inline-actions { margin-top:.25rem; }
+@media(max-width:1050px) { .supervisor-preset-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+@media(max-width:700px) { .supervisor-preset-grid, .supervisor-preset-limits, .supervisor-preset-numbers { grid-template-columns:1fr; } .supervisor-preset-config { gap:var(--stack); } }
 .source-image { width:100%; height:auto; object-fit:contain; }
 .delegated-run { margin-left:1rem; border-left:1px solid var(--border); padding-left:1rem; }
 .source-text { max-height:20rem; overflow:auto; border:1px solid var(--border); padding:.75rem; margin:.5rem 0; line-height:1.6; }

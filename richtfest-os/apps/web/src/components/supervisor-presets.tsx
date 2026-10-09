@@ -115,7 +115,8 @@ export function SupervisorPresets({
     );
   const supervisor = activeDraft.supervisor || {};
   const specialists = activeDraft.specialists || {};
-  const modelCatalog = modelsQuery.data as { models?: ProviderModel[] } | undefined;
+  const modelCatalog = modelsQuery.data as
+    { models?: ProviderModel[] } | undefined;
   return (
     <SectionShell title={t("supervisorPresets")}>
       <p className="muted">{t("supervisorPresetsDescription")}</p>
@@ -286,21 +287,35 @@ function PresetConfig({
             disabled={modelsLoading}
             onChange={(event) => onChange("modelId", event.target.value)}
           >
-            {config.modelId && !models.some((model) => model.id === config.modelId) && (
-              <option value={config.modelId}>{config.modelId} ({t("modelNotInCatalog")})</option>
-            )}
-            <option value="" disabled>{modelsLoading ? t("loadingModels") : t("selectModel")}</option>
-            {models.filter((model) => isRecommendedModel(provider, model.id)).length > 0 && (
+            {config.modelId &&
+              !models.some((model) => model.id === config.modelId) && (
+                <option value={config.modelId}>
+                  {config.modelId} ({t("modelNotInCatalog")})
+                </option>
+              )}
+            <option value="" disabled>
+              {modelsLoading ? t("loadingModels") : t("selectModel")}
+            </option>
+            {models.filter((model) => isRecommendedModel(provider, model.id))
+              .length > 0 && (
               <optgroup label={t("recommendedModels")}>
-                {models.filter((model) => isRecommendedModel(provider, model.id)).map((model) => (
-                  <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                ))}
+                {models
+                  .filter((model) => isRecommendedModel(provider, model.id))
+                  .map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name || model.id}
+                    </option>
+                  ))}
               </optgroup>
             )}
             <optgroup label={t("availableModels")}>
-              {models.filter((model) => !isRecommendedModel(provider, model.id)).map((model) => (
-                <option key={model.id} value={model.id}>{model.name || model.id}</option>
-              ))}
+              {models
+                .filter((model) => !isRecommendedModel(provider, model.id))
+                .map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name || model.id}
+                  </option>
+                ))}
             </optgroup>
           </NativeSelect>
         )}
@@ -360,7 +375,7 @@ function SectionShell({
       <div className="section-heading">
         <h2>{title}</h2>
       </div>
-      {children}
+      <div className="supervisor-preset-content">{children}</div>
     </section>
   );
 }
