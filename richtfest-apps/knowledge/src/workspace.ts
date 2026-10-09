@@ -15,6 +15,7 @@ import {
   supervisorRuns,
   tasks,
 } from "./schema";
+import { attachUsageSummaries } from "./usage";
 export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
 export const conflict = (message: string) =>
@@ -273,6 +274,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
     const supervisors = new Set(
       supervisorIds.map((run: { runId: string }) => run.runId),
     );
+    const enrichedRuns = await attachUsageSummaries(d, runs);
     return {
       conversations: threads.map((t: any) => ({
         ...t,
@@ -281,7 +283,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           counts.rows.find((c: any) => c.conversation_id === t.id)?.count ?? 0,
       })),
       artifacts: artifactRows,
-      runs: runs.map((run: any) => ({
+      runs: enrichedRuns.map((run: any) => ({
         ...run,
         isSupervisor: supervisors.has(run.id),
       })),

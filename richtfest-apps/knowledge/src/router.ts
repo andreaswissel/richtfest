@@ -18,6 +18,7 @@ import { runsRouter } from "./runs";
 import { reviewsRouter } from "./reviews";
 import { conversation, missing } from "./workspace";
 import { workspaceRouter } from "./workspace";
+import { attachUsageSummaries } from "./usage";
 type GetDeps = (req: Request) => AppDeps;
 const conversationInput = z.object({
   title: z.string().trim().min(1).max(300),
@@ -69,7 +70,7 @@ export function createRouter(getDeps: GetDeps) {
         .from(conversations)
         .where(and(eq(conversations.tenantId, d.tenantId), projectId ? eq(conversations.projectId,projectId) : undefined))
         .orderBy(desc(conversations.createdAt));
-      return send(res, 200, ok(rows));
+      return send(res, 200, ok(await attachUsageSummaries(d, rows)));
     } catch (e) {
       return next(e);
     }

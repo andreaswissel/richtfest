@@ -3,6 +3,32 @@
   flex-direction: column;
   gap: 0.25rem;
 }
+.subagent-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.subagent-section + .subagent-section {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.subagent-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.5rem 0.25rem;
+}
+.subagent-section-header h3 {
+  margin: 0;
+  font-size: var(--ui-xs);
+  font-weight: 600;
+}
+.subagent-section-count {
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+  font-variant-numeric: tabular-nums;
+}
 .subagent-row {
   display: flex;
   align-items: center;
@@ -47,6 +73,9 @@
 .subagent-history > summary {
   font-size: var(--ui-xs);
   color: var(--muted-foreground);
+}
+.subagent-label .agent-run-metrics {
+  font-size: var(--ui-2xs);
 }
 .subagent-empty {
   padding: 0.75rem 0.5rem;

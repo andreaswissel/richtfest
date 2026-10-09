@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { AGENT_MAX_OUTPUT_TOKENS } from "@richtfest/shared";
 import { api, list, type RecordData } from "../api";
 import { queryClient, useApi } from "../query";
 import { useT } from "../i18n";
@@ -342,6 +343,7 @@ function PresetConfig({
           <Input
             type="number"
             min="256"
+            max={AGENT_MAX_OUTPUT_TOKENS}
             value={config.maxOutputTokens ?? 4096}
             onChange={(event) =>
               onChange("maxOutputTokens", numberValue(event.target.value, 4096))

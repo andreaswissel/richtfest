@@ -13,6 +13,7 @@ import {
   messages,
   tasks,
   annotations,
+  agentRunUsage,
 } from "./schema";
 import {
   conversation,
@@ -23,6 +24,7 @@ import {
 } from "./workspace";
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
+import { recordProviderUsage, summarizeUsageRows } from "./usage";
 const runInput = z.object({
   effort: z.enum(["low", "medium", "high", "ultra"]).default("medium"),
   messageId: z.string().uuid().optional(),
@@ -311,6 +313,7 @@ export async function executeRun(d: AppDeps, run: any) {
         );
       });
     };
+    const providerStartedAt = new Date();
     let response = await d.executeProvider({
       runId: run.id,
       onSummaryDelta,
@@ -320,6 +323,7 @@ export async function executeRun(d: AppDeps, run: any) {
       maxOutputTokens: executionModel?.maxOutputTokens,
       goal: run.goal,
       context,
+      onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
     });
     if (response.status === "unconfigured") {
       await active(d, run, async (tx) => {
@@ -503,6 +507,7 @@ export async function executeRun(d: AppDeps, run: any) {
     }
     if (results.length) {
       partialOutput = "";
+      const followupStartedAt = new Date();
       response = await d.executeProvider({
         runId: run.id,
         onSummaryDelta,
@@ -513,6 +518,7 @@ export async function executeRun(d: AppDeps, run: any) {
         goal: run.goal,
         context,
         toolResults: results,
+        onUsage: (usage) => recordProviderUsage(d, run, usage, followupStartedAt).then(() => undefined),
       });
       if (response.status !== "completed")
         throw conflict("Provider connection is no longer configured");
@@ -684,7 +690,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
             seen.add(item.id);
           }
           res.write(
-            `event: status\ndata: ${JSON.stringify({ id: run.id, status: run.status, partialOutput: run.partialOutput, outputSummary: run.outputSummary })}\n\n`,
+            `event: status\ndata: ${JSON.stringify({ id: run.id, status: run.status, partialOutput: run.partialOutput, outputSummary: run.outputSummary, createdAt: run.createdAt, startedAt: run.startedAt, finishedAt: run.finishedAt, durationMs: run.durationMs })}\n\n`,
           );
           if (!["queued", "running"].includes(run.status)) {
             res.end();
@@ -874,6 +880,34 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           eq(agentRuns.tenantId, d.tenantId),
         ),
       );
+    const usageRows = await d.db
+      .select()
+      .from(agentRunUsage)
+      .where(
+        and(
+          eq(agentRunUsage.tenantId, d.tenantId),
+          inArray(agentRunUsage.runId, [run.id, ...children.map((child: any) => child.id)]),
+        ),
+      )
+      .orderBy(agentRunUsage.startedAt);
+    const callRows = usageRows.map((row: any) => ({
+      id: row.id,
+      runId: row.runId,
+      callIndex: row.callIndex,
+      provider: row.provider,
+      modelId: row.modelId,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      reasoningTokens: row.reasoningTokens,
+      cachedInputTokens: row.cachedInputTokens,
+      totalTokens: row.totalTokens,
+      estimatedCostUsd: row.estimatedCostUsd == null ? null : Number(row.estimatedCostUsd) / 1_000_000,
+      pricingVersion: row.pricingVersion,
+      startedAt: row.startedAt,
+      completedAt: row.completedAt,
+    }));
+    const ownUsage = summarizeUsageRows(usageRows.filter((row: any) => row.runId === run.id));
+    const aggregateUsage = summarizeUsageRows(usageRows);
     return {
       run,
       events,
@@ -883,6 +917,12 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         ? { ...orchestration, leaseToken: undefined }
         : null,
       children,
+      usage: {
+        calls: callRows,
+        ...ownUsage,
+        own: ownUsage,
+        aggregate: aggregateUsage,
+      },
     };
   });
   route("post", "/runs/:runId/steer", "agent:run", async (d, req) => {

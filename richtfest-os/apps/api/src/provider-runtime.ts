@@ -3,10 +3,12 @@ import { validateOpenUI } from "./openui-validation";
 import type {
   ProviderRequest,
   ProviderResult,
+  ProviderUsage,
 } from "@richtfest/knowledge/deps";
 import type { Database } from "./db/client";
 import { withProviderCredential } from "./ai-connections";
 import { env } from "./env";
+import { estimateCostUsd } from "./model-pricing";
 export type ProviderFetch = (
   url: string,
   init: RequestInit,
@@ -34,6 +36,29 @@ export function reasoningEffortForModel(provider: ProviderRequest["provider"], m
     : undefined;
 }
 const controllers = new Map<string, AbortController>();
+
+const tokenCount = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
+function providerUsage(input: ProviderRequest, raw: any, modelId?: string | null): ProviderUsage {
+  const usage = raw?.usage ?? raw?.response?.usage ?? {};
+  const inputTokens = tokenCount(usage.input_tokens ?? usage.inputTokens);
+  const outputTokens = tokenCount(usage.output_tokens ?? usage.outputTokens);
+  const value: ProviderUsage = {
+    provider: input.provider,
+    modelId: modelId ?? input.modelId ?? null,
+    inputTokens,
+    outputTokens,
+    reasoningTokens: tokenCount(usage.output_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? usage.reasoningTokens),
+    cachedInputTokens: tokenCount(usage.input_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedInputTokens),
+    totalTokens: tokenCount(usage.total_tokens ?? usage.totalTokens) ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
+  };
+  return { ...value, ...estimateCostUsd(value) };
+}
+function attachUsage(output: unknown, usage: ProviderUsage): unknown {
+  if (!output || typeof output !== "object") return output;
+  Object.defineProperty(output, "__usage", { value: usage, enumerable: false, configurable: true });
+  return output;
+}
 export function cancelProviderExecution(runId: string) {
   controllers.get(runId)?.abort();
 }
@@ -71,6 +96,14 @@ export async function callProvider(
   if (isVercel && !input.modelId?.trim()) throw new Error("Vercel Gateway model preset is unconfigured");
   const controller = new AbortController();
   if (input.runId) controllers.set(input.runId, controller);
+  let rawUsage: any;
+  let responseModel: string | null = input.modelId ?? null;
+  let usageReported = false;
+  const reportUsage = async () => {
+    if (usageReported || !rawUsage) return;
+    usageReported = true;
+    await input.onUsage?.(providerUsage(input, rawUsage, responseModel));
+  };
   try {
     const response = await fetcher(
       isOpenAi
@@ -137,6 +170,15 @@ export async function callProvider(
           const raw = line.slice(5).trim();
           if (raw === "[DONE]" || !raw) continue;
           const event = JSON.parse(raw);
+          if (isOpenAi && ["response.completed", "response.incomplete", "response.failed"].includes(event.type)) {
+            rawUsage = event.response?.usage;
+            responseModel = event.response?.model ?? responseModel;
+          } else if (!isOpenAi && event.type === "message_start") {
+            rawUsage = event.message?.usage ?? rawUsage;
+            responseModel = event.message?.model ?? responseModel;
+          } else if (!isOpenAi && event.type === "message_delta") {
+            rawUsage = { ...(rawUsage ?? {}), ...(event.usage ?? {}) };
+          }
           if (event.type === "error" || event.type === "response.failed")
             throw new Error("Provider stream failed");
           const delta = isOpenAi
@@ -169,6 +211,8 @@ export async function callProvider(
         await input.onSummaryDelta?.(summary.slice(emitted.length));
     } else {
       const data: any = await response.json();
+      rawUsage = data.usage;
+      responseModel = data.model ?? responseModel;
       text = isOpenAi
         ? (data.output ?? [])
             .filter((item: any) => item.type === "message")
@@ -182,6 +226,7 @@ export async function callProvider(
             .join("\n");
     }
 
+    await reportUsage();
     if (typeof text !== "string" || !text.trim())
       throw new Error("Provider returned no text output");
     try {
@@ -190,15 +235,18 @@ export async function callProvider(
           .replace(/^```(?:json)?\s*/i, "")
           .replace(/\s*```$/, ""),
       );
-      return {
+      return attachUsage({
         ...output,
         openuiReferences: output.openui
           ? validateOpenUI(output.openui)
           : undefined,
-      };
+      }, providerUsage(input, rawUsage, responseModel));
     } catch {
       throw new Error("Provider returned invalid structured output");
     }
+  } catch (error) {
+    await reportUsage().catch(() => undefined);
+    throw error;
   } finally {
     if (input.runId && controllers.get(input.runId) === controller)
       controllers.delete(input.runId);
@@ -219,9 +267,10 @@ export async function executeProvider(
       input.provider,
       (key) => callProvider(input, key, fetcher),
     );
+    const usage = output && typeof output === "object" ? (output as { __usage?: ProviderUsage }).__usage : undefined;
     return output === null
       ? { status: "unconfigured" }
-      : { status: "completed", output };
+      : { status: "completed", output, usage };
   } catch {
     throw new Error(
       "Provider execution failed. Check the selected connection and retry.",

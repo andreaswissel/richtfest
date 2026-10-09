@@ -394,7 +394,8 @@ export const knowledgeDeps = (
       const output = await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, signal =>
         withProviderCredential(db, actor.tenantId, actor.id, input.provider,
           key => callMastraSupervisor(input, key, { signal })));
-      return output === null ? { status: "unconfigured" as const } : { status: "completed" as const, output };
+      const usage = output && typeof output === "object" ? (output as { __usage?: unknown }).__usage : undefined;
+      return output === null ? { status: "unconfigured" as const } : { status: "completed" as const, output, usage: usage as any };
     },
     cancelExecution: (runId) => { cancelProviderExecution(runId); cancelSupervisorExecution(runId); },
     providerConfigured: async (provider) =>

@@ -4,10 +4,13 @@ export const agentEffortSchema = z.enum(["low", "medium", "high", "ultra"]);
 export type AgentEffort = z.infer<typeof agentEffortSchema>;
 export const agentProviderSchema = z.enum(["openai", "anthropic", "vercel"]);
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
+// GPT-6 models support up to 128K generated tokens. This is an output ceiling,
+// distinct from their 1.05M-token context window.
+export const AGENT_MAX_OUTPUT_TOKENS = 128_000;
 export const agentModelConfigSchema = z.object({
   modelId: z.string().trim().min(1).max(150).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:\/-]*$/),
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
-  maxOutputTokens: z.number().int().min(256).max(16000),
+  maxOutputTokens: z.number().int().min(256).max(AGENT_MAX_OUTPUT_TOKENS),
   maxSteps: z.number().int().min(1).max(8),
 }).strict();
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;

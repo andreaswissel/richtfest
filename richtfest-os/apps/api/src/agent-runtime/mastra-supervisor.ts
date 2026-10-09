@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { AgentModelConfig, AgentPresetSnapshot } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
+import type { ProviderUsage } from "@richtfest/knowledge/deps";
+import { estimateCostUsd } from "../model-pricing";
 
 export type SupervisorPhase = "plan" | "specialist" | "review";
 export type SupervisorRequest = {
@@ -16,6 +18,7 @@ export type SupervisorRequest = {
   modelConfig?: AgentModelConfig;
   modelPolicy?: AgentPresetSnapshot;
   onSummaryDelta?: (delta: string) => Promise<void>;
+  onUsage?: (usage: ProviderUsage) => Promise<void>;
 };
 const evidence = {
   summary: z.string().min(1).max(10000),
@@ -41,6 +44,28 @@ const phaseInstructions: Record<SupervisorPhase, string> = {
   specialist: "Complete only your assigned scoped task using the supplied source excerpts. Return an evidence-backed summary, concise rationale and citations. Do not delegate or request other tools.",
   review: "Review the specialist findings against the original goal and evidence, including conflicting values, document revisions, and stated scope exclusions. Accept only if the evidence supports the answer. Otherwise request precise revisions referencing supplied task UUIDs. Do not repeat completed work. If evidence is unavailable or requested source coverage is incomplete, report that limitation honestly; do not treat unreviewed status as an approval gate. Accepted results must have no revisions.",
 };
+const tokenCount = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
+function usageFor(input: SupervisorRequest, raw: any, modelId: string | null): ProviderUsage {
+  const usage = raw ?? {};
+  const inputTokens = tokenCount(usage.inputTokens ?? usage.input_tokens);
+  const outputTokens = tokenCount(usage.outputTokens ?? usage.output_tokens);
+  const value: ProviderUsage = {
+    provider: input.provider,
+    modelId,
+    inputTokens,
+    outputTokens,
+    reasoningTokens: tokenCount(usage.reasoningTokens ?? usage.reasoning_tokens),
+    cachedInputTokens: tokenCount(usage.cachedInputTokens ?? usage.cached_input_tokens),
+    totalTokens: tokenCount(usage.totalTokens ?? usage.total_tokens) ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
+  };
+  return { ...value, ...estimateCostUsd(value) };
+}
+function attachUsage(output: unknown, usage: ProviderUsage): unknown {
+  if (!output || typeof output !== "object") return output;
+  Object.defineProperty(output, "__usage", { value: usage, enumerable: false, configurable: true });
+  return output;
+}
 /** Stateless inference only. Credentials live in this call, never in workflow input or storage. */
 export async function callMastraSupervisor(
   input: SupervisorRequest,
@@ -83,6 +108,7 @@ export async function callMastraSupervisor(
     };
     const prompt = JSON.stringify({ goal: input.goal, context: input.context });
     let object: unknown;
+    let rawUsage: unknown;
     let emitted = "";
     if (input.onSummaryDelta && input.phase !== "plan") {
       const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);
@@ -98,11 +124,16 @@ export async function callMastraSupervisor(
           emitted = safe;
         }
       }
+      rawUsage = await stream.usage;
+      if (rawUsage) await input.onUsage?.(usageFor(input, rawUsage, modelConfig?.modelId ?? null));
       abortSignal.throwIfAborted();
       if (stream.error) throw stream.error;
       object = await stream.object;
     } else {
-      object = (await agent.generate<Record<string, unknown>>(prompt, executionOptions)).object;
+      const result = await agent.generate<Record<string, unknown>>(prompt, executionOptions);
+      rawUsage = await result.usage;
+      if (rawUsage) await input.onUsage?.(usageFor(input, rawUsage, modelConfig?.modelId ?? null));
+      object = result.object;
     }
     abortSignal.throwIfAborted();
     const output = supervisorSchemas[input.phase].parse(JSON.parse(redact(JSON.stringify(object))));
@@ -110,7 +141,7 @@ export async function callMastraSupervisor(
       if (!output.summary.startsWith(emitted)) throw new Error("Summary stream changed its emitted prefix");
       if (output.summary.length > emitted.length) await input.onSummaryDelta(output.summary.slice(emitted.length));
     }
-    return output;
+    return attachUsage(output, usageFor(input, rawUsage, modelConfig?.modelId ?? null));
   } catch {
     // Provider and SDK exceptions can contain request bodies or auth headers.
     throw new Error("Supervisor model execution failed. Check the selected connection and retry.");

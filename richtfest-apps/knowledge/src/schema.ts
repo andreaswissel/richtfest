@@ -87,6 +87,9 @@ export const agentRuns = pgTable("knowledge_agent_runs", {
   error: text("error"),
   correlationId: uuid("correlation_id").notNull(),
   requestedBy: uuid("requested_by").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  durationMs: integer("duration_ms"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -94,6 +97,24 @@ export const agentRuns = pgTable("knowledge_agent_runs", {
     .defaultNow()
     .notNull(),
 });
+export const agentRunUsage = pgTable("knowledge_agent_run_usage", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  runId: uuid("run_id").notNull(),
+  callIndex: integer("call_index").notNull(),
+  provider: text("provider").notNull(),
+  modelId: text("model_id"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  reasoningTokens: integer("reasoning_tokens"),
+  cachedInputTokens: integer("cached_input_tokens"),
+  totalTokens: integer("total_tokens"),
+  estimatedCostUsd: integer("estimated_cost_usd_micros"),
+  pricingVersion: text("pricing_version"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ runCall: uniqueIndex("knowledge_agent_run_usage_run_call").on(table.runId, table.callIndex) }));
 export const agentRunEvents = pgTable("knowledge_agent_run_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

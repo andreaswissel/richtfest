@@ -13,6 +13,7 @@ import {
 } from "./schema";
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact } from "./workspace";
+import { recordProviderUsage } from "./usage";
 
 export const specialistOutput = z.object({
   summary: z.string().min(1).max(10000),
@@ -178,6 +179,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       runId = id,
     ) => {
       await assertActive();
+      const providerStartedAt = new Date();
       const response = await d.executeSupervisor!({
         phase,
         provider: run.provider,
@@ -201,6 +203,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         },
         modelPolicy: state.modelPolicy,
         onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
+        onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
       });
       if (response.status !== "completed")
         throw conflict("Provider unavailable");

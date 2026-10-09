@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -19,6 +19,7 @@ import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
 import { runActivityLabel } from "./run-activity";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
+import { AgentRunMetrics, isAgentRunActive } from "../agent-run-metrics";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -111,6 +112,7 @@ export function SubagentList({
           <span>
             {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
           </span>
+          <AgentRunMetrics run={run} />
         </span>
         <ArrowUpRight className="size-icon-sm muted" aria-hidden="true" />
       </Link>
@@ -118,7 +120,20 @@ export function SubagentList({
   };
   return (
     <div className="subagent-list" aria-label={t("agentThreadList")}>
-      {current.map(row)}
+      {current.length > 0 && (
+        <SubagentSection
+          title={t("agentRunsActive")}
+          runs={current.filter(isAgentRunActive)}
+          row={row}
+        />
+      )}
+      {current.length > 0 && (
+        <SubagentSection
+          title={t("agentRunsDone")}
+          runs={current.filter((run) => !isAgentRunActive(run))}
+          row={row}
+        />
+      )}
       {!current.length && (
         <p className="subagent-empty">
           {preparing ? t("agentThreadPreparing") : t("agentThreadEmpty")}
@@ -133,6 +148,27 @@ export function SubagentList({
         </details>
       )}
     </div>
+  );
+}
+
+function SubagentSection({
+  title,
+  runs,
+  row,
+}: {
+  title: string;
+  runs: RecordData[];
+  row: (run: RecordData) => ReactNode;
+}) {
+  if (!runs.length) return null;
+  return (
+    <section className="subagent-section">
+      <header className="subagent-section-header">
+        <h3>{title}</h3>
+        <span className="subagent-section-count">{runs.length}</span>
+      </header>
+      {runs.map(row)}
+    </section>
   );
 }
 
@@ -159,6 +195,7 @@ export function SubagentThread({
     ? {
         ...query.data.run,
         ...initialRun,
+        usage: query.data.usage ?? initialRun?.usage,
         isSupervisor: Boolean(
           initialRun?.isSupervisor || query.data.orchestration,
         ),
@@ -208,6 +245,7 @@ export function SubagentThread({
           <Badge>
             {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
           </Badge>
+          <AgentRunMetrics run={run} />
         </div>
       </header>
       <MessageScrollerProvider

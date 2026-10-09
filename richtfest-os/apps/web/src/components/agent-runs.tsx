@@ -5,6 +5,7 @@ import { useApi, useWrite } from "../query";
 import { list, type RecordData } from "../api";
 import { useT } from "../i18n";
 import { AgentEffortControl } from "./agent-effort-control";
+import { AgentRunMetrics, isAgentRunActive } from "./agent-run-metrics";
 import { Section } from "./layout";
 import { Input, Textarea } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
@@ -61,20 +62,10 @@ export function AgentRuns({
         <Callout tone="error">{readiness.error.message}</Callout>
       )}
       {runs.error && <Callout tone="error">{runs.error.message}</Callout>}
-      <div className="agent-run-list">
-        {list(initialRuns || runs.data, "items")
-          .filter((run) => !run.parentRunId)
-          .map((run) => (
-            <RunGroup
-              key={run.id}
-              run={run}
-              projectId={projectId}
-              childrenRuns={list(initialRuns || runs.data, "items").filter(
-                (child) => child.parentRunId === run.id,
-              )}
-            />
-          ))}
-      </div>
+      <RunSections
+        runs={list(initialRuns || runs.data, "items")}
+        projectId={projectId}
+      />
       {(initialRuns || runs.data) &&
         !list(initialRuns || runs.data, "items").length && (
           <Empty>{t("noAgentRuns")}</Empty>
@@ -167,6 +158,44 @@ export function AgentRuns({
     </Section>
   );
 }
+
+function RunSections({
+  runs,
+  projectId,
+}: {
+  runs: RecordData[];
+  projectId: string;
+}) {
+  const t = useT();
+  const parentRuns = runs.filter((run) => !run.parentRunId);
+  const activeRuns = parentRuns.filter(isAgentRunActive);
+  const doneRuns = parentRuns.filter((run) => !isAgentRunActive(run));
+  const section = (title: string, sectionRuns: RecordData[]) =>
+    sectionRuns.length > 0 ? (
+      <section className="agent-run-section" key={title}>
+        <header className="agent-run-section-header">
+          <h3>{title}</h3>
+          <span className="agent-run-section-count">{sectionRuns.length}</span>
+        </header>
+        <div className="agent-run-list">
+          {sectionRuns.map((run) => (
+            <RunGroup
+              key={run.id}
+              run={run}
+              projectId={projectId}
+              childrenRuns={runs.filter((child) => child.parentRunId === run.id)}
+            />
+          ))}
+        </div>
+      </section>
+    ) : null;
+  return (
+    <div className="agent-run-sections">
+      {section(t("agentRunsActive"), activeRuns)}
+      {section(t("agentRunsDone"), doneRuns)}
+    </div>
+  );
+}
 function runHref(projectId: string, run: RecordData) {
   const params = new URLSearchParams();
   if (run.conversationId) params.set("conversation", run.conversationId);
@@ -201,12 +230,40 @@ function RunGroup({
   childrenRuns: RecordData[];
 }) {
   const t = useT();
-  const activeChildren = childrenRuns.filter(
+  const currentChildren = childrenRuns.filter(
     (child) => child.status !== "cancelled",
   );
+  const activeChildren = currentChildren.filter(isAgentRunActive);
+  const doneChildren = currentChildren.filter((child) => !isAgentRunActive(child));
   const previousChildren = childrenRuns.filter(
     (child) => child.status === "cancelled",
   );
+  const childLink = (child: RecordData) => (
+    <Link
+      className="agent-run-child"
+      key={child.id}
+      to={runHref(projectId, child)}
+    >
+      <span className="agent-run-child-copy">
+        <strong>{specialistLabel(child, t)}</strong>
+        <span>{statusLabel(child, t)}</span>
+        <AgentRunMetrics run={child} />
+      </span>
+      <ArrowUpRight className="size-icon-sm" aria-hidden="true" />
+    </Link>
+  );
+  const childSection = (title: string, children: RecordData[]) =>
+    children.length > 0 ? (
+      <section className="agent-run-child-section" key={title}>
+        <header className="agent-run-child-section-header">
+          <h4>{title}</h4>
+          <span>{children.length}</span>
+        </header>
+        <div className="agent-run-children" aria-label={t("supervisorSpecialists")}>
+          {children.map(childLink)}
+        </div>
+      </section>
+    ) : null;
   return (
     <details className="agent-run-group">
       <summary className="agent-run-row">
@@ -214,6 +271,7 @@ function RunGroup({
           <span className="agent-run-copy">
             <strong>{run.goal}</strong>
             <span>{specialistLabel(run, t)}</span>
+            <AgentRunMetrics run={run} />
           </span>
           <Badge tone={run.status === "approved" ? "success" : "neutral"}>
             {statusLabel(run, t)}
@@ -225,24 +283,10 @@ function RunGroup({
         />
       </summary>
       <RunDetails run={run} projectId={projectId} />
-      {activeChildren.length > 0 && (
-        <div
-          className="agent-run-children"
-          aria-label={t("supervisorSpecialists")}
-        >
-          {activeChildren.map((child) => (
-            <Link
-              className="agent-run-child"
-              key={child.id}
-              to={runHref(projectId, child)}
-            >
-              <span className="agent-run-child-copy">
-                <strong>{specialistLabel(child, t)}</strong>
-                <span>{statusLabel(child, t)}</span>
-              </span>
-              <ArrowUpRight className="size-icon-sm" aria-hidden="true" />
-            </Link>
-          ))}
+      {currentChildren.length > 0 && (
+        <div className="agent-run-child-sections">
+          {childSection(t("agentRunsActive"), activeChildren)}
+          {childSection(t("agentRunsDone"), doneChildren)}
         </div>
       )}
       {previousChildren.length > 0 && (
@@ -251,19 +295,7 @@ function RunGroup({
             {t("agentThreadPrevious")} · {previousChildren.length}
           </summary>
           <div className="agent-run-children">
-            {previousChildren.map((child) => (
-              <Link
-                className="agent-run-child"
-                key={child.id}
-                to={runHref(projectId, child)}
-              >
-                <span className="agent-run-child-copy">
-                  <strong>{specialistLabel(child, t)}</strong>
-                  <span>{statusLabel(child, t)}</span>
-                </span>
-                <ArrowUpRight className="size-icon-sm" aria-hidden="true" />
-              </Link>
-            ))}
+            {previousChildren.map(childLink)}
           </div>
         </details>
       )}

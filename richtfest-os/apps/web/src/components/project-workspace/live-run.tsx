@@ -7,6 +7,7 @@ import { Button } from "../ui/button";
 import { Badge, Callout } from "../ui/primitives";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { runActivityLabel } from "./run-activity";
+import { AgentRunMetrics } from "../agent-run-metrics";
 
 export function LiveRun({
   run,
@@ -123,6 +124,7 @@ export function LiveRun({
             ? t("workspaceLive")
             : run.status}
         </Badge>
+        <AgentRunMetrics run={run} />
         <CraneWorkingIndicator label={t("workspaceUiSupervisorWorking")} />
         {["queued", "running"].includes(run.status) && (
           <Button

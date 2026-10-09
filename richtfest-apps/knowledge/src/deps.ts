@@ -14,6 +14,7 @@ export type AppDeps = {
     context: unknown;
     modelPolicy?: AgentPresetSnapshot;
     onSummaryDelta?: (delta: string) => Promise<void>;
+    onUsage?: (usage: ProviderUsage) => Promise<void>;
   }) => Promise<ProviderResult>;
   cancelExecution: (runId: string) => void;
   providerConfigured: (provider: AgentProvider) => Promise<boolean>;
@@ -70,9 +71,22 @@ export type ProviderRequest = {
   toolResults?: unknown[];
   runId?: string;
   onSummaryDelta?: (delta: string) => Promise<void>;
+  onUsage?: (usage: ProviderUsage) => Promise<void>;
+};
+export type ProviderUsage = {
+  provider: AgentProvider;
+  modelId: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  cachedInputTokens: number | null;
+  totalTokens: number | null;
+  estimatedCostUsd?: number | null;
+  pricingVersion?: string | null;
 };
 export type ProviderResult =
-  { status: "unconfigured" } | { status: "completed"; output: unknown };
+  | { status: "unconfigured" }
+  | { status: "completed"; output: unknown; usage?: ProviderUsage };
 
 /** Discovery metadata only; a source must be resolved before it can be cited. */
 export type ProjectSourceInventory = {

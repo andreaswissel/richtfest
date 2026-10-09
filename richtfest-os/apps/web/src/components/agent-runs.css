@@ -4,6 +4,34 @@
   border-top: 1px solid var(--border);
 }
 
+.agent-run-sections {
+  display: grid;
+  gap: var(--section);
+}
+
+.agent-run-section {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.agent-run-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.agent-run-section-header h3 {
+  margin: 0;
+  font-size: var(--ui-sm);
+  font-weight: 600;
+}
+
+.agent-run-section-count {
+  color: var(--muted-foreground);
+  font-size: var(--ui-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 .agent-run-group {
   border-bottom: 1px solid var(--border);
 }
@@ -61,6 +89,20 @@
   font-size: var(--ui-xs);
 }
 
+.agent-run-metrics {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-run-copy .agent-run-metrics,
+.agent-run-child-copy .agent-run-metrics {
+  font-size: var(--ui-2xs);
+}
+
 .agent-run-disclosure {
   color: var(--muted-foreground);
   font-size: var(--ui-sm);
@@ -111,6 +153,30 @@
   margin: 0 0 var(--stack) 0;
   border-top: 1px solid var(--border);
   padding-left: 0;
+}
+
+.agent-run-child-sections {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.agent-run-child-section {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.agent-run-child-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+}
+
+.agent-run-child-section-header h4 {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
 }
 
 .agent-run-child {
