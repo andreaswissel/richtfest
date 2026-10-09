@@ -131,8 +131,8 @@ export function ArtifactPanel({
           {
             runs.filter(
               (run) =>
-                run.parentRunId &&
-                run.status !== "cancelled" &&
+                (run.isSupervisor ||
+                  (run.parentRunId && run.status !== "cancelled")) &&
                 (!conversationId || run.conversationId === conversationId),
             ).length
           }

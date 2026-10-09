@@ -686,7 +686,11 @@ function Conversation({
                 >
                   <Message>
                     <MessageContent>
-                      <LiveRun run={run} projectId={projectId} />
+                      <LiveRun
+                        run={run}
+                        projectId={projectId}
+                        showSupervisorActivity={activeSupervisorRun?.id === run.id}
+                      />
                     </MessageContent>
                   </Message>
                 </MessageScrollerItem>

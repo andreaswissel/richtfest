@@ -457,9 +457,10 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 @media(prefers-reduced-motion:reduce) { [data-slot^="message-scroller"] { scroll-behavior:auto!important; transition:none!important; } }
 .composer-provider { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
 .composer-provider .field { margin:0; }
-.workspace-live-run { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:.2rem .75rem; border-bottom:1px solid var(--border); color:var(--muted-foreground); font-size:var(--ui-xs); }
+.workspace-live-run { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; padding:.2rem .75rem; border-bottom:1px solid var(--border); color:var(--muted-foreground); font-size:var(--ui-xs); }
 .workspace-live-run .inline-actions { gap:.5rem; }
 .workspace-live-run .inline-actions > span { color:var(--foreground); font-weight:500; }
+.workspace-live-run-activity { flex:1 0 100%; }
 .project-transcript [data-slot="message-scroller-content"] { gap:calc(var(--stack) * .75); }
 .project-transcript [data-slot="message-content"] { max-width:min(100%, 72rem); }
 .workspace-review-result { display:inline-flex; width:max-content; align-items:center; border-radius:var(--radius); padding:.25rem .55rem; color:var(--primary); font-size:var(--ui-xs); font-weight:600; text-decoration:none; }

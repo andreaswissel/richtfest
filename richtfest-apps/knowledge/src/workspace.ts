@@ -12,6 +12,7 @@ import {
   conversationReads,
   messages,
   agentRuns,
+  supervisorRuns,
   tasks,
 } from "./schema";
 export const missing = (message = "Record not found") =>
@@ -255,6 +256,23 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           sql`select m.conversation_id, count(*)::int as count from knowledge_messages m join knowledge_conversations c on c.id=m.conversation_id and c.tenant_id=m.tenant_id left join knowledge_conversation_reads r on r.conversation_id=m.conversation_id and r.tenant_id=m.tenant_id and r.user_id=${d.actorId} where m.tenant_id=${d.tenantId} and c.project_id=${id} and (m.author_id<>${d.actorId} or m.actor_kind<>'user') and (r.read_at is null or m.created_at>r.read_at) group by m.conversation_id`,
         ),
       ]);
+    const supervisorIds = runs.length
+      ? await d.db
+          .select({ runId: supervisorRuns.runId })
+          .from(supervisorRuns)
+          .where(
+            and(
+              eq(supervisorRuns.tenantId, d.tenantId),
+              inArray(
+                supervisorRuns.runId,
+                runs.map((run: any) => run.id),
+              ),
+            ),
+          )
+      : [];
+    const supervisors = new Set(
+      supervisorIds.map((run: { runId: string }) => run.runId),
+    );
     return {
       conversations: threads.map((t: any) => ({
         ...t,
@@ -263,7 +281,10 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           counts.rows.find((c: any) => c.conversation_id === t.id)?.count ?? 0,
       })),
       artifacts: artifactRows,
-      runs,
+      runs: runs.map((run: any) => ({
+        ...run,
+        isSupervisor: supervisors.has(run.id),
+      })),
       tasks: taskRows,
     };
   });

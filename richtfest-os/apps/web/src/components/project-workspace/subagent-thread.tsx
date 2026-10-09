@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   FileSearch,
   ListChecks,
+  Network,
   Sparkles,
 } from "lucide-react";
 import { list, type RecordData } from "../../api";
@@ -16,6 +17,7 @@ import { Badge, Callout, Field, Form, Modal } from "../ui/primitives";
 import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
+import { runActivityLabel } from "./run-activity";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import {
   MessageScrollerProvider,
@@ -31,15 +33,23 @@ function agentName(run: RecordData, t: ReturnType<typeof useT>) {
     return t("agentThreadSourceName");
   if (run.specialistRole === "requirements_reviewer")
     return t("agentThreadRequirementsName");
+  if (run.isSupervisor) return t("supervisorRole");
   if (!run.parentRunId) return t("agentThreadCoordinator");
   return (
     run.goal?.split(/[.!?\n]/)[0]?.slice(0, 72) || t("agentThreadSpecialist")
   );
 }
 
-function AgentIcon({ role }: { role?: string }) {
-  const Icon =
-    role === "source_reviewer"
+function AgentIcon({
+  role,
+  supervisor,
+}: {
+  role?: string;
+  supervisor?: boolean;
+}) {
+  const Icon = supervisor
+    ? Network
+    : role === "source_reviewer"
       ? FileSearch
       : role === "requirements_reviewer"
         ? ListChecks
@@ -59,11 +69,16 @@ export function SubagentList({
   const t = useT();
   const [params] = useSearchParams();
   const relevant = runs.filter(
-    (run) => !conversationId || run.conversationId === conversationId,
+    (run) =>
+      (run.parentRunId || run.isSupervisor) &&
+      (!conversationId || run.conversationId === conversationId),
   );
-  const children = relevant.filter((run) => run.parentRunId);
-  const current = children.filter((run) => run.status !== "cancelled");
-  const previous = children.filter((run) => run.status === "cancelled");
+  const current = relevant.filter(
+    (run) => !run.parentRunId || run.status !== "cancelled",
+  );
+  const previous = relevant.filter(
+    (run) => run.parentRunId && run.status === "cancelled",
+  );
   const preparing = relevant.some(
     (run) => !run.parentRunId && ["queued", "running"].includes(run.status),
   );
@@ -81,10 +96,18 @@ export function SubagentList({
         aria-current={params.get("agentRun") === run.id ? "page" : undefined}
       >
         <span className="subagent-icon">
-          <AgentIcon role={run.specialistRole} />
+          <AgentIcon
+            role={run.specialistRole}
+            supervisor={Boolean(run.isSupervisor)}
+          />
         </span>
         <span className="subagent-label">
           <strong>{agentName(run, t)}</strong>
+          {run.isSupervisor && run.goal && (
+            <span className="truncate" title={run.goal}>
+              {run.goal}
+            </span>
+          )}
           <span>
             {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
           </span>
@@ -133,7 +156,13 @@ export function SubagentThread({
   );
   const cancel = useWrite(`/knowledge/runs/${runId}/cancel`);
   const run = query.data?.run
-    ? { ...query.data.run, ...initialRun }
+    ? {
+        ...query.data.run,
+        ...initialRun,
+        isSupervisor: Boolean(
+          initialRun?.isSupervisor || query.data.orchestration,
+        ),
+      }
     : initialRun;
   const back = new URLSearchParams(params);
   back.delete("agentRun");
@@ -171,7 +200,10 @@ export function SubagentThread({
           {t("agentThreadBack")}
         </Link>
         <div className="agent-thread-title">
-          <AgentIcon role={run.specialistRole} />
+          <AgentIcon
+            role={run.specialistRole}
+            supervisor={Boolean(run.isSupervisor)}
+          />
           <h2>{agentName(run, t)}</h2>
           <Badge>
             {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
@@ -268,17 +300,46 @@ export function SubagentThread({
                 </MessageScrollerItem>
               )}
               {list(query.data?.events).some(
-                (event) => event.resultSummary,
+                (event) => runActivityLabel(event) || event.resultSummary,
               ) && (
                 <MessageScrollerItem messageId={`${runId}-activity`}>
                   <details className="agent-thread-details">
                     <summary>{t("agentThreadActivity")}</summary>
                     <ul>
-                      {list(query.data?.events)
-                        .filter((event) => event.resultSummary)
-                        .map((event) => (
-                          <li key={event.id}>{event.resultSummary}</li>
-                        ))}
+                      {list(query.data?.events).map((event) => {
+                        const label = runActivityLabel(event);
+                        if (!label && !event.resultSummary) return null;
+                        const timestamp = event.createdAt
+                          ? new Date(event.createdAt)
+                          : null;
+                        return (
+                          <li
+                            key={event.id}
+                            className="flex items-baseline gap-2"
+                          >
+                            {timestamp &&
+                              !Number.isNaN(timestamp.getTime()) && (
+                                <time
+                                  className="shrink-0 tabular-nums"
+                                  dateTime={timestamp.toISOString()}
+                                >
+                                  {timestamp.toLocaleTimeString(undefined, {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </time>
+                              )}
+                            <span>
+                              {label ? t(label) : event.resultSummary}
+                              {label && event.resultSummary && (
+                                <span className="ml-2 text-muted-foreground">
+                                  {event.resultSummary}
+                                </span>
+                              )}
+                            </span>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </details>
                 </MessageScrollerItem>
