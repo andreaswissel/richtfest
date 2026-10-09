@@ -10,7 +10,7 @@ Opening a project shows its active threads in a rail beside the conversation. Us
 1. Create the customer and relevant contacts, then associate a project with that customer.
 2. Attach the original source files to the project. Uploading a revision creates another immutable version instead of replacing the evidence behind earlier decisions.
 3. Start a project conversation. Attach an exact source version when asking the agent to review evidence.
-4. The workspace's active provider uses the user's personal connection first, then the workspace connection for that same provider. When no credential or effort preset is configured, the message is retained and the workspace links to Settings without inventing an answer.
+4. The workspace's active provider uses the user's personal connection first, then the workspace connection for that same provider. When no credential or effort preset is configured, an error callout below the composer explains that agent replies are unavailable and links to AI connections in Settings. Messages can still be saved; after sending, the callout confirms that the message was saved but the agent could not reply.
 5. Agent output streams into a stable conversation turn. Runs, source-review delegation, tool summaries, interruptions and retries remain durable and auditable.
 6. Review proposed artifacts and annotations against the exact source version and page. A permitted reviewer can publish the current, exact artifact revision as a reviewed source finding. The reviewed-knowledge record retains links to the artifact revision and immutable source versions; a stale or repeated review is rejected. Generated status labels cannot grant approval.
 

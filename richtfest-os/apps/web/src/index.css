@@ -432,8 +432,6 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .workspace-composer-error { color:var(--destructive); }
 .workspace-composer [data-slot="native-select"] { height:var(--control-sm); font-size:var(--ui-xs); }
 .workspace-jump { position:static; align-self:flex-end; padding:.3rem 1rem; z-index:25; }
-.workspace-provider-status { padding:.1rem 0; color:var(--muted-foreground); font-size:var(--ui-2xs); line-height:1.4; }
-.workspace-provider-status a { color:var(--foreground); text-decoration:underline; text-underline-offset:3px; }
 .workspace-resize-handle { width:8px; height:100%; padding:0; border:0; border-left:1px solid var(--border); border-right:1px solid var(--border); background:var(--muted); cursor:col-resize; transition:background-color .15s; }
 .workspace-resize-handle:hover, .workspace-resize-handle:focus-visible { background:color-mix(in oklch, var(--primary) 14%, var(--muted)); }
 .project-artifacts { min-width:0; min-height:0; display:flex; flex-direction:column; }

@@ -776,10 +776,13 @@ function Conversation({
           <Callout tone="error">{readiness.error.message}</Callout>
         )}
         {readiness.data && !readiness.data.executionAvailable && (
-          <div className="workspace-provider-status" role="status">
+          <Callout tone="error">
+            {send.isSuccess && <p>{t("workspaceMessageSavedNoReply")}</p>}
             {t("workspaceNoExecution")}{" "}
-            <Link to="/settings">{t("aiConnections")}</Link>
-          </div>
+            <Link className="underline underline-offset-2" to="/settings">
+              {t("aiConnections")}
+            </Link>
+          </Callout>
         )}
         {startRun.error && (
           <Callout tone="error">

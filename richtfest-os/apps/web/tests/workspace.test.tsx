@@ -142,7 +142,7 @@ describe("workspace records and navigation", () => {
     expect(html).toContain("panel=tasks");
     expect(html).toContain(`href="/projects/${projectId}?view=sources"`);
   });
-  test("unconfigured composer honestly persists messages without promising an agent answer", () => {
+  test("unconfigured composer shows an actionable alert without claiming a message was saved", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,
       `/projects/${projectId}`,
@@ -154,7 +154,10 @@ describe("workspace records and navigation", () => {
         },
       },
     );
-    expect(html).toContain("Messages are saved");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Agent replies are unavailable");
+    expect(html).toContain("You can still save messages");
+    expect(html).not.toContain("Your message was saved");
     expect(html).toContain('href="/settings"');
     expect(html).toContain('data-slot="message-scroller-viewport"');
     expect(html).not.toContain("Jump to latest");
@@ -202,6 +205,8 @@ describe("workspace records and navigation", () => {
     expect(html).not.toContain("Anthropic");
     expect(html).not.toContain("Vercel AI Gateway");
     expect(html).toContain("Preset effort");
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain("Agent replies are unavailable");
   });
   test("composer shows configured effort levels when optional supervisor is disabled", () => {
     const html = render(
