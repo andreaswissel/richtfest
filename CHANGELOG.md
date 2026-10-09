@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Project status is selected from translated Planning, Active and Completed options.
 - Project message action links now share the same hover treatment as adjacent buttons.
 - Project chat steers only queued or running agent work; messages after a run finishes start a fresh run.
 - Copy your own project chat messages with a compact button.

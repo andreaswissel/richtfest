@@ -13,7 +13,7 @@ import { ArrowUpRight, MessageSquare } from "lucide-react";
 import "./shared-work.css";
 import { list, type RecordData } from "../api";
 import { useApi, useWrite } from "../query";
-import { useT } from "../i18n";
+import { projectStatusLabel, useT } from "../i18n";
 import { Page, PageHeader, Section } from "../components/layout";
 import { Input, Textarea } from "../components/ui/input";
 import {
@@ -57,7 +57,7 @@ export function ProjectTable({ projects }: { projects: RecordData[] }) {
         cells: [
           <RowLink to={`/projects/${p.id}`}>{p.name}</RowLink>,
           p.customerName || "—",
-          <Badge>{p.status || t("active")}</Badge>,
+          <Badge>{projectStatusLabel(p.status, t)}</Badge>,
         ],
       }))}
     />

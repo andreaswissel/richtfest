@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
-import { useT } from "../i18n";
+import { projectStatusLabel, useT } from "../i18n";
 import { Page, PageHeader } from "../components/layout";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -140,7 +140,7 @@ export function ProjectWorkspace() {
     <Page>
       <PageHeader
         title={title}
-        titleAside={<Badge>{details.status || t("active")}</Badge>}
+        titleAside={<Badge>{projectStatusLabel(details.status, t)}</Badge>}
         eyebrow={project.data?.customerName}
         actions={
           view === "details" && (
@@ -315,12 +315,19 @@ export function ProjectWorkspace() {
               <Callout tone="error">{customers.error.message}</Callout>
             )}
             <Field label={t("status")}>
-              <Input
-                required
-                maxLength={40}
+              <NativeSelect
                 name="status"
                 defaultValue={details.status || "planning"}
-              />
+              >
+                {!(["planning", "active", "completed"] as string[]).includes(
+                  details.status || "planning",
+                ) && (
+                  <option value={details.status}>{details.status}</option>
+                )}
+                <option value="planning">{t("projectStatusPlanning")}</option>
+                <option value="active">{t("projectStatusActive")}</option>
+                <option value="completed">{t("projectStatusCompleted")}</option>
+              </NativeSelect>
             </Field>
             {updateProject.error && (
               <Callout tone="error">{updateProject.error.message}</Callout>
@@ -349,7 +356,7 @@ export function ProjectWorkspace() {
             <dt>{t("customer")}</dt>
             <dd>{project.data?.customerName || t("noCustomer")}</dd>
             <dt>{t("status")}</dt>
-            <dd>{details.status || t("active")}</dd>
+            <dd>{projectStatusLabel(details.status, t)}</dd>
           </dl>
         )
       )}
