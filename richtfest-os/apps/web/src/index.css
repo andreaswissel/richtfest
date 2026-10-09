@@ -422,11 +422,12 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .workspace-composer-input { display:flex; align-items:flex-end; gap:.35rem; }
 .workspace-composer-input textarea { min-height:2.75rem; max-height:7rem; resize:none; border:0; box-shadow:none; }
 .workspace-composer-input textarea:focus-visible { border-color:transparent; box-shadow:none; }
-.workspace-composer-controls { display:flex; align-items:end; flex-wrap:wrap; gap:.5rem; padding:0 .35rem .1rem; }
+.workspace-composer-controls { display:flex; align-items:end; flex-wrap:nowrap; gap:.5rem; padding:0 .35rem .1rem; }
 .workspace-composer-controls .field { gap:3px; margin:0; }
 .workspace-composer-controls .field > label { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .workspace-composer-controls [data-slot="native-select"] { height:var(--control-sm); font-size:var(--ui-xs); }
-.workspace-send-button { margin-left:auto; border-radius:999px; }
+.workspace-composer-status { flex:1 1 auto; min-width:0; overflow:hidden; text-align:right; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-send-button { flex:0 0 auto; margin-left:0; border-radius:999px; }
 .workspace-composer-attachments { display:flex; flex-wrap:wrap; gap:.35rem; padding:0 .35rem; }
 .workspace-composer-attachments [data-slot="attachment"] { margin:0; padding:.15rem .35rem; }
 .workspace-composer-error { color:var(--destructive); }

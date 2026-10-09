@@ -752,6 +752,16 @@ function Conversation({
               value={selectedEffort}
               onChange={setEffort}
             />
+            <span
+              className={`workspace-composer-status text-ui-xs${save.error ? " workspace-composer-error" : " muted"}`}
+              aria-live={save.error ? "assertive" : "polite"}
+            >
+              {save.error
+                ? t("workspaceDraftError")
+                : save.isPending
+                  ? t("workspaceSaving")
+                  : ""}
+            </span>
             <Button
               type="submit"
               size="icon"
@@ -762,14 +772,6 @@ function Conversation({
             >
               <ArrowUp aria-hidden="true" />
             </Button>
-            {save.isPending && (
-              <span className="muted text-ui-xs">{t("workspaceSaving")}</span>
-            )}
-            {save.error && (
-              <span className="workspace-composer-error text-ui-xs">
-                {t("workspaceDraftError")}
-              </span>
-            )}
           </div>
         </div>
         {readiness.error && (
