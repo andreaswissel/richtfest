@@ -223,12 +223,16 @@ export function Settings() {
                   error={mutation.error}
                   onSubmit={() => mutation.mutate({})}
                 >
-                  <Field label={t("apiKey")} hint={t("apiKeyHint")}>
+                  <Field
+                    label={t("apiKey")}
+                    hint={t(configured ? "apiKeyReplaceHint" : "apiKeyHint")}
+                  >
                     <Input
                       type="password"
                       autoComplete="new-password"
                       name="apiKey"
                       required
+                      placeholder={configured ? "••••••••••••" : undefined}
                       value={key}
                       onChange={(e) => {
                         setKey(e.target.value);
@@ -240,7 +244,9 @@ export function Settings() {
                 </Form>
               )}
               {saved && (
-                <Callout tone="success">{t("credentialSaved")}</Callout>
+                <Badge tone="success" role="status">
+                  {t("credentialSaved")}
+                </Badge>
               )}
               {canEdit && configured && (
                 <div className="remove-credential">
