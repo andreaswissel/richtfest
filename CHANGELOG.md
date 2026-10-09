@@ -6,7 +6,7 @@
 
 - Project threads show a small accent dot for unread messages and clear it after you reach the latest message.
 
-- Added an animated crane that lifts a block while project agents work.
+- Added an animated crane below the latest chat response to show when project agents are working.
 
 - Users can rename project threads manually from the thread list.
 

@@ -98,14 +98,15 @@ export function ProjectWorkspace() {
   const activeRuns = list(workspace.data?.runs).filter((run) =>
     ["queued", "running"].includes(run.status),
   );
-  const visibleLiveRunId =
-    activeRuns.find(
-      (run) => run.id === (selectedRun?.parentRunId || agentRunId),
-    )?.id ||
-    activeRuns.find(
-      (run) => !run.parentRunId && run.conversationId === selected?.id,
-    )?.id ||
-    activeRuns.find((run) => !run.parentRunId)?.id;
+  const transcriptLiveRunIds = new Set(
+    !agentRunId && selected
+      ? activeRuns
+          .filter(
+            (run) => !run.parentRunId && run.conversationId === selected.id,
+          )
+          .map((run) => run.id)
+      : [],
+  );
   const create = useWrite("/knowledge/conversations", (data) => {
     const next = new URLSearchParams(params);
     next.set("conversation", data.id);
@@ -178,14 +179,11 @@ export function ProjectWorkspace() {
                 {create.error && (
                   <Callout tone="error">{create.error.message}</Callout>
                 )}
-                {activeRuns.map((run) => (
-                  <LiveRun
-                    key={run.id}
-                    run={run}
-                    projectId={id!}
-                    silent={run.id !== visibleLiveRunId}
-                  />
-                ))}
+                {activeRuns
+                  .filter((run) => !transcriptLiveRunIds.has(run.id))
+                  .map((run) => (
+                    <LiveRun key={run.id} run={run} projectId={id!} silent />
+                  ))}
                 <div
                   className="project-workspace-grid"
                   style={{

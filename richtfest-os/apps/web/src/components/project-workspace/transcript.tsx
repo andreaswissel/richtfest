@@ -36,7 +36,7 @@ import {
 } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
-import { CraneWorkingIndicator } from "./crane-working-indicator";
+import { LiveRun } from "./live-run";
 import {
   Attachment,
   AttachmentContent,
@@ -648,26 +648,14 @@ function Conversation({
                       <MarkerContent>{t("workspaceUnread")}</MarkerContent>
                     </Marker>
                   )}
-                {message.id.startsWith("run-") && (
-                  <Marker>
-                    <MarkerContent>
-                      {(() => {
-                        const status = runs.find(
-                          (run) => run.id === message.runId,
-                        )?.status;
-                        if (["queued", "running"].includes(status))
-                          return (
-                            <CraneWorkingIndicator label={t("workspaceLive")} />
-                          );
-                        return ["stopped", "cancelled", "failed"].includes(
-                          status,
-                        )
-                          ? t("workspaceInterrupted")
-                          : t("workspaceLive");
-                      })()}
-                    </MarkerContent>
-                  </Marker>
-                )}
+                {message.id.startsWith("run-") &&
+                  ["stopped", "cancelled", "failed"].includes(
+                    runs.find((run) => run.id === message.runId)?.status,
+                  ) && (
+                    <Marker>
+                      <MarkerContent>{t("workspaceInterrupted")}</MarkerContent>
+                    </Marker>
+                  )}
                 <MessageRow
                   message={message}
                   projectId={projectId}
@@ -689,6 +677,20 @@ function Conversation({
                 />
               </MessageScrollerItem>
             ))}
+            {runs
+              .filter((run) => ["queued", "running"].includes(run.status))
+              .map((run) => (
+                <MessageScrollerItem
+                  key={`run-${run.id}-working`}
+                  messageId={`run-${run.id}-working`}
+                >
+                  <Message>
+                    <MessageContent>
+                      <LiveRun run={run} projectId={projectId} />
+                    </MessageContent>
+                  </Message>
+                </MessageScrollerItem>
+              ))}
             {!messages.length && (
               <Marker>
                 <MarkerContent>{t("noMessages")}</MarkerContent>
