@@ -55,12 +55,16 @@
 
 .thread-rail-row {
   display: flex;
+  width: 100%;
   min-width: 0;
   align-items: center;
   gap: 0.15rem;
   border-radius: var(--radius);
+  transition: background-color 120ms ease;
 }
 
+.thread-rail-row:hover,
+.thread-rail-row:focus-within,
 .thread-rail-row.is-selected {
   background: var(--muted);
 }
@@ -80,6 +84,7 @@
 .thread-rail-link:hover,
 .thread-rail-link:focus-visible,
 .thread-rail-row.is-selected .thread-rail-link {
+  background: transparent;
   color: var(--foreground);
 }
 
@@ -156,7 +161,7 @@
 
 .thread-rail-action:hover,
 .thread-rail-action:focus-visible {
-  background: var(--muted);
+  background: transparent;
   color: var(--foreground);
 }
 
