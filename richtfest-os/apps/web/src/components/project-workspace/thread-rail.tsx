@@ -139,7 +139,11 @@ export function ThreadRail({
         >
           <span className="thread-rail-title">{titleFor(conversation)}</span>
           {conversation.unreadCount > 0 && (
-            <Badge tone="neutral">{conversation.unreadCount}</Badge>
+            <span
+              className="thread-rail-unread"
+              aria-label={t("threadRailUnread")}
+              title={t("threadRailUnread")}
+            />
           )}
         </Link>
         <button

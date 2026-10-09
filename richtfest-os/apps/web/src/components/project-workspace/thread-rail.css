@@ -91,9 +91,13 @@
   font-size: var(--ui-sm);
 }
 
-.thread-rail-link [data-slot="badge"] {
+.thread-rail-unread {
   margin-left: auto;
-  font-size: var(--ui-2xs);
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--primary);
+  flex: 0 0 auto;
 }
 
 .thread-rail-action {

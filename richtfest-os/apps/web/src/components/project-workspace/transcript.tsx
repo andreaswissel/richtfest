@@ -234,7 +234,7 @@ function Conversation({
     scope: { id: `reader-${conversationId}` },
     mutationFn: (body: ReadState) =>
       api<ReadState>(`${path}/read`, body, "PUT"),
-    onSuccess: (state) => {
+    onSuccess: (state, variables) => {
       queryClient.setQueryData([path, "messages"], (old: any) =>
         old
           ? {
@@ -254,7 +254,13 @@ function Conversation({
                 ...old,
                 conversations: old.conversations.map((conversation: any) =>
                   conversation.id === conversationId
-                    ? { ...conversation, readState: state }
+                    ? {
+                        ...conversation,
+                        readState: state,
+                        ...(variables.lastReadMessageId === messages.at(-1)?.id
+                          ? { unreadCount: 0 }
+                          : {}),
+                      }
                     : conversation,
                 ),
               }
@@ -572,6 +578,26 @@ function Conversation({
         <MessageScrollerViewport
           aria-label={t("workspaceConversation")}
           preserveScrollOnPrepend
+          onScroll={(event) => {
+            const viewport = event.currentTarget;
+            const atEnd =
+              viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <=
+              8;
+            if (!atEnd) {
+              setFollowing(false);
+              return;
+            }
+
+            setFollowing(true);
+            const lastMessage = messages.at(-1);
+            if (
+              lastMessage &&
+              reader.current.lastReadMessageId !== lastMessage.id
+            ) {
+              reader.current.lastReadMessageId = lastMessage.id;
+              persistReader({ ...reader.current, composerDraft: draft });
+            }
+          }}
           onWheel={() => setFollowing(false)}
           onTouchMove={() => setFollowing(false)}
           onKeyDown={() => setFollowing(false)}

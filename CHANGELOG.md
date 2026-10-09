@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project threads show a small accent dot for unread messages and clear it after you reach the latest message.
+
 - Users can rename project threads manually from the thread list.
 
 - Project threads receive a concise model-generated title after their first message, using the active provider's economical model.
