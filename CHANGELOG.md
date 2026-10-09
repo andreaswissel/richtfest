@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Copy your own project chat messages with a compact button.
 - Project details now edit inline on the page, with Save and Cancel actions.
 - Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.
 - Agent model settings now keep preset controls and shared limits aligned across screen sizes.

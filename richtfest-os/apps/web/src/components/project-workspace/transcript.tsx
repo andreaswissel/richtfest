@@ -17,7 +17,7 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
 import { AgentEffortControl } from "../agent-effort-control";
-import { ArrowUp, Search, X } from "lucide-react";
+import { ArrowUp, Check, Copy, Search, X } from "lucide-react";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -899,6 +899,12 @@ const MessageRow = memo(function MessageRow({
   onInput: (body: string) => void;
 }) {
   const t = useT();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
   const role =
     message.actorKind || message.role || message.authorType || "user";
   const link = `/projects/${projectId}?conversation=${conversationId}&message=${message.id}`;
@@ -987,6 +993,33 @@ const MessageRow = memo(function MessageRow({
             </Link>
           )}
         <MessageFooter>
+          {isOwnMessage && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t(
+                copied ? "workspaceMessageCopied" : "workspaceCopyMessage",
+              )}
+              title={t(
+                copied ? "workspaceMessageCopied" : "workspaceCopyMessage",
+              )}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(message.body);
+                  setCopied(true);
+                } catch {
+                  setCopied(false);
+                }
+              }}
+            >
+              {copied ? (
+                <Check className="size-icon-sm" aria-hidden="true" />
+              ) : (
+                <Copy className="size-icon-sm" aria-hidden="true" />
+              )}
+            </Button>
+          )}
           {!message.id.startsWith("run-") && (
             <>
               <Button variant="ghost" onClick={() => onReply(message.id)}>

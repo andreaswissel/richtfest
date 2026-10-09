@@ -316,6 +316,8 @@
   "workspaceSaved": "Entwurf gespeichert",
   "workspaceReply": "Auf Nachricht antworten",
   "workspaceMessageLink": "Nachrichtenlink",
+  "workspaceCopyMessage": "Nachricht kopieren",
+  "workspaceMessageCopied": "Nachricht kopiert",
   "workspaceArtifacts": "Arbeitsergebnisse",
   "workspaceChooseRevision": "Genaue Revision wählen",
   "workspaceExactVersion": "Genaue Revision zum Prüfen oder Kommentieren wählen. Bestehende Links behalten ihre ursprüngliche Revision.",

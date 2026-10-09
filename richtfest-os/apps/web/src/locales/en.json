@@ -316,6 +316,8 @@
   "workspaceSaved": "Draft saved",
   "workspaceReply": "Reply to message",
   "workspaceMessageLink": "Message link",
+  "workspaceCopyMessage": "Copy message",
+  "workspaceMessageCopied": "Message copied",
   "workspaceArtifacts": "Artifacts",
   "workspaceChooseRevision": "Choose an exact revision",
   "workspaceExactVersion": "Choose the exact revision to review or annotate. Existing links keep their original revision.",
