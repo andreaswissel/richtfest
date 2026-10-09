@@ -106,6 +106,7 @@ Every deploy must:
 - commit on local `main`
 - push local `main` to `origin/main`
 - if the thread started from a Linear or JIRA issue, add a short deployment note and move that issue to `In Review` after the push succeeds
+- watch the Railway deployment for the pushed commit until it succeeds; if the build or deploy fails, read its logs, fix the cause right away and redeploy without waiting to be asked
 - report whether a database migration was included
 
 ## UI Defaults

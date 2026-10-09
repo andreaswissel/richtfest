@@ -9,7 +9,7 @@
     "build:web": "bun run --filter @richtfest/web build",
     "build:docs": "bun run --filter @richtfest/docs build",
     "start": "bun run --filter @richtfest/api start",
-    "typecheck": "bun run --filter @richtfest/shared typecheck && bun run --filter @richtfest/api typecheck && bun run --filter '@richtfest/*' typecheck",
+    "typecheck": "bun run --filter '@richtfest/*' typecheck",
     "test": "bun test",
     "db:migrate": "bun run --filter @richtfest/api db:migrate",
     "db:seed": "bun run --filter @richtfest/api db:seed",

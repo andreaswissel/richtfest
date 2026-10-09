@@ -7,6 +7,7 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "auth:dev-link": "bun src/scripts/dev-magic-link.ts",
+    "auth:bootstrap-admin": "bun src/scripts/bootstrap-admin.ts",
     "typecheck": "tsc -p tsconfig.json",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "bun src/seed.ts",

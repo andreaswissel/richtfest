@@ -353,9 +353,9 @@ export function DeliveryStatus({ status }: { status?: string }) {
   const t = useT();
   return (
     <Callout>
-      {status === "configured" || status === "sent"
+      {status === "resend" || status === "configured" || status === "sent"
         ? t("deliveryConfigured")
-        : status === "local_preview" || status === "preview"
+        : status === "development_outbox" || status === "local_preview" || status === "preview"
           ? t("deliveryPreview")
           : status === "unconfigured"
             ? t("deliveryUnconfigured")

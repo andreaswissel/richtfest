@@ -23,6 +23,16 @@ test("sign-in asks for email only without exposing a disabled development choose
   expect(html).toContain("Send sign-in link");
   expect(html).not.toContain("Local development access");
 });
+test("sign-in recognizes the server's email delivery modes", () => {
+  const configured = render(<Login />, "/auth/delivery-readiness", { configured: true, mode: "resend" });
+  expect(configured).toContain("Email delivery is configured");
+  expect(configured).not.toContain("has not confirmed");
+  const preview = render(<Login />, "/auth/delivery-readiness", { configured: false, mode: "development_outbox" });
+  expect(preview).toContain("Local email preview is enabled");
+  expect(preview).not.toContain("has not confirmed");
+  const missing = render(<Login />, "/auth/delivery-readiness", { configured: false, mode: "unconfigured" });
+  expect(missing).toContain("not configured");
+});
 test("development identity chooser appears only with explicitly returned identities", () => {
   const html = render(<Login />, "/auth/dev-identities", [
     { id: "local", name: "Local user", email: "local@example.test" },

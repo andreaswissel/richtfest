@@ -20,6 +20,8 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     env: {
       NODE_ENV: "production",
+      // Matches the Dockerfile's EXPOSE and the public domain's target port.
+      PORT: "3000",
       DATABASE_URL: db.env.DATABASE_URL,
       BETTER_AUTH_URL: "https://${{RAILWAY_PUBLIC_DOMAIN}}",
       BUCKET: ref(files, "BUCKET"),

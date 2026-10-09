@@ -13,6 +13,8 @@ Do not create the services through the dashboard's GitHub import. It detects the
 
 Fumadocs exports a static site. The API serves its output under `/docs` behind sign-in, including document data and assets. No separate production Next.js server is required.
 
+Docker runs the typecheck, web build and docs export in independent stages, so Railway can build them in parallel and reuse unchanged stages. Only application source and build inputs invalidate these stages, not agent rules or infrastructure metadata. The runtime image installs production dependencies and only native bindings for its own architecture. All workspace typechecks still gate the image. The service pins `PORT=3000`, matching the public domain's target port.
+
 ## Configuration before a live release
 
 Configure the database connection, canonical HTTPS origin, authentication secrets, allowed origin and passkey relying-party settings, server-side credential encryption, Resend API key and verified sender. Follow the repository environment example for the exact variable names.
@@ -37,6 +39,8 @@ Configure bucket credentials and browser CORS for the application origin. Author
 
 Create the first real workspace administrator through an explicit production bootstrap before inviting customer users. Local seed identities and development sign-in helpers are test fixtures and must not be used to establish production access.
 
+In the production service's shell, run `bun run auth:bootstrap-admin 'email@example.com' 'Administrator name' 'Workspace name'` from `/app/richtfest-os/apps/api`. This operator-only command requires an empty workspace, creates matching OS/auth identities and an Admin invitation with every current permission, and records a system audit event. It does not send email or mark email verified. The administrator requests a sign-in link from the public sign-in page and proves email ownership to accept the invitation. The invitation expires after seven days. After the first account exists, use Team invitations instead; the bootstrap refuses to change an existing workspace.
+
 Before running an agent, the administrator selects the workspace provider in Settings, configures the model IDs for each enabled effort level, and saves a workspace credential or confirms that the pilot user has a personal credential. For Vercel AI Gateway, use `provider/model` model IDs. Verify provider selection and readiness without sending a paid request, then use the intended Railway deployment to run the first credited call.
 
 Complete the pilot with a real project source: upload the original file, start the project conversation, inspect the agent's source references, and publish only the reviewed artifact revision. This walkthrough checks the customer workflow and its audit trail rather than treating a successful provider response as completion.
@@ -45,7 +49,7 @@ Complete the pilot with a real project source: upload the original file, start t
 
 Preparing configuration does not authorize deployment. On an explicit deploy request, follow `AGENTS.md`: review the intended changes, update release notes and affected docs, run required checks, commit on local `main`, then push that branch to `origin/main`.
 
-Report included database migrations.
+After the push, watch the Railway deployment for that commit. If the build or deploy fails, read the logs, fix the cause and push again straight away. Report included database migrations.
 
 ## Docs build
 
