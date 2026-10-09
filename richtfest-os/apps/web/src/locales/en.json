@@ -401,6 +401,9 @@
   "sharedWorkArchived": "Archived",
   "threadRailThread": "Thread",
   "threadRailNew": "New thread",
+  "threadRailRename": "Rename thread",
+  "threadRailRenameTitle": "Rename thread",
+  "threadRailTitleLabel": "Thread name",
   "threadRailEmpty": "No active threads",
   "workspaceOpenArtifact": "Open artifact",
   "workspaceArtifactUnavailable": "This artifact is unavailable in this project."

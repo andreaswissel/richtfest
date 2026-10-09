@@ -19,6 +19,8 @@ export type AppDeps = {
   providerConfigured: (provider: AgentProvider) => Promise<boolean>;
   resolveActiveProvider?: () => Promise<AgentProvider>;
   executeProvider: (input: ProviderRequest) => Promise<ProviderResult>;
+  /** Generate a title from the first user message using the active provider. */
+  generateConversationTitle?: (input: { message: string }) => Promise<string | null>;
   resolveSource: (
     projectId: string,
     input: {

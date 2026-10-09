@@ -286,6 +286,29 @@ function Conversation({
       sourceVersionIds: string[];
     }) => api<WorkspaceMessage>(`${path}/messages`, body),
     onSuccess: async (message, submitted) => {
+      if (messages.length === 0 && !submitted.parentMessageId) {
+        void api<{ title: string }>(`${path}/title-from-message`, {
+          messageId: message.id,
+        })
+          .then(({ title }) => {
+            queryClient.setQueryData(
+              [`/knowledge/workspaces/${projectId}`],
+              (old: any) =>
+                old
+                  ? {
+                      ...old,
+                      conversations: old.conversations.map(
+                        (conversation: any) =>
+                          conversation.id === conversationId
+                            ? { ...conversation, title }
+                            : conversation,
+                      ),
+                    }
+                  : old,
+            );
+          })
+          .catch(() => undefined);
+      }
       if (readiness.data?.executionAvailable) {
         const nextRun = {
           goal: submitted.body,

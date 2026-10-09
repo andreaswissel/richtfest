@@ -18,6 +18,10 @@ export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
 export const conflict = (message: string) =>
   Object.assign(new Error(message), { status: 409, code: "invalid_state" });
+// The web client uses this format when a thread has not received a meaningful title yet.
+// Keep this deliberately narrow so a user-chosen title is never overwritten.
+export const isGeneratedConversationPlaceholder = (title: string) =>
+  /^Thread\s+\d+$/i.test(title.trim());
 export async function conversation(d: AppDeps, id: string, projectId?: string) {
   const [row] = await d.db
     .select()
@@ -384,6 +388,86 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           conversationId: id,
         });
         return row;
+      });
+    },
+  );
+  route(
+    "post",
+    "/conversations/:conversationId/title-from-message",
+    "knowledge:write",
+    async (d, req) => {
+      const id = String(req.params.conversationId);
+      const thread = await conversation(d, id);
+      const input = z
+        .object({ messageId: z.string().uuid() })
+        .strict()
+        .parse(req.body);
+
+      // This endpoint is intentionally idempotent. A retry after a successful
+      // update, or a request for a renamed thread, returns the current title.
+      if (!isGeneratedConversationPlaceholder(thread.title))
+        return { title: thread.title };
+
+      const [firstUserMessage] = await d.db
+        .select({ id: messages.id, body: messages.body })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.tenantId, d.tenantId),
+            eq(messages.conversationId, id),
+            eq(messages.actorKind, "user"),
+          ),
+        )
+        .orderBy(asc(messages.createdAt), asc(messages.id))
+        .limit(1);
+      if (!firstUserMessage || firstUserMessage.id !== input.messageId)
+        return { title: thread.title };
+
+      let generated: string | null = null;
+      try {
+        generated =
+          (await d.generateConversationTitle?.({
+            message: firstUserMessage.body,
+          })) ?? null;
+      } catch {
+        // Provider failures must not turn a successful message into an error.
+        generated = null;
+      }
+      if (!generated) return { title: thread.title };
+
+      return d.db.transaction(async (tx: any) => {
+        const [updated] = await tx
+          .update(conversations)
+          .set({ title: generated })
+          .where(
+            and(
+              eq(conversations.id, id),
+              eq(conversations.tenantId, d.tenantId),
+              // Preserve a title edited while the provider was running.
+              eq(conversations.title, thread.title),
+            ),
+          )
+          .returning();
+        if (!updated) {
+          const [current] = await tx
+            .select({ title: conversations.title })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.id, id),
+                eq(conversations.tenantId, d.tenantId),
+              ),
+            );
+          return { title: current?.title ?? thread.title };
+        }
+        await d.audit(
+          tx,
+          "knowledge.conversation.title_generated",
+          "conversation",
+          id,
+          { messageId: input.messageId },
+        );
+        return { title: updated.title };
       });
     },
   );

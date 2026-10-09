@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   MessageSquare,
+  PencilLine,
   Plus,
   RotateCcw,
 } from "lucide-react";
@@ -13,7 +14,15 @@ import { api, type RecordData } from "../../api";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import { Callout } from "../ui/primitives";
+import { Callout, Field } from "../ui/primitives";
+import { Input } from "../ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 import "./thread-rail.css";
 
 export function ThreadRail({
@@ -35,6 +44,8 @@ export function ThreadRail({
   const queryClient = useQueryClient();
   const [params] = useSearchParams();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [editing, setEditing] = useState<RecordData | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
   const archive = useMutation({
     mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
       api(`/knowledge/conversations/${id}/archive`, { archived }, "PATCH"),
@@ -68,6 +79,30 @@ export function ThreadRail({
           queryKey: [`/knowledge/conversations?projectId=${projectId}`],
         }),
       ]);
+    },
+  });
+  const rename = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      api<RecordData>(`/knowledge/conversations/${id}/title`, { title }, "PATCH"),
+    onSuccess: (updated, variables) => {
+      queryClient.setQueryData(
+        [`/knowledge/workspaces/${projectId}`],
+        (old: RecordData | undefined) => {
+          if (!old || !Array.isArray(old.conversations)) return old;
+          return {
+            ...old,
+            conversations: old.conversations.map((conversation: RecordData) =>
+              conversation.id === variables.id
+                ? { ...conversation, title: updated.title }
+                : conversation,
+            ),
+          };
+        },
+      );
+      void queryClient.invalidateQueries({
+        queryKey: [`/knowledge/conversations?projectId=${projectId}`],
+      });
+      setEditing(null);
     },
   });
   const active = conversations.filter(
@@ -107,6 +142,20 @@ export function ThreadRail({
             <Badge tone="neutral">{conversation.unreadCount}</Badge>
           )}
         </Link>
+        <button
+          type="button"
+          className="thread-rail-action"
+          disabled={rename.isPending}
+          aria-label={`${t("threadRailRename")} ${titleFor(conversation)}`}
+          title={t("threadRailRename")}
+          onClick={() => {
+            setTitleDraft(conversation.title || "");
+            setEditing(conversation);
+            rename.reset();
+          }}
+        >
+          <PencilLine aria-hidden="true" />
+        </button>
         <button
           type="button"
           className="thread-rail-action"
@@ -193,6 +242,65 @@ export function ThreadRail({
           <Callout tone="error">{archive.error.message}</Callout>
         )}
       </div>
+      <Dialog
+        open={Boolean(editing)}
+        onOpenChange={(open) => {
+          if (!open && !rename.isPending) {
+            setEditing(null);
+            rename.reset();
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>{t("threadRailRenameTitle")}</DialogTitle>
+          </DialogHeader>
+          <form
+            className="grid gap-stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!editing || !titleDraft.trim()) return;
+              rename.mutate({ id: editing.id, title: titleDraft.trim() });
+            }}
+          >
+            <Field label={t("threadRailTitleLabel")}>
+              <Input
+                autoFocus
+                maxLength={300}
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                disabled={rename.isPending}
+              />
+            </Field>
+            {rename.error && (
+              <Callout tone="error">{rename.error.message}</Callout>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={rename.isPending}
+                onClick={() => {
+                  setEditing(null);
+                  rename.reset();
+                }}
+              >
+                {t("cancel")}
+              </Button>
+              <Button
+                type="submit"
+                disabled={
+                  rename.isPending ||
+                  !titleDraft.trim() ||
+                  titleDraft.trim() === editing?.title
+                }
+              >
+                {t("threadRailRename")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

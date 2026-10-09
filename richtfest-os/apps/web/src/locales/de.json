@@ -401,6 +401,9 @@
   "sharedWorkArchived": "Archiviert",
   "threadRailThread": "Thread",
   "threadRailNew": "Neuer Thread",
+  "threadRailRename": "Thread umbenennen",
+  "threadRailRenameTitle": "Thread umbenennen",
+  "threadRailTitleLabel": "Threadname",
   "threadRailEmpty": "Keine aktiven Threads",
   "workspaceOpenArtifact": "Artefakt öffnen",
   "workspaceArtifactUnavailable": "Dieses Artefakt ist in diesem Projekt nicht verfügbar."

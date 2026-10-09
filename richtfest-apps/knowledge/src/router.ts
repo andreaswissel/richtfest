@@ -22,6 +22,9 @@ const conversationInput = z.object({
   title: z.string().trim().min(1).max(300),
   projectId: z.string().uuid().optional(),
 });
+const renameConversationInput = z.object({
+  title: z.string().trim().min(1).max(300),
+}).strict();
 const messageInput = z.object({
   body: z.string().trim().min(1).max(20000),
   sourceRef: z.string().max(1000).optional(),
@@ -120,6 +123,56 @@ export function createRouter(getDeps: GetDeps) {
           return updated;
         });
         return send(res, 200, ok(row));
+      } catch (e) {
+        return next(e);
+      }
+    },
+  );
+  router.patch(
+    "/conversations/:conversationId/title",
+    async (req, res, next) => {
+      try {
+        const d = getDeps(req);
+        d.requirePermission("knowledge:write");
+        const id = z.string().uuid().parse(req.params.conversationId);
+        const { title } = renameConversationInput.parse(req.body);
+        const row = await d.db.transaction(async (tx: any) => {
+          const [current] = await tx
+            .select()
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.id, id),
+                eq(conversations.tenantId, d.tenantId),
+              ),
+            )
+            .for("update");
+          if (
+            !current ||
+            (current.projectId && !(await d.validateProject(current.projectId)))
+          )
+            throw missing("Conversation not found in project");
+          if (current.title === title) return current;
+          const [updated] = await tx
+            .update(conversations)
+            .set({ title })
+            .where(
+              and(
+                eq(conversations.id, id),
+                eq(conversations.tenantId, d.tenantId),
+              ),
+            )
+            .returning();
+          await d.audit(
+            tx,
+            "knowledge.conversation.renamed",
+            "conversation",
+            id,
+            { projectId: current.projectId },
+          );
+          return updated;
+        });
+        return send(res, 200, ok(row, "Thread renamed"));
       } catch (e) {
         return next(e);
       }
