@@ -4,6 +4,8 @@
 
 - Kept the project message send button in place while the draft save status changes.
 
+- Send project workspace messages with Enter; use Shift+Enter for a new line.
+
 - Changed saved agent model settings confirmation to a compact neutral status badge.
 
 - Clarified saved AI credentials in Settings with a masked key placeholder and a quieter saved status.

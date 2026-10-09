@@ -389,6 +389,7 @@
   "workspaceUiCloseSearch": "Suche schließen",
   "workspaceUiComposerPlaceholder": "Zum Projekt fragen oder den aktiven Lauf steuern…",
   "workspaceUiSendMessage": "Nachricht senden",
+  "workspaceUiSendShortcut": "Enter zum Senden · Shift+Enter für einen Zeilenumbruch",
   "workspaceUiReviewResult": "Ergebnis prüfen",
   "workspaceUiSupervisorWorking": "Supervisor arbeitet",
   "sharedWorkConversations": "Gespräche",

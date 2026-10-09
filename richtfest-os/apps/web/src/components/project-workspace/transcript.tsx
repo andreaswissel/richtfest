@@ -738,7 +738,11 @@ function Conversation({
                   persistReader({ ...reader.current, composerDraft: draft });
               }}
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing
+                ) {
                   e.preventDefault();
                   e.currentTarget.form?.requestSubmit();
                 }
@@ -767,7 +771,7 @@ function Conversation({
               size="icon"
               className="workspace-send-button"
               aria-label={t("workspaceUiSendMessage")}
-              title={`${t("workspaceUiSendMessage")} · ⌘↵`}
+              title={t("workspaceUiSendShortcut")}
               disabled={send.isPending || !draft.trim()}
             >
               <ArrowUp aria-hidden="true" />
