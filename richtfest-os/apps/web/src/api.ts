@@ -56,7 +56,8 @@ export async function uploadFile<T = RecordData>(
     sourceMetadata: { label: String(form.get("label") || "") },
   });
   const uploadUrl = initiated.uploadUrl;
-  const apiPath = (url: string) => (url.startsWith("/api/") ? url.slice(4) : url);
+  const apiPath = (url: string) =>
+    url.startsWith("/api/") ? url.slice(4) : url;
   try {
     const uploadResponse = await fetch(uploadUrl, {
       method: initiated.uploadMethod || "PUT",
@@ -77,4 +78,51 @@ export async function uploadFile<T = RecordData>(
     ).catch(() => undefined);
     throw error;
   }
+}
+
+export async function uploadFiles(
+  path: string,
+  files: File[],
+  label: string,
+  onProgress: (
+    results: Array<{
+      name: string;
+      status: "uploading" | "uploaded" | "failed";
+      error?: string;
+    }>,
+  ) => void,
+): Promise<
+  Array<{ name: string; status: "uploaded" | "failed"; error?: string }>
+> {
+  const results: Array<{
+    name: string;
+    status: "uploading" | "uploaded" | "failed";
+    error?: string;
+  }> = files.map((file) => ({ name: file.name, status: "uploading" }));
+  onProgress([...results]);
+  for (const [index, file] of files.entries()) {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("label", label);
+    try {
+      await uploadFile(path, form);
+      results[index] = { name: file.name, status: "uploaded" };
+    } catch (error) {
+      results[index] = {
+        name: file.name,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    onProgress([...results]);
+  }
+  return results.filter(
+    (
+      result,
+    ): result is {
+      name: string;
+      status: "uploaded" | "failed";
+      error?: string;
+    } => result.status !== "uploading",
+  );
 }

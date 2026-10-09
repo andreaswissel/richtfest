@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { api, ApiError, list } from "../src/api";
+import { api, ApiError, list, uploadFiles } from "../src/api";
 import { queryClient } from "../src/query";
 const original = globalThis.fetch;
 afterEach(() => {
@@ -100,4 +100,65 @@ test("file upload initiates, streams raw bytes, and completes the version", asyn
   expect(calls[2]?.url).toBe(
     "/api/projects/project-1/files/file-1/versions/1/complete",
   );
+});
+
+test("multi-file upload processes files in order and continues after an individual failure", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (url, init) => {
+    const target = String(url);
+    calls.push(target);
+    if (target.endsWith("/initiate")) {
+      const body = JSON.parse(init?.body as string) as { name: string };
+      const id = body.name === "first.txt" ? "file-1" : "file-2";
+      return Response.json({
+        data: {
+          fileId: id,
+          version: 1,
+          uploadUrl: `/api/projects/project-1/files/${id}/upload`,
+          uploadMethod: "PUT",
+          completeUrl: `/api/projects/project-1/files/${id}/complete`,
+        },
+        error: null,
+      });
+    }
+    if (target.endsWith("/file-1/upload"))
+      return Response.json(
+        {
+          data: null,
+          error: { code: "failed" },
+          message: "Storage unavailable",
+        },
+        { status: 503 },
+      );
+    return Response.json({
+      data: { uploaded: true },
+      error: null,
+      message: null,
+    });
+  }) as typeof fetch;
+
+  const progress: Array<Array<{ name: string; status: string }>> = [];
+  const results = await uploadFiles(
+    "/projects/project-1/files",
+    [new File(["one"], "first.txt"), new File(["two"], "second.txt")],
+    "",
+    (value) => progress.push(value),
+  );
+
+  expect(results).toEqual([
+    {
+      name: "first.txt",
+      status: "failed",
+      error: "The file could not be uploaded to storage.",
+    },
+    { name: "second.txt", status: "uploaded" },
+  ]);
+  expect(progress.at(-1)).toEqual(results);
+  expect(calls.filter((url) => url.endsWith("/initiate"))).toHaveLength(2);
+  const cancelIndex = calls.findIndex((url) => url.endsWith("/file-1/cancel"));
+  const secondInitiateIndex = calls.findIndex(
+    (url, index) => index > 0 && url.endsWith("/initiate"),
+  );
+  expect(cancelIndex).toBeGreaterThanOrEqual(0);
+  expect(cancelIndex).toBeLessThan(secondInitiateIndex);
 });

@@ -1,7 +1,7 @@
 import { AgentRuns } from "../components/agent-runs";
 import { Activity } from "../components/activity";
 import { useMutation } from "@tanstack/react-query";
-import { uploadFile } from "../api";
+import { uploadFiles } from "../api";
 import { queryClient } from "../query";
 import { NativeSelect } from "../components/ui/native-select";
 import { Button } from "../components/ui/button";
@@ -301,13 +301,32 @@ export function Sources({
   const t = useT();
   const query = useApi(`/projects/${projectId}/files`);
   const [mode, setMode] = useState<"upload" | "link" | null>(null);
+  const [selectedFileCount, setSelectedFileCount] = useState(0);
+  const [uploadResults, setUploadResults] = useState<
+    Array<{
+      name: string;
+      status: "uploading" | "uploaded" | "failed";
+      error?: string;
+    }>
+  >([]);
   const write = useWrite(`/projects/${projectId}/files`, () => setMode(null));
   const upload = useMutation({
-    mutationFn: (form: FormData) =>
-      uploadFile(`/projects/${projectId}/files`, form),
-    onSuccess: () => {
-      setMode(null);
+    mutationFn: async (form: FormData) => {
+      const files = form
+        .getAll("files")
+        .filter((value): value is File => value instanceof File);
+      return uploadFiles(
+        `/projects/${projectId}/files`,
+        files,
+        files.length === 1 ? String(form.get("label") || "") : "",
+        setUploadResults,
+      );
+    },
+    onSuccess: (results) => {
       void queryClient.invalidateQueries();
+      if (results.every((result) => result.status === "uploaded")) {
+        setMode(null);
+      }
     },
   });
   const files = list(query.data || initial.files, "files");
@@ -319,7 +338,14 @@ export function Sources({
           <Button variant="link" onClick={() => setMode("link")}>
             {t("registerSource")}
           </Button>
-          <Button onClick={() => setMode("upload")}>
+          <Button
+            onClick={() => {
+              setUploadResults([]);
+              setSelectedFileCount(0);
+              upload.reset();
+              setMode("upload");
+            }}
+          >
             ＋ {t("attachFile")}
           </Button>
         </div>
@@ -363,19 +389,73 @@ export function Sources({
         !query.isPending && <Empty>{t("noSources")}</Empty>
       )}
       {mode === "upload" && (
-        <Modal title={t("attachFile")} onClose={() => setMode(null)}>
+        <Modal
+          title={t("attachFile")}
+          onClose={() => {
+            if (!upload.isPending) setMode(null);
+          }}
+        >
           <Form
-            label={t("attachFile")}
+            label={
+              uploadResults.length &&
+              uploadResults.every((result) => result.status !== "uploading")
+                ? t("close")
+                : t("uploadFiles")
+            }
             pending={upload.isPending}
-            error={upload.error}
-            onSubmit={(form) => upload.mutate(form)}
+            disabled={upload.isPending}
+            onSubmit={(form) => {
+              if (
+                uploadResults.length &&
+                uploadResults.every((result) => result.status !== "uploading")
+              ) {
+                setMode(null);
+                return;
+              }
+              upload.mutate(form);
+            }}
           >
-            <Field label={t("file")}>
-              <Input type="file" name="file" required />
+            <Field label={t("files")}>
+              <Input
+                type="file"
+                name="files"
+                multiple
+                required
+                disabled={upload.isPending || uploadResults.length > 0}
+                onChange={(event) => {
+                  setUploadResults([]);
+                  setSelectedFileCount(event.currentTarget.files?.length ?? 0);
+                }}
+              />
             </Field>
-            <Field label={t("fileLabel")}>
-              <Input name="label" />
-            </Field>
+            {uploadResults.length > 0 && (
+              <div className="grid gap-stack">
+                <Callout>
+                  {uploadResults.every(
+                    (result) => result.status !== "uploading",
+                  )
+                    ? t("uploadFinished")
+                    : `${t("uploadingFiles")} (${uploadResults.filter((result) => result.status !== "uploading").length}/${uploadResults.length})`}
+                </Callout>
+                <ul className="grid gap-stack">
+                  {uploadResults.map((result, index) => (
+                    <li key={`${result.name}-${index}`}>
+                      <strong>{result.name}</strong> —{" "}
+                      {result.status === "uploaded"
+                        ? t("uploadSuccess")
+                        : result.status === "failed"
+                          ? `${t("uploadFailed")}: ${result.error}`
+                          : t("uploadingFiles")}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!uploadResults.length && selectedFileCount <= 1 && (
+              <Field label={t("fileLabel")}>
+                <Input name="label" />
+              </Field>
+            )}
           </Form>
         </Modal>
       )}
@@ -442,7 +522,9 @@ export function SharedWork({ projectId }: { projectId: string }) {
   const taskWrite = useWrite("/knowledge/tasks", () =>
     setTaskConversation(null),
   );
-  const conversations = list(query.data, "conversations").filter((conversation) => !conversation.archivedAt);
+  const conversations = list(query.data, "conversations").filter(
+    (conversation) => !conversation.archivedAt,
+  );
   return (
     <div className="shared-work-view">
       <Section
