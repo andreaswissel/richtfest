@@ -35,7 +35,7 @@ Run `bun test tests/social-preview.test.ts` to build the web bundle and verify u
 
 Use a private Railway Bucket for original uploaded files and revisions. Stream or upload directly to the bucket; the prototype does not impose an arbitrary application-level file-size cap. Platform and transport failures must still be handled explicitly. A local storage adapter is for development, and a service's temporary filesystem is not a production file store.
 
-Configure bucket credentials and browser CORS for the application origin. Authorize access before creating short-lived upload or download URLs, and retain immutable object/version references in Postgres. Back up the database and bucket objects as a coherent recovery set, protect backup access and encryption keys, and test restoration in an isolated environment.
+Configure bucket credentials and browser CORS for the application origin. For signed browser uploads, allow the exact HTTPS app origin, `PUT`, and the `Content-Type` request header; keep the bucket private and do not use a wildcard origin. The bucket responds to preflight requests based on this rule. Authorize access before creating short-lived upload or download URLs, and retain immutable object/version references in Postgres. Back up the database and bucket objects as a coherent recovery set, protect backup access and encryption keys, and test restoration in an isolated environment. See [Railway's upload and CORS guidance](https://docs.railway.com/storage-buckets/uploading-serving) for configuring its S3-compatible bucket API.
 
 ## First customer pilot preflight
 

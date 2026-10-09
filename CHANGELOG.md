@@ -20,7 +20,7 @@
 
 - Defined the Railway project in code (`.railway/railway.ts`): one `richtfest-monorepo` service built from the Dockerfile, Postgres and the private file bucket in EU West. This replaces the deprecated `railway.json` and avoids Railway's per-package monorepo import. The production image now installs dependencies the same way as local development, which fixes the failing web typecheck in the Docker build.
 
-- Project sources now support selecting and uploading multiple files in one action, with per-file progress and failure results.
+- Project sources support selecting and uploading multiple files in one action, with per-file progress and failure results; browser uploads use a private bucket policy scoped to the app origin.
 
 - Added a saved light and dark appearance preference in Account settings.
 
