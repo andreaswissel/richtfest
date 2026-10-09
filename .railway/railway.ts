@@ -20,6 +20,8 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     env: {
       NODE_ENV: "production",
+      // Enable supervised source-review assignments in production.
+      AGENT_SUPERVISOR_ENABLED: "true",
       // Matches the Dockerfile's EXPOSE and the public domain's target port.
       PORT: "3000",
       DATABASE_URL: db.env.DATABASE_URL,

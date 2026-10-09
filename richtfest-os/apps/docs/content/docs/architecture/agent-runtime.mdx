@@ -50,7 +50,9 @@ Workspace instructions remain subordinate to the platform safety and output cont
 
 ## Runtime setup
 
-The supervisor worker is disabled by default. Apply the standard application migrations first, then initialize the Mastra workflow store, and only then enable the worker:
+The supervisor worker is disabled by default in local development and enabled in production with `AGENT_SUPERVISOR_ENABLED=true`. Before enabling it in a new environment, apply the standard application migrations, initialize the Mastra workflow store, and configure model presets. The planner routes file-based work to source and requirements reviewers. Project files are readable as unreviewed evidence; human review applies to the proposed result. If a user explicitly asks to review every project source, assignments cover the available inventory or report the coverage limit.
+
+For a new environment, apply the standard application migrations first, then initialize the Mastra workflow store, configure model presets, and only then enable the worker:
 
 ```sh
 bun run --filter '@richtfest/api' db:migrate

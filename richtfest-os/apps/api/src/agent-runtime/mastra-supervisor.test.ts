@@ -22,6 +22,27 @@ test("real Mastra agent returns a valid focused plan", async () => {
   })).toEqual(plan);
 });
 
+test("source review plans treat unreviewed files as readable and honor all-source requests", async () => {
+  let request: any;
+  await callMastraSupervisor({
+    ...base,
+    phase: "plan",
+    goal: "Review all project files and prepare the requested plan",
+    context: { sourceInventory: { sources: [{ versionId: crypto.randomUUID() }], truncated: false } },
+  }, "test-key", {
+    model: createMockModel({
+      version: "v2",
+      objectGenerationMode: "json",
+      mockText: { tasks: [{ role: "source_reviewer", goal: "Review the available project source", sourceVersionIds: [crypto.randomUUID()] }] },
+      spyGenerate: value => { request = value; },
+    }),
+  });
+  const prompt = JSON.stringify(request);
+  expect(prompt).toContain("unreviewed status is not a reason to defer inspection");
+  expect(prompt).toContain("distribute every available version across assignments");
+  expect(prompt).toContain("do not claim full coverage");
+});
+
 test("configured reasoning and output budget reach the selected provider", async () => {
   let request: any;
   await callMastraSupervisor({ ...base, phase: "specialist", modelConfig: { modelId: "gpt-5.1", reasoningEffort: "low", maxOutputTokens: 900, maxSteps: 1 } }, "test-key", {

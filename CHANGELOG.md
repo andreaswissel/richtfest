@@ -5,6 +5,9 @@
 - Project details now edit inline on the page, with Save and Cancel actions.
 - Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.
 - Agent model settings now keep preset controls and shared limits aligned across screen sizes.
+- Project thread hover highlights now span the row behind rename and archive actions.
+
+- Project agents now assign source reviews for file-based work and distinguish readable unreviewed sources from findings awaiting human review.
 
 ## 2026-10-10
 
