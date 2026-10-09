@@ -6,6 +6,7 @@ import {
   jsonb,
   integer,
   primaryKey,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 export const conversations = pgTable("knowledge_conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -186,6 +187,7 @@ export const supervisorRuns = pgTable("knowledge_supervisor_runs", {
   generation: integer("generation").notNull().default(0),
   phase: text("phase").notNull().default("plan"),
   revision: integer("revision").notNull().default(0),
+  profileSnapshot: jsonb("profile_snapshot").notNull().default([]),
   assignments: jsonb("assignments").notNull().default([]),
   review: jsonb("review"),
   history: jsonb("history").notNull().default([]),
@@ -195,3 +197,15 @@ export const supervisorRuns = pgTable("knowledge_supervisor_runs", {
   leaseToken: uuid("lease_token"),
   leaseUntil: timestamp("lease_until", { withTimezone: true }),
 });
+
+export const agentProfiles = pgTable("knowledge_agent_profiles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  key: text("key").notNull(),
+  instructions: text("instructions").notNull().default(""),
+  triggerPhrases: jsonb("trigger_phrases").notNull().default([]),
+  knowledgeIds: jsonb("knowledge_ids").notNull().default([]),
+  version: integer("version").notNull().default(1),
+  updatedBy: uuid("updated_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({ workspaceRole: uniqueIndex("knowledge_agent_profiles_tenant_role").on(table.tenantId, table.key) }));

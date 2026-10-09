@@ -15,6 +15,10 @@ Provider output is constrained to a small allowlist: exact project-source reads,
 
 OpenUI uses a generated registry shared by the provider prompt, server parser and web renderer. Generated UI can display only registered Richtfest components. Query, mutation, dynamic action, external URL and executable markup paths are disabled. Model-generated status UI is always presented as proposed; approval comes from the review record.
 
+## Workspace role guidance
+
+Administrators with both `knowledge:read` and `access:manage` can configure the existing supervisor and reviewer profiles in Settings → Agents. Changes are workspace-scoped and audited; only approved company-wide knowledge can be assigned. Routing phrases influence planning as hints and confer no authority. Each durable supervisor run preserves its own configuration and reference-content snapshot. See [Agent profiles](/docs/architecture/agent-runtime#agent-profiles) for configuration and the fixed safety boundaries.
+
 ## Activity without clutter
 
 Contextual activity is a filtered view of the audit record. A project shows relevant project events; a knowledge item shows its drafting and review history. Broader audit inspection supports filtering and pagination for permitted users.

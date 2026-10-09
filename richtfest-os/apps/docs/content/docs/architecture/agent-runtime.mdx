@@ -38,6 +38,16 @@ For OpenAI and Anthropic, the model fields in Settings use the connected provide
 
 The workspace provider setting selects the active provider for direct and supervisor execution. Empty model IDs leave Anthropic and Vercel presets unconfigured; OpenAI retains its `gpt-4.1-mini` direct default when no model environment value is supplied. The UI does not invent or silently switch providers. Vercel presets use `provider/model` Gateway IDs at `https://ai-gateway.vercel.sh/v1` and do not fall back to OpenAI or Anthropic on a gateway failure. Vendor defaults can be restored by an administrator through Settings.
 
+## Agent profiles
+
+Settings → Agents configures the three existing workspace profiles: Supervisor (`supervisor`), Source reviewer (`source_reviewer`) and Requirements reviewer (`requirements_reviewer`). Users with both `knowledge:read` and `access:manage` can save plain-language role instructions, routing phrases and assigned knowledge. These controls customize the existing team; they do not create new roles or grant permissions.
+
+Use instructions for working preferences within a role, such as checking dimensions before summarizing a source. Routing phrases are optional hints the supervisor considers while planning assignments, not guaranteed triggers. Assign only approved company-wide knowledge: project-specific or unapproved drafts cannot be selected. Company references guide the work but do not replace the project's source evidence or supply project-version citations.
+
+Each new durable supervisor run saves the profile versions, instructions, routing phrases and assigned reference content in its own snapshot. Planning, specialist work and review use that snapshot, so later settings or knowledge edits do not rewrite the run's context. Existing runs without a profile snapshot retain the original defaults.
+
+Workspace instructions remain subordinate to the platform safety and output contract. They cannot expand source access, change supported roles, bypass human review, approve an output, authorize external actions or relax structured output and citation validation. Engineering calculations remain unavailable until a validated deterministic tool exists.
+
 ## Runtime setup
 
 The supervisor worker is disabled by default. Apply the standard application migrations first, then initialize the Mastra workflow store, and only then enable the worker:

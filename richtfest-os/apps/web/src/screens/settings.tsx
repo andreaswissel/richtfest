@@ -24,6 +24,7 @@ import {
   type ConnectionsState,
   type ProviderId,
 } from "../connection-policy";
+import { AgentProfiles } from "../components/agent-profiles";
 import { SupervisorPresets } from "../components/supervisor-presets";
 
 export function Settings() {
@@ -282,6 +283,7 @@ export function Settings() {
             </div>
           </Section>
           <SupervisorPresets provider={activeProvider} />
+          <AgentProfiles />
         </>
       )}
     </Page>

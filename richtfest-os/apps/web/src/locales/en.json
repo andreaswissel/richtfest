@@ -407,5 +407,17 @@
   "threadRailTitleLabel": "Thread name",
   "threadRailEmpty": "No active threads",
   "workspaceOpenArtifact": "Open artifact",
-  "workspaceArtifactUnavailable": "This artifact is unavailable in this project."
+  "workspaceArtifactUnavailable": "This artifact is unavailable in this project.",
+  "agentProfilesTitle": "Agents",
+  "agentProfilesDescription": "Configure role instructions and approved company knowledge for supervisor runs.",
+  "agentProfileRole": "Role",
+  "agentProfileInstructions": "Role instructions",
+  "agentProfileRoutingHints": "Routing phrases (hints)",
+  "agentProfileRoutingHintDescription": "One phrase per line. Hints help route work; they do not guarantee delegation.",
+  "agentProfileKnowledge": "Approved company knowledge",
+  "agentProfileNoKnowledge": "No approved company-wide knowledge is available.",
+  "agentProfileSave": "Save role",
+  "agentProfileSaved": "Role saved",
+  "agentProfileAdminOnly": "Only workspace administrators can edit agent settings.",
+  "agentProfilesDisabled": "The supervisor workflow is disabled. Saved settings take effect when it is enabled."
 }

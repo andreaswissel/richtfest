@@ -13,6 +13,7 @@ import {
   tasks,
 } from "./schema";
 import type { AppDeps } from "./deps";
+import { agentProfilesRouter } from "./agent-profiles";
 import { runsRouter } from "./runs";
 import { reviewsRouter } from "./reviews";
 import { conversation, missing } from "./workspace";
@@ -53,6 +54,7 @@ const send = (res: any, status: number, body: any) =>
   res.status(status).json(body);
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
+  router.use(agentProfilesRouter(getDeps));
   router.use(workspaceRouter(getDeps));
   router.use(runsRouter(getDeps));
   router.use(reviewsRouter(getDeps));

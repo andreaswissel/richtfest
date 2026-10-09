@@ -11,6 +11,7 @@ import {
   annotations,
   artifacts,
 } from "./schema";
+import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact } from "./workspace";
 
 export const specialistOutput = z.object({
@@ -72,9 +73,10 @@ export async function createSupervisor(
   effort: string,
   modelPolicy: unknown,
 ) {
+  const profileSnapshot = await snapshotAgentProfiles(d, tx);
   await tx
     .insert(supervisorRuns)
-    .values({ runId: run.id, tenantId: d.tenantId, effort, modelPolicy });
+    .values({ runId: run.id, tenantId: d.tenantId, effort, modelPolicy, profileSnapshot });
 }
 // All commits fence against both cancellation and replacement lease tokens.
 async function commit(
@@ -183,6 +185,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         goal,
         context: {
           ...(context as object),
+          workspaceGuidance: (() => {
+            // Pre-existing runs retain original defaults rather than adopting later settings.
+            const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
+            const role = phase === "specialist" ? (context as { role: string }).role : "supervisor";
+            return {
+              profile: profiles.find(profile => profile.key === role),
+              routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
+            };
+          })(),
           budgets: {
             maxTasks: state.modelPolicy?.maxTasks,
             maxRevisions: state.modelPolicy?.maxRevisions,

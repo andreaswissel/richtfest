@@ -11,6 +11,7 @@
 - Users can rename project threads manually from the thread list.
 
 - Project threads receive a concise model-generated title after their first message, using the active provider's economical model.
+- Added Agent controls for workspace role instructions, routing hints and approved company knowledge; each supervisor run keeps the guidance it started with.
 
 - Project workspace can show an embedded visual preview for Affinity Publisher files while keeping the original download available.
 
