@@ -124,15 +124,47 @@ describe("accepted API workflow (PostgreSQL)", () => {
       };
       const cookie = await login("andreas@richtfest.local");
       expect(cookie).toContain("better-auth.session_token");
+      const customerDetails = {
+        name: `Integration customer ${Date.now()}`,
+        email: "office@example.com", phone: "+49 30 12345",
+        street: "Planstraße 8, Haus B", postalCode: "01234", city: "Dresden", country: "Deutschland",
+        billingName: "Planung Holding GmbH", billingStreet: "Kontorweg 42",
+        billingPostalCode: "10115", billingCity: "Berlin", billingCountry: "Deutschland",
+        invoiceEmail: "invoices@example.com", vatId: "DE123456789", taxNumber: "12/345/67890",
+        paymentTerms: "30 days net", notes: "Include purchase order reference",
+      };
       const customer = await request(
         "/api/crm/customers",
         {
           method: "POST",
-          body: JSON.stringify({ name: `Integration customer ${Date.now()}` }),
+          body: JSON.stringify(customerDetails),
         },
         cookie,
       );
       expect(customer.response.status).toBe(201);
+      expect(customer.body.data).toMatchObject(customerDetails);
+      const customerPath = `/api/crm/customers/${customer.body.data.id}`;
+      const patchedCustomer = await request(customerPath, {
+        method: "PATCH", body: JSON.stringify({ city: "Leipzig", invoiceEmail: "", phone: null }),
+      }, cookie);
+      expect(patchedCustomer.response.status).toBe(200);
+      expect(patchedCustomer.body.data).toMatchObject({ ...customerDetails, city: "Leipzig", invoiceEmail: null, phone: null });
+      const customerList = await request("/api/crm/customers", {}, cookie);
+      expect(customerList.body.data.find((row: any) => row.id === customer.body.data.id)).toMatchObject({
+        ...customerDetails, city: "Leipzig", invoiceEmail: null, phone: null,
+      });
+      for (const invalid of [{ invoiceEmail: "not-an-email" }, { name: " " }, { paymentTerms: "x".repeat(501) }, {}]) {
+        expect((await request(customerPath, { method: "PATCH", body: JSON.stringify(invalid) }, cookie)).response.status).toBe(400);
+      }
+      const minimalCustomer = await request("/api/crm/customers", {
+        method: "POST", body: JSON.stringify({ name: `Name only ${Date.now()}` }),
+      }, cookie);
+      expect(minimalCustomer.response.status).toBe(201);
+      expect(minimalCustomer.body.data.billingStreet).toBeNull();
+      const customerAudit = await pool.query("select metadata from os_audit_events where action = 'crm.customer.updated' and entity_id = $1", [customer.body.data.id]);
+      expect(customerAudit.rows).toHaveLength(1);
+      expect(customerAudit.rows[0].metadata.fields.sort()).toEqual(["city", "invoiceEmail", "phone"]);
+      expect(JSON.stringify(customerAudit.rows)).not.toContain("Leipzig");
       const project = await request(
         "/api/projects",
         {
@@ -547,6 +579,19 @@ describe("accepted API workflow (PostgreSQL)", () => {
         ),
       ).toBe(true);
       const outsiderCookie = await login("outsider@other.local");
+      await pool.query("insert into os_role_permissions (role_id, permission) select r.id, 'richtfest-os:use' from os_roles r join os_tenants t on t.id = r.tenant_id where t.name = 'Outsider' on conflict do nothing");
+      expect((await request(customerPath, { method: "PATCH", body: JSON.stringify({ name: "Forbidden" }) }, outsiderCookie)).response.status).toBe(403);
+      // Give the other tenant CRM access to test isolation independently of permissions.
+      await pool.query("insert into os_role_permissions (role_id, permission) select r.id, p.key from os_roles r join os_tenants t on t.id = r.tenant_id cross join os_permissions p where t.name = 'Outsider' and p.key in ('crm:read', 'crm:write') on conflict do nothing");
+      try {
+        expect((await request(customerPath, { method: "PATCH", body: JSON.stringify({ name: "Wrong tenant" }) }, outsiderCookie)).response.status).toBe(404);
+        const otherCustomers = await request("/api/crm/customers", {}, outsiderCookie);
+        expect(otherCustomers.response.status).toBe(200);
+        expect(otherCustomers.body.data.some((row: any) => row.id === customer.body.data.id)).toBe(false);
+        expect((await request("/api/crm/customers", {}, cookie)).body.data.find((row: any) => row.id === customer.body.data.id).name).toBe(customerDetails.name);
+      } finally {
+        await pool.query("delete from os_role_permissions where role_id in (select r.id from os_roles r join os_tenants t on t.id = r.tenant_id where t.name = 'Outsider') and permission in ('crm:read', 'crm:write', 'richtfest-os:use')");
+      }
       const outsiderProject = await request(
         `/api/projects/${project.body.data.id}`,
         {},

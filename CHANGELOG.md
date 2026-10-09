@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added editable customer company/contact details, addresses and separate billing details, including invoice email, tax IDs, payment terms and one-click address copying. Existing customers can keep these fields empty.
+
 - Project chat now clearly warns when agent replies are unavailable, confirms that sent messages were saved, and links to AI connection settings.
 
 - Added provider-backed model selectors to agent model settings, with GPT 6 and Claude Opus 5.5 / Sonnet 5.5 models surfaced first.

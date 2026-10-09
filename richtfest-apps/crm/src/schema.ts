@@ -1,3 +1,25 @@
 import { pgTable, uuid, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
-export const customers = pgTable("crm_customers", { id: uuid("id").primaryKey().defaultRandom(), tenantId: uuid("tenant_id").notNull(), name: text("name").notNull(), notes: text("notes"), createdBy: uuid("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull() }, (t) => ({ tenantName: uniqueIndex("crm_customer_tenant_name").on(t.tenantId, t.name) }));
+export const customers = pgTable("crm_customers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  street: text("street"),
+  postalCode: text("postal_code"),
+  city: text("city"),
+  country: text("country"),
+  billingName: text("billing_name"),
+  billingStreet: text("billing_street"),
+  billingPostalCode: text("billing_postal_code"),
+  billingCity: text("billing_city"),
+  billingCountry: text("billing_country"),
+  invoiceEmail: text("invoice_email"),
+  vatId: text("vat_id"),
+  taxNumber: text("tax_number"),
+  paymentTerms: text("payment_terms"),
+  notes: text("notes"),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({ tenantName: uniqueIndex("crm_customer_tenant_name").on(t.tenantId, t.name) }));
 export const contacts = pgTable("crm_contacts", { id: uuid("id").primaryKey().defaultRandom(), tenantId: uuid("tenant_id").notNull(), customerId: uuid("customer_id").notNull(), name: text("name").notNull(), email: text("email"), phone: text("phone"), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull() });

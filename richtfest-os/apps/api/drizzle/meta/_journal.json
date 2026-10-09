@@ -120,6 +120,13 @@
       "when": 1791584000000,
       "tag": "0016_user_theme",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791585000000,
+      "tag": "0017_customer_details",
+      "breakpoints": true
     }
   ]
 }

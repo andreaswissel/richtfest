@@ -1,0 +1,16 @@
+ALTER TABLE crm_customers
+  ADD COLUMN email text,
+  ADD COLUMN phone text,
+  ADD COLUMN street text,
+  ADD COLUMN postal_code text,
+  ADD COLUMN city text,
+  ADD COLUMN country text,
+  ADD COLUMN billing_name text,
+  ADD COLUMN billing_street text,
+  ADD COLUMN billing_postal_code text,
+  ADD COLUMN billing_city text,
+  ADD COLUMN billing_country text,
+  ADD COLUMN invoice_email text,
+  ADD COLUMN vat_id text,
+  ADD COLUMN tax_number text,
+  ADD COLUMN payment_terms text;

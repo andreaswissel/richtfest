@@ -1,5 +1,7 @@
 import { AgentRuns } from "../components/agent-runs";
 import { Activity } from "../components/activity";
+import { CustomerForm } from "../components/crm/customer-form";
+import type { CustomerInput } from "@richtfest/shared";
 import { useMutation } from "@tanstack/react-query";
 import { uploadFiles } from "../api";
 import { queryClient } from "../query";
@@ -209,12 +211,12 @@ export function Customers() {
   const t = useT(),
     query = useApi("/crm/customers");
   const [create, setCreate] = useState(false),
+    [edit, setEdit] = useState<(CustomerInput & { id: string }) | null>(null),
     [contact, setContact] = useState<RecordData | null>(null);
   const contacts = useApi(`/crm/customers/${contact?.id}/contacts`, !!contact);
-  const write = useWrite("/crm/customers", () => setCreate(false)),
-    writeContact = useWrite(`/crm/customers/${contact?.id}/contacts`, () =>
-      setContact(null),
-    );
+  const writeContact = useWrite(`/crm/customers/${contact?.id}/contacts`, () =>
+    setContact(null),
+  );
   return (
     <Page>
       <PageHeader
@@ -230,34 +232,66 @@ export function Customers() {
       {query.data &&
         (list(query.data, "customers").length ? (
           <Table
-            headers={[t("company"), t("contact"), t("email")]}
+            headers={[
+              t("company"),
+              t("customerAddress"),
+              t("email"),
+              t("contact"),
+              t("manage"),
+            ]}
             rows={list(query.data, "customers").map((c) => ({
               id: c.id,
-              sort: [c.name, c.contactName || "", c.email || ""],
+              sort: [c.name, c.city || "", c.email || "", "", ""],
               cells: [
-                <strong>{c.name}</strong>,
+                <strong className="block max-w-56 whitespace-normal break-words">
+                  {c.name}
+                </strong>,
+                <div className="min-w-32 max-w-56 whitespace-normal break-words">
+                  {c.street && <div>{c.street}</div>}
+                  {(c.postalCode || c.city) && (
+                    <div>
+                      {[c.postalCode, c.city].filter(Boolean).join(" ")}
+                    </div>
+                  )}
+                  {c.country && <div>{c.country}</div>}
+                  {!c.street && !c.postalCode && !c.city && !c.country && "—"}
+                </div>,
+                <span className="block max-w-48 whitespace-normal break-words">
+                  {c.email || "—"}
+                </span>,
                 <Button variant="link" onClick={() => setContact(c)}>
                   {t("addContact")} ＋
                 </Button>,
-                c.email || "—",
+                <Button
+                  variant="link"
+                  aria-label={`${t("customerEdit")} · ${c.name}`}
+                  onClick={() => setEdit(c as CustomerInput & { id: string })}
+                >
+                  {t("customerEdit")}
+                </Button>,
               ],
             }))}
           />
         ) : (
           <Empty>{t("noCustomers")}</Empty>
         ))}
-      {create && (
-        <Modal title={t("newCustomer")} onClose={() => setCreate(false)}>
-          <Form
-            label={t("newCustomer")}
-            pending={write.isPending}
-            error={write.error}
-            onSubmit={(f) => write.mutate(values(f))}
-          >
-            <Field label={t("company")}>
-              <Input name="name" required autoFocus />
-            </Field>
-          </Form>
+      {(create || edit) && (
+        <Modal
+          title={
+            edit ? `${t("customerEdit")} · ${edit.name}` : t("newCustomer")
+          }
+          onClose={() => {
+            setCreate(false);
+            setEdit(null);
+          }}
+        >
+          <CustomerForm
+            customer={edit ?? undefined}
+            onSaved={() => {
+              setCreate(false);
+              setEdit(null);
+            }}
+          />
         </Modal>
       )}
       {contact && (
