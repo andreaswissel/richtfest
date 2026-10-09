@@ -157,7 +157,13 @@ export function App({ initializing = false }: { initializing?: boolean }) {
       </aside>
       <div className="main-shell">
         <div className="topbar">
-          <span>{t("workspace")}</span>
+          {/^\/projects\/[^/]+/.test(pathname) ? (
+            <Link className="back-link" to="/projects">
+              ← {t("backProjects")}
+            </Link>
+          ) : (
+            <span>{t("workspace")}</span>
+          )}
         </div>
         <main id="main" aria-busy={pending}>
           {session.isError ? (

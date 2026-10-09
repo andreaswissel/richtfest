@@ -117,9 +117,6 @@ export function ProjectWorkspace() {
   const title = (project.data?.project || project.data)?.name || t("project");
   return (
     <Page>
-      <Link className="back-link" to="/projects">
-        ← {t("backProjects")}
-      </Link>
       <PageHeader
         title={title}
         eyebrow={project.data?.customerName}

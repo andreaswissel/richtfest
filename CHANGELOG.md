@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Moved “Back to projects” into the app header while viewing a project.
+
 - Project threads show a small accent dot for unread messages and clear it after you reach the latest message.
 
 - Added an animated crane that lifts a block while project agents work.
