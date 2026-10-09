@@ -299,7 +299,6 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 .knowledge-item p { max-width: 860px; }
 .knowledge-bottom { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .preserve-lines { overflow-wrap: anywhere; white-space: pre-wrap; }
-.boot { display: flex; min-height: 100vh; align-items: center; justify-content: center; gap: 14px; color: var(--muted-foreground); }
 
 .login { display: grid; min-height: 100vh; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
 .login-story { display: flex; position: relative; flex-direction: column; justify-content: space-between; gap: 70px; overflow: hidden; padding: 40px 55px; background: var(--foreground); color: var(--background); }

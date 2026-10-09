@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { api, ApiError, list } from "../src/api";
+import { queryClient } from "../src/query";
 const original = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = original;
+  queryClient.clear();
 });
 test("API sends cookie credentials and preserves request data", async () => {
   let options: RequestInit | undefined;
@@ -23,6 +25,33 @@ test("API rejects permission errors instead of presenting them as saved data", a
     )) as typeof fetch;
   await expect(api("/projects", {})).rejects.toBeInstanceOf(ApiError);
   await expect(api("/projects", {})).rejects.toThrow("Access denied");
+});
+test("expired sessions are not retried, while a temporary session failure can recover", async () => {
+  for (const status of [401, 503]) {
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests++;
+      return requests === 1
+        ? Response.json(
+            { error: "unavailable", message: "Session unavailable" },
+            { status },
+          )
+        : Response.json({ data: { id: "verified" } });
+    }) as typeof fetch;
+    const result = queryClient.fetchQuery({
+      queryKey: ["/auth/me"],
+      queryFn: () => api("/auth/me"),
+      retryDelay: 0,
+    });
+    if (status === 401) {
+      await expect(result).rejects.toBeInstanceOf(ApiError);
+      expect(requests).toBe(1);
+    } else {
+      expect(await result).toEqual({ id: "verified" });
+      expect(requests).toBe(2);
+    }
+    queryClient.clear();
+  }
 });
 test("list normalizes an array or explicit collection without accepting objects as rows", () => {
   expect(list([{ id: 1 }])).toEqual([{ id: 1 }]);

@@ -20,6 +20,7 @@ export function persistWorkspaceCache(scope: string) {
       .objectStore("workspaces")
       .get(scope);
     read.onsuccess = () => {
+      if (disposed) return;
       const saved = read.result;
       if (saved && Date.now() - saved.at < 300_000)
         hydrate(queryClient, saved.state);

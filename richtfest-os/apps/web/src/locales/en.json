@@ -73,7 +73,7 @@
   "devLogin": "Local development access",
   "devNote": "Choose a seeded identity to enter this local workspace. Development access is disabled in production.",
   "loginUnavailable": "Sign-in is not configured for this environment. Ask the workspace administrator to enable an authentication provider.",
-  "loading": "Loading workspace…",
+  "loading": "Loading…",
   "retry": "Try again",
   "error": "Could not load this view.",
   "signOut": "Sign out",

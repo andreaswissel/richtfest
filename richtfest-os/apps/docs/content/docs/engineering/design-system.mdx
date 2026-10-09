@@ -17,6 +17,12 @@ Use `Page`, `PageHeader` and `Section` for screen structure. Shared buttons, inp
 
 Layouts follow the task: establish context, surface missing information, accept input and then present the decision. Keep one primary action per view or panel. Use actual links for navigation so keyboard access and opening in a new tab remain available.
 
+## Refresh and session checks
+
+On refresh, render the non-sensitive navigation shell immediately and show a content placeholder while the session is checked. Use the same shell when an initial project route is still loading its code. Do not replace the whole workspace with a loading splash, or blank an existing screen during navigation.
+
+The session cookie preserves sign-in, but each fresh page verifies the session before showing identity or protected content. The persisted data cache restores only after the current user and workspace are verified; it never supplies authentication. Expired sessions go directly to sign-in without an automatic retry. Temporary failures keep the shell visible with a retry action in the content area.
+
 ## Density and language
 
 Dense and Normal modes share the same components. Use the documented density and spacing tokens instead of fixed one-off sizes. Verify both modes when adding or changing a reusable component.

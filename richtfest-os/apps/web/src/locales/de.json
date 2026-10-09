@@ -73,7 +73,7 @@
   "devLogin": "Lokaler Entwicklungszugang",
   "devNote": "Wählen Sie eine vorbereitete Identität für diesen lokalen Arbeitsplatz. In Produktion ist dieser Zugang deaktiviert.",
   "loginUnavailable": "Die Anmeldung ist hier nicht eingerichtet. Bitten Sie die Administration, einen Anmeldeanbieter zu aktivieren.",
-  "loading": "Arbeitsplatz wird geladen…",
+  "loading": "Wird geladen…",
   "retry": "Erneut versuchen",
   "error": "Diese Ansicht konnte nicht geladen werden.",
   "signOut": "Abmelden",

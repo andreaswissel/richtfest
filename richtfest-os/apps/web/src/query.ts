@@ -1,9 +1,13 @@
 import { QueryClient, useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: true },
   },
+});
+queryClient.setQueryDefaults(["/auth/me"], {
+  retry: (failures, error) =>
+    !(error instanceof ApiError && error.status === 401) && failures < 1,
 });
 export function useApi(path: string, enabled = true) {
   return useQuery({ queryKey: [path], queryFn: () => api(path), enabled });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh now shows workspace navigation immediately instead of a full-screen loading splash; protected content waits for session verification, and connection failures offer retry without losing the shell.
+
 - Added branded social link previews with a construction illustration, clear title and description; private project details stay out of shared previews.
 
 - Added safe first-administrator provisioning for a new production workspace and corrected the sign-in email-delivery status for configured Resend accounts.
