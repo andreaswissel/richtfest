@@ -178,6 +178,172 @@ function SubagentSection({
   );
 }
 
+function timestampValue(value: unknown) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function eventTime(event: RecordData) {
+  return timestampValue(event.createdAt ?? event.created_at);
+}
+
+function formatElapsed(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function providerCallId(event: RecordData, index: number) {
+  const value = event.paramsSummary;
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : `legacy-provider-call-${index}`;
+}
+
+function activeProviderCalls(events: RecordData[]) {
+  const calls = new Map<
+    string,
+    { startedAt?: number; active: boolean; phase?: string }
+  >();
+  events.forEach((event, index) => {
+    if (event.eventType === "resumed") {
+      for (const call of calls.values()) call.active = false;
+      return;
+    }
+    if (event.eventType === "provider_call_started") {
+      calls.set(providerCallId(event, index), {
+        startedAt: eventTime(event),
+        active: true,
+        phase:
+          typeof event.resultSummary === "string"
+            ? event.resultSummary
+            : undefined,
+      });
+      return;
+    }
+    if (
+      !["provider_call_completed", "provider_call_failed"].includes(
+        event.eventType,
+      )
+    )
+      return;
+    const id = event.paramsSummary;
+    if (typeof id === "string" && id.trim()) {
+      const call = calls.get(id.trim());
+      if (call) call.active = false;
+      return;
+    }
+    const active = [...calls.values()].filter((call) => call.active);
+    if (active.length === 1) active[0].active = false;
+  });
+  return [...calls.values()].filter((call) => call.active);
+}
+
+const phaseTranslationKeys = {
+  plan: "agentRunPhasePlan",
+  specialist: "agentRunPhaseSpecialists",
+  specialists: "agentRunPhaseSpecialists",
+  review: "agentRunPhaseReview",
+  independent_review: "agentRunPhaseIndependentReview",
+  done: "agentRunPhaseDone",
+} as const;
+
+function supervisorPhaseLabel(value: unknown, t: ReturnType<typeof useT>) {
+  if (typeof value !== "string") return "";
+  const key = phaseTranslationKeys[value as keyof typeof phaseTranslationKeys];
+  return key ? t(key) : value;
+}
+
+function RunDiagnosis({
+  status,
+  phase,
+  createdAt,
+  events,
+}: {
+  status: string;
+  phase?: string;
+  createdAt?: unknown;
+  events: RecordData[];
+}) {
+  const t = useT();
+  const activeCalls = status === "running" ? activeProviderCalls(events) : [];
+  const oldestActiveCall = activeCalls
+    .filter((call) => call.startedAt !== undefined)
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))[0];
+  const activeCallStartedAt = oldestActiveCall?.startedAt;
+  const queuedAt = status === "queued" ? timestampValue(createdAt) : undefined;
+  const [now, setNow] = useState(() => Date.now());
+  const lastProgress = [...events]
+    .map(eventTime)
+    .filter((timestamp): timestamp is number => timestamp !== undefined)
+    .pop();
+
+  useEffect(() => {
+    if (oldestActiveCall === undefined && queuedAt === undefined) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeCallStartedAt, queuedAt]);
+
+  const waitingForWorker = status === "queued" && events.length === 0;
+  const phaseLabel = supervisorPhaseLabel(
+    oldestActiveCall?.phase ?? phase,
+    t,
+  );
+  const queueWait = queuedAt === undefined ? undefined : now - queuedAt;
+  const callElapsed =
+    activeCallStartedAt === undefined ? undefined : now - activeCallStartedAt;
+
+  return (
+    <div
+      className="border-b px-3 py-2 text-ui-xs text-muted-foreground"
+      role="group"
+      aria-label={t("agentRunDiagnosis")}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="font-medium text-foreground">
+          {t("agentRunDiagnosis")}
+        </span>
+        {waitingForWorker ? (
+          <span>
+            {t("agentRunWaitingForWorker")}
+            {queueWait !== undefined &&
+              ` · ${t("agentRunQueueWait")}: ${formatElapsed(queueWait)}`}
+          </span>
+        ) : status === "queued" ? (
+          <span>
+            {t("agentRunQueuedWaiting")}
+            {queueWait !== undefined &&
+              ` · ${t("agentRunQueueWait")}: ${formatElapsed(queueWait)}`}
+          </span>
+        ) : status === "running" && events.length === 0 ? (
+          <span>{t("agentRunAwaitingProgress")}</span>
+        ) : phaseLabel ? (
+          <span>
+            {t("agentRunSupervisorPhase")}: {phaseLabel}
+          </span>
+        ) : null}
+        {activeCalls.length > 0 && (
+          <span>
+            {t("agentRunProviderCalls")}: {activeCalls.length}
+            {callElapsed !== undefined &&
+              ` · ${t("agentRunOldestCall")}: ${formatElapsed(callElapsed)}`}
+          </span>
+        )}
+        {lastProgress !== undefined && (
+          <span>
+            {t("agentRunLastProgress")}: {new Date(lastProgress).toLocaleTimeString(
+              undefined,
+              { hour: "2-digit", minute: "2-digit" },
+            )}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SubagentThread({
   projectId,
   runId,
@@ -201,8 +367,8 @@ export function SubagentThread({
   const cancel = useWrite(`/knowledge/runs/${runId}/cancel`);
   const run = query.data?.run
     ? {
-        ...query.data.run,
         ...initialRun,
+        ...query.data.run,
         usage: query.data.usage ?? initialRun?.usage,
         isSupervisor: Boolean(
           initialRun?.isSupervisor || query.data.orchestration,
@@ -283,7 +449,9 @@ export function SubagentThread({
     );
   const managed = Boolean(run.parentRunId);
   const output = run.outputSummary || run.partialOutput;
-  const running = ["queued", "running"].includes(streamStatus ?? run.status);
+  const currentStatus = streamStatus ?? run.status;
+  const running = ["queued", "running"].includes(currentStatus);
+  const executing = currentStatus === "running";
   const persistedEvents = list(query.data?.events).filter((event) =>
     runActivityLabel(event),
   );
@@ -323,11 +491,17 @@ export function SubagentThread({
           />
           <h2>{agentName(run, t)}</h2>
           <Badge>
-            {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
+            {t(`run_${currentStatus}` as Parameters<typeof t>[0]) || currentStatus}
           </Badge>
           <AgentRunMetrics run={run} />
         </div>
       </header>
+      <RunDiagnosis
+        status={currentStatus}
+        phase={query.data?.orchestration?.phase}
+        createdAt={run.createdAt ?? run.created_at}
+        events={activityEvents}
+      />
       <MessageScrollerProvider
         key={runId}
         autoScroll={false}
@@ -364,7 +538,7 @@ export function SubagentThread({
                     ) : (
                       <Marker>
                         <MarkerContent>
-                          {running ? (
+                          {executing ? (
                             <CraneWorkingIndicator
                               label={t("agentThreadWorking")}
                             />
@@ -376,7 +550,7 @@ export function SubagentThread({
                     )}
                     <RunActivityFeed
                       events={activityEvents}
-                      active={running}
+                      active={executing}
                       currentTask={currentTask}
                     />
                     {run.rationale && (

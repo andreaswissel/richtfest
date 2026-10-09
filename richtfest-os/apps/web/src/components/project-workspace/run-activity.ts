@@ -3,6 +3,9 @@ import type { RecordData } from "../../api";
 const activityLabels = {
   started: "workspaceActivityRunStarted",
   supervisor_started: "workspaceActivityStarted",
+  provider_call_started: "workspaceActivityProviderCallStarted",
+  provider_call_completed: "workspaceActivityProviderCallCompleted",
+  provider_call_failed: "workspaceActivityProviderCallFailed",
   resumed: "workspaceActivityResumed",
   supervisor_planned: "workspaceActivityPlanned",
   specialist_completed: "workspaceActivitySpecialistCompleted",

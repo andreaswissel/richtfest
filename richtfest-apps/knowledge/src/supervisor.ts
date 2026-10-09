@@ -142,11 +142,20 @@ export function assertRevisionAssignments(
     revisions.some((revision) => !assignments.some((assignment) => assignment.taskId === revision.taskId))
   ) throw conflict("Invalid revision assignments");
 }
-async function log(d: AppDeps, tx: any, run: any, type: string) {
+async function log(
+  d: AppDeps,
+  tx: any,
+  run: any,
+  type: string,
+  resultSummary?: string,
+  paramsSummary?: string,
+) {
   await tx.insert(agentRunEvents).values({
     tenantId: d.tenantId,
     runId: run.id,
     eventType: type,
+    paramsSummary,
+    resultSummary,
     createdBy: d.actorId,
   });
   await d.auditRun(
@@ -269,43 +278,61 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       context: unknown,
       runId = id,
     ) => {
+      const callId = crypto.randomUUID();
       await assertActive();
-      const providerStartedAt = new Date();
-      const response = await d.executeSupervisor!({
-        phase,
-        provider: run.provider,
-        runId,
-        goal,
-        context: {
-          ...(context as object),
-          workspaceGuidance: (() => {
-            // Pre-existing runs retain original defaults rather than adopting later settings.
-            const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
-            const role = phase === "specialist" || phase === "independent_review"
-              ? (context as { role: string }).role
-              : "supervisor";
-            const profile = profiles.find(profile => profile.key === role) ?? (
-              role === "independent_reviewer"
-                ? { ...defaultProfiles().find(profile => profile.key === role)!, knowledge: [] }
-                : undefined
-            );
-            return {
-              profile,
-              routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
-            };
-          })(),
-          budgets: {
-            maxTasks: state.modelPolicy?.maxTasks,
-            maxRevisions: state.modelPolicy?.maxRevisions,
-          },
-        },
-        modelPolicy: state.modelPolicy,
-        onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
-        onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
+      const started = await commit(d, run, token, async (tx) => {
+        await log(d, tx, run, "provider_call_started", phase, callId);
       });
-      if (response.status !== "completed")
-        throw conflict("Provider unavailable");
-      return response.output;
+      if (!started) throw conflict("Supervisor no longer active");
+      const providerStartedAt = new Date();
+      try {
+        const response = await d.executeSupervisor!({
+          phase,
+          provider: run.provider,
+          runId,
+          goal,
+          context: {
+            ...(context as object),
+            workspaceGuidance: (() => {
+              // Pre-existing runs retain original defaults rather than adopting later settings.
+              const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
+              const role = phase === "specialist" || phase === "independent_review"
+                ? (context as { role: string }).role
+                : "supervisor";
+              const profile = profiles.find(profile => profile.key === role) ?? (
+                role === "independent_reviewer"
+                  ? { ...defaultProfiles().find(profile => profile.key === role)!, knowledge: [] }
+                  : undefined
+              );
+              return {
+                profile,
+                routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
+              };
+            })(),
+            budgets: {
+              maxTasks: state.modelPolicy?.maxTasks,
+              maxRevisions: state.modelPolicy?.maxRevisions,
+            },
+          },
+          modelPolicy: state.modelPolicy,
+          onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
+          onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
+        });
+        if (response.status !== "completed")
+          throw conflict("Provider unavailable");
+        const completed = await commit(d, run, token, async (tx) => {
+          await log(d, tx, run, "provider_call_completed", phase, callId);
+        });
+        if (!completed) throw conflict("Supervisor no longer active");
+        return response.output;
+      } catch (error) {
+        // Keep this event deliberately bounded: the phase is enough to explain where
+        // execution stopped without persisting prompts, source text, or provider errors.
+        await commit(d, run, token, async (tx) => {
+          await log(d, tx, run, "provider_call_failed", phase, callId);
+        });
+        throw error;
+      }
     };
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
