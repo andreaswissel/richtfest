@@ -1,0 +1,59 @@
+.crane-working-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.crane-working-indicator__art {
+  display: block;
+  width: 3.5rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.crane-working-indicator__brace {
+  opacity: 0.5;
+  stroke-width: 1;
+}
+
+.crane-working-indicator__load {
+  transform-box: view-box;
+  transform-origin: 34px 8px;
+  animation: crane-load-transfer 2.8s ease-in-out infinite;
+}
+
+.crane-working-indicator__block {
+  fill: var(--muted);
+  stroke-width: 1.25;
+}
+
+@keyframes crane-load-transfer {
+  0%,
+  12% {
+    transform: translate(0, 0);
+  }
+  42%,
+  58% {
+    transform: translate(28px, -2px);
+  }
+  88%,
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crane-working-indicator__load {
+    animation: none;
+    transform: translate(14px, -1px);
+  }
+}

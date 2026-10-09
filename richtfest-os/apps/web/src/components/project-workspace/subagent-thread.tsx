@@ -16,6 +16,7 @@ import { Badge, Callout, Field, Form, Modal } from "../ui/primitives";
 import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
+import { CraneWorkingIndicator } from "./crane-working-indicator";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -213,9 +214,13 @@ export function SubagentThread({
                     ) : (
                       <Marker>
                         <MarkerContent>
-                          {running
-                            ? t("agentThreadWorking")
-                            : t("agentThreadNoResult")}
+                          {running ? (
+                            <CraneWorkingIndicator
+                              label={t("agentThreadWorking")}
+                            />
+                          ) : (
+                            t("agentThreadNoResult")
+                          )}
                         </MarkerContent>
                       </Marker>
                     )}

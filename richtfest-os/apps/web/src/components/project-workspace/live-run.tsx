@@ -5,6 +5,7 @@ import { queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Badge, Callout } from "../ui/primitives";
+import { CraneWorkingIndicator } from "./crane-working-indicator";
 export function LiveRun({
   run,
   projectId,
@@ -102,7 +103,7 @@ export function LiveRun({
             ? t("workspaceLive")
             : run.status}
         </Badge>
-        <span>{t("workspaceUiSupervisorWorking")}</span>
+        <CraneWorkingIndicator label={t("workspaceUiSupervisorWorking")} />
         {["queued", "running"].includes(run.status) && (
           <Button
             variant="link"

@@ -36,6 +36,7 @@ import {
 } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { Marker, MarkerContent } from "../ui/marker";
+import { CraneWorkingIndicator } from "./crane-working-indicator";
 import {
   Attachment,
   AttachmentContent,
@@ -581,7 +582,9 @@ function Conversation({
           onScroll={(event) => {
             const viewport = event.currentTarget;
             const atEnd =
-              viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <=
+              viewport.scrollHeight -
+                viewport.scrollTop -
+                viewport.clientHeight <=
               8;
             if (!atEnd) {
               setFollowing(false);
@@ -648,11 +651,20 @@ function Conversation({
                 {message.id.startsWith("run-") && (
                   <Marker>
                     <MarkerContent>
-                      {["stopped", "cancelled", "failed"].includes(
-                        runs.find((r) => r.id === message.runId)?.status,
-                      )
-                        ? t("workspaceInterrupted")
-                        : t("workspaceLive")}
+                      {(() => {
+                        const status = runs.find(
+                          (run) => run.id === message.runId,
+                        )?.status;
+                        if (["queued", "running"].includes(status))
+                          return (
+                            <CraneWorkingIndicator label={t("workspaceLive")} />
+                          );
+                        return ["stopped", "cancelled", "failed"].includes(
+                          status,
+                        )
+                          ? t("workspaceInterrupted")
+                          : t("workspaceLive");
+                      })()}
                     </MarkerContent>
                   </Marker>
                 )}
