@@ -9,6 +9,7 @@ import {
   supervisorRuns,
   tasks,
   agentRunEvents,
+  agentRunUsage,
   conversations,
   messages,
 } from "../richtfest-apps/knowledge/src/schema";
@@ -17,6 +18,7 @@ import {
   createSupervisor,
 } from "../richtfest-apps/knowledge/src/supervisor";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
+import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
 import { soundInsulationPlanningFixture as fixture } from "./fixtures/sound-insulation-planning";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 const integration = process.env.DATABASE_URL ? test : test.skip;
@@ -32,6 +34,74 @@ const policy = {
   maxTasks: 4,
   maxRevisions: 2,
 };
+integration("specialist costs belong to each child while the supervisor retains the total", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const d = {
+    db, tenantId, actorId,
+    requirePermission: () => {},
+    validateProject: async () => true,
+    auditRun: async () => {},
+    listProjectSources: async () => ({ sources: [], truncated: false, authority: "unreviewed_source_inventory" }),
+    executeSupervisor: async (input) => {
+      await input.onUsage?.({
+        provider: "openai", modelId: "test-model",
+        inputTokens: 1000, outputTokens: 100, totalTokens: 1100,
+        reasoningTokens: 0, cachedInputTokens: 0,
+        estimatedCostUsd: input.phase === "plan" ? 0.01 : input.goal === "Review A" ? 0.02 : 0.03,
+        pricingVersion: "test",
+      });
+      return {
+        status: "completed",
+        output: input.phase === "plan"
+          ? { tasks: [
+              { role: "source_reviewer", goal: "Review A", sourceVersionIds: [] },
+              { role: "requirements_reviewer", goal: "Review B", sourceVersionIds: [] },
+            ] }
+          : { summary: "Reviewed", rationale: "No sources supplied", citations: [] },
+      };
+    },
+  } as AppDeps;
+  let server: any;
+  try {
+    const [parent] = await db.insert(agentRuns).values({
+      tenantId, projectId, requestedBy: actorId,
+      goal: "Review project", provider: "openai", correlationId: crypto.randomUUID(),
+    }).returning();
+    await createSupervisor(d, db, parent, "medium", policy);
+    await stepSupervisor(d, parent!.id);
+    await stepSupervisor(d, parent!.id);
+    server = express()
+      .use("/api/knowledge", workspaceRouter(() => d))
+      .use("/api/knowledge", runsRouter(() => d))
+      .listen(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const baseUrl = `http://127.0.0.1:${server.address().port}/api/knowledge`;
+    const workspace = await (await fetch(`${baseUrl}/workspaces/${projectId}`)).json() as any;
+    const parentUsage = workspace.data.runs.find((run: any) => run.id === parent!.id).usage;
+    expect(parentUsage.own.callCount).toBe(1);
+    expect(parentUsage.own.estimatedCostUsd).toBe(0.01);
+    expect(parentUsage.aggregate.callCount).toBe(3);
+    expect(parentUsage.aggregate.estimatedCostUsd).toBe(0.06);
+    for (const [goal, cost] of [["Review A", 0.02], ["Review B", 0.03]] as const) {
+      const child = workspace.data.runs.find((run: any) => run.goal === goal);
+      expect(child.usage.callCount).toBe(1);
+      expect(child.usage.estimatedCostUsd).toBe(cost);
+      const detail = await (await fetch(`${baseUrl}/runs/${child.id}`)).json() as any;
+      expect(detail.data.usage.estimatedCostUsd).toBe(cost);
+      expect(detail.data.usage.calls).toHaveLength(1);
+      expect(detail.data.usage.calls[0].runId).toBe(child.id);
+    }
+  } finally {
+    if (server) await new Promise<void>((resolve) => server.close(resolve));
+    await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
+    await db.delete(agentRunEvents).where(eq(agentRunEvents.tenantId, tenantId));
+    await db.delete(supervisorRuns).where(eq(supervisorRuns.tenantId, tenantId));
+    await db.delete(agentRuns).where(eq(agentRuns.tenantId, tenantId));
+    await db.delete(tasks).where(eq(tasks.tenantId, tenantId));
+    await pool.end();
+  }
+});
 integration(
   "Bendenweg sound-insulation fixture reaches specialist review and a downloadable OpenUI PDF",
   async () => {

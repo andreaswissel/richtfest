@@ -335,7 +335,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             context: providerContext,
             modelPolicy: state.modelPolicy,
             onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
-            onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
+            onUsage: (usage) => recordProviderUsage(d, { ...run, id: runId }, usage, providerStartedAt).then(() => undefined),
           });
           if (response.status !== "completed") throw conflict("Provider unavailable");
           const completed = await commit(d, run, token, async (tx) => {

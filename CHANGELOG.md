@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Subagents now show their own token usage and estimated cost in run lists and details, while the supervisor keeps the combined total. Previously recorded costs remain unchanged.
+
 - Removed the redundant outer circle around callout icons.
 
 - Added reusable orb setup with the pinned toolchain, cached dependencies, local test database, PDF/OCR tools and supervised development services.
