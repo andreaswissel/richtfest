@@ -103,6 +103,8 @@ export function LocationEditor({ projectId }: { projectId: string }) {
     [future, setFuture] = useState<LocationScene[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [tool, setTool] = useState<ViewportState["tool"]>("select");
+  const [treeStyle, setTreeStyle] =
+    useState<ViewportState["treeStyle"]>("schematic");
   const [tab, setTab] = useState("properties");
   const [layers, setLayers] = useState({
     buildings: true,
@@ -329,6 +331,7 @@ export function LocationEditor({ projectId }: { projectId: string }) {
         layers,
         selected,
         tool,
+        treeStyle,
         measurement,
         clipHeight,
         dark: theme === "dark",
@@ -342,6 +345,7 @@ export function LocationEditor({ projectId }: { projectId: string }) {
     layers,
     selected,
     tool,
+    treeStyle,
     measurement,
     clipHeight,
     theme,
@@ -615,6 +619,29 @@ export function LocationEditor({ projectId }: { projectId: string }) {
                   <Trees className="size-icon-sm" />,
                   state.data!.context!.trees.length,
                 )}
+                <Field label={t("locationTreeStyle")}>
+                  <Segmented
+                    items={[
+                      { value: "schematic", label: t("locationSchematic") },
+                      {
+                        value: "illustrative",
+                        label: t("locationIllustrative"),
+                      },
+                    ]}
+                    value={treeStyle}
+                    onChange={(value) => {
+                      setTreeStyle(
+                        value === "illustrative" ? "illustrative" : "schematic",
+                      );
+                      if (tool === "measure") setTool("select");
+                    }}
+                  />
+                </Field>
+                {treeStyle === "illustrative" && (
+                  <p className="text-ui-xs muted">
+                    {t("locationTreeStyleHint")}
+                  </p>
+                )}
                 <details>
                   <summary>{t("locationReadOnly")}</summary>
                   {state.data!.context!.trees.map((b) =>
@@ -709,7 +736,10 @@ export function LocationEditor({ projectId }: { projectId: string }) {
                       aria-label={t(key)}
                       aria-pressed={tool === value}
                       disabled={value === "place" && !object}
-                      onClick={() => setTool(value)}
+                      onClick={() => {
+                        if (value === "measure") setTreeStyle("schematic");
+                        setTool(value);
+                      }}
                     >
                       <Icon className="size-icon-sm" />
                     </Button>
@@ -964,7 +994,13 @@ export function LocationEditor({ projectId }: { projectId: string }) {
                     )}
                   </dl>
                   <Callout>
-                    {t(tree ? "locationTreeHint" : "locationBuildingHint")}
+                    {t(
+                      tree
+                        ? treeStyle === "illustrative"
+                          ? "locationTreeIllustrationHint"
+                          : "locationTreeHint"
+                        : "locationBuildingHint",
+                    )}
                   </Callout>
                   <code className="text-ui-2xs break-all">
                     {tree?.sourceId || building?.sourceId}
@@ -973,7 +1009,13 @@ export function LocationEditor({ projectId }: { projectId: string }) {
               ) : (
                 <>
                   <p className="muted text-ui-sm">{t("locationSelectHint")}</p>
-                  <Callout>{t("locationTreeHint")}</Callout>
+                  <Callout>
+                    {t(
+                      treeStyle === "illustrative"
+                        ? "locationTreeIllustrationHint"
+                        : "locationTreeHint",
+                    )}
+                  </Callout>
                   <Callout>{t("locationBuildingHint")}</Callout>
                 </>
               )}
@@ -1011,7 +1053,7 @@ export function LocationEditor({ projectId }: { projectId: string }) {
               EPSG:25833 ·{" "}
               {state.data!.context!.origin.map((n) => n.toFixed(2)).join(" / ")}
             </span>
-            <span>{t("locationUnverified")}</span>
+            <span>{t("locationLighting")}</span>
           </footer>
         </>
       )}

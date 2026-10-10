@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import type {
   LocationContext,
   LocationPointCloud,
@@ -21,6 +22,7 @@ export type ViewportState = {
   };
   selected: string | null;
   tool: "select" | "place" | "measure";
+  treeStyle: "schematic" | "illustrative";
   measurement: SceneVector[];
   clipHeight: number;
   dark: boolean;
@@ -36,20 +38,60 @@ export function createViewport(
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.localClippingEnabled = true;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  // Static source geometry only needs a new shadow map after scene edits, not
+  // every orbit/pan. Lighting is illustrative, not a geolocated sun study.
+  renderer.shadowMap.autoUpdate = false;
   host.appendChild(renderer.domElement);
   renderer.domElement.setAttribute("aria-label", "3D viewport");
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
-  camera.position.set(95, 95, 120);
+  const skyCanvas = document.createElement("canvas");
+  skyCanvas.width = 256;
+  skyCanvas.height = 128;
+  const skyContext = skyCanvas.getContext("2d")!;
+  const skyGradient = skyContext.createLinearGradient(0, 0, 0, 128);
+  skyGradient.addColorStop(0, "#819db6");
+  skyGradient.addColorStop(0.45, "#e0e7e8");
+  skyGradient.addColorStop(0.55, "#f1eadd");
+  skyGradient.addColorStop(1, "#85867e");
+  skyContext.fillStyle = skyGradient;
+  skyContext.fillRect(0, 0, 256, 128);
+  const sky = new THREE.CanvasTexture(skyCanvas);
+  sky.colorSpace = THREE.SRGBColorSpace;
+  sky.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environment = pmrem.fromEquirectangular(sky);
+  pmrem.dispose();
+  scene.environment = environment.texture;
+  scene.environmentIntensity = 0.35;
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 2000);
+  const homeDirection = new THREE.Vector3(0.8, 0.95, 1).normalize();
+  const homeTarget = new THREE.Vector3(0, 5, 0);
+  camera.position.copy(homeTarget).addScaledVector(homeDirection, 190);
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 5, 0);
+  controls.target.copy(homeTarget);
   controls.maxDistance = 500;
   controls.minDistance = 1;
   controls.maxPolarAngle = Math.PI * 0.495;
   controls.update();
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x86919b, 2.6));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-  sun.position.set(80, 120, 40);
+  const fill = new THREE.HemisphereLight(0xdde8f3, 0x777366, 1.2);
+  scene.add(fill);
+  const sun = new THREE.DirectionalLight(0xffefda, 3);
+  sun.position.set(-65, 110, 55);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.00015;
+  sun.shadow.normalBias = 0.12;
+  Object.assign(sun.shadow.camera, {
+    left: -160,
+    right: 160,
+    top: 160,
+    bottom: -160,
+    near: 1,
+    far: 500,
+  });
   scene.add(sun);
   const groups = {
     buildings: new THREE.Group(),
@@ -60,17 +102,21 @@ export function createViewport(
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(240, 240),
+    new THREE.PlaneGeometry(2000, 2000),
     new THREE.MeshStandardMaterial({
-      color: 0xe9e8e4,
+      color: 0xc7c8bb,
       roughness: 1,
       side: THREE.DoubleSide,
     }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.04;
+  ground.receiveShadow = true;
   scene.add(ground);
-  const grid = new THREE.GridHelper(240, 48, 0xa6adb0, 0xcbd0d0);
+  const grid = new THREE.GridHelper(240, 48, 0x77857c, 0x77857c);
+  grid.material.transparent = true;
+  grid.material.opacity = 0.18;
+  grid.material.depthWrite = false;
   grid.position.y = -0.02;
   scene.add(grid);
   const marker = new THREE.Mesh(
@@ -86,6 +132,19 @@ export function createViewport(
   const slice = new THREE.Plane(new THREE.Vector3(0, -1, 0), 50);
   let current: ViewportState | undefined;
   const render = () => renderer.render(scene, camera);
+  let initialFrame = true;
+  const frame = (box?: THREE.Box3) => {
+    const target = box ? box.getCenter(new THREE.Vector3()) : homeTarget;
+    const radius = box ? box.getSize(new THREE.Vector3()).length() / 2 : 58;
+    const halfFov = Math.atan(
+      Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) *
+        Math.min(1, camera.aspect),
+    );
+    const distance = Math.max(12, (radius / Math.sin(halfFov)) * 1.15);
+    camera.position.copy(target).addScaledVector(homeDirection, distance);
+    controls.target.copy(target);
+    controls.update();
+  };
   controls.addEventListener("change", render);
   const resize = new ResizeObserver(() => {
     const { width, height } = host.getBoundingClientRect();
@@ -93,6 +152,10 @@ export function createViewport(
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    if (initialFrame) {
+      initialFrame = false;
+      frame();
+    }
     render();
   });
   resize.observe(host);
@@ -116,21 +179,35 @@ export function createViewport(
   const edges = (mesh: THREE.Mesh, color: number) => {
     const line = new THREE.LineSegments(
       new THREE.EdgesGeometry(mesh.geometry, 25),
-      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5 }),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.22 }),
     );
     mesh.add(line);
   };
   function update(next: ViewportState) {
     const previous = current;
     current = next;
-    scene.background = new THREE.Color(next.dark ? 0x252930 : 0xf1f2f0);
+    scene.background = next.dark ? new THREE.Color(0x202a34) : sky;
+    renderer.toneMappingExposure = next.dark ? 0.8 : 1;
+    fill.intensity = next.dark ? 0.85 : 1.2;
+    sun.intensity = next.dark ? 2 : 3;
     (ground.material as THREE.MeshStandardMaterial).color.set(
-      next.dark ? 0x30363c : 0xe9e8e4,
+      next.dark ? 0x333f43 : 0xc7c8bb,
     );
+    grid.material.color.set(next.dark ? 0x90a8ae : 0x77857c);
+    if (
+      previous?.context !== next.context ||
+      previous?.objects !== next.objects ||
+      previous?.models !== next.models ||
+      previous?.layers.buildings !== next.layers.buildings ||
+      previous?.layers.objects !== next.layers.objects ||
+      previous?.layers.trees !== next.layers.trees ||
+      previous?.treeStyle !== next.treeStyle ||
+      (previous?.tool === "measure") !== (next.tool === "measure")
+    )
+      renderer.shadowMap.needsUpdate = true;
     if (previous?.context !== next.context) {
       disposeGroup(groups.buildings);
-      disposeGroup(groups.trees);
-      for (const building of next.context.buildings) {
+      for (const [index, building] of next.context.buildings.entries()) {
         const group = new THREE.Group();
         group.userData.id = `building:${building.id}`;
         for (const polygon of building.polygons) {
@@ -148,22 +225,93 @@ export function createViewport(
             bevelEnabled: false,
           });
           geometry.rotateX(-Math.PI / 2);
-          const mesh = new THREE.Mesh(
-            geometry,
+          const mesh = new THREE.Mesh(geometry, [
             new THREE.MeshStandardMaterial({
-              color: building.height ? 0xc5c7ca : 0x9ca3aa,
-              roughness: 0.85,
+              color: 0xe6e3da,
+              roughness: 0.95,
             }),
-          );
+            new THREE.MeshStandardMaterial({
+              // Display palette, not inferred facade materials.
+              color: building.height
+                ? [0xd3cec2, 0xc4cccb, 0xd5d3ca][index % 3]
+                : 0x9ca3aa,
+              roughness: 0.9,
+            }),
+          ]);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
           edges(mesh, 0x65707a);
           group.add(mesh);
         }
         groups.buildings.add(group);
       }
+    }
+    if (
+      previous?.context !== next.context ||
+      previous?.treeStyle !== next.treeStyle ||
+      (previous?.tool === "measure") !== (next.tool === "measure")
+    ) {
+      disposeGroup(groups.trees);
       for (const tree of next.context.trees) {
         const group = new THREE.Group();
         group.userData.id = `tree:${tree.id}`;
         group.position.set(tree.position[0], 0, tree.position[1]);
+        // Decorative crowns are never measurement targets. Unknown dimensions
+        // keep their schematic markers rather than inventing a full-sized tree.
+        if (
+          next.treeStyle === "illustrative" &&
+          next.tool !== "measure" &&
+          tree.height &&
+          tree.crownDiameter
+        ) {
+          const clusters = [
+            [0, 0.65, 0, 0.36],
+            [-0.23, 0.53, 0.04, 0.27],
+            [0.22, 0.57, -0.1, 0.28],
+            [0.06, 0.5, 0.22, 0.27],
+            [-0.08, 0.8, -0.12, 0.25],
+          ].map(([x, y, z, radius]) => {
+            const geometry = new THREE.IcosahedronGeometry(radius, 1);
+            geometry.translate(x, y, z);
+            return geometry;
+          });
+          const crown = mergeGeometries(clusters)!;
+          clusters.forEach((geometry) => geometry.dispose());
+          crown.computeBoundingBox();
+          const bounds = crown.boundingBox!;
+          const centre = bounds.getCenter(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3());
+          crown.translate(-centre.x, -bounds.min.y, -centre.z);
+          crown.scale(
+            tree.crownDiameter / size.x,
+            (tree.height * 0.55) / size.y,
+            tree.crownDiameter / size.z,
+          );
+          crown.translate(0, tree.height * 0.45, 0);
+          const leaves = new THREE.Mesh(
+            crown,
+            new THREE.MeshStandardMaterial({
+              color: 0x6e8956,
+              roughness: 0.95,
+              flatShading: true,
+            }),
+          );
+          const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(
+              tree.crownDiameter * 0.016,
+              tree.crownDiameter * 0.025,
+              tree.height * 0.65,
+              8,
+            ),
+            new THREE.MeshStandardMaterial({ color: 0x78624c, roughness: 1 }),
+          );
+          trunk.position.y = tree.height * 0.325;
+          leaves.castShadow = trunk.castShadow = true;
+          leaves.receiveShadow = trunk.receiveShadow = true;
+          group.add(leaves, trunk);
+          groups.trees.add(group);
+          continue;
+        }
         // Crown discs + height poles deliberately avoid inventing crown undersides.
         const radius = (tree.crownDiameter ?? 1) / 2;
         const ring = new THREE.Mesh(
@@ -229,18 +377,19 @@ export function createViewport(
             );
             geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
             const [r, g, b, a] = data.color;
-            group.add(
-              new THREE.Mesh(
-                geometry,
-                new THREE.MeshStandardMaterial({
-                  color: new THREE.Color(r, g, b),
-                  opacity: a,
-                  transparent: a < 1,
-                  roughness: 0.8,
-                  side: THREE.DoubleSide,
-                }),
-              ),
+            const mesh = new THREE.Mesh(
+              geometry,
+              new THREE.MeshStandardMaterial({
+                color: new THREE.Color(r, g, b),
+                opacity: a,
+                transparent: a < 1,
+                roughness: 0.8,
+                side: THREE.DoubleSide,
+              }),
             );
+            mesh.castShadow = a >= 0.98;
+            mesh.receiveShadow = true;
+            group.add(mesh);
           }
         } else if (object.kind === "note") {
           const pin = new THREE.Mesh(
@@ -300,6 +449,7 @@ export function createViewport(
             new THREE.PointsMaterial({
               size: 0.17,
               vertexColors: true,
+              toneMapped: false,
               clippingPlanes: [slice],
             }),
           ),
@@ -413,7 +563,7 @@ export function createViewport(
           ? [0, 150, 0.01]
           : mode === "street"
             ? [25, 4, 35]
-            : [95, 95, 120];
+            : homeDirection.clone().multiplyScalar(190).toArray();
       camera.position.copy(target).add(new THREE.Vector3(...offset));
       controls.update();
       render();
@@ -422,23 +572,7 @@ export function createViewport(
       const node = Object.values(groups)
         .flatMap((group) => group.children)
         .find((node) => node.userData.id === id);
-      const target = node
-        ? new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3())
-        : new THREE.Vector3(0, 5, 0);
-      const distance = node
-        ? Math.max(
-            15,
-            new THREE.Box3()
-              .setFromObject(node)
-              .getSize(new THREE.Vector3())
-              .length() * 1.8,
-          )
-        : 130;
-      camera.position
-        .copy(target)
-        .add(new THREE.Vector3(0.7, 0.65, 1).multiplyScalar(distance));
-      controls.target.copy(target);
-      controls.update();
+      frame(node ? new THREE.Box3().setFromObject(node) : undefined);
       render();
     },
     dispose() {
@@ -456,6 +590,9 @@ export function createViewport(
           ).forEach((m) => m.dispose());
         }
       });
+      sun.shadow.dispose();
+      environment.dispose();
+      sky.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
