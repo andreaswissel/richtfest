@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Save conversation reading positions only for persisted messages, avoiding draft-save errors when a temporary agent-run row is visible.
+- Omit unset conversation message IDs from read-state saves, and save reading positions only for persisted messages, preventing composer draft-save errors on empty threads and temporary agent-run rows.
 
 - Specialist source reviews now receive citation IDs only for readable source text, while unreadable assigned files remain visible as coverage gaps.
 

@@ -298,8 +298,12 @@ function Conversation({
   const lastReaderWrite = useRef("");
   const persistReader = (state: ReadState) => {
     const payload: ReadState = {
-      lastReadMessageId: state.lastReadMessageId,
-      meaningfulMessageId: state.meaningfulMessageId,
+      ...(typeof state.lastReadMessageId === "string"
+        ? { lastReadMessageId: state.lastReadMessageId }
+        : {}),
+      ...(typeof state.meaningfulMessageId === "string"
+        ? { meaningfulMessageId: state.meaningfulMessageId }
+        : {}),
       composerDraft: state.composerDraft || "",
     };
     const fingerprint = JSON.stringify(payload);
