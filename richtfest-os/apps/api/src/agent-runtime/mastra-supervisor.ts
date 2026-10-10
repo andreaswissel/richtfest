@@ -8,6 +8,7 @@ import type { AgentModelConfig, AgentPresetSnapshot } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
 import type { ProviderUsage, ProviderTelemetry, ProviderResponseMetadata } from "@richtfest/knowledge/deps";
+import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 import { estimateCostUsd } from "../model-pricing";
 import { appRevision, metadataHash } from "../provider-metadata";
 import { dependencies } from "../../package.json";
@@ -93,7 +94,24 @@ const structuredOutputErrorIds = new Set([
   "STRUCTURED_OUTPUT_TRUNCATED",
   "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
   "STRUCTURED_OUTPUT_OBJECT_UNDEFINED",
+  "OBJECT_UNDEFINED",
 ]);
+function failureDiagnostics(error: unknown, finishReason?: unknown) {
+  let current = error;
+  let errorId: unknown;
+  let issues: unknown;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
+    const value = current as Record<string, unknown>;
+    if (!errorId && structuredOutputErrorIds.has(String(value.id ?? value.code))) errorId = value.id ?? value.code;
+    if (!issues && Array.isArray(value.issues)) issues = value.issues;
+    if (value.details && typeof value.details === "object") {
+      const detailFinish = sanitizeProviderDiagnostics({ finishReason: (value.details as Record<string, unknown>).finishReason }).finishReason;
+      if (detailFinish) finishReason = detailFinish;
+    }
+    current = value.cause;
+  }
+  return sanitizeProviderDiagnostics({ errorId, finishReason, issues });
+}
 function providerFailureMetadata(error: unknown): {
   retryable: boolean;
   status?: number;
@@ -212,6 +230,7 @@ export async function callMastraSupervisor(
   let inferenceCompleted = false;
   let emitted = "";
   let rawUsage: unknown;
+  let collectFailure: (() => Promise<unknown>) | undefined;
   let usageReported = false;
   let failed = false;
   const reportUsage = async () => {
@@ -237,12 +256,30 @@ export async function callMastraSupervisor(
       modelId: modelConfig?.modelId ?? (typeof options.model === "object" && options.model && "modelId" in options.model ? String(options.model.modelId) : "unknown"),
       requestedReasoningEffort: modelConfig?.reasoningEffort ?? null, reasoningEffort: reasoningEffort ?? null,
       maxOutputTokens: executionOptions.modelSettings.maxOutputTokens, maxSteps: executionOptions.maxSteps, maxRetries: 0,
-      timeoutMs: 60000, stream: !!input.onSummaryDelta && input.phase !== "plan", store: input.provider === "anthropic" ? null : false,
+      timeoutMs: 60000, stream: true, store: input.provider === "anthropic" ? null : false,
       instructionsHash: metadataHash(`${policy}\n${phaseInstructions[input.phase]}`), promptHash: metadataHash(prompt),
       outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(supervisorSchemas[input.phase])))) });
     let object: unknown;
+    const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);
+    collectFailure = async () => {
+      const [total, usage, finish, complete, text] = await Promise.allSettled([stream.totalUsage, stream.usage, stream.finishReason, stream.object, stream.text]);
+      rawUsage = total.status === "fulfilled" ? total.value : usage.status === "fulfilled" ? usage.value : rawUsage;
+      await reportUsage();
+      let object = complete.status === "fulfilled" ? complete.value : undefined;
+      // The OpenAI wrapper may omit the Zod cause. Validate a complete JSON
+      // output locally, never error messages/details or partial JSON repairs.
+      if (object === undefined && text.status === "fulfilled") {
+        try { object = JSON.parse(text.value); } catch { /* No complete object available. */ }
+      }
+      const validation = object !== undefined ? supervisorSchemas[input.phase].safeParse(object) : undefined;
+      return { finishReason: finish.status === "fulfilled" ? finish.value : undefined,
+        issues: validation && !validation.success ? validation.error.issues : undefined };
+    };
+    // Consume the parent output even when only partial objects are requested. Retain
+    // the public stream handle when strict validation rejects getFullOutput().
+    const completed = stream.getFullOutput();
+    void completed.catch(() => {});
     if (input.onSummaryDelta && input.phase !== "plan") {
-      const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);
       for await (const partial of stream.objectStream) {
         abortSignal.throwIfAborted();
         if (typeof partial.summary !== "string") continue;
@@ -254,17 +291,12 @@ export async function callMastraSupervisor(
           emitted = safe;
         }
       }
-      rawUsage = await stream.usage;
-      await reportUsage();
-      abortSignal.throwIfAborted();
-      if (stream.error) throw stream.error;
-      object = await stream.object;
-    } else {
-      const result = await agent.generate<Record<string, unknown>>(prompt, executionOptions);
-      rawUsage = await result.usage;
-      await reportUsage();
-      object = result.object;
     }
+    const result = await completed;
+    rawUsage = result.totalUsage ?? result.usage;
+    await reportUsage();
+    if (result.error) throw result.error;
+    object = result.object;
     inferenceCompleted = true;
     abortSignal.throwIfAborted();
     const serialized = JSON.stringify(object);
@@ -277,7 +309,12 @@ export async function callMastraSupervisor(
     return attachUsage(output, usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
   } catch (error) {
     failed = true;
+    // Diagnostic/usage recovery must never replace the original failure with
+    // an unsanitized collection or persistence exception.
+    const retained = collectFailure ? await collectFailure().catch(() => ({})) as { finishReason?: unknown; issues?: unknown } : {};
     await reportUsage().catch(() => undefined);
+    const diagnostics = failureDiagnostics(error, responseMetadata.finishReason ?? retained.finishReason);
+    const safeDiagnostics = sanitizeProviderDiagnostics({ ...diagnostics, issues: diagnostics.issues ?? retained.issues });
     // Provider and SDK exceptions can contain request bodies or auth headers.
     if (options.signal?.aborted) {
       const cancelled = new Error("Supervisor model execution failed. Execution was cancelled.") as Error & { code: string };
@@ -286,12 +323,12 @@ export async function callMastraSupervisor(
     }
     if (abortSignal.aborted) throw Object.assign(safeProviderError(true), { code: "timeout", timedOut: true });
     const metadata = providerFailureMetadata(error);
-    throw safeProviderError(
+    throw Object.assign(safeProviderError(
       inferenceCompleted ? metadata.category === "validation" : metadata.retryable,
       metadata.status,
       metadata.category,
       metadata.retryAfterMs,
-    );
+    ), { diagnostics: safeDiagnostics });
   } finally {
     if (failed) await input.onResponse?.(responseMetadata).catch(() => undefined);
     else await input.onResponse?.(responseMetadata);

@@ -1,15 +1,25 @@
 import { expect, test } from "bun:test";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
 import { callMastraSupervisor } from "./mastra-supervisor";
+import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
 test("Mastra telemetry reports filtered effort and no configured-model response fallback", async () => {
   let settings: any;
   let metadata: any;
+  const model = new MastraLanguageModelV2Mock({ doStream: async () => ({
+    stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "text-start", id: "output" });
+      controller.enqueue({ type: "text-delta", id: "output", delta: JSON.stringify({ summary: "Done", rationale: "Evidence", citations: [] }) });
+      controller.enqueue({ type: "text-end", id: "output" });
+      controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 } });
+      controller.close();
+    } }),
+  }) });
   await callMastraSupervisor({ ...base, phase: "specialist", modelConfig: { modelId: "o3", reasoningEffort: "xhigh", maxSteps: 1, maxOutputTokens: 900 },
     onRequest: async value => { settings = value; }, onResponse: async value => { metadata = value; },
-  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { summary: "Done", rationale: "Evidence", citations: [] } }) });
-  expect(settings).toMatchObject({ requestedReasoningEffort: "xhigh", reasoningEffort: null, maxOutputTokens: 900, maxRetries: 0, stream: false });
+  }, "test-key", { model });
+  expect(settings).toMatchObject({ requestedReasoningEffort: "xhigh", reasoningEffort: null, maxOutputTokens: 900, maxRetries: 0, stream: true });
   expect(settings.outputSchemaHash).toMatch(/^[a-f0-9]{64}$/);
   expect(metadata.modelId).toBeNull();
 });
@@ -26,10 +36,11 @@ test("real Mastra agent rejects plans outside bounded schema", async () => {
   })).rejects.toThrow("Supervisor model execution failed");
 });
 test("Mastra truncation and OpenAI schema failures remain retryable without exposing output", async () => {
-  for (const failure of ["truncated", "schema"] as const) {
+  for (const failure of ["truncated", "schema", "summary_limit"] as const) {
     for (const streaming of [false, true]) {
       const secret = "sk-test-secret";
       const text = failure === "truncated" ? `{"summary":"${secret}`
+        : failure === "summary_limit" ? JSON.stringify({ summary: "x".repeat(10001), rationale: secret, citations: [] })
         : JSON.stringify({ summary: secret, rationale: "Invalid citation", citations: ["not-a-uuid"] });
       const finishReason = failure === "truncated" ? "length" : "stop";
       const usage = { inputTokens: 12, outputTokens: 50, totalTokens: 62 };
@@ -61,11 +72,27 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
         code: "invalid_provider_output", providerFailure: true, retryable: true, failureCategory: "validation",
       });
       expect(error.providerStatus).toBeUndefined();
+      expect(error.diagnostics).toMatchObject({
+        errorId: failure === "truncated" ? "STRUCTURED_OUTPUT_TRUNCATED" : "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+        // Prefer upstream metadata over Mastra's post-validation "error" reason.
+        finishReason,
+      });
+      if (failure === "schema") expect(error.diagnostics.issues).toEqual([{ code: "invalid_string", path: ["citations", 0], validation: "uuid" }]);
+      if (failure === "summary_limit") expect(error.diagnostics.issues).toEqual([{ code: "too_big", path: ["summary"], maximum: 10000 }]);
       expect(error.cause).toBeUndefined();
       expect(`${error.message}${JSON.stringify(error)}`).not.toContain(secret);
       expect(`${error.message}${JSON.stringify(error)}`).not.toContain("not-a-uuid");
     }
   }
+});
+test("diagnostics exclude unknown paths, messages, values and unbounded numeric limits", () => {
+  expect(sanitizeProviderDiagnostics({ errorId: "secret", finishReason: "secret", message: "sk-secret", issues: [
+    { code: "too_big", path: ["summary"], maximum: 10000, message: "sk-secret", value: "sk-secret" },
+    { code: "invalid_type", path: ["sk-secret"] },
+    { code: "invalid_type", path: ["citations", 101] },
+    { code: "sk-secret", path: [] },
+    { code: "too_small", path: ["tasks"], minimum: Infinity },
+  ] })).toEqual({ issues: [{ code: "too_big", path: ["summary"], maximum: 10000 }, { code: "too_small", path: ["tasks"] }] });
 });
 test("real Mastra agent returns a valid focused plan", async () => {
   const plan = { tasks: [{ role: "source_reviewer", goal: "Check assigned source", sourceVersionIds: [crypto.randomUUID()] }] };
@@ -85,7 +112,7 @@ test("independent review requires evidence findings and does not inherit the sup
     revisions: [],
   };
   const output = await callMastraSupervisor({ ...base, phase: "independent_review", context: { role: "independent_reviewer", proposedResult: "Draft" } }, "test-key", {
-    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: finding, spyGenerate: value => { request = value; } }),
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: finding, spyStream: value => { request = value; } }),
   });
   expect(output).toEqual(finding);
   const prompt = JSON.stringify(request);
@@ -105,7 +132,7 @@ test("source review plans treat unreviewed files as readable and honor all-sourc
       version: "v2",
       objectGenerationMode: "json",
       mockText: { tasks: [{ role: "source_reviewer", goal: "Review the available project source", sourceVersionIds: [crypto.randomUUID()] }] },
-      spyGenerate: value => { request = value; },
+      spyStream: value => { request = value; },
     }),
   });
   const prompt = JSON.stringify(request);
@@ -117,7 +144,7 @@ test("source review plans treat unreviewed files as readable and honor all-sourc
 test("configured reasoning and output budget reach the selected provider", async () => {
   let request: any;
   await callMastraSupervisor({ ...base, phase: "specialist", modelConfig: { modelId: "gpt-5.1", reasoningEffort: "low", maxOutputTokens: 900, maxSteps: 1 } }, "test-key", {
-    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { summary: "Done", rationale: "Evidence", citations: [] }, spyGenerate: value => { request = value; } }),
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { summary: "Done", rationale: "Evidence", citations: [] }, spyStream: value => { request = value; } }),
   });
   expect(request.maxOutputTokens).toBe(900);
   expect(request.providerOptions.openai).toEqual({ store: false, reasoningEffort: "low" });

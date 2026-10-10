@@ -10,6 +10,7 @@ import {
   tasks,
   agentRunEvents,
   agentRunUsage,
+  agentRunAttempts,
   conversations,
   messages,
 } from "../richtfest-apps/knowledge/src/schema";
@@ -339,6 +340,69 @@ integration(
     }
   },
 );
+integration("failed specialist attempts persist bounded diagnostics and usage exactly once", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  let attempts = 0;
+  const d: any = {
+    db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true,
+    listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async (input: any) => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Inspect", sourceVersionIds: [] }] } };
+      attempts++;
+      const usage = { provider: "openai", modelId: "test-model", inputTokens: 12, outputTokens: 50, totalTokens: 62, reasoningTokens: null, cachedInputTokens: null };
+      await input.onUsage(usage);
+      await input.onUsage(usage); // Defensive boundary deduplication, not two calls.
+      throw Object.assign(new Error("sk-secret raw provider body"), {
+        providerFailure: true, retryable: true, failureCategory: "validation",
+        diagnostics: {
+          errorId: attempts === 1 ? "STRUCTURED_OUTPUT_TRUNCATED" : "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+          finishReason: attempts === 1 ? "length" : "error",
+          raw: "sk-secret", stack: "sk-secret",
+          issues: [{ code: "too_big", path: ["summary"], maximum: 10000, message: "sk-secret", value: "sk-secret" }, { code: "invalid_type", path: ["sk-secret"] }],
+        },
+      });
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Diagnostic regression", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    expect(attempts).toBe(3);
+    const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, run!.id));
+    const failed = events.filter(event => ["provider_call_retrying", "provider_call_failed"].includes(event.eventType));
+    const metadata = failed.map(event => JSON.parse(event.paramsSummary!)).sort((a, b) => a.attempt - b.attempt);
+    expect(metadata.map(value => value.attempt)).toEqual([1, 2, 3]);
+    expect(new Set(metadata.map(value => value.callId)).size).toBe(1);
+    const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
+    expect(children).toHaveLength(1);
+    expect(metadata.every(value => value.runId === children[0]!.id)).toBe(true);
+    expect(metadata[0].diagnostics.errorId).toBe("STRUCTURED_OUTPUT_TRUNCATED");
+    expect(metadata[2].diagnostics.errorId).toBe("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED");
+    expect(metadata[2].diagnostics.issues).toEqual([{ code: "too_big", path: ["summary"], maximum: 10000 }]);
+    expect(JSON.stringify(events)).not.toContain("sk-secret");
+    const usage = await db.select().from(agentRunUsage).where(eq(agentRunUsage.runId, children[0]!.id));
+    expect(usage).toHaveLength(3);
+    expect(usage.reduce((sum, row) => sum + row.totalTokens!, 0)).toBe(186);
+    const tracked = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, children[0]!.id));
+    expect(tracked).toHaveLength(3);
+    for (const event of metadata) {
+      const attempt = tracked.find(row => row.operationId === event.callId && row.attemptNumber === event.attempt);
+      expect(attempt?.status).toBe("failed");
+      expect(usage.filter(row => row.attemptId === attempt?.id)).toHaveLength(1);
+    }
+  } finally {
+    await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
+    await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
+    await db.delete(agentRunEvents).where(eq(agentRunEvents.tenantId, tenantId));
+    await db.delete(supervisorRuns).where(eq(supervisorRuns.tenantId, tenantId));
+    await db.delete(agentRuns).where(eq(agentRuns.tenantId, tenantId));
+    await db.delete(tasks).where(eq(tasks.tenantId, tenantId));
+    await pool.end();
+  }
+});
 integration(
   "cancelled parent fences late provider result and prevents child writes",
   async () => {

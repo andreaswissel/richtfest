@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, or, isNull, lt } from "drizzle-orm";
 import { agentPresetSnapshotSchema } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
+import { sanitizeProviderDiagnostics } from "./deps";
 import {
   agentRuns,
   agentRunEvents,
@@ -346,8 +347,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           return response.output;
         } catch (error) {
           const metadata = typeof error === "object" && error !== null
-            ? error as { retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown }
+            ? error as { retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown; diagnostics?: unknown }
             : {};
+          const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics: sanitizeProviderDiagnostics(metadata.diagnostics) });
           const providerFailureStatus = typeof metadata.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
             && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : undefined;
           const failureCategory: RunFailureCategory = metadata.providerFailure === true
@@ -368,7 +370,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 run,
                 "provider_call_retrying",
                 `${phase}; attempt ${attempt} of ${maxAttempts}; retrying after transient provider failure`,
-                `${callId}:${attempt}`,
+                attemptMetadata,
               );
             });
             if (!retryLogged) throw conflict("Supervisor no longer active");
@@ -389,7 +391,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               run,
               "provider_call_failed",
               `${phase}${providerFailureStatus === undefined ? "" : `; HTTP ${providerFailureStatus}`}${cooldownExceedsBudget ? "; provider cooldown exceeds five-minute automatic retry budget" : ""}`,
-              `${callId}:${attempt}`,
+              attemptMetadata,
             );
           });
           // Carry only this call's sanitized metadata: parallel siblings cannot overwrite it.
@@ -580,6 +582,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   text: excerpt.content.text,
                   truncated: excerpt.content.truncated,
                   coverage: excerpt.content.coverage,
+                  extractionNotes: excerpt.content.reason,
                 }),
               );
               const output = specialistOutput.parse(

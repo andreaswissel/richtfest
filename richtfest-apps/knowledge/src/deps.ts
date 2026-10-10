@@ -1,4 +1,32 @@
 import type { PermissionKey, AgentPresetSnapshot, AgentProvider } from "@richtfest/shared";
+
+/** Only these structural facts may cross the provider/event boundary. */
+export function sanitizeProviderDiagnostics(raw: unknown) {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED"];
+  const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
+  const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation"];
+  const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
+  const issues = Array.isArray(value.issues) ? value.issues.slice(0, 10).flatMap(rawIssue => {
+    if (!rawIssue || typeof rawIssue !== "object") return [];
+    const issue = rawIssue as Record<string, unknown>;
+    if (!codes.includes(issue.code as string) || !Array.isArray(issue.path) || issue.path.length > 8
+      || !issue.path.every(part => typeof part === "string" ? keys.includes(part) : typeof part === "number" && Number.isInteger(part) && part >= 0 && part <= 100)) return [];
+    const limits: Partial<Record<"minimum" | "maximum" | "multipleOf", number>> = {};
+    for (const key of ["minimum", "maximum", "multipleOf"] as const) {
+      const number = issue[key];
+      if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 10000) limits[key] = number;
+    }
+    return [{ code: issue.code as string, path: issue.path as (string | number)[], ...limits,
+      ...(issue.validation === "uuid" ? { validation: "uuid" as const } : {}),
+    }];
+  }) : [];
+  return {
+    ...(ids.includes(value.errorId as string) ? { errorId: value.errorId as string } : {}),
+    ...(finishes.includes(value.finishReason as string) ? { finishReason: value.finishReason as string } : {}),
+    ...(issues.length ? { issues } : {}),
+  };
+}
 export type AppDeps = {
   db: any;
   supervisorEnabled?: boolean;
