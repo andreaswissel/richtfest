@@ -16,6 +16,143 @@ import {
   tasks,
 } from "./schema";
 import { attachUsageSummaries } from "./usage";
+
+/**
+ * Render the immutable, saved artifact revision as a small self-contained PDF.
+ * Keep this dependency-free so the export works in the API runtime without a
+ * browser, external service, or separately provisioned renderer.
+ */
+function artifactPdf(
+  title: string,
+  content: string,
+  version: number,
+  sourceVersionIds: string[],
+): Buffer {
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const margin = 48;
+  const bodySize = 10;
+  const lineHeight = 14;
+  const maxCharacters = 96;
+  const sourceReferences = sourceVersionIds.length
+    ? `\n\nSource versions\n${sourceVersionIds.map((id) => `- ${id}`).join("\n")}`
+    : "";
+  const plainText = `${content}${sourceReferences}`
+    .replace(/\r\n?/g, "\n")
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/!?\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "• ")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/[*_`~]/g, "");
+  const wrap = (value: string, limit: number) => {
+    const result: string[] = [];
+    let line = "";
+    for (const word of value.split(/\s+/)) {
+      if (!word) continue;
+      if (word.length > limit) {
+        if (line) result.push(line);
+        line = "";
+        for (let i = 0; i < word.length; i += limit)
+          result.push(word.slice(i, i + limit));
+      } else if (!line) line = word;
+      else if (`${line} ${word}`.length <= limit) line += ` ${word}`;
+      else {
+        result.push(line);
+        line = word;
+      }
+    }
+    if (line) result.push(line);
+    return result;
+  };
+  const lines: { text: string; size: number; gapBefore?: number }[] = [
+    ...wrap(title.trim() || "Project document", 66).map((text) => ({ text, size: 16 })),
+    { text: `Revision ${version} · Richtfest`, size: 9, gapBefore: 5 },
+    { text: "", size: bodySize, gapBefore: 10 },
+  ];
+  for (const paragraph of plainText.split("\n")) {
+    const wrapped = wrap(paragraph.trim(), maxCharacters);
+    if (wrapped.length) lines.push(...wrapped.map((text) => ({ text, size: bodySize })));
+    else lines.push({ text: "", size: bodySize });
+  }
+
+  const pages: typeof lines[] = [];
+  let page: typeof lines = [];
+  let y = pageHeight - margin;
+  for (const line of lines) {
+    const needed = (line.gapBefore ?? 0) + lineHeight;
+    if (y - needed < margin && page.length) {
+      pages.push(page);
+      page = [];
+      y = pageHeight - margin;
+    }
+    page.push(line);
+    y -= needed;
+  }
+  if (page.length || !pages.length) pages.push(page);
+
+  const toWinAnsi = (value: string) => {
+    const replacements: Record<number, number> = {
+      0x20ac: 0x80, 0x201a: 0x82, 0x192: 0x83, 0x201e: 0x84,
+      0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x2c6: 0x88,
+      0x2030: 0x89, 0x160: 0x8a, 0x2039: 0x8b, 0x152: 0x8c,
+      0x17d: 0x8e, 0x2018: 0x91, 0x2019: 0x92, 0x201c: 0x93,
+      0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97,
+      0x2dc: 0x98, 0x2122: 0x99, 0x161: 0x9a, 0x203a: 0x9b,
+      0x153: 0x9c, 0x17e: 0x9e, 0x178: 0x9f,
+    };
+    return Array.from(value, (character) => {
+      const code = character.codePointAt(0)!;
+      if (code === 0x2022) return "\\225";
+      const byte = replacements[code] ?? (code <= 0xff ? code : 0x3f);
+      if (byte === 0x28) return "\\(";
+      if (byte === 0x29) return "\\)";
+      if (byte === 0x5c) return "\\\\";
+      if (byte < 0x20 || byte > 0x7e) return `\\${byte.toString(8).padStart(3, "0")}`;
+      return String.fromCharCode(byte);
+    }).join("");
+  };
+
+  const objects: string[] = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "", // Filled with the page tree after page object ids are known.
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+  ];
+  const pageObjectIds: number[] = [];
+  for (const pageLines of pages) {
+    const pageId = objects.length + 1;
+    const contentId = pageId + 1;
+    pageObjectIds.push(pageId);
+    let cursorY = pageHeight - margin;
+    const commands = ["BT"];
+    for (const line of pageLines) {
+      cursorY -= line.gapBefore ?? 0;
+      commands.push(`/F1 ${line.size} Tf 1 0 0 1 ${margin} ${cursorY} Tm (${toWinAnsi(line.text)}) Tj`);
+      cursorY -= lineHeight;
+    }
+    commands.push("ET");
+    const stream = commands.join("\n");
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(`${stream}\n`, "ascii")} >>\nstream\n${stream}\nendstream`,
+    );
+  }
+  objects[1] = `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageObjectIds.length} >>`;
+
+  let pdf = "%PDF-1.4\n% Richtfest\n";
+  const offsets = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(pdf, "ascii"));
+    pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf, "ascii");
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1))
+    pdf += `${offset.toString().padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "ascii");
+}
+
 export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
 export const conflict = (message: string) =>
@@ -567,6 +704,60 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
     await sources(d, input.projectId, input.sourceVersionIds);
     return d.db.transaction((tx: any) => createArtifact(d, tx, input));
   });
+  router.get(
+    "/artifacts/:artifactId/revisions/:revisionId/pdf",
+    async (req, res, next) => {
+      try {
+        const d = getDeps(req);
+        d.requirePermission("knowledge:read");
+        const artifactId = z.string().uuid().parse(req.params.artifactId);
+        const revisionId = z.string().uuid().parse(req.params.revisionId);
+        const [row] = await d.db
+          .select({
+            artifactId: artifacts.id,
+            projectId: artifacts.projectId,
+            title: artifactRevisions.title,
+            content: artifactRevisions.content,
+            version: artifactRevisions.version,
+            sourceVersionIds: artifactRevisions.sourceVersionIds,
+          })
+          .from(artifactRevisions)
+          .innerJoin(artifacts, eq(artifactRevisions.artifactId, artifacts.id))
+          .where(
+            and(
+              eq(artifacts.id, artifactId),
+              eq(artifacts.tenantId, d.tenantId),
+              eq(artifactRevisions.id, revisionId),
+              eq(artifactRevisions.tenantId, d.tenantId),
+            ),
+          )
+          .limit(1);
+        if (!row || !(await d.validateProject(row.projectId)))
+          throw missing("Artifact revision not found");
+
+        const filename = `${row.title}`
+          .normalize("NFKD")
+          .replace(/[^\w -]/g, "")
+          .trim()
+          .replace(/[\s-]+/g, "-")
+          .slice(0, 80) || "richtfest-artifact";
+        const sourceVersionIds = Array.isArray(row.sourceVersionIds)
+          ? row.sourceVersionIds.filter((id: unknown): id is string => typeof id === "string")
+          : [];
+        const pdf = artifactPdf(row.title, row.content, row.version, sourceVersionIds);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Length", String(pdf.length));
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}-v${row.version}.pdf"`,
+        );
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.status(200).send(pdf);
+      } catch (e) {
+        return next(e);
+      }
+    },
+  );
   route("get", "/artifacts/:artifactId", "knowledge:read", async (d, req) => {
     const [artifact] = await d.db
       .select()

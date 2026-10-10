@@ -795,7 +795,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               runId: id,
               parentMessageId: run.messageId,
               body: summary,
-              openui: `root = ArtifactPreview(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
+              openui: `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
               sourceVersionIds: review.citations,
             });
           await log(d, tx, run, "supervisor_review_completed");
@@ -989,7 +989,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             runId: id,
             parentMessageId: run.messageId,
             body: summary,
-            openui: `root = ArtifactPreview(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
+            openui: `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
             sourceVersionIds: reviewCitations,
           });
           await log(d, tx, run, "independent_review_completed");

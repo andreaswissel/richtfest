@@ -13,8 +13,16 @@ import { Button } from "../ui/button";
 import { useT } from "../../i18n";
 import { useApi } from "../../query";
 import { list } from "../../api";
-import { FileText, ArrowUpRight } from "lucide-react";
-import "./artifact-preview.css";
+import { Download, FileText } from "lucide-react";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "../ui/attachment";
 
 const ReplyContext = createContext<((body: string) => void) | undefined>(
   undefined,
@@ -87,24 +95,97 @@ function ArtifactPreview({
     revision: revisionId,
   });
   if (conversationId) target.set("conversation", conversationId);
+  const pdfUrl = artifactPdfUrl(artifactId, revisionId);
   return (
-    <Link
-      className="workspace-artifact-preview"
-      to={`/projects/${projectId}?${target}`}
-    >
-      <span className="workspace-artifact-preview-icon">
-        <FileText className="size-icon" aria-hidden="true" />
-      </span>
-      <span className="workspace-artifact-preview-copy">
-        <strong>{artifact.title}</strong>
-        <span>{t("workspaceOpenArtifact")}</span>
-      </span>
-      <ArrowUpRight className="size-icon-sm" aria-hidden="true" />
-    </Link>
+    <Attachment size="sm">
+      <AttachmentMedia>
+        <FileText aria-hidden="true" />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>
+          <Link to={`/projects/${projectId}?${target}`}>{artifact.title}</Link>
+        </AttachmentTitle>
+        <AttachmentDescription>{t("workspacePdfAttachment")}</AttachmentDescription>
+      </AttachmentContent>
+      <AttachmentActions>
+        <AttachmentAction asChild aria-label={t("workspaceDownloadPdf")}>
+          <a href={pdfUrl} download>
+            <Download aria-hidden="true" />
+          </a>
+        </AttachmentAction>
+      </AttachmentActions>
+    </Attachment>
+  );
+}
+
+function artifactPdfUrl(artifactId: string, revisionId: string) {
+  return `/api/knowledge/artifacts/${encodeURIComponent(artifactId)}/revisions/${encodeURIComponent(revisionId)}/pdf`;
+}
+
+function ArtifactPdf({
+  artifactId,
+  revisionId,
+}: {
+  artifactId: string;
+  revisionId: string;
+}) {
+  const { projectId } = useContext(ProjectContext);
+  const t = useT();
+  const validIds =
+    z.string().uuid().safeParse(artifactId).success &&
+    z.string().uuid().safeParse(revisionId).success;
+  const workspace = useApi(`/knowledge/workspaces/${projectId}`, validIds);
+  const artifact = validIds
+    ? list(workspace.data?.artifacts).find(
+        (item) => item.id === artifactId && item.projectId === projectId,
+      )
+    : undefined;
+
+  if (!validIds || !artifact)
+    return (
+      <Callout>
+        {workspace.isPending && validIds
+          ? t("loading")
+          : t("workspaceArtifactUnavailable")}
+      </Callout>
+    );
+
+  const pdfUrl = artifactPdfUrl(artifactId, revisionId);
+  return (
+    <Attachment size="sm">
+      <AttachmentMedia>
+        <FileText aria-hidden="true" />
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>
+          <a href={pdfUrl} download>
+            {artifact.title}
+          </a>
+        </AttachmentTitle>
+        <AttachmentDescription>{t("workspacePdfAttachment")}</AttachmentDescription>
+      </AttachmentContent>
+      <AttachmentActions>
+        <AttachmentAction asChild aria-label={t("workspaceDownloadPdf")}>
+          <a href={pdfUrl} download>
+            <Download aria-hidden="true" />
+          </a>
+        </AttachmentAction>
+      </AttachmentActions>
+    </Attachment>
   );
 }
 export const library = createLibrary({
   components: [
+    defineComponent({
+      name: "ArtifactPdf",
+      description:
+        "Attach a real PDF rendered from an exact saved project artifact revision. The title comes from the trusted workspace record.",
+      props: z.object({
+        artifactId: z.string().uuid(),
+        revisionId: z.string().uuid(),
+      }),
+      component: ({ props }) => <ArtifactPdf {...props} />,
+    }),
     defineComponent({
       name: "ArtifactPreview",
       description:

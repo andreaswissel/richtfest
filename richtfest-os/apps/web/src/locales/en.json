@@ -581,6 +581,8 @@
   "threadRailTitleLabel": "Thread name",
   "threadRailEmpty": "No active threads",
   "workspaceOpenArtifact": "Open artifact",
+  "workspacePdfAttachment": "PDF document",
+  "workspaceDownloadPdf": "Download PDF",
   "workspaceArtifactUnavailable": "This artifact is unavailable in this project.",
   "agentProfilesTitle": "Agents",
   "agentProfilesDescription": "Configure role instructions and approved company knowledge for supervisor runs.",

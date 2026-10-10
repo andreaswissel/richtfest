@@ -1230,7 +1230,7 @@ const MessageRow = memo(function MessageRow({
           </Attachment>
         ))}
         {reviewRun &&
-          !/^root\s*=\s*ArtifactPreview\(/.test(
+          !/^root\s*=\s*(?:ArtifactPreview|ArtifactPdf)\(/.test(
             message.openui || message.metadata?.openui || "",
           ) && (
             <Link
