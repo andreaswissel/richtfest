@@ -8,17 +8,14 @@ import { Page, PageHeader } from "../components/layout";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
-import {
-  Badge,
-  Callout,
-  Field,
-} from "../components/ui/primitives";
+import { Badge, Callout, Field } from "../components/ui/primitives";
 import { ThreadRail } from "../components/project-workspace/thread-rail";
 import { LoadState, Sources, SharedWork, Knowledge } from "./foundation";
 import { Transcript } from "../components/project-workspace/transcript";
 import { ArtifactPanel } from "../components/project-workspace/artifacts";
 import { LiveRun } from "../components/project-workspace/live-run";
 import { SubagentThread } from "../components/project-workspace/subagent-thread";
+import { LocationMode } from "../components/location/mode";
 import { ArrowUp } from "lucide-react";
 
 const MIN_ARTIFACT_WIDTH = 25;
@@ -98,7 +95,7 @@ export function ProjectWorkspace() {
   const [initialMessage, setInitialMessage] = useState<string>();
   const [initialMessageDraft, setInitialMessageDraft] = useState("");
   const project = useApi(`/projects/${id}`),
-    workspace = useApi(`/knowledge/workspaces/${id}`),
+    workspace = useApi(`/knowledge/workspaces/${id}`, view !== "location"),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
   const selected =
@@ -160,23 +157,33 @@ export function ProjectWorkspace() {
         }
       />
       <nav className="workspace-view-links" aria-label={t("projectDetails")}>
-        {["workspace", "details", "sources", "sharedWork", "knowledge"].map(
-          (key) => (
-            <Link
-              key={key}
-              aria-current={view === key ? "page" : undefined}
-              to={`/projects/${id}${key === "workspace" ? "" : `?view=${key}`}`}
-            >
-              {key === "workspace"
-                ? t("workspaceConversation")
+        {[
+          "workspace",
+          "location",
+          "details",
+          "sources",
+          "sharedWork",
+          "knowledge",
+        ].map((key) => (
+          <Link
+            key={key}
+            aria-current={view === key ? "page" : undefined}
+            to={`/projects/${id}${key === "workspace" ? "" : `?view=${key}`}`}
+          >
+            {key === "workspace"
+              ? t("workspaceConversation")
+              : key === "location"
+                ? t("locationEditor")
                 : key === "details"
                   ? t("projectDetails")
                   : t(key as "sources")}
-            </Link>
-          ),
-        )}
+          </Link>
+        ))}
       </nav>
       <LoadState query={project} />
+      {view === "location" && project.isSuccess && (
+        <LocationMode projectId={id!} />
+      )}
       {view === "workspace" && (
         <>
           <LoadState query={workspace} />
@@ -345,8 +352,8 @@ export function ProjectWorkspace() {
           </div>
         </>
       )}
-      {view === "details" && (
-        editingDetails ? (
+      {view === "details" &&
+        (editingDetails ? (
           <form
             className="form project-details-form"
             onSubmit={(event) => {
@@ -403,9 +410,7 @@ export function ProjectWorkspace() {
               >
                 {!(["planning", "active", "completed"] as string[]).includes(
                   details.status || "planning",
-                ) && (
-                  <option value={details.status}>{details.status}</option>
-                )}
+                ) && <option value={details.status}>{details.status}</option>}
                 <option value="planning">{t("projectStatusPlanning")}</option>
                 <option value="active">{t("projectStatusActive")}</option>
                 <option value="completed">{t("projectStatusCompleted")}</option>
@@ -440,8 +445,7 @@ export function ProjectWorkspace() {
             <dt>{t("status")}</dt>
             <dd>{projectStatusLabel(details.status, t)}</dd>
           </dl>
-        )
-      )}
+        ))}
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />
       )}

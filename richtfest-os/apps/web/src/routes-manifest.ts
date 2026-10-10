@@ -26,6 +26,7 @@ export const performanceRoutes = [
   "/customers",
   "/team",
   "/projects/:id",
+  "/projects/:id?view=location",
   "/settings",
   "/settings/models",
   "/settings/agents",

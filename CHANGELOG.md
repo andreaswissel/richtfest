@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a full-width project 3D location editor for Giersstraße 20, Berlin: official building/tree context, on-demand 2021 LiDAR, versioned IFC overlays, editable vehicle envelopes, massing and planning notes. Survey and alignment limits stay explicit; this is not fire-access certification. Conversation and other app pages now use the full available width.
+
 - Project threads use a first-message title if AI naming is unavailable, and older numbered threads recover their titles when reopened. Manual names are preserved.
 
 - Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; fix sign-in content overflowing narrow screens.

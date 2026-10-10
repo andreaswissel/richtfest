@@ -49,3 +49,10 @@ export type AppDeps = {
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;
 };
+
+/** Background worker has no request actor. OS supplies system-scoped audit. */
+export type LocationWorkerDeps = {
+  db: any;
+  audit: (tx: any, tenantId: string, action: string, projectId: string, metadata?: unknown) => Promise<void>;
+  reportError: () => void;
+};

@@ -6,6 +6,7 @@ import { ok } from "@richtfest/shared";
 import { files, fileVersions, projectMembers, projects } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
+import { createLocationRouter } from "./location-router";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -61,6 +62,7 @@ const projectFile = async (
 
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
+  router.use(createLocationRouter(getDeps));
   router.get("/projects", async (req, res, next) => {
     try {
       const d = getDeps(req);

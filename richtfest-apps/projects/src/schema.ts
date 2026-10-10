@@ -6,7 +6,25 @@ import {
   jsonb,
   integer,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
+import type { LocationContext, LocationPointCloud, LocationScene } from "@richtfest/shared";
+
+export const projectLocations = pgTable("projects_locations", {
+  projectId: uuid("project_id").primaryKey(),
+  tenantId: uuid("tenant_id").notNull(),
+  revision: integer("revision").notNull().default(0),
+  scene: jsonb("scene").$type<LocationScene>().notNull().default({ objects: [], planningNotes: "" }),
+  context: jsonb("context").$type<LocationContext>(),
+  cloud: jsonb("cloud").$type<LocationPointCloud>(),
+  contextStatus: text("context_status").notNull().default("idle"),
+  contextError: text("context_error"),
+  lidarStatus: text("lidar_status").notNull().default("idle"),
+  lidarError: text("lidar_error"),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ jobs: index("projects_locations_jobs").on(table.contextStatus, table.lidarStatus, table.leaseUntil) }));
 export const projects = pgTable("projects_projects", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

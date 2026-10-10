@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/router.ts",
     "./deps": "./src/deps.ts",
-    "./schema": "./src/schema.ts"
+    "./schema": "./src/schema.ts",
+    "./location-worker": "./src/location-worker.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

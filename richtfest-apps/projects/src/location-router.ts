@@ -1,0 +1,96 @@
+import { Router, type Request } from "express";
+import { and, eq, sql, getTableColumns } from "drizzle-orm";
+import { z } from "zod";
+import { ok, type LocationState } from "@richtfest/shared";
+import type { AppDeps } from "./deps";
+import { projectLocations as locations, projects, files, fileVersions } from "./schema";
+
+const vector = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
+const sceneInput = z.object({
+  objects: z.array(z.object({
+    id: z.string().min(1).max(200), kind: z.enum(["vehicle", "mass", "note", "ifc"]),
+    label: z.string().max(500), position: vector,
+    size: z.tuple([z.number().finite().nonnegative(), z.number().finite().nonnegative(), z.number().finite().nonnegative()]),
+    rotation: z.number().finite(), note: z.string().max(10000),
+    source: z.object({ fileId: z.string().uuid(), version: z.number().int().positive() }).strict().optional(),
+  }).strict().refine(item => (item.kind === "ifc") === Boolean(item.source), "IFC objects must reference a project source version")).max(1000).refine(items => new Set(items.map(i => i.id)).size === items.length, "Duplicate object IDs"),
+  planningNotes: z.string().max(50000),
+}).strict();
+const failure = (message: string, status: number, code: string) => Object.assign(new Error(message), { status, code });
+const { cloud: _cloud, ...stateColumns } = getTableColumns(locations);
+export const locationState = (row?: Omit<typeof locations.$inferSelect, "cloud">): LocationState => ({
+  revision: row?.revision ?? 0,
+  scene: row?.scene ?? { objects: [], planningNotes: "" },
+  context: row?.context ?? null,
+  contextJob: { status: (row?.contextStatus ?? "idle") as LocationState["contextJob"]["status"], error: row?.contextError ?? null },
+  lidarJob: { status: (row?.lidarStatus ?? "idle") as LocationState["lidarJob"]["status"], error: row?.lidarError ?? null },
+});
+
+export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
+  const router = Router();
+  const scope = async (req: Request, write: boolean) => {
+    const d = getDeps(req);
+    d.requirePermission(write ? "projects:write" : "projects:read");
+    const projectId = z.string().uuid().parse(req.params.projectId);
+    const [project] = await d.db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).limit(1);
+    if (!project) throw failure("Project not found", 404, "not_found");
+    return { d, projectId, where: and(eq(locations.projectId, projectId), eq(locations.tenantId, d.tenantId)) };
+  };
+  router.get("/projects/:projectId/location", async (req, res, next) => {
+    try {
+      const { d, where } = await scope(req, false);
+      const [row] = await d.db.select(stateColumns).from(locations).where(where).limit(1);
+      res.json(ok(locationState(row)));
+    } catch (error) { next(error); }
+  });
+  router.put("/projects/:projectId/location", async (req, res, next) => {
+    try {
+      const { d, projectId, where } = await scope(req, true);
+      const input = z.object({ revision: z.number().int().nonnegative().max(2147483646), scene: sceneInput }).strict().parse(req.body);
+      const row = await d.db.transaction(async (tx: any) => {
+        for (const object of input.scene.objects) {
+          if (!object.source) continue;
+          const [source] = await tx.select({ id: files.id }).from(files)
+            .innerJoin(fileVersions, eq(fileVersions.fileId, files.id))
+            .where(and(eq(files.id, object.source.fileId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.version, object.source.version), eq(fileVersions.status, "ready"))).limit(1);
+          if (!source) throw failure("IFC source version not found in this project", 404, "not_found");
+        }
+        await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
+        const [saved] = await tx.update(locations).set({ scene: input.scene, revision: sql`${locations.revision} + 1`, updatedAt: new Date() }).where(and(where, eq(locations.revision, input.revision))).returning(stateColumns);
+        if (!saved) throw failure("Location revision changed; reload before saving", 409, "revision_conflict");
+        await d.audit(tx, "projects.location.saved", "project", projectId, { revision: saved.revision });
+        return saved;
+      });
+      res.json(ok(locationState(row)));
+    } catch (error) { next(error); }
+  });
+  for (const kind of ["context", "lidar"] as const) {
+    router.post(`/projects/:projectId/location/${kind === "context" ? "import" : "lidar"}`, async (req, res, next) => {
+      try {
+        const { d, projectId, where } = await scope(req, true);
+        if (kind === "context") z.object({ siteId: z.literal("berlin-giersstrasse-20") }).strict().parse(req.body);
+        else z.object({}).strict().parse(req.body ?? {});
+        const row = await d.db.transaction(async (tx: any) => {
+          await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
+          const [current] = await tx.select(stateColumns).from(locations).where(where).for("update");
+          if (kind === "lidar" && !current.context) throw failure("Import location context first", 409, "context_required");
+          const status = kind === "context" ? current.contextStatus : current.lidarStatus;
+          if (["queued", "running", "ready"].includes(status)) return current;
+          const [queued] = await tx.update(locations).set(kind === "context" ? { contextStatus: "queued", contextError: null, updatedAt: new Date() } : { lidarStatus: "queued", lidarError: null, updatedAt: new Date() }).where(where).returning(stateColumns);
+          await d.audit(tx, `projects.location.${kind}.queued`, "project", projectId, { siteId: "berlin-giersstrasse-20" });
+          return queued;
+        });
+        res.status(202).json(ok(locationState(row)));
+      } catch (error) { next(error); }
+    });
+  }
+  router.get("/projects/:projectId/location/lidar", async (req, res, next) => {
+    try {
+      const { d, where } = await scope(req, false);
+      const [row] = await d.db.select().from(locations).where(where).limit(1);
+      if (!row?.cloud || row.lidarStatus !== "ready") throw failure("Point cloud is not ready; poll location state", 409, "lidar_not_ready");
+      res.json(ok(row.cloud));
+    } catch (error) { next(error); }
+  });
+  return router;
+}

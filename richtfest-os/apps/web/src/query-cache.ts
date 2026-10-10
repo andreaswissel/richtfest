@@ -36,6 +36,7 @@ export function persistWorkspaceCache(scope: string) {
       const state = dehydrate(queryClient, {
         shouldDehydrateQuery: (q) =>
           q.state.status === "success" &&
+          q.meta?.persist !== false &&
           !String(q.queryKey[0]).startsWith("/auth/") &&
           q.queryKey[0] !== "/access/dev-outbox" &&
           q.queryKey[0] !== "security",
