@@ -6,6 +6,8 @@
 <title>Richtfest</title>
 <meta name="description" content="AI-native construction planning. Our agent system pairs LLM reasoning with fast System 1 models to find cost savings in every plan.">
 <meta name="theme-color" content="#0a0b0b">
+<!-- Where sales-call requests are POSTed as JSON. Leave empty until a receiver exists. -->
+<meta name="rf-lead-endpoint" content="">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -194,6 +196,58 @@ p { margin: 0; }
 @keyframes ctaIn { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 600px) { .v-cta { padding: 12px; } .v-cta-card { padding: 20px 18px; gap: 10px; border-radius: 22px; } .v-cta-card p { display: none; } .v-cta-card h3 { font-size: 24px; } .v-cta-card .amt { font-size: 34px; } .v-cta-card .row .btn { height: 44px; } }
 
+/* Explore mode */
+.viewer.exploring .pin { pointer-events: auto; cursor: pointer; }
+.viewer.exploring .pin.active i { box-shadow: 0 0 0 8px rgba(243,207,74,.45); }
+.viewer.exploring .v-feed, .viewer.exploring .v-hint { display: none !important; }
+.v-explore { position: absolute; left: 16px; bottom: 16px; z-index: 4; width: min(400px, calc(100% - 32px)); max-height: calc(100% - 84px); overflow-y: auto; padding: 18px 18px 16px; border-radius: 22px; background: rgba(255,255,255,.95); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 30px 80px -30px rgba(10,11,11,.55); display: flex; flex-direction: column; gap: 12px; animation: rise .35s ease both; }
+.vx-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vx-tabs { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(16,18,17,.06); }
+.vx-tabs button { width: 32px; height: 30px; border: 0; border-radius: 999px; background: transparent; font: 600 13px/1 var(--display); color: var(--muted); cursor: pointer; }
+.vx-tabs button[aria-selected="true"] { background: var(--ink); color: var(--white); }
+.vx-close { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: transparent; cursor: pointer; font-size: 18px; line-height: 1; color: var(--fg); }
+.v-explore .k { font: 400 10px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.v-explore h4 { margin: 2px 0 0; font: 400 22px/1.15 var(--display); letter-spacing: -0.02em; }
+.vx-save { font: 300 30px/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.vx-save small { font: 400 11px/1.3 var(--mono); letter-spacing: .02em; color: var(--muted); margin-left: 8px; }
+.v-explore p { font-size: 14px; line-height: 1.5; color: var(--fg); }
+.v-explore p.why { color: var(--muted); }
+.v-explore p.why b { display: block; color: var(--fg); font-weight: 600; margin-bottom: 2px; }
+.vx-vals { margin: 0; display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 12px; font-size: 13px; align-items: baseline; }
+.vx-vals dt { font: 400 10px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vx-vals dd { margin: 0; font-variant-numeric: tabular-nums; }
+.vx-vals dd.was { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(16,18,17,.3); }
+.vx-vals .hd { font: 400 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vx-src { font: 400 11px/1.4 var(--mono); color: var(--muted); padding-top: 10px; border-top: 1px solid var(--line); }
+.vx-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 600px) { .v-explore { left: 8px; right: 8px; bottom: 8px; width: auto; max-height: calc(100% - 60px); padding: 14px; } .v-explore h4 { font-size: 19px; } .vx-save { font-size: 26px; } }
+
+/* Sales call form */
+.lead { border: 0; padding: 0; border-radius: 28px; width: min(600px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto; background: var(--paper); color: var(--fg); box-shadow: 0 50px 120px -30px rgba(10,11,11,.6); }
+.lead::backdrop { background: rgba(10,11,11,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.lead[open] { animation: rise .3s ease both; }
+.lead form, .lead .done { padding: clamp(22px, 4vw, 36px); display: flex; flex-direction: column; gap: 18px; }
+.lead-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.lead-head h2 { font-size: clamp(28px, 3.4vw, 38px); }
+.lead-head p { margin-top: 8px; color: var(--muted); max-width: 44ch; }
+.lead-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.lead-grid .full { grid-column: 1 / -1; }
+@media (max-width: 560px) { .lead-grid { grid-template-columns: 1fr; } }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > span { font: 400 11px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.field > span i { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--muted); opacity: .8; }
+.field input, .field select, .field textarea { width: 100%; height: 46px; padding: 0 14px; border-radius: 12px; border: 1px solid rgba(16,18,17,.18); background: var(--white); color: var(--fg); font: 400 15px/1.3 var(--body); }
+.field textarea { height: auto; min-height: 96px; padding: 12px 14px; resize: vertical; }
+.field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; border-radius: 12px; }
+.field input:user-invalid, .field select:user-invalid { border-color: #b3261e; }
+.consent { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--muted); }
+.consent input { margin-top: 3px; width: 16px; height: 16px; flex: none; }
+.lead-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.lead-note { font: 400 11px/1.4 var(--mono); color: var(--muted); }
+.lead-callout { padding: 12px 14px; border-radius: 14px; background: rgba(16,18,17,.05); border: 1px solid var(--line); font-size: 14px; }
+.lead .done { align-items: flex-start; }
+.lead .done h2 { font-size: clamp(28px, 3.4vw, 38px); }
+
 /* Pipeline */
 .pipeline { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 48px; margin-top: 72px; align-items: stretch; }
 @media (max-width: 960px) { .pipeline { grid-template-columns: 1fr; } }
@@ -201,7 +255,9 @@ p { margin: 0; }
 .phase { text-align: left; background: none; border: 0; color: rgba(255,255,255,.62); font: 400 20px/1.2 var(--display); padding: 14px 18px; border-radius: 14px; cursor: pointer; display: flex; gap: 14px; align-items: baseline; transition: background .2s ease, color .2s ease; }
 .phase small { font: 400 12px/1 var(--mono); color: var(--muted-d); min-width: 40px; }
 .phase:hover { color: var(--white); }
-.phase[aria-selected="true"] { background: var(--ink-3); color: var(--white); }
+.phase[aria-selected="true"] { background: var(--ink-3); color: var(--white); position: relative; overflow: hidden; }
+.phase .pbar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--amber); transform-origin: left; animation: pbar 7s linear both; }
+@keyframes pbar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .phase-body { padding: 8px 18px 22px 72px; color: rgba(255,255,255,.75); font-size: 15px; display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
 .phase-body .de { font: 400 12px/1.4 var(--mono); color: var(--muted-d); }
 .engine { position: relative; border-radius: var(--r-xl); background: radial-gradient(80% 70% at 60% 40%, #1d2022 0%, var(--ink-2) 70%); border: 1px solid var(--line-d); overflow: hidden; min-height: 520px; display: flex; flex-direction: column; }
@@ -371,8 +427,8 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
         <button type="button" data-lang="de" aria-pressed="false">DE</button>
       </div>
       <a class="login" id="signIn" href="#" data-i18n="nav.signin">Sign in</a>
-      <a class="btn btn-solid btn-sm start" href="#cta"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
-      <a class="btn btn-ghost btn-sm talk" href="#cta"><span data-i18n="nav.talk">Talk to us</span></a>
+      <a class="btn btn-solid btn-sm start" href="#cta" data-lead="nav-start"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+      <a class="btn btn-ghost btn-sm talk" href="#cta" data-lead="nav-talk"><span data-i18n="nav.talk">Talk to us</span></a>
     </div>
   </div>
 </header>
@@ -385,7 +441,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
       <p class="lede" data-i18n="hero.lede">Richtfest rebuilds construction planning as an AI-native process. Our proprietary agent system pairs LLM reasoning with fast System 1 models to test thousands of options per site, and finds the cost savings a three-person team never has time to look for.</p>
       <div class="ctas">
         <a class="btn btn-solid" href="#try"><span data-i18n="hero.cta1">Optimize a house</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
-        <a class="btn btn-ghost" href="#cta"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+        <a class="btn btn-ghost" href="#cta" data-lead="hero"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
       </div>
       <div class="hero-meta">
         <span data-i18n="hero.m1"><b>HOAI phases 1–5</b> in one pipeline</span>
@@ -418,6 +474,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
           <div class="pin" id="pin3"><i>3</i><span data-i18n="pin3">Two shafts instead of four</span></div>
           <span class="v-hint" data-i18n="v.hint">Drag to orbit · Scroll to zoom</span>
           <div class="v-feed" id="vFeed" aria-hidden="true"></div>
+          <div class="v-explore" id="vExplore" hidden role="region" aria-label="Findings"></div>
           <div class="v-cta" id="vCta" hidden>
             <div class="v-cta-card" role="dialog" aria-labelledby="vCtaH">
               <span class="k" id="vCtaK">Rev B · 3 proposals</span>
@@ -425,7 +482,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
               <span class="amt" id="vCtaAmt"></span>
               <p id="vCtaP"></p>
               <div class="row">
-                <a class="btn btn-dark" href="#cta" id="vCtaBook"><span>Book a sales call</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+                <button class="btn btn-dark" type="button" id="vCtaBook"><span>Book a sales call</span><svg class="arrow"><use href="#i-arrow"/></svg></button>
                 <button class="btn btn-line" type="button" id="vCtaClose">Explore the model</button>
               </div>
             </div>
@@ -615,8 +672,8 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
             <h2 data-i18n="cta.h2">Ready to see what your plot can really hold?</h2>
             <p data-i18n="cta.p">Send us a site and a brief. We will come back with your first variants.</p>
             <div class="ctas">
-              <a class="btn btn-solid" href="#"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
-              <a class="btn btn-ghost" href="#"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+              <a class="btn btn-solid" href="#cta" data-lead="cta-start"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+              <a class="btn btn-ghost" href="#cta" data-lead="cta-talk"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
             </div>
           </div>
         </div>
@@ -624,6 +681,54 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
     </div>
   </section>
 </main>
+
+<dialog class="lead" id="leadDialog" aria-labelledby="leadTitle">
+  <form id="leadForm" novalidate>
+    <div class="lead-head">
+      <div>
+        <h2 id="leadTitle" data-i18n="lf.h">Book a sales call</h2>
+        <p data-i18n="lf.p">Tell us about your site. A planner from our team walks you through what the agent system finds, usually in a 30-minute call.</p>
+      </div>
+      <button class="vx-close" type="button" id="leadClose" aria-label="Close">×</button>
+    </div>
+    <div class="lead-grid">
+      <label class="field"><span data-i18n="lf.name">Name</span><input id="lfName" name="name" autocomplete="name" required></label>
+      <label class="field"><span data-i18n="lf.email">Work email</span><input id="lfEmail" name="email" type="email" autocomplete="email" required></label>
+      <label class="field"><span data-i18n="lf.company">Company</span><input id="lfCompany" name="company" autocomplete="organization"></label>
+      <label class="field"><span data-i18n="lf.phone">Phone <i>(optional)</i></span><input id="lfPhone" name="phone" type="tel" autocomplete="tel"></label>
+      <label class="field"><span data-i18n="lf.role">Your role</span>
+        <select id="lfRole" name="role" required>
+          <option value="" data-i18n="lf.pick">Choose one</option>
+          <option value="developer" data-i18n="lf.r1">Developer</option>
+          <option value="architect" data-i18n="lf.r2">Architect</option>
+          <option value="contractor" data-i18n="lf.r3">General contractor</option>
+          <option value="public" data-i18n="lf.r4">Public authority</option>
+          <option value="other" data-i18n="lf.r5">Other</option>
+        </select></label>
+      <label class="field"><span data-i18n="lf.stage">Project stage</span>
+        <select id="lfStage" name="stage" required>
+          <option value="" data-i18n="lf.pick">Choose one</option>
+          <option value="site" data-i18n="lf.s1">Looking at a site</option>
+          <option value="feasibility" data-i18n="lf.s2">Feasibility</option>
+          <option value="design" data-i18n="lf.s3">Design (LPH 2–3)</option>
+          <option value="permit" data-i18n="lf.s4">Permit (LPH 4)</option>
+          <option value="execution" data-i18n="lf.s5">Execution planning</option>
+        </select></label>
+      <label class="field full"><span data-i18n="lf.msg">What should we look at?</span><textarea id="lfMsg" name="message" rows="4"></textarea></label>
+    </div>
+    <label class="consent"><input type="checkbox" id="lfConsent" name="consent" required><span data-i18n="lf.consent">Richtfest may contact me about this request. Details in the privacy policy.</span></label>
+    <div class="lead-callout" id="leadError" hidden></div>
+    <div class="lead-foot">
+      <span class="lead-note" data-i18n="lf.note">We reply within one business day.</span>
+      <button class="btn btn-dark" type="submit" id="lfSubmit"><span data-i18n="lf.submit">Request a call</span><svg class="arrow"><use href="#i-arrow"/></svg></button>
+    </div>
+  </form>
+  <div class="done" id="leadDone" hidden>
+    <h2 id="leadDoneH"></h2>
+    <p data-i18n="lf.doneP">A planner will get in touch to find a time. Have a site plan or zoning plan at hand if you can.</p>
+    <button class="btn btn-line" type="button" id="leadDoneClose" data-i18n="lf.close">Close</button>
+  </div>
+</dialog>
 
 <footer id="footer">
   <div class="wrap">
@@ -634,7 +739,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
       </div>
       <div><h4 data-i18n="ft.h1">Platform</h4><ul><li><a href="#" data-i18n="ft.a1">Project workspace</a></li><li><a href="#" data-i18n="ft.a2">Agents</a></li><li><a href="#" data-i18n="ft.a3">Calculation tools</a></li><li><a href="#" data-i18n="ft.a4">Review &amp; approval</a></li></ul></div>
       <div><h4>Workflows</h4><ul><li><a href="#" data-i18n="ft.b1">Feasibility</a></li><li><a href="#" data-i18n="ft.b2">Massing variants</a></li><li><a href="#" data-i18n="ft.b3">Building physics</a></li><li><a href="#" data-i18n="ft.b4">Cost &amp; tender</a></li></ul></div>
-      <div><h4 data-i18n="ft.h3">Company</h4><ul><li><a href="#" data-i18n="ft.c1">About</a></li><li><a href="#" data-i18n="ft.c2">Careers</a></li><li><a href="#" data-i18n="ft.c3">Press</a></li><li><a href="#" data-i18n="ft.c4">Contact</a></li></ul></div>
+      <div><h4 data-i18n="ft.h3">Company</h4><ul><li><a href="#" data-i18n="ft.c1">About</a></li><li><a href="#" data-i18n="ft.c2">Careers</a></li><li><a href="#" data-i18n="ft.c3">Press</a></li><li><a href="#cta" data-lead="footer" data-i18n="ft.c4">Contact</a></li></ul></div>
       <div><h4 data-i18n="ft.h4">Legal</h4><ul><li><a href="#" data-i18n="ft.d1">Imprint</a></li><li><a href="#" data-i18n="ft.d2">Privacy</a></li><li><a href="#" data-i18n="ft.d3">Terms</a></li><li><a href="#" data-i18n="ft.d4">Security</a></li></ul></div>
     </div>
     <div class="legal"><span>© 2026 Richtfest</span><span data-i18n="ft.made">Made for the people who build</span></div>
@@ -702,7 +807,13 @@ window.RF = (() => {
     'ft.b1': 'Machbarkeit', 'ft.b2': 'Kubaturvarianten', 'ft.b3': 'Bauphysik', 'ft.b4': 'Kosten &amp; Ausschreibung',
     'ft.h3': 'Unternehmen', 'ft.c1': 'Über uns', 'ft.c2': 'Karriere', 'ft.c3': 'Presse', 'ft.c4': 'Kontakt',
     'ft.h4': 'Rechtliches', 'ft.d1': 'Impressum', 'ft.d2': 'Datenschutz', 'ft.d3': 'AGB', 'ft.d4': 'Sicherheit',
-    'ft.made': 'Für die Menschen, die bauen'
+    'ft.made': 'Für die Menschen, die bauen',
+    'lf.h': 'Vertriebsgespräch vereinbaren', 'lf.p': 'Erzählen Sie uns von Ihrem Grundstück. Eine Planerin oder ein Planer aus unserem Team zeigt Ihnen, was das Agentensystem findet, meist in einem 30-minütigen Gespräch.',
+    'lf.name': 'Name', 'lf.email': 'Geschäftliche E-Mail', 'lf.company': 'Unternehmen', 'lf.phone': 'Telefon <i>(optional)</i>', 'lf.role': 'Ihre Rolle', 'lf.pick': 'Bitte wählen',
+    'lf.r1': 'Projektentwicklung', 'lf.r2': 'Architektur', 'lf.r3': 'Generalunternehmer', 'lf.r4': 'Behörde', 'lf.r5': 'Sonstiges',
+    'lf.stage': 'Projektphase', 'lf.s1': 'Grundstück in Prüfung', 'lf.s2': 'Machbarkeit', 'lf.s3': 'Entwurf (LPH 2–3)', 'lf.s4': 'Genehmigung (LPH 4)', 'lf.s5': 'Ausführungsplanung',
+    'lf.msg': 'Was sollen wir uns ansehen?', 'lf.consent': 'Richtfest darf mich zu dieser Anfrage kontaktieren. Details in der Datenschutzerklärung.',
+    'lf.note': 'Wir antworten innerhalb eines Werktags.', 'lf.submit': 'Gespräch anfragen', 'lf.doneP': 'Eine Planerin oder ein Planer meldet sich für einen Termin. Halten Sie, wenn möglich, Lageplan oder Bebauungsplan bereit.', 'lf.close': 'Schließen'
   };
   const nodes = [...document.querySelectorAll('[data-i18n]')];
   const EN = {};
@@ -916,15 +1027,15 @@ window.RF = (() => {
       ['5', 'Ausführungsplanung', 'HOAI Leistungsphase 5', 'Details und Listen für die Baustelle, bei jeder Revision synchron gehalten, damit immer nach dem aktuellen Plan gebaut wird.']]
   };
   const phEl = document.getElementById('phases');
-  let phActive = 1;
+  let phActive = 0, phAuto = !reduce, phStart = performance.now();
   function renderPhases() {
     phEl.innerHTML = '';
     PH[L()].forEach((p, i) => {
       const b = document.createElement('button');
       b.className = 'phase'; b.type = 'button'; b.setAttribute('role', 'tab'); b.id = 'phase-' + i;
       b.setAttribute('aria-selected', i === phActive);
-      b.innerHTML = `<small>${L() === 'de' ? 'LPH' : 'LPH'} ${p[0]}</small>${p[1]}`;
-      b.onclick = () => { phActive = i; renderPhases(); };
+      b.innerHTML = `<small>LPH ${p[0]}</small>${p[1]}${i === phActive && phAuto ? '<i class="pbar"></i>' : ''}`;
+      b.onclick = () => { phAuto = false; phActive = i; renderPhases(); if (reduce) requestAnimationFrame(frameEngine); };
       phEl.appendChild(b);
       if (i === phActive) {
         const d = document.createElement('div'); d.className = 'phase-body';
@@ -934,10 +1045,10 @@ window.RF = (() => {
     });
   }
 
-  /* ---------- Engine: isometric building with variant cubes ---------- */
+  /* ---------- Engine: one isometric scene per HOAI phase ---------- */
   const ec = document.getElementById('engine');
   const ectx = ec.getContext('2d');
-  const GX = 7, GY = 4, GZ = 6;
+  const GX = 7, GY = 4, GZ = 6, FHs = 1.05;
   const cubes = [];
   const er = rng(7);
   for (let z = 0; z < GZ; z++) for (let y = 0; y < GY; y++) for (let x = 0; x < GX; x++) cubes.push({ x, y, z, v: 0, target: er() < 0.35 ? 1 : 0, next: er() * 3 });
@@ -945,56 +1056,161 @@ window.RF = (() => {
   let ew, eh, engVisible = false, eRaf = 0;
   function sizeEngine() { const b = ec.getBoundingClientRect(); ew = b.width; eh = b.height; ec.width = ew * DPR; ec.height = eh * DPR; ectx.setTransform(DPR, 0, 0, DPR, 0, 0); }
   sizeEngine(); addEventListener('resize', sizeEngine);
+  let ePhase = phActive, ePrev = -1, eSwitch = 0, A = 1, U = 1, OX = 0, OY = 0, EDX = 0, EDY = 0;
+  const iso = (x, y, z) => [OX + ((x + EDX) - (y + EDY)) * 0.866 * U, OY + ((x + EDX) + (y + EDY)) * 0.5 * U - z * U];
+  const ga = a => { ectx.globalAlpha = Math.max(0, Math.min(1, a)) * A; };
+  function poly(pts, fill, stroke, lw = 1, dash) {
+    ectx.beginPath(); pts.forEach((p, i) => { const q = iso(...p); i ? ectx.lineTo(...q) : ectx.moveTo(...q); }); ectx.closePath();
+    if (fill) { ectx.fillStyle = fill; ectx.fill(); }
+    if (stroke) { if (dash) ectx.setLineDash(dash); ectx.strokeStyle = stroke; ectx.lineWidth = lw; ectx.stroke(); ectx.setLineDash([]); }
+  }
+  function seg(a, b, stroke, lw = 1, dash) { ectx.beginPath(); if (dash) ectx.setLineDash(dash); ectx.moveTo(...iso(...a)); ectx.lineTo(...iso(...b)); ectx.strokeStyle = stroke; ectx.lineWidth = lw; ectx.stroke(); ectx.setLineDash([]); }
+  function prism(x0, y0, x1, y1, z0, z1, top, left, right, stroke) {
+    poly([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], left, stroke);
+    poly([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], right, stroke);
+    poly([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], top, stroke);
+  }
+  function wireBox(x0, y0, z0, x1, y1, z1, stroke, lw = 1) {
+    [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].forEach(([x, y], i, arr) => { const [nx, ny] = arr[(i + 1) % 4]; seg([x, y, z0], [nx, ny, z0], stroke, lw); seg([x, y, z1], [nx, ny, z1], stroke, lw); seg([x, y, z0], [x, y, z1], stroke, lw); });
+  }
+  function gable(x0, y0, x1, y1, top, ridge, stroke) {
+    const ym = (y0 + y1) / 2;
+    seg([x0, y0, top], [x0, ym, ridge], stroke); seg([x0, y1, top], [x0, ym, ridge], stroke);
+    seg([x1, y0, top], [x1, ym, ridge], stroke); seg([x1, y1, top], [x1, ym, ridge], stroke); seg([x0, ym, ridge], [x1, ym, ridge], stroke);
+  }
+  function groundGrid() { ga(1); for (let i = -4; i <= GX + 4; i++) seg([i, -4, 0], [i, GY + 4, 0], 'rgba(255,255,255,.06)'); for (let j = -4; j <= GY + 4; j++) seg([-4, j, 0], [GX + 4, j, 0], 'rgba(255,255,255,.06)'); }
+  function labels(tl, tr, trAmber) {
+    ga(1); ectx.font = '11px "JetBrains Mono", monospace'; ectx.textAlign = 'left'; ectx.fillStyle = 'rgba(255,255,255,.55)';
+    tl.forEach((t, i) => ectx.fillText(t, 24, 34 + i * 18));
+    ectx.textAlign = 'right'; ectx.fillText(tr, ew - 24, 34); ectx.fillStyle = AMBER; ectx.fillText(trAmber, ew - 24, 52); ectx.textAlign = 'left';
+  }
+  const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const de = () => L() === 'de';
+  const nf1 = v => RF.nf(v, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+  // LPH 1: plot, setbacks and the permitted envelope
+  function sceneSite(t) {
+    groundGrid(); ga(1);
+    wireBox(-7, -1, 0, -4, 5, 4.2, 'rgba(255,255,255,.16)'); wireBox(11, -2, 0, 14, 4, 3.6, 'rgba(255,255,255,.16)');
+    poly([[-2.6, -2.1, 0], [9.6, -1.6, 0], [9.2, 6.6, 0], [-2.1, 6.1, 0]], 'rgba(255,255,255,.035)', 'rgba(255,255,255,.6)', 1.3, [6, 5]);
+    [[-1.4, 5.2], [8.4, 5.7], [8.7, -0.7], [-1.8, -1.2]].forEach(([x, y], i) => { const [sx, sy] = iso(x, y, 0); ectx.fillStyle = 'rgba(150,185,130,.32)'; ectx.beginPath(); ectx.ellipse(sx, sy - U * 0.5, U * 0.55, U * 0.5, 0, 0, 7); ectx.fill(); });
+    [[-2.6, -2.1], [9.6, -1.6], [9.2, 6.6], [-2.1, 6.1]].forEach(([x, y], i) => {
+      const [sx, sy] = iso(x, y, 0), p = (t * 0.8 + i * 0.25) % 1;
+      ectx.strokeStyle = 'rgba(255,255,255,.8)'; ectx.lineWidth = 1.2; ectx.beginPath(); ectx.moveTo(sx - 5, sy); ectx.lineTo(sx + 5, sy); ectx.moveTo(sx, sy - 5); ectx.lineTo(sx, sy + 5); ectx.stroke();
+      ga(1 - p); ectx.beginPath(); ectx.ellipse(sx, sy, 4 + p * 16, (4 + p * 16) * 0.55, 0, 0, 7); ectx.stroke(); ga(1);
+    });
+    poly([[-0.4, -0.4, 0], [7.4, -0.4, 0], [7.4, 4.4, 0], [-0.4, 4.4, 0]], 'rgba(243,207,74,.06)', AMBER, 1.4, [7, 5]);
+    const cyc = (t % 6) / 3.2, hh = 4.4 * ease(Math.min(1, cyc));
+    if (hh > 0.02) {
+      prism(-0.4, -0.4, 7.4, 4.4, 0, hh, 'rgba(243,207,74,.16)', 'rgba(243,207,74,.09)', 'rgba(243,207,74,.06)', 'rgba(243,207,74,.75)');
+      for (let z = FHs; z < hh; z += FHs) { seg([-0.4, 4.4, z], [7.4, 4.4, z], 'rgba(243,207,74,.35)'); seg([7.4, -0.4, z], [7.4, 4.4, z], 'rgba(243,207,74,.35)'); }
+    }
+    labels([de() ? 'GRUNDSTÜCK 980 m²' : 'PLOT 980 m²', de() ? 'ABSTANDSFLÄCHE 3,0 m' : 'SETBACK 3.0 m'], de() ? 'GRZ 0,4 · GFZ 1,2' : 'GRZ 0.4 · GFZ 1.2', `${de() ? 'HÜLLKÖRPER' : 'ENVELOPE'} ${nf1(hh * 3.1 / FHs)} m`);
+  }
+
+  // LPH 2: massing variants being tested
+  function sceneVariants(t) {
+    groundGrid(); ga(1);
+    for (let z = 0; z <= GZ; z++) { const h = z * FHs; poly([[0, 0, h], [GX, 0, h], [GX, GY, h], [0, GY, h]], null, 'rgba(255,255,255,.26)'); }
+    for (const [x, y] of [[0, 0], [GX, 0], [GX, GY], [0, GY]]) seg([x, y, 0], [x, y, GZ * FHs], 'rgba(255,255,255,.26)');
+    gable(0, 0, GX, GY, GZ * FHs, GZ * FHs + 1.6, 'rgba(255,255,255,.4)');
+    const s = 0.34;
+    for (const c of cubes) {
+      if (!reduce && t > c.next) { c.target = Math.random() < 0.38 ? 1 : 0; c.next = t + 1.2 + Math.random() * 3.5; }
+      c.v = reduce ? c.target : c.v + (c.target - c.v) * 0.08;
+      if (c.v < 0.02) continue;
+      const ox = c.x + 0.5, oy = c.y + 0.5, oz = c.z * FHs + 0.3, k = s * (0.6 + 0.4 * c.v);
+      ga(c.v);
+      prism(ox - k, oy - k, ox + k, oy + k, oz - k, oz + k, '#fbe58a', '#d3ad2a', AMBER);
+    }
+    const live = cubes.filter(c => c.target).length;
+    labels([`${de() ? 'VARIANTE' : 'VARIANT'} ${String(400 + Math.floor(t * 7) % 880).padStart(4, '0')} / 1280`, `${de() ? 'EINHEITEN GEPRÜFT' : 'UNITS TESTED'}  ${String(live).padStart(3, '0')}`],
+      de() ? 'GFZ 1,8 · GRZ 0,4' : 'GFZ 1.8 · GRZ 0.4', `${de() ? 'BESTWERT' : 'BEST'}  ${RF.eur(2410 - Math.min(265, Math.floor(t * 9) % 300))} / m²`);
+  }
+
+  // LPH 3: the chosen design assembles floor by floor on its structural grid
+  function sceneDesign(t) {
+    groundGrid(); ga(1);
+    const xs = [0, 2.33, 4.67, 7], ys = [0, 2, 4];
+    xs.forEach(x => seg([x, -1.6, 0], [x, GY + 1.6, 0], 'rgba(243,207,74,.35)', 1, [4, 4]));
+    ys.forEach(y => seg([-1.6, y, 0], [GX + 1.6, y, 0], 'rgba(243,207,74,.35)', 1, [4, 4]));
+    const k = Math.min(GZ, Math.floor((t * 1.1) % (GZ + 3)) + 1);
+    for (let z = 0; z < k; z++) {
+      const z0 = z * FHs;
+      prism(0, 0, GX, GY, z0, z0 + 0.12, '#2c3033', '#1d2022', '#24272a', 'rgba(255,255,255,.35)');
+      if (z < k - 1 || k === GZ) xs.forEach(x => ys.forEach(y => seg([x, y, z0 + 0.12], [x, y, z0 + FHs], 'rgba(243,207,74,.85)', 1.4)));
+    }
+    const topZ = (k - 1) * FHs + 0.12;
+    [[2.33, 0, 2.33, GY], [4.67, 0, 4.67, GY], [0, 2, GX, 2], [1.2, 2, 1.2, GY], [5.8, 0, 5.8, 2]].forEach(([a, b, c, d]) => seg([a, b, topZ], [c, d, topZ], 'rgba(255,255,255,.55)', 1));
+    if (k === GZ) { prism(0, 0, GX, GY, GZ * FHs, GZ * FHs + 0.12, '#2c3033', '#1d2022', '#24272a', 'rgba(255,255,255,.35)'); gable(0, 0, GX, GY, GZ * FHs + 0.12, GZ * FHs + 1.7, 'rgba(255,255,255,.55)'); }
+    labels([de() ? 'TRAGRASTER 8,10 m' : 'STRUCTURAL GRID 8.10 m', `${de() ? 'GESCHOSS' : 'FLOOR'} ${k} / ${GZ}`], "R'w 41 dB · U 0.18", k === GZ ? (de() ? 'NACHWEISE ERFÜLLT' : 'ALL CHECKS PASSED') : (de() ? 'PRÜFE…' : 'CHECKING…'));
+  }
+
+  // LPH 4: the permit set stacks up sheet by sheet
+  function scenePermit(t) {
+    EDX = -3.4; EDY = 0.6; groundGrid(); ga(1);
+    for (let z = 0; z <= GZ; z += 2) { const h = z * FHs; poly([[0, 0, h], [GX, 0, h], [GX, GY, h], [0, GY, h]], null, 'rgba(255,255,255,.3)'); }
+    for (const [x, y] of [[0, 0], [GX, 0], [GX, GY], [0, GY]]) seg([x, y, 0], [x, y, GZ * FHs], 'rgba(255,255,255,.3)');
+    gable(0, 0, GX, GY, GZ * FHs, GZ * FHs + 1.6, 'rgba(255,255,255,.45)');
+    const SX = 7.6, SY = -0.6, SW = 3.0, SH = 2.1, TOTAL = 24, cyc = (t * 2.2) % (TOTAL + 8), n = Math.min(TOTAL, Math.floor(cyc));
+    const sheet = (z, a, i) => {
+      ga(a); poly([[SX, SY, z], [SX + SW, SY, z], [SX + SW, SY + SH, z], [SX, SY + SH, z]], i % 2 ? '#e6e5df' : '#f1f0ea', 'rgba(16,18,17,.35)');
+      const r = rng(i + 3);
+      for (let k = 0; k < 4; k++) { const x = SX + 0.3 + r() * (SW - 0.6), y = SY + 0.25 + r() * (SH - 0.5); seg([x, SY + 0.2, z], [x, SY + SH - 0.2, z], 'rgba(16,18,17,.35)'); seg([SX + 0.2, y, z], [SX + SW - 0.2, y, z], 'rgba(16,18,17,.35)'); }
+    };
+    for (let i = 0; i < n; i++) sheet(i * 0.06, 1, i);
+    if (n < TOTAL && !reduce) { const f = cyc - n; sheet(n * 0.06 + 3 * (1 - ease(f)), ease(f), n); }
+    if (n === TOTAL) {
+      const [sx, sy] = iso(SX + SW * 0.62, SY + SH * 0.5, TOTAL * 0.06); ga(1);
+      ectx.fillStyle = AMBER; ectx.beginPath(); ectx.ellipse(sx, sy, U * 0.7, U * 0.4, 0, 0, 7); ectx.fill();
+      ectx.strokeStyle = '#0a0b0b'; ectx.lineWidth = 2.2; ectx.beginPath(); ectx.moveTo(sx - U * 0.28, sy); ectx.lineTo(sx - U * 0.06, sy + U * 0.14); ectx.lineTo(sx + U * 0.3, sy - U * 0.16); ectx.stroke();
+    }
+    EDX = 0; EDY = 0;
+    labels([de() ? 'BAUANTRAG' : 'PERMIT SET', `${de() ? 'BLATT' : 'SHEET'} ${String(n).padStart(2, '0')} / ${TOTAL}`], 'BauO Bln · §70', n === TOTAL ? (de() ? 'VOLLSTÄNDIG' : 'COMPLETE') : (de() ? 'WIRD ERSTELLT…' : 'COMPILING…'));
+  }
+
+  // LPH 5: exploded floors with components and a live construction schedule
+  function sceneExecution(t) {
+    EDX = 1.6; EDY = -1.2; groundGrid(); ga(1);
+    const gap = reduce ? 0.5 : 0.35 + 0.3 * (0.5 + 0.5 * Math.sin(t * 1.3));
+    const NFL = 4, H = 1.3;
+    for (let i = 0; i < NFL; i++) {
+      const z0 = i * (H + gap);
+      prism(0, 0, GX, GY, z0, z0 + H, 'rgba(44,48,51,.9)', 'rgba(29,32,34,.9)', 'rgba(36,39,42,.9)', 'rgba(255,255,255,.4)');
+      for (let x = 0.5; x < GX - 0.5; x += 1.2) poly([[x, GY, z0 + 0.4], [x + 0.6, GY, z0 + 0.4], [x + 0.6, GY, z0 + 1.0], [x, GY, z0 + 1.0]], 'rgba(243,207,74,.85)');
+      for (let y = 0.5; y < GY - 0.5; y += 1.2) poly([[GX, y, z0 + 0.4], [GX, y + 0.6, z0 + 0.4], [GX, y + 0.6, z0 + 1.0], [GX, y, z0 + 1.0]], 'rgba(243,207,74,.6)');
+    }
+    gable(0, 0, GX, GY, NFL * (H + gap), NFL * (H + gap) + 1.5, 'rgba(255,255,255,.5)');
+    EDX = 0; EDY = 0;
+    const rows = de() ? ['Rohbau', 'Dach', 'Fassade', 'TGA', 'Ausbau', 'Übergabe'] : ['Shell', 'Roof', 'Facade', 'MEP', 'Fit-out', 'Handover'];
+    const spans = [[0, 0.34], [0.26, 0.46], [0.36, 0.66], [0.3, 0.8], [0.55, 0.92], [0.9, 1]];
+    const gx = 24, gw = Math.min(220, ew * 0.32), gy = eh - 28 - rows.length * 15, now = (t * 0.08) % 1;
+    ectx.font = '10px "JetBrains Mono", monospace';
+    rows.forEach((r, i) => {
+      const y = gy + i * 15; ga(1); ectx.fillStyle = 'rgba(255,255,255,.5)'; ectx.fillText(r.toUpperCase(), gx, y + 8);
+      const x0 = gx + 70 + spans[i][0] * gw, x1 = gx + 70 + spans[i][1] * gw;
+      ectx.fillStyle = 'rgba(255,255,255,.12)'; ectx.fillRect(x0, y, x1 - x0, 9);
+      const done = Math.max(0, Math.min(1, (now - spans[i][0]) / (spans[i][1] - spans[i][0])));
+      ectx.fillStyle = AMBER; ectx.fillRect(x0, y, (x1 - x0) * done, 9);
+    });
+    const nx = gx + 70 + now * gw; ectx.fillStyle = '#ffffff'; ectx.fillRect(nx, gy - 4, 1, rows.length * 15 + 2);
+    labels([`DETAIL 1:20`, `${de() ? 'KW' : 'WEEK'} ${14 + Math.floor(now * 40)}`], de() ? 'REV. C' : 'REV C', de() ? 'SYNCHRON MIT BAUSTELLE' : 'IN SYNC WITH SITE');
+  }
+
+  const SCENES = [sceneSite, sceneVariants, sceneDesign, scenePermit, sceneExecution];
+  function setEnginePhase(i) { if (i === ePhase) return; ePrev = ePhase; ePhase = i; eSwitch = performance.now(); }
   function frameEngine(now) {
     const time = now / 1000;
     ectx.clearRect(0, 0, ew, eh);
-    const u = Math.min(ew / 15, eh / 11.5);
-    const cx = ew / 2, cy = eh * 0.66;
-    const iso = (x, y, z) => [cx + (x - y) * 0.866 * u, cy + (x + y) * 0.5 * u - z * u - (GX + GY) * 0.25 * u + u * 1.2];
-    const line = (a, b) => { ectx.beginPath(); ectx.moveTo(...iso(...a)); ectx.lineTo(...iso(...b)); ectx.stroke(); };
-    const FH = 1.05;
-    ectx.strokeStyle = 'rgba(255,255,255,.06)'; ectx.lineWidth = 1;
-    for (let i = -3; i <= GX + 3; i++) line([i, -3, 0], [i, GY + 3, 0]);
-    for (let j = -3; j <= GY + 3; j++) line([-3, j, 0], [GX + 3, j, 0]);
-    ectx.strokeStyle = 'rgba(255,255,255,.28)';
-    for (let z = 0; z <= GZ; z++) { const h = z * FH; line([0, 0, h], [GX, 0, h]); line([GX, 0, h], [GX, GY, h]); line([GX, GY, h], [0, GY, h]); line([0, GY, h], [0, 0, h]); }
-    for (const [x, y] of [[0, 0], [GX, 0], [GX, GY], [0, GY]]) line([x, y, 0], [x, y, GZ * FH]);
-    ectx.strokeStyle = 'rgba(255,255,255,.4)';
-    const top = GZ * FH, ridge = top + 1.6;
-    line([0, 0, top], [0, GY / 2, ridge]); line([0, GY, top], [0, GY / 2, ridge]);
-    line([GX, 0, top], [GX, GY / 2, ridge]); line([GX, GY, top], [GX, GY / 2, ridge]);
-    line([0, GY / 2, ridge], [GX, GY / 2, ridge]);
-    const [bx, by] = iso(GX / 2, GY / 2, ridge);
-    ectx.strokeStyle = AMBER; ectx.beginPath(); ectx.moveTo(bx, by); ectx.lineTo(bx, by - u * 0.9); ectx.stroke();
-    ectx.fillStyle = AMBER; ectx.beginPath(); ectx.moveTo(bx, by - u * 1.6); ectx.lineTo(bx - u * 0.35, by - u * 0.8); ectx.lineTo(bx + u * 0.35, by - u * 0.8); ectx.closePath(); ectx.fill();
-    const s = 0.34;
-    for (const c of cubes) {
-      if (!reduce && time > c.next) { c.target = Math.random() < 0.38 ? 1 : 0; c.next = time + 1.2 + Math.random() * 3.5; }
-      c.v = reduce ? c.target : c.v + (c.target - c.v) * 0.08;
-      if (c.v < 0.02) continue;
-      const ox = c.x + 0.5, oy = c.y + 0.5, oz = c.z * FH + 0.3;
-      const k = s * (0.6 + 0.4 * c.v);
-      const p = (dx, dy, dz) => iso(ox + dx * k, oy + dy * k, oz + dz * k);
-      const face = (pts, col) => { ectx.fillStyle = col; ectx.beginPath(); pts.forEach((q, i) => i ? ectx.lineTo(...q) : ectx.moveTo(...q)); ectx.closePath(); ectx.fill(); };
-      ectx.globalAlpha = c.v;
-      face([p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)], '#fbe58a');
-      face([p(-1, 1, 1), p(1, 1, 1), p(1, 1, -1), p(-1, 1, -1)], '#d3ad2a');
-      face([p(1, -1, 1), p(1, 1, 1), p(1, 1, -1), p(1, -1, -1)], AMBER);
-    }
-    ectx.globalAlpha = 1;
-    ectx.font = '11px "JetBrains Mono", monospace'; ectx.fillStyle = 'rgba(255,255,255,.55)';
-    const de = L() === 'de';
-    const live = cubes.filter(c => c.target).length;
-    ectx.fillText(`${de ? 'VARIANTE' : 'VARIANT'} ${String(400 + Math.floor(time * 7) % 880).padStart(4, '0')} / 1280`, 24, 34);
-    ectx.fillText(`${de ? 'EINHEITEN GEPRÜFT' : 'UNITS TESTED'}  ${String(live).padStart(3, '0')}`, 24, 52);
-    ectx.textAlign = 'right';
-    ectx.fillText(de ? 'GFZ 1,8 · GRZ 0,4' : 'GFZ 1.8 · GRZ 0.4', ew - 24, 34);
-    ectx.fillStyle = AMBER;
-    ectx.fillText(`${de ? 'BESTWERT' : 'BEST'}  ${RF.eur(2410 - Math.min(265, Math.floor(time * 9) % 300))} / m²`, ew - 24, 52);
-    ectx.textAlign = 'left';
+    U = Math.min(ew / 15, eh / 11.5); OX = ew / 2; OY = eh * 0.66 - (GX + GY) * 0.25 * U + U * 1.2;
+    if (phAuto && engVisible && now - phStart > 7000) { phActive = (phActive + 1) % 5; phStart = now; renderPhases(); }
+    setEnginePhase(phActive);
+    const f = reduce ? 1 : Math.min(1, (now - eSwitch) / 650);
+    if (f < 1 && ePrev >= 0) { A = 1 - f; SCENES[ePrev](time); }
+    A = f; SCENES[ePhase](time); A = 1; ectx.globalAlpha = 1;
     eRaf = (!reduce && engVisible) ? requestAnimationFrame(frameEngine) : 0;
   }
-  new IntersectionObserver(([e]) => { engVisible = e.isIntersecting; if (engVisible && !eRaf) eRaf = requestAnimationFrame(frameEngine); }).observe(ec);
+  new IntersectionObserver(([e]) => { engVisible = e.isIntersecting; if (engVisible) { phStart = performance.now(); if (!eRaf) eRaf = requestAnimationFrame(frameEngine); } }).observe(ec);
   requestAnimationFrame(frameEngine);
 
   /* ---------- Workflows ---------- */
@@ -1139,6 +1355,48 @@ window.RF = (() => {
 })();
 </script>
 
+<script>
+/* ---------- Sales call form ---------- */
+window.RFLead = (() => {
+  const dlg = document.getElementById('leadDialog'), form = document.getElementById('leadForm'), done = document.getElementById('leadDone');
+  const err = document.getElementById('leadError'), submit = document.getElementById('lfSubmit');
+  const endpoint = (document.querySelector('meta[name="rf-lead-endpoint"]') || {}).content || '';
+  const T = {
+    en: { invalid: 'Please fill in your name, a valid work email, your role and project stage, and confirm we may contact you.', offline: 'Sales requests are not connected yet, so this request was not sent. Set the rf-lead-endpoint meta tag to a receiver.', failed: 'We could not send your request. Please try again in a moment.', thanks: n => `Thanks, ${n}.`, demo: s => `I saw the Berlin example find ${s} in savings. I would like to see what Richtfest finds on my project.` },
+    de: { invalid: 'Bitte geben Sie Name, eine gültige geschäftliche E-Mail, Ihre Rolle und die Projektphase an und bestätigen Sie die Kontaktaufnahme.', offline: 'Anfragen sind noch nicht angebunden, diese Anfrage wurde daher nicht gesendet. Hinterlegen Sie einen Empfänger im Meta-Tag rf-lead-endpoint.', failed: 'Ihre Anfrage konnte nicht gesendet werden. Bitte versuchen Sie es gleich noch einmal.', thanks: n => `Danke, ${n}.`, demo: s => `Ich habe gesehen, dass das Berliner Beispiel ${s} Einsparungen findet. Ich möchte sehen, was Richtfest in meinem Projekt findet.` }
+  };
+  let source = 'page';
+  function open(src, context = {}) {
+    source = src; err.hidden = true; form.hidden = false; done.hidden = true;
+    const msg = document.getElementById('lfMsg');
+    if (context.savings && !msg.value) msg.value = T[RF.lang].demo(context.savings);
+    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+    setTimeout(() => document.getElementById('lfName').focus(), 30);
+  }
+  function close() { if (dlg.open) dlg.close(); }
+  document.getElementById('leadClose').addEventListener('click', close);
+  document.getElementById('leadDoneClose').addEventListener('click', close);
+  dlg.addEventListener('click', e => { if (e.target === dlg) close(); });
+  document.querySelectorAll('[data-lead]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); open(a.dataset.lead); }));
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const t = T[RF.lang];
+    if (!form.checkValidity()) { err.textContent = t.invalid; err.hidden = false; form.reportValidity(); return; }
+    const data = Object.fromEntries(new FormData(form).entries());
+    data.consent = true; data.source = source; data.language = RF.lang; data.page = location.href.split('#')[0];
+    if (!endpoint) { err.textContent = t.offline; err.hidden = false; return; }
+    submit.disabled = true;
+    try {
+      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!res.ok) throw new Error(String(res.status));
+      document.getElementById('leadDoneH').textContent = t.thanks(String(data.name).split(' ')[0]);
+      form.hidden = true; done.hidden = false; form.reset();
+    } catch (x) { err.textContent = t.failed; err.hidden = false; }
+    finally { submit.disabled = false; }
+  });
+  return { open };
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
@@ -1160,7 +1418,13 @@ window.RF = (() => {
         ['LLM agent · Berlin building code', 'Here is the big one. In Berlin, the fire brigade can rescue people with portable ladders as long as the parapet is no higher than 8 m. Your top-floor balconies sit at 8.10 m. We dropped them three steps, 51 cm, with a short stair from the door down to the balcony. The parapet is now at 7.59 m. The ladder reaches, the balconies count as the second escape route, and the second staircase can go. That saves you about €100k.'],
         ['System 1 · floor plan sweep', 'Last one: bathrooms and kitchens now stack directly above each other, so four service shafts become two with shorter pipe runs.']],
       sum: s => `Done. Three changes, ${s} saved, same flats and the same standard. Each change is marked as a proposal until your planner approves it.`,
-      ctaH: 'Want this for your project?', ctaP: 'We found this in a six-flat house in Berlin. Let us look at yours: send a site and a brief, and we will walk you through what our agents find.', ctaBook: 'Book a sales call', ctaClose: 'Explore the model', saved: 'saved'
+      ctaH: 'Want this for your project?', ctaP: 'We found this in a six-flat house in Berlin. Let us look at yours: send a site and a brief, and we will walk you through what our agents find.', ctaBook: 'Book a sales call', ctaClose: 'Explore the model', saved: 'saved',
+      status: 'Proposal · awaiting planner approval', why: 'Why it works', before: 'Before', after: 'After', prev: 'Previous', next: 'Next finding', book: 'Book a sales call', close: 'Close',
+      info: [
+        { t: 'Fire engine parks on the existing driveway', save: 24000, note: 'less paving', change: 'The driveway on the east side is widened from 3.00 m to 3.40 m along 12 m and marked as the fire brigade standing area. The separate access lane from the first design is dropped.', why: 'The Berlin building code (BauO Bln §5) asks for fire brigade access and standing areas within reach of the building. The widened driveway meets the minimum width, so a second paved lane adds nothing.', vals: [['Access lane', 'Separate, 28 m', 'Existing driveway'], ['Width', '3.00 m', '3.40 m'], ['Paved area', '+85 m²', '+5 m²']], src: 'System 1 site layout sweep · 3,412 layouts scored' },
+        { t: 'Top balconies three steps lower', save: 100000, note: 'net, after stair and waterproofing', change: 'The 2nd-floor balconies drop three steps (3 × 17 cm). A short stair leads from the balcony door down to the new balcony floor, and the parapet moves from 8.10 m to 7.59 m above ground.', why: 'BauO Bln §33 lets the fire brigade provide the second escape route with its rescue equipment. Up to a parapet height of 8 m, portable ladders are enough, so the second staircase can go and no turntable-ladder set-up area is needed.', vals: [['Parapet height', '8.10 m', '7.59 m'], ['Second staircase', 'Required', 'Not needed'], ['Net cost', '+€118,000', '+€18,000']], src: 'LLM agent · Berlin building code reasoning · checked by the deterministic height tool' },
+        { t: 'Two service shafts instead of four', save: 18000, note: 'pipes and fire stopping', change: 'Bathrooms and kitchens are stacked directly above each other on every floor, so four service shafts become two next to the staircase.', why: 'Fewer shafts mean shorter pipe runs and fewer fire-stopping penetrations per floor, with the same flat layouts and room sizes.', vals: [['Service shafts', '4', '2'], ['Pipe run', '126 m', '92 m'], ['Fire stops / floor', '8', '4']], src: 'System 1 floor plan sweep · 1,140 layouts scored' }
+      ]
     },
     de: {
       first: 'Erster Entwurf', busy: 'Optimiere…', done: 'Rev. B · 3 Vorschläge', agent: 'Richtfest-Agent',
@@ -1171,7 +1435,13 @@ window.RF = (() => {
         ['LLM-Agent · Bauordnung Berlin', 'Jetzt das Wichtigste. In Berlin kann die Feuerwehr mit tragbaren Leitern retten, solange die Brüstung höchstens 8 m hoch liegt. Ihre Balkone im 2. OG liegen bei 8,10 m. Wir haben sie drei Stufen, also 51 cm, tiefer gesetzt und eine kurze Treppe von der Tür auf den Balkon ergänzt. Die Brüstung liegt jetzt bei 7,59 m. Die Leiter reicht, die Balkone gelten als zweiter Rettungsweg, und das zweite Treppenhaus entfällt. Das spart Ihnen rund 100.000 €.'],
         ['System 1 · Grundriss-Sweep', 'Zum Schluss: Bäder und Küchen liegen jetzt direkt übereinander. So werden aus vier Installationsschächten zwei mit kürzeren Leitungswegen.']],
       sum: s => `Fertig. Drei Änderungen, ${s} gespart, gleiche Wohnungen, gleicher Standard. Jede Änderung bleibt als Vorschlag markiert, bis Ihre Planerin oder Ihr Planer sie freigibt.`,
-      ctaH: 'Das wollen Sie auch?', ctaP: 'Das haben wir in einem Haus mit sechs Wohnungen in Berlin gefunden. Schauen wir uns Ihr Projekt an: Schicken Sie uns Grundstück und Anforderungen, und wir zeigen Ihnen, was unsere Agenten finden.', ctaBook: 'Vertriebsgespräch vereinbaren', ctaClose: 'Modell erkunden', saved: 'gespart'
+      ctaH: 'Das wollen Sie auch?', ctaP: 'Das haben wir in einem Haus mit sechs Wohnungen in Berlin gefunden. Schauen wir uns Ihr Projekt an: Schicken Sie uns Grundstück und Anforderungen, und wir zeigen Ihnen, was unsere Agenten finden.', ctaBook: 'Vertriebsgespräch vereinbaren', ctaClose: 'Modell erkunden', saved: 'gespart',
+      status: 'Vorschlag · wartet auf Freigabe', why: 'Warum das funktioniert', before: 'Vorher', after: 'Nachher', prev: 'Zurück', next: 'Nächster Befund', book: 'Vertriebsgespräch vereinbaren', close: 'Schließen',
+      info: [
+        { t: 'Feuerwehr parkt auf der bestehenden Zufahrt', save: 24000, note: 'weniger Pflaster', change: 'Die Zufahrt auf der Ostseite wird auf 12 m Länge von 3,00 m auf 3,40 m verbreitert und als Aufstellfläche der Feuerwehr markiert. Die separate Feuerwehrzufahrt aus dem ersten Entwurf entfällt.', why: 'Die Bauordnung für Berlin (BauO Bln §5) verlangt Zufahrten und Aufstellflächen für die Feuerwehr in Reichweite des Gebäudes. Die verbreiterte Zufahrt erfüllt die Mindestbreite, eine zweite befestigte Fläche bringt nichts.', vals: [['Zufahrt', 'Separat, 28 m', 'Bestehende Zufahrt'], ['Breite', '3,00 m', '3,40 m'], ['Befestigte Fläche', '+85 m²', '+5 m²']], src: 'System-1-Lageplan-Sweep · 3.412 Varianten bewertet' },
+        { t: 'Balkone im 2. OG drei Stufen tiefer', save: 100000, note: 'netto, nach Treppe und Abdichtung', change: 'Die Balkone im 2. OG liegen drei Stufen (3 × 17 cm) tiefer. Eine kurze Treppe führt von der Balkontür auf den neuen Balkonboden, die Brüstung sinkt von 8,10 m auf 7,59 m über Gelände.', why: 'Nach BauO Bln §33 darf der zweite Rettungsweg über Rettungsgeräte der Feuerwehr führen. Bis zu einer Brüstungshöhe von 8 m reichen tragbare Leitern. Das zweite Treppenhaus entfällt, eine Aufstellfläche für die Drehleiter ist nicht nötig.', vals: [['Brüstungshöhe', '8,10 m', '7,59 m'], ['Zweites Treppenhaus', 'Erforderlich', 'Entfällt'], ['Nettokosten', '+118.000 €', '+18.000 €']], src: 'LLM-Agent · Bauordnung Berlin · geprüft mit dem deterministischen Höhenwerkzeug' },
+        { t: 'Zwei Installationsschächte statt vier', save: 18000, note: 'Leitungen und Brandschotts', change: 'Bäder und Küchen liegen in jedem Geschoss direkt übereinander. So werden aus vier Installationsschächten zwei neben dem Treppenhaus.', why: 'Weniger Schächte bedeuten kürzere Leitungswege und weniger Brandschotts pro Geschoss, bei gleichen Grundrissen und Raumgrößen.', vals: [['Schächte', '4', '2'], ['Leitungslänge', '126 m', '92 m'], ['Brandschotts / Geschoss', '8', '4']], src: 'System-1-Grundriss-Sweep · 1.140 Varianten bewertet' }
+      ]
     }
   };
   const T = () => TXT[RF.lang];
@@ -1193,7 +1463,9 @@ window.RF = (() => {
     document.querySelector('#vCtaBook span').textContent = T().ctaBook;
     document.getElementById('vCtaClose').textContent = T().ctaClose;
   }
-  document.getElementById('vCtaClose').addEventListener('click', () => { vCta.hidden = true; });
+  let enterExplore = () => { vCta.hidden = true; };
+  document.getElementById('vCtaClose').addEventListener('click', () => enterExplore(1));
+  document.getElementById('vCtaBook').addEventListener('click', () => RFLead.open('3d-demo', { savings: RF.eur(BASE - cost) }));
   const pin2t = document.getElementById('pin2t');
   let parapet = 8.10;
   const setPin2 = () => { pin2t.textContent = `${T().parapet} ${RF.nf(parapet, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m${parapet <= 8 ? ' · ' + T().ok : ''}`; };
@@ -1835,6 +2107,55 @@ window.RF = (() => {
     if (phase === 'done') { renderCta(); vCta.hidden = false; }
   });
 
+  /* Explore mode: pins become clickable and each finding opens a detail card */
+  const exploreEl = document.getElementById('vExplore');
+  const FOCUS = [
+    [new THREE.Vector3(40, 15, 34), new THREE.Vector3(12, 1.5, 3)],
+    [new THREE.Vector3(30, 9, 30), new THREE.Vector3(5, 5, 6.5)],
+    [new THREE.Vector3(-34, 38, 38), new THREE.Vector3(0, 6, 0)]
+  ];
+  let exploreIdx = -1, xrayOn = false;
+  function xray(on) {
+    if (on === xrayOn) return; xrayOn = on;
+    windowParts.forEach(k => { inst[k].visible = !on; });
+    wall.depthWrite = !on; core.visible = on;
+    newShafts.forEach(m => { m.visible = true; m.scale.y = 1; m.position.y = G0 + NF * FH / 2; });
+    tween(500, p => { wall.opacity = on ? 1 - 0.8 * p : 0.2 + 0.8 * p; });
+  }
+  function renderExplore() {
+    const t = T(), f = t.info[exploreIdx];
+    pins.forEach((p, i) => p.el.classList.toggle('active', i === exploreIdx));
+    exploreEl.innerHTML = `
+      <div class="vx-head"><div class="vx-tabs" role="tablist">${[0, 1, 2].map(i => `<button type="button" role="tab" aria-selected="${i === exploreIdx}" data-i="${i}">${i + 1}</button>`).join('')}</div>
+      <button class="vx-close" type="button" aria-label="${t.close}">×</button></div>
+      <div><span class="k">${t.status}</span><h4>${f.t}</h4></div>
+      <div class="vx-save">−${RF.eur(f.save)}<small>${f.note}</small></div>
+      <p>${f.change}</p>
+      <dl class="vx-vals"><span></span><span class="hd">${t.before}</span><span class="hd">${t.after}</span>${f.vals.map(v => `<dt>${v[0]}</dt><dd class="was">${v[1]}</dd><dd>${v[2]}</dd>`).join('')}</dl>
+      <p class="why"><b>${t.why}</b>${f.why}</p>
+      <span class="vx-src">${f.src}</span>
+      <div class="vx-actions"><button class="btn btn-line btn-sm" type="button" data-next>${t.next}</button><button class="btn btn-dark btn-sm" type="button" data-book>${t.book}<svg class="arrow"><use href="#i-arrow"/></svg></button></div>`;
+    exploreEl.querySelectorAll('.vx-tabs button').forEach(b => b.onclick = () => showFinding(+b.dataset.i));
+    exploreEl.querySelector('.vx-close').onclick = exitExplore;
+    exploreEl.querySelector('[data-next]').onclick = () => showFinding((exploreIdx + 1) % 3);
+    exploreEl.querySelector('[data-book]').onclick = () => RFLead.open('3d-explore', { savings: RF.eur(BASE - cost) });
+  }
+  function showFinding(i) {
+    exploreIdx = i; renderExplore(); exploreEl.scrollTop = 0;
+    controls.autoRotate = false;
+    xray(i === 2);
+    fly(FOCUS[i][0], FOCUS[i][1], 1200);
+  }
+  enterExplore = (i = 1) => {
+    vCta.hidden = true; host.classList.add('exploring'); exploreEl.hidden = false; showFinding(i - 1 < 0 ? 0 : i - 1);
+  };
+  function exitExplore() {
+    exploreIdx = -1; host.classList.remove('exploring'); exploreEl.hidden = true; pins.forEach(p => p.el.classList.remove('active'));
+    xray(false); controls.autoRotate = !reduce; fly(HOME.pos, HOME.tgt, 1200);
+  }
+  pins.forEach((p, i) => p.el.addEventListener('click', () => { if (host.classList.contains('exploring')) showFinding(i); }));
+  RF.on(() => { if (exploreIdx >= 0) renderExplore(); });
+
   resetBtn.addEventListener('click', () => {
     if (phase !== 'done') return;
     fireArea.visible = false; fireArea.scale.z = 0.001; widen.visible = false; sign.visible = false; truck.visible = false;
@@ -1844,6 +2165,7 @@ window.RF = (() => {
     wall.opacity = 1; wall.depthWrite = true; core.visible = false;
     pins.forEach(p => p.el.classList.remove('on'));
     cost = BASE; phase = 'idle'; intro(); resetBtn.hidden = true; goBtn.disabled = false; vCta.hidden = true; panelEl.classList.remove('running'); feedClear();
+    if (exploreIdx >= 0) { exploreIdx = -1; host.classList.remove('exploring'); exploreEl.hidden = true; xrayOn = false; windowParts.forEach(k => { inst[k].visible = true; }); }
     fly(HOME.pos, HOME.tgt, 1200);
   });
 })();
