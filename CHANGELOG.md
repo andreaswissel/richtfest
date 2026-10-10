@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Specialist source reviews now receive citation IDs only for readable source text, while unreadable assigned files remain visible as coverage gaps.
+
 - Recheck server messages whenever a project conversation is reopened, so newly saved agent answers do not stay hidden behind a fresh client cache.
 
 - Invite users with their name; pending invitations show each person’s name and email.

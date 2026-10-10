@@ -486,18 +486,51 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   return d.resolveSource(run.projectId, { versionId });
                 }),
               );
-              const readableSourceIds = new Set(
-                excerpts.flatMap((excerpt: any) =>
+              const resolvedSources = assignment.sourceVersionIds.map(
+                (versionId, index) => ({ versionId, excerpt: excerpts[index] as any }),
+              );
+              const readableSources = resolvedSources.filter(
+                ({ versionId, excerpt }) =>
                   excerpt?.status === "resolved" &&
+                  excerpt?.source?.versionId === versionId &&
                   excerpt?.content?.status === "available" &&
                   typeof excerpt.content.text === "string" &&
-                  excerpt.content.text.trim().length > 0
-                    ? [excerpt.source?.versionId].filter(
-                        (versionId: unknown): versionId is string =>
-                          typeof versionId === "string",
-                      )
-                    : [],
-                ),
+                  excerpt.content.text.trim().length > 0,
+              );
+              const readableSourceIds = new Set<string>(
+                readableSources.map(({ versionId }) => versionId),
+              );
+              // Keep unreadable files visible as coverage gaps, but do not give
+              // their version IDs to the model as possible citation targets.
+              const unreadableSources = resolvedSources
+                .filter(({ versionId, excerpt }) =>
+                  !readableSourceIds.has(versionId) ||
+                  excerpt?.source?.versionId !== versionId,
+                )
+                .map(({ versionId, excerpt }) => ({
+                  name:
+                    typeof excerpt?.source?.name === "string"
+                      ? excerpt.source.name
+                      : "Unnamed source",
+                  reason:
+                    typeof excerpt?.content?.reason === "string"
+                      ? excerpt.content.reason
+                      : typeof excerpt?.message === "string"
+                        ? excerpt.message
+                        : excerpt?.source?.versionId !== versionId
+                          ? "Resolved source version did not match the assigned version."
+                          : "Readable source text is unavailable.",
+                }));
+              const specialistSources = readableSources.map(
+                ({ versionId, excerpt }) => ({
+                  versionId,
+                  name: excerpt.source.name,
+                  version: excerpt.source.version,
+                  mimeType: excerpt.source.mimeType,
+                  text: excerpt.content.text,
+                  truncated: excerpt.content.truncated,
+                  coverage: excerpt.content.coverage,
+                }),
               );
               const output = specialistOutput.parse(
                 await call(
@@ -505,8 +538,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   assignment.goal,
                   {
                     role: assignment.role,
-                    sourceVersionIds: assignment.sourceVersionIds,
-                    sources: excerpts,
+                    sourceVersionIds: [...readableSourceIds],
+                    sources: specialistSources,
+                    unreadableSources,
                   },
                   assignment.runId,
                 ),
