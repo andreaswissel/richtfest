@@ -1,0 +1,25 @@
+services:
+  postgres:
+    command: exec "$(pg_config --bindir)/postgres" -D .data/postgres
+    port: 5433
+  web:
+    command: bun run --filter @richtfest/web dev --port "$PORT" --strictPort
+    port: 5173
+    health: /
+    portal:
+      title: Richtfest
+      description: Local seeded data. Use development sign-in as Andreas or Luca; no provider credentials are configured.
+  api:
+    command: bun --env-file=.env --watch richtfest-os/apps/api/src/index.ts
+    port: 3000
+    health: /health
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/richtfest
+      NODE_ENV: development
+      ALLOW_DEV_AUTH: "true"
+      BETTER_AUTH_URL: ${services.web.publicURL}
+      BETTER_AUTH_SECRET: orb-local-development-only-secret-not-for-production
+      FILE_STORAGE_PATH: ./.data/files
+      AGENT_SUPERVISOR_ENABLED: "false"
+      RESEND_API_KEY: ""
+      RESEND_FROM: ""

@@ -31,6 +31,9 @@ __pycache__/
 .data/
 **/.data/
 
+# Generated orb portal links are specific to a thread.
+.amp/portals/
+
 # Customer reference material and temporary planning context stay local.
 reference-project/
 context/

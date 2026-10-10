@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+TIMEFORMAT='[orb setup] Step took %3R seconds'
+
+echo '[orb setup] Checking system prerequisites'
+packages=()
+for package in postgresql-15 postgresql-client-15 libpq-dev curl unzip poppler-utils tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng; do
+  if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
+    packages+=("$package")
+  fi
+done
+if ((${#packages[@]})); then
+  time sudo apt-get update -qq
+  time sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+fi
+
+echo '[orb setup] Checking pinned Bun toolchain'
+bun_version="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+if ! command -v bun >/dev/null || [[ "$(bun --version)" != "$bun_version" ]]; then
+  case "$(uname -m)" in
+    x86_64) bun_arch=x64 ;;
+    aarch64) bun_arch=aarch64 ;;
+    *) echo 'Unsupported Bun architecture' >&2; exit 1 ;;
+  esac
+  download="$(mktemp -d)"
+  trap 'rm -rf "$download"' EXIT
+  time curl --fail --silent --show-error --location --retry 3 \
+    "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/bun-linux-${bun_arch}.zip" \
+    -o "$download/bun.zip"
+  unzip -q "$download/bun.zip" -d "$download"
+  sudo install -m 0755 "$download/bun-linux-${bun_arch}/bun" /usr/local/bin/bun
+  rm -rf "$download"
+  trap - EXIT
+fi
+[[ "$(bun --version)" == "$bun_version" ]]
+
+echo '[orb setup] Installing locked workspace dependencies'
+time bun install --frozen-lockfile --linker=isolated
+
+echo '[orb setup] Preparing local development configuration and OCR models'
+# Never copy project/personal secrets into a reusable snapshot. Existing config
+# is left alone, and migrations below always target the isolated orb database.
+if [[ ! -f .env ]]; then
+  (umask 077; cat > .env <<'EOF'
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/richtfest
+MASTRA_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/richtfest
+NODE_ENV=development
+ALLOW_DEV_AUTH=true
+PORT=3000
+BETTER_AUTH_URL=http://localhost:3000
+BETTER_AUTH_SECRET=orb-local-development-only-secret-not-for-production
+AI_CONNECTION_ENCRYPTION_KEY=
+FILE_STORAGE_PATH=./.data/files
+AGENT_SUPERVISOR_ENABLED=false
+EOF
+  )
+fi
+mkdir -p tools/reference-extraction/models
+for language in deu eng; do
+  if [[ ! -e "tools/reference-extraction/models/$language.traineddata" ]]; then
+    ln -s "/usr/share/tesseract-ocr/5/tessdata/$language.traineddata" \
+      "tools/reference-extraction/models/$language.traineddata"
+  fi
+done
+
+echo '[orb setup] Preparing the isolated PostgreSQL database'
+pg_bin="$(pg_config --bindir)"
+pg_data="$repo_root/.data/postgres"
+mkdir -p "$pg_data"
+if [[ ! -f "$pg_data/PG_VERSION" ]]; then
+  time "$pg_bin/initdb" -D "$pg_data" -U postgres --auth-local=trust \
+    --auth-host=scram-sha-256 --pwfile=<(printf '%s\n' postgres) >/dev/null
+  cat >> "$pg_data/postgresql.conf" <<EOF
+
+# Disposable orb data only. Never use these durability settings in production.
+# Keep clear of Debian's default cluster on 5432.
+listen_addresses = '127.0.0.1'
+port = 5433
+unix_socket_directories = '$pg_data'
+fsync = off
+synchronous_commit = off
+EOF
+fi
+
+# Run PostgreSQL only for this finite initialization, then stop it before the
+# snapshot. After activation, .amp/services.yaml owns the persistent process.
+if ! "$pg_bin/pg_ctl" -D "$pg_data" status >/dev/null; then
+  time "$pg_bin/pg_ctl" -D "$pg_data" -l "$pg_data/setup.log" -w start
+  trap '"$pg_bin/pg_ctl" -D "$pg_data" -m fast -w stop' EXIT
+fi
+export PGHOST="$pg_data" PGPORT=5433 PGUSER=postgres
+if [[ "$(psql -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = 'richtfest'")" != 1 ]]; then
+  createdb richtfest
+fi
+# Override DATABASE_URL even if the orb or an existing .env points elsewhere.
+export DATABASE_URL="postgresql://postgres@localhost:5433/richtfest?host=$pg_data"
+export NODE_ENV=development ALLOW_DEV_AUTH=true
+unset ENDPOINT
+time bun run db:migrate
+time bun run db:seed
+
+echo '[orb setup] Ready; run amp orb services ensure to start the local app'

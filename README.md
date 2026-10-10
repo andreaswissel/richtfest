@@ -22,6 +22,20 @@ The API listens on `http://localhost:3000`. The web app runs separately during d
 
 Keep `reference-project/`, `context/`, `.data/`, `.env`, and generated output local. They are excluded from Git and Docker build contexts. The local file adapter stores development/test files under `FILE_STORAGE_PATH`; production source files belong in the private Railway Bucket, never in the repository.
 
+## Amp orbs
+
+`.agents/setup` installs the pinned Bun version, frozen workspace dependencies, PostgreSQL 15, and PDF/OCR tools. It creates a local `.env` only when missing, migrates an isolated database on port 5433, and seeds development identities. Installed dependencies and database files can be reused by Amp's project snapshots; warm setup checks the lockfile without reinstalling unchanged packages.
+
+`.agents/resume` ensures the PostgreSQL, API and Vite services declared in `.amp/services.yaml` are running. Open the **Richtfest** portal and use development sign-in as Andreas or Luca. To repair or inspect the services:
+
+```bash
+amp orb services ensure
+amp orb service list
+amp orb service logs api
+```
+
+Run `bun run typecheck`, `bun test`, and `bun run build` from the root. The generated `.env` enables the PostgreSQL integration tests, including Mastra recovery tests, against this disposable database. Existing `.env` files are preserved; setup migrations always target the orb database regardless of an inherited `DATABASE_URL`. No Railway access, live email, provider credentials or customer files are needed. See Richtfest Docs → Engineering → Deployment preparation for lifecycle and safety details.
+
 ## Railway setup
 
 The Railway project `richtfest-os` is defined in `.railway/railway.ts` (Railway Infrastructure as Code): one service named `richtfest-monorepo`, a Railway Postgres service, and the private Railway Bucket `richtfest-files`, all in EU West (Amsterdam). Railway does not read this file during deploys, so do not create services from the Railway dashboard's GitHub import; it stages one failing service per workspace package. Apply the file with the Railway CLI instead:

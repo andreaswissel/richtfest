@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# Ensure starts missing services without restarting healthy ones or reinstalling
+# dependencies. Authentication stays with the current thread, not the snapshot.
+amp orb services ensure

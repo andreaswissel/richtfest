@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added reusable orb setup with the pinned toolchain, cached dependencies, local test database, PDF/OCR tools and supervised development services.
+
 - Serve the public landing page on `richtfest.ai` while preserving existing domain aliases; use `app.richtfest.ai` for the app.
 
 - Project agent runs retry temporary provider failures and invalid responses, including truncated and schema-invalid Mastra responses, with up to three attempts instead of treating them as connection failures. Failed runs show a clear outcome with run details and a retry action. Completed reviews now include a downloadable PDF attachment in the conversation for the exact saved artifact revision.

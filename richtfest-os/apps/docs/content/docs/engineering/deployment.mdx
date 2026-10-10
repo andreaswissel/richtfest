@@ -3,6 +3,22 @@ title: Deployment preparation
 description: Prepare the Railway prototype without deploying or provisioning it implicitly.
 ---
 
+## Amp orb development
+
+The repository includes executable `.agents/setup` and `.agents/resume` hooks and a supervised service manifest in `.amp/services.yaml`. These prepare isolated development machines, not Railway deployments.
+
+Setup installs Bun at the version in the root `packageManager` field, runs `bun install --frozen-lockfile --linker=isolated`, and installs PostgreSQL 15, Poppler and Tesseract with German/English language data. The isolated linker preserves the workspace packages' different Zod versions. Bun and the system tools are available to fresh non-interactive login shells without activating a custom shell environment.
+
+Setup creates `.env` only if absent, initializes `.data/postgres` on loopback port 5433, applies the existing migrations, and seeds the Alpha and Outsider test workspaces. It always migrates this local database, never a database named by inherited project secrets. Local PostgreSQL disables fsync and synchronous commits for speed; this database is disposable and must never hold customer originals. The setup-only PostgreSQL process stops before the snapshot is captured. Repeating setup preserves local configuration and records and does not duplicate seed identities.
+
+Amp can reuse a matching project snapshot, skipping setup entirely. On a stale snapshot, setup rechecks installed packages and the Bun lockfile rather than downloading unchanged dependencies again. Resume does not install anything: it ensures the declared PostgreSQL, API and Vite services are running without restarting healthy services. Services are supervised independently of the agent process. Run `amp orb services ensure` again to recover stopped services; inspect failures with `amp orb service logs api`, `web` or `postgres`.
+
+Open the **Richtfest** portal and choose the seeded Andreas or Luca identity on the development sign-in screen. Vite proxies API requests on the same origin; the API's authentication origin comes from the web service's current portal URL, not a committed hostname. The service manifest keeps development authentication enabled, email delivery disabled and the supervisor off. Setup does not copy credentials, customer sources, or login sessions into the snapshot. Provider execution still requires explicitly configured credentials and models.
+
+From the repository root, run `bun run typecheck`, `bun test`, and `bun run build`. The generated `.env` sets both `DATABASE_URL` and `MASTRA_TEST_DATABASE_URL` to the disposable local database, so database-backed tests run rather than silently skipping. PDF extraction uses the installed language models through ignored links in `tools/reference-extraction/models`; it does not download customer files or run extraction during setup. Build the docs with `bun run --filter '@richtfest/docs' build` when a static docs export is needed; application builds and test suites are intentionally not part of every setup.
+
+Generated `.amp/portals` links, `.env`, database files, uploads, and dependencies stay out of Git. Lifecycle changes must reach the project's default branch before future orbs can use them. Committing or testing these files locally does not deploy or change Railway.
+
 ## Hosting shape
 
 The selected Railway project is `richtfest-os`, with `richtfest-monorepo` serving API and web on one origin, a separate `Postgres` service and the private `richtfest-files` bucket, all in EU West (Amsterdam). Connect through Railway's private `DATABASE_URL` reference. AWS and Neon are not part of this architecture.
