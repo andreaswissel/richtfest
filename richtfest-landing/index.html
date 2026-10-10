@@ -175,6 +175,24 @@ p { margin: 0; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .d-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .d-note { font: 400 11px/1.5 var(--mono); color: var(--muted); }
+.d-panel.running .d-facts, .d-panel.running .d-note { display: none; }
+.v-feed { position: absolute; right: 12px; bottom: 12px; z-index: 3; width: min(68%, 380px); max-height: 33%; display: none; flex-direction: column; justify-content: flex-end; gap: 6px; overflow: hidden; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12%); mask-image: linear-gradient(to bottom, transparent 0, #000 12%); }
+.v-feed div { flex: none; padding: 8px 11px; border-radius: 14px; background: rgba(10,11,11,.4); color: var(--white); font-size: 12.5px; line-height: 1.42; backdrop-filter: blur(10px) saturate(1.2); -webkit-backdrop-filter: blur(10px) saturate(1.2); text-shadow: 0 1px 6px rgba(10,11,11,.5); animation: rise .35s ease both; }
+.v-feed b { display: block; margin-bottom: 3px; font: 500 9.5px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--amber); }
+@media (max-width: 1000px) { .viewer.feeding .v-feed { display: flex; } .viewer.feeding .v-hint { display: none; } }
+@media (max-width: 600px) { .v-hud { left: 12px; right: 12px; top: 12px; font-size: 10px; letter-spacing: .04em; } .v-hud span { padding: 6px 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } }
+.d-panel.running h3 { font-size: 20px; }
+.v-cta { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; padding: 20px; background: rgba(10,11,11,.32); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); animation: ctaIn .5s ease both; }
+.v-cta-card { max-width: 440px; width: 100%; padding: clamp(24px, 3vw, 36px); border-radius: 28px; background: rgba(255,255,255,.94); box-shadow: 0 40px 100px -30px rgba(10,11,11,.6); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.v-cta-card .k { font: 400 11px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.v-cta-card h3 { font-size: clamp(26px, 2.6vw, 34px); }
+.v-cta-card .amt { font: 300 clamp(36px, 4vw, 52px)/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.v-cta-card .amt i { font-style: normal; background: linear-gradient(90deg, #e7b93a, #e98ab8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.v-cta-card p { color: var(--muted); max-width: 34ch; }
+.v-cta-card .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
+@keyframes ctaIn { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 600px) { .v-cta { padding: 12px; } .v-cta-card { padding: 20px 18px; gap: 10px; border-radius: 22px; } .v-cta-card p { display: none; } .v-cta-card h3 { font-size: 24px; } .v-cta-card .amt { font-size: 34px; } .v-cta-card .row .btn { height: 44px; } }
 
 /* Pipeline */
 .pipeline { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 48px; margin-top: 72px; align-items: stretch; }
@@ -399,6 +417,19 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
           <div class="pin" id="pin2"><i>2</i><span id="pin2t">Parapet 8.10 m</span></div>
           <div class="pin" id="pin3"><i>3</i><span data-i18n="pin3">Two shafts instead of four</span></div>
           <span class="v-hint" data-i18n="v.hint">Drag to orbit · Scroll to zoom</span>
+          <div class="v-feed" id="vFeed" aria-hidden="true"></div>
+          <div class="v-cta" id="vCta" hidden>
+            <div class="v-cta-card" role="dialog" aria-labelledby="vCtaH">
+              <span class="k" id="vCtaK">Rev B · 3 proposals</span>
+              <h3 id="vCtaH">Want this for your project?</h3>
+              <span class="amt" id="vCtaAmt"></span>
+              <p id="vCtaP"></p>
+              <div class="row">
+                <a class="btn btn-dark" href="#cta" id="vCtaBook"><span>Book a sales call</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+                <button class="btn btn-line" type="button" id="vCtaClose">Explore the model</button>
+              </div>
+            </div>
+          </div>
         </div>
         <aside class="d-panel">
           <div>
@@ -1128,7 +1159,8 @@ window.RF = (() => {
       f: [['System 1 · site layout sweep', 'Alright, we found a spot for the fire engine to park that was not obvious: the existing driveway on the east side. Widened by 40 cm, it puts the engine right next to the balconies, so no extra paved lane is needed.'],
         ['LLM agent · Berlin building code', 'Here is the big one. In Berlin, the fire brigade can rescue people with portable ladders as long as the parapet is no higher than 8 m. Your top-floor balconies sit at 8.10 m. We dropped them three steps, 51 cm, with a short stair from the door down to the balcony. The parapet is now at 7.59 m. The ladder reaches, the balconies count as the second escape route, and the second staircase can go. That saves you about €100k.'],
         ['System 1 · floor plan sweep', 'Last one: bathrooms and kitchens now stack directly above each other, so four service shafts become two with shorter pipe runs.']],
-      sum: s => `Done. Three changes, ${s} saved, same flats and the same standard. Each change is marked as a proposal until your planner approves it.`
+      sum: s => `Done. Three changes, ${s} saved, same flats and the same standard. Each change is marked as a proposal until your planner approves it.`,
+      ctaH: 'Want this for your project?', ctaP: 'We found this in a six-flat house in Berlin. Let us look at yours: send a site and a brief, and we will walk you through what our agents find.', ctaBook: 'Book a sales call', ctaClose: 'Explore the model', saved: 'saved'
     },
     de: {
       first: 'Erster Entwurf', busy: 'Optimiere…', done: 'Rev. B · 3 Vorschläge', agent: 'Richtfest-Agent',
@@ -1138,12 +1170,30 @@ window.RF = (() => {
       f: [['System 1 · Lageplan-Sweep', 'Gut, wir haben einen Platz gefunden, an dem die Feuerwehr parken kann, und der war nicht offensichtlich: die bestehende Zufahrt auf der Ostseite. Um 40 cm verbreitert steht das Fahrzeug direkt an den Balkonen, eine zusätzliche befestigte Fläche ist nicht nötig.'],
         ['LLM-Agent · Bauordnung Berlin', 'Jetzt das Wichtigste. In Berlin kann die Feuerwehr mit tragbaren Leitern retten, solange die Brüstung höchstens 8 m hoch liegt. Ihre Balkone im 2. OG liegen bei 8,10 m. Wir haben sie drei Stufen, also 51 cm, tiefer gesetzt und eine kurze Treppe von der Tür auf den Balkon ergänzt. Die Brüstung liegt jetzt bei 7,59 m. Die Leiter reicht, die Balkone gelten als zweiter Rettungsweg, und das zweite Treppenhaus entfällt. Das spart Ihnen rund 100.000 €.'],
         ['System 1 · Grundriss-Sweep', 'Zum Schluss: Bäder und Küchen liegen jetzt direkt übereinander. So werden aus vier Installationsschächten zwei mit kürzeren Leitungswegen.']],
-      sum: s => `Fertig. Drei Änderungen, ${s} gespart, gleiche Wohnungen, gleicher Standard. Jede Änderung bleibt als Vorschlag markiert, bis Ihre Planerin oder Ihr Planer sie freigibt.`
+      sum: s => `Fertig. Drei Änderungen, ${s} gespart, gleiche Wohnungen, gleicher Standard. Jede Änderung bleibt als Vorschlag markiert, bis Ihre Planerin oder Ihr Planer sie freigibt.`,
+      ctaH: 'Das wollen Sie auch?', ctaP: 'Das haben wir in einem Haus mit sechs Wohnungen in Berlin gefunden. Schauen wir uns Ihr Projekt an: Schicken Sie uns Grundstück und Anforderungen, und wir zeigen Ihnen, was unsere Agenten finden.', ctaBook: 'Vertriebsgespräch vereinbaren', ctaClose: 'Modell erkunden', saved: 'gespart'
     }
   };
   const T = () => TXT[RF.lang];
   let phase = 'idle', cost = BASE;
 
+  // Keep the newest agent message in view whenever the log changes
+  let follow = true;
+  logEl.addEventListener('scroll', () => { follow = logEl.scrollHeight - logEl.clientHeight - logEl.scrollTop < 24; }, { passive: true });
+  const toBottom = () => { if (follow) logEl.scrollTop = logEl.scrollHeight; };
+  new MutationObserver(() => requestAnimationFrame(toBottom)).observe(logEl, { childList: true, subtree: true, characterData: true });
+  new ResizeObserver(() => requestAnimationFrame(toBottom)).observe(logEl);
+  const panelEl = document.querySelector('.d-panel');
+  const vCta = document.getElementById('vCta');
+  function renderCta() {
+    document.getElementById('vCtaK').textContent = T().done;
+    document.getElementById('vCtaH').textContent = T().ctaH;
+    document.getElementById('vCtaAmt').innerHTML = `−${RF.eur(BASE - cost)} <i>${T().saved}</i>`;
+    document.getElementById('vCtaP').textContent = T().ctaP;
+    document.querySelector('#vCtaBook span').textContent = T().ctaBook;
+    document.getElementById('vCtaClose').textContent = T().ctaClose;
+  }
+  document.getElementById('vCtaClose').addEventListener('click', () => { vCta.hidden = true; });
   const pin2t = document.getElementById('pin2t');
   let parapet = 8.10;
   const setPin2 = () => { pin2t.textContent = `${T().parapet} ${RF.nf(parapet, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m${parapet <= 8 ? ' · ' + T().ok : ''}`; };
@@ -1159,7 +1209,7 @@ window.RF = (() => {
   intro();
   RF.on(() => {
     if (phase === 'idle') intro();
-    else if (phase === 'done') { statusEl.textContent = T().done; costEl.textContent = RF.eur(cost); setDelta(); setPin2(); }
+    else if (phase === 'done') { statusEl.textContent = T().done; costEl.textContent = RF.eur(cost); setDelta(); setPin2(); renderCta(); }
   });
   function setDelta() { deltaEl.textContent = cost < BASE ? `−${RF.eur(BASE - cost)} · −${RF.nf((BASE - cost) / BASE * 100, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %` : ''; }
 
@@ -1659,7 +1709,9 @@ window.RF = (() => {
   /* Loop, only while visible */
   let visible = true, raf = 0;
   let lastW = 0, lastH = 0;
-  function resize() { const w = host.clientWidth, h = host.clientHeight; if (w === lastW && h === lastH) return; lastW = w; lastH = h; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.render(scene, camera); }
+  function resize() { const w = host.clientWidth, h = host.clientHeight; if (w === lastW && h === lastH) return; lastW = w; lastH = h; renderer.setSize(w, h, false); camera.aspect = w / h;
+    const hHalf = Math.tan(THREE.MathUtils.degToRad(15)) * 1.16; camera.fov = Math.max(30, THREE.MathUtils.radToDeg(2 * Math.atan(hHalf / camera.aspect)));
+    camera.updateProjectionMatrix(); renderer.render(scene, camera); }
   new ResizeObserver(resize).observe(host); resize();
   // Material colours are authored as sRGB hex values; convert them once so they render true to colour
   const converted = new Set();
@@ -1686,27 +1738,37 @@ window.RF = (() => {
     const from = cost; cost = to; setDelta();
     return tween(900, p => { costEl.textContent = RF.eur(from + (to - from) * ease(p)); });
   }
-  async function typeInto(el, text) {
-    if (reduce) { el.textContent = text; return; }
-    for (let i = 1; i <= text.length; i += 2) { el.textContent = text.slice(0, i); logEl.scrollTop = logEl.scrollHeight; await new Promise(r => setTimeout(r, 9)); }
-    el.textContent = text;
+  // On stacked layouts the agent messages also stream into the bottom-right of the 3D view
+  const feed = document.getElementById('vFeed');
+  function feedAdd(who, text = '') {
+    host.classList.add('feeding');
+    const d = document.createElement('div'); d.innerHTML = '<b></b><span></span>';
+    d.firstChild.textContent = who; d.lastChild.textContent = text; feed.appendChild(d);
+    while (feed.children.length > 4) feed.firstChild.remove();
+    return d.lastChild;
+  }
+  function feedClear() { feed.innerHTML = ''; host.classList.remove('feeding'); }
+  async function typeInto(el, text, mirror) {
+    if (reduce) { el.textContent = text; if (mirror) mirror.textContent = text; return; }
+    for (let i = 1; i <= text.length; i += 2) { el.textContent = text.slice(0, i); if (mirror) mirror.textContent = el.textContent; await new Promise(r => setTimeout(r, 9)); }
+    el.textContent = text; if (mirror) mirror.textContent = text;
   }
   async function finding(n, save) {
     const [who, text] = T().f[n - 1];
     const li = document.createElement('li'); li.className = 'found';
     li.innerHTML = `<div class="row"><span class="row" style="gap:8px"><span class="num">${n}</span><span class="who">${who}</span></span><span class="save">−${RF.eur(save)}</span></div><span class="t"></span>`;
     logEl.appendChild(li); logEl.scrollTop = logEl.scrollHeight;
-    await typeInto(li.querySelector('.t'), text);
+    await typeInto(li.querySelector('.t'), text, feedAdd(`${n} · ${who}`));
   }
   const windowParts = ['frame', 'glass', 'mull', 'sill'];
 
   goBtn.addEventListener('click', async () => {
     if (phase !== 'idle') return; phase = 'busy';
-    goBtn.disabled = true; controls.enabled = false; controls.autoRotate = false;
+    goBtn.disabled = true; controls.enabled = false; controls.autoRotate = false; follow = true; panelEl.classList.add('running');
     statusEl.textContent = T().busy;
     const li = document.createElement('li');
     li.innerHTML = `<span class="who">${T().scanWho}</span><span>${T().scan}</span><div class="prog"><i></i></div>`;
-    logEl.appendChild(li);
+    logEl.appendChild(li); feedAdd(T().scanWho, T().scan);
     requestAnimationFrame(() => requestAnimationFrame(() => { li.querySelector('.prog i').style.width = '100%'; }));
     await fly(new THREE.Vector3(40, 34, 40), new THREE.Vector3(4, 3, 2), 1400);
 
@@ -1765,10 +1827,12 @@ window.RF = (() => {
     await fly(HOME.pos, HOME.tgt, 1800);
     const sum = document.createElement('li');
     sum.innerHTML = `<span class="who">${T().agent}</span><span>${T().sum(RF.eur(BASE - cost))}</span>`;
-    logEl.appendChild(sum); logEl.scrollTop = logEl.scrollHeight;
+    logEl.appendChild(sum); logEl.scrollTop = logEl.scrollHeight; feedAdd(T().agent, T().sum(RF.eur(BASE - cost)));
     statusEl.textContent = T().done;
     controls.enabled = true; controls.autoRotate = !reduce;
     resetBtn.hidden = false; phase = 'done';
+    await wait(1400);
+    if (phase === 'done') { renderCta(); vCta.hidden = false; }
   });
 
   resetBtn.addEventListener('click', () => {
@@ -1779,7 +1843,7 @@ window.RF = (() => {
     newShafts.forEach(m => { m.visible = false; m.scale.y = 0.001; }); oldShafts.forEach(m => { m.visible = false; });
     wall.opacity = 1; wall.depthWrite = true; core.visible = false;
     pins.forEach(p => p.el.classList.remove('on'));
-    cost = BASE; phase = 'idle'; intro(); resetBtn.hidden = true; goBtn.disabled = false;
+    cost = BASE; phase = 'idle'; intro(); resetBtn.hidden = true; goBtn.disabled = false; vCta.hidden = true; panelEl.classList.remove('running'); feedClear();
     fly(HOME.pos, HOME.tgt, 1200);
   });
 })();
