@@ -13,7 +13,7 @@ Do not create the services through the dashboard's GitHub import. It detects the
 
 Fumadocs exports a static site. The API serves its output under `/docs` behind sign-in, including document data and assets. No separate production Next.js server is required.
 
-The public marketing page is the static `richtfest-landing` directory. The API serves it at `/landing/` on the Railway preview hostname and at `/` for `richtfest.si`; the app remains at `/` on its Railway and `app.` hostnames. The Docker runtime includes the landing files alongside the web bundle.
+The public marketing page is the static `richtfest-landing` directory. The API serves it at `/landing/` on the Railway preview hostname and at `/` for `richtfest.andreaswissel.com`, `richtfest.si` and `www.richtfest.si`; the app remains at `/` on its Railway and app hostnames, including `richtfest-app.andreaswissel.com`. The Docker runtime includes the landing files alongside the web bundle.
 
 Docker runs the typecheck, web build and docs export in independent stages, so Railway can build them in parallel and reuse unchanged stages. Only application source and build inputs invalidate these stages, not agent rules or infrastructure metadata. The runtime image installs production dependencies and only native bindings for its own architecture. All workspace typechecks still gate the image. The service pins `PORT=3000`, matching the public domain's target port.
 
