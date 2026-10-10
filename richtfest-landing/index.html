@@ -1432,6 +1432,14 @@ window.RF = (() => {
   box(2.5, 0.35, 0.2, M({ color: 0x222222, roughness: 0.6 }), 0, 0.7, 4.45, truck);
   [[-1.15, -3], [1.15, -3], [-1.15, -1.7], [1.15, -1.7], [-1.15, 3.2], [1.15, 3.2]].forEach(([x, z]) => { const w = cyl(0.52, 0.52, 0.38, tyre, x, 0.52, z, truck); w.rotation.z = Math.PI / 2; });
   truck.rotation.y = Math.PI; truck.visible = false;
+  // Route: along the street from off-screen, turn into the driveway, stop beside the balconies
+  const route = new THREE.CatmullRomCurve3([[-48, 21.5], [-20, 21.5], [5, 21.5], [11.6, 20.2], [14.2, 16], [14.2, 9], [14.2, 3]].map(([x, z]) => new THREE.Vector3(x, 0, z)), false, 'centripetal');
+  const tangent = new THREE.Vector3();
+  function placeTruck(u) {
+    const pt = route.getPointAt(u); route.getTangentAt(u, tangent);
+    truck.position.set(pt.x, 0.16, pt.z);
+    truck.rotation.y = Math.atan2(tangent.x, tangent.z);
+  }
 
   /* Finding 2: lower the top balconies three steps so the parapet stays within ladder reach */
   const DROP = 0.51, PAR0 = G0 + (NF - 1) * FH + 1.0;
@@ -1541,8 +1549,8 @@ window.RF = (() => {
     await fly(new THREE.Vector3(40, 15, 34), new THREE.Vector3(12, 1.5, 3));
     widen.visible = true; fireArea.visible = true; sign.visible = true;
     await tween(700, p => { fireArea.scale.z = Math.max(0.001, ease(p)); });
-    truck.visible = true;
-    await tween(1800, p => { truck.position.set(14.2, 0, 30 - 27 * ease(p)); });
+    placeTruck(0); truck.visible = true;
+    await tween(4600, p => { placeTruck(1 - Math.pow(1 - p, 1.8)); });
     pins[0].el.classList.add('on');
     await finding(1, 24000);
     await tickCost(BASE - 24000);
@@ -1555,7 +1563,7 @@ window.RF = (() => {
     parapet = 7.59; setPin2();
     await fly(new THREE.Vector3(6.5, 16.5, 14.5), new THREE.Vector3(3, 6.6, 6.3), 1300);
     for (const part of stairParts) {
-      part.m.visible = true;
+      part.m.position.z = part.z - 0.7; part.m.position.y = part.y + 0.5; part.m.visible = true;
       tween(450, p => { const e = ease(p); part.m.position.z = part.z - 0.7 * (1 - e); part.m.position.y = part.y + 0.5 * (1 - e); });
       await wait(110);
     }
