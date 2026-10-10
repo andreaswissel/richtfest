@@ -4,7 +4,7 @@
 
 - Serve the public landing page on `richtfest.ai` while preserving existing domain aliases; use `app.richtfest.ai` for the app.
 
-- Project agent runs retry temporary provider failures and invalid responses with up to three attempts, and failed runs show a clear outcome with run details and a retry action. Completed reviews now include a downloadable PDF attachment in the conversation for the exact saved artifact revision.
+- Project agent runs retry temporary provider failures and invalid responses, including truncated and schema-invalid Mastra responses, with up to three attempts instead of treating them as connection failures. Failed runs show a clear outcome with run details and a retry action. Completed reviews now include a downloadable PDF attachment in the conversation for the exact saved artifact revision.
 
 - Project conversations render assistant Markdown with readable headings, lists, tables and code while keeping user messages literal.
 

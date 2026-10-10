@@ -83,6 +83,11 @@ const transientNetworkCodes = new Set([
   "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH",
   "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
 ]);
+const structuredOutputErrorIds = new Set([
+  "STRUCTURED_OUTPUT_TRUNCATED",
+  "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+  "STRUCTURED_OUTPUT_OBJECT_UNDEFINED",
+]);
 function providerFailureMetadata(error: unknown): {
   retryable: boolean;
   status?: number;
@@ -115,8 +120,10 @@ function providerFailureMetadata(error: unknown): {
       if (Number.isFinite(delay)) retryAfterMs = Math.min(300001, Math.max(0, delay));
     }
     const name = value.name;
+    // Mastra uses stable IDs, not error names; OpenAI schema wrappers can omit causes.
     if (["ZodError", "SyntaxError", "NoObjectGeneratedError", "AI_NoObjectGeneratedError",
-      "AI_TypeValidationError", "AI_JSONParseError"].includes(String(name)) || value.code === "invalid_provider_output") {
+      "AI_TypeValidationError", "AI_JSONParseError"].includes(String(name)) || value.code === "invalid_provider_output"
+      || structuredOutputErrorIds.has(String(value.id)) || structuredOutputErrorIds.has(String(value.code))) {
       category = "validation";
       retryable = true;
     }

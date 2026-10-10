@@ -15,6 +15,40 @@ test("real Mastra agent rejects plans outside bounded schema", async () => {
     model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: ({ tasks: [{ role: "admin", goal: "Write data", sourceVersionIds: [] }] }) }),
   })).rejects.toThrow("Supervisor model execution failed");
 });
+test("Mastra truncation and OpenAI schema failures remain retryable without exposing output", async () => {
+  for (const failure of ["truncated", "schema"] as const) {
+    for (const streaming of [false, true]) {
+      const secret = "sk-test-secret";
+      const text = failure === "truncated" ? `{"summary":"${secret}`
+        : JSON.stringify({ summary: secret, rationale: "Invalid citation", citations: ["not-a-uuid"] });
+      const finishReason = failure === "truncated" ? "length" : "stop";
+      const usage = { inputTokens: 12, outputTokens: 50, totalTokens: 62 };
+      const model = new MastraLanguageModelV2Mock({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        doGenerate: async () => ({ content: [{ type: "text", text }], finishReason, usage, warnings: [] }),
+        doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+          controller.enqueue({ type: "text-start", id: "output" });
+          controller.enqueue({ type: "text-delta", id: "output", delta: text });
+          controller.enqueue({ type: "text-end", id: "output" });
+          controller.enqueue({ type: "finish", finishReason, usage });
+          controller.close();
+        } }) }),
+      });
+      const error = await callMastraSupervisor({
+        ...base, phase: "specialist",
+        onSummaryDelta: streaming ? async () => {} : undefined,
+      }, secret, { model }).then(() => { throw new Error("Invalid output was accepted"); }, error => error);
+      expect(error).toMatchObject({
+        code: "invalid_provider_output", providerFailure: true, retryable: true, failureCategory: "validation",
+      });
+      expect(error.providerStatus).toBeUndefined();
+      expect(error.cause).toBeUndefined();
+      expect(`${error.message}${JSON.stringify(error)}`).not.toContain(secret);
+      expect(`${error.message}${JSON.stringify(error)}`).not.toContain("not-a-uuid");
+    }
+  }
+});
 test("real Mastra agent returns a valid focused plan", async () => {
   const plan = { tasks: [{ role: "source_reviewer", goal: "Check assigned source", sourceVersionIds: [crypto.randomUUID()] }] };
   expect(await callMastraSupervisor({ ...base, phase: "plan" }, "test-key", {
