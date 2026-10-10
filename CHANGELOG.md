@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project agent failures and cancellations now show recorded reasons in run details and sub-agent lists, including why child runs stopped when their supervisor failed. Older runs with only a generic error are labeled as having no specific recorded reason.
+
 - Start a project chat thread by writing and sending the first message in the workspace.
 
 - Supervisor workers now advance queued project runs through persisted Mastra workflow checkpoints provisioned by the standard application migration; worker startup, polling failures and per-run execution failures are visible in API logs with run context.

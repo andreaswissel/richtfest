@@ -1,6 +1,7 @@
 import { and, eq, inArray, lt, notExists } from "drizzle-orm";
 import type { AppDeps } from "./deps";
 import { agentRuns, agentRunEvents, supervisorRuns } from "./schema";
+import { formatRunFailureReason } from "./run-reasons";
 /** Legacy executions cannot resume. Make their interruption visible on every run-reading surface. */
 export async function repairLegacyRuns(
   d: AppDeps,
@@ -12,7 +13,7 @@ export async function repairLegacyRuns(
       .update(agentRuns)
       .set({
         status: "failed",
-        error: "Execution was interrupted. Retry to start a new run.",
+        error: formatRunFailureReason("execution", "execution"),
         updatedAt: new Date(),
       })
       .where(

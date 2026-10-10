@@ -74,6 +74,18 @@
   font-size: var(--ui-xs);
   color: var(--muted-foreground);
 }
+.subagent-run-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.45;
+}
+.subagent-run-reason-label,
+.agent-thread-run-reason-label {
+  color: var(--foreground);
+  font-weight: 500;
+}
 .subagent-label .agent-run-metrics {
   font-size: var(--ui-2xs);
 }
@@ -242,6 +254,19 @@
 }
 .agent-thread-specialists a > span:first-child {
   flex: 1;
+}
+.agent-thread-specialist-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.agent-thread-specialist-reason {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .agent-thread-sources {
   display: flex;

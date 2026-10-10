@@ -44,6 +44,102 @@ function agentName(run: RecordData, t: ReturnType<typeof useT>) {
   );
 }
 
+const runReasonPhases = {
+  plan: "workspaceRunPhasePlan",
+  specialist: "workspaceRunPhaseSpecialist",
+  review: "workspaceRunPhaseReview",
+  independent_review: "workspaceRunPhaseIndependentReview",
+  provider: "workspaceRunPhaseProvider",
+  execution: "workspaceRunPhaseExecution",
+  source_resolution: "workspaceRunPhaseSourceResolution",
+  tool_execution: "workspaceRunPhaseToolExecution",
+  finalization: "workspaceRunPhaseFinalization",
+  cancellation: "workspaceRunPhaseCancellation",
+  approval: "workspaceRunPhaseApproval",
+} as const;
+
+const runReasonCategories = {
+  provider: "workspaceRunCategoryProvider",
+  permission: "workspaceRunCategoryPermission",
+  validation: "workspaceRunCategoryValidation",
+  source: "workspaceRunCategorySource",
+  project: "workspaceRunCategoryProject",
+  cancellation: "workspaceRunCategoryCancellation",
+  execution: "workspaceRunCategoryExecution",
+} as const;
+
+const canonicalCategoryReasonPrefixes = {
+  provider: "The provider call could not complete.",
+  permission: "A required permission is unavailable.",
+  validation: "The run returned unsupported or invalid output.",
+  source: "Required project source content is unavailable.",
+  project: "The project is unavailable.",
+  execution: "The run stopped unexpectedly before output could be approved.",
+} as const;
+
+const genericLegacyRunReasons = new Set([
+  "Execution failed or returned unsupported output. Check the provider connection and retry. No output was approved.",
+  "Execution was interrupted. Retry to start a new run.",
+  "Supervisor stopped: provider, permission, or output validation failed. No output was approved.",
+]);
+
+function formatPersistedRunReason(
+  reason: string,
+  t: ReturnType<typeof useT>,
+) {
+  if (genericLegacyRunReasons.has(reason)) return t("workspaceRunNoSpecificReason");
+  const match = /^phase=([^;]+);\s*category=([^;]+);\s*(.*)$/s.exec(reason);
+  if (!match) return reason;
+  const phaseKey = runReasonPhases[match[1] as keyof typeof runReasonPhases];
+  const categoryKey =
+    runReasonCategories[match[2] as keyof typeof runReasonCategories];
+  if (!phaseKey || !categoryKey) return reason;
+  const phase = t(phaseKey);
+  const category = t(categoryKey);
+  const cause = match[3];
+  const childCauseKey = cause.startsWith("The supervisor failed during")
+    ? "workspaceRunChildCauseSupervisorFailed"
+    : cause.startsWith("The supervisor was cancelled during")
+      ? "workspaceRunChildCauseSupervisorCancelled"
+      : cause.startsWith("The supervisor was steered with new instructions during")
+        ? "workspaceRunChildCauseSupervisorSteered"
+        : undefined;
+  if (childCauseKey)
+    return `${t("workspaceRunChildCancelledDuring")} ${phase}: ${category} ${t("workspaceRunCauseLabel")}: ${t(childCauseKey)}`;
+  if (cause.startsWith("Output was rejected during human review"))
+    return t("workspaceRunReviewRejected");
+  if (
+    match[2] === "cancellation" &&
+    !cause.startsWith("The run was cancelled by a user")
+  )
+    return reason;
+  if (
+    match[2] !== "cancellation" &&
+    !cause.startsWith(
+      canonicalCategoryReasonPrefixes[
+        match[2] as keyof typeof canonicalCategoryReasonPrefixes
+      ],
+    )
+  )
+    return reason;
+  return `${t(
+    match[2] === "cancellation"
+      ? "workspaceRunCancelledDuring"
+      : "workspaceRunFailedDuring",
+  )} ${phase}: ${category}`;
+}
+
+function terminalRunReason(run: RecordData, t: ReturnType<typeof useT>) {
+  if (run.status !== "failed" && run.status !== "cancelled") return undefined;
+  const persistedReason = [run.error, run.failureReason].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (persistedReason) return formatPersistedRunReason(persistedReason.trim(), t);
+  return run.status === "failed"
+    ? t("workspaceRunFailedNoReason")
+    : t("workspaceRunCancelledNoReason");
+}
+
 function AgentIcon({
   role,
   supervisor,
@@ -95,6 +191,7 @@ export function SubagentList({
     if (conversationId || run.conversationId)
       next.set("conversation", conversationId || run.conversationId);
     next.delete("message");
+    const reason = terminalRunReason(run, t);
     return (
       <Link
         key={run.id}
@@ -118,6 +215,14 @@ export function SubagentList({
           <span>
             {t(`run_${run.status}` as Parameters<typeof t>[0]) || run.status}
           </span>
+          {reason && (
+            <span className="subagent-run-reason" title={reason}>
+              <span className="subagent-run-reason-label">
+                {t("workspaceRunReason")}:
+              </span>{" "}
+              {reason}
+            </span>
+          )}
           <AgentRunMetrics run={run} />
         </span>
         <ArrowUpRight className="size-icon-sm muted" aria-hidden="true" />
@@ -477,6 +582,7 @@ export function SubagentThread({
     ? activeChild?.goal ||
       t(childRuns.length ? "workspaceTaskReviewing" : "workspaceTaskPlanning")
     : run.goal;
+  const reason = terminalRunReason(run, t);
   return (
     <section className="agent-thread" aria-label={agentName(run, t)}>
       <header className="agent-thread-header">
@@ -556,7 +662,14 @@ export function SubagentThread({
                     {run.rationale && (
                       <p className="agent-thread-rationale">{run.rationale}</p>
                     )}
-                    {run.error && <Callout tone="error">{run.error}</Callout>}
+                    {reason && (
+                      <Callout tone={run.status === "failed" ? "error" : undefined}>
+                        <span className="agent-thread-run-reason-label">
+                          {t("workspaceRunReason")}:
+                        </span>{" "}
+                        {reason}
+                      </Callout>
+                    )}
                     {!managed && run.status === "needs_review" && (
                       <div>
                         <Button onClick={() => setReview(true)}>
@@ -615,12 +728,26 @@ export function SubagentThread({
                             conversationId || child.conversationId,
                           );
                         target.delete("message");
+                        const reason = terminalRunReason(child, t);
                         return (
                           <Link
                             key={child.id}
                             to={`/projects/${projectId}?${target}`}
                           >
-                            <span>{agentName(child, t)}</span>
+                            <span className="agent-thread-specialist-copy">
+                              <span>{agentName(child, t)}</span>
+                              {reason && (
+                                <span
+                                  className="agent-thread-specialist-reason"
+                                  title={reason}
+                                >
+                                  <span className="agent-thread-run-reason-label">
+                                    {t("workspaceRunReason")}:
+                                  </span>{" "}
+                                  {reason}
+                                </span>
+                              )}
+                            </span>
                             <Badge>
                               {t(
                                 `run_${child.status}` as Parameters<

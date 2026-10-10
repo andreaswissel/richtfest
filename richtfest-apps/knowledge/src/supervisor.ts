@@ -14,6 +14,13 @@ import {
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact } from "./workspace";
 import { recordProviderUsage } from "./usage";
+import {
+  classifyRunFailure,
+  formatChildCancellationReason,
+  formatRunFailureReason,
+  type RunFailureCategory,
+  type RunFailurePhase,
+} from "./run-reasons";
 
 export const specialistOutput = z.object({
   summary: z.string().min(1).max(10000),
@@ -237,6 +244,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     await log(d, tx, run, s.leaseToken ? "resumed" : "supervisor_started");
   });
   if (!run) return;
+  let failurePhase: RunFailurePhase =
+    state.phase === "specialists" ? "specialist" : (state.phase as RunFailurePhase);
+  let failureCategory: RunFailureCategory = "execution";
   const heartbeat = setInterval(() => {
     void commit(d, run, token, async (tx) => {
       await tx
@@ -279,6 +289,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       runId = id,
     ) => {
       const callId = crypto.randomUUID();
+      failurePhase = phase;
+      failureCategory = "execution";
       await assertActive();
       const started = await commit(d, run, token, async (tx) => {
         await log(d, tx, run, "provider_call_started", phase, callId);
@@ -328,6 +340,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       } catch (error) {
         // Keep this event deliberately bounded: the phase is enough to explain where
         // execution stopped without persisting prompts, source text, or provider errors.
+        // The supervisor execution adapter is the provider boundary. Provider SDK
+        // exceptions are intentionally reduced to this stable category; their
+        // messages can contain prompts, credentials, or response bodies.
+        failureCategory = "provider";
         await commit(d, run, token, async (tx) => {
           await log(d, tx, run, "provider_call_failed", phase, callId);
         });
@@ -897,20 +913,29 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         });
       }
     }
-  } catch {
+  } catch (error) {
+    const category =
+      failureCategory === "execution"
+        ? classifyRunFailure(error, failurePhase)
+        : failureCategory;
+    const failureReason = formatRunFailureReason(failurePhase, category);
+    const childCancellationReason = formatChildCancellationReason(
+      failurePhase,
+      category,
+      "supervisor_failed",
+    );
     await commit(d, run, token, async (tx) => {
       await tx
         .update(agentRuns)
         .set({
           status: "failed",
-          error:
-            "Supervisor stopped: provider, permission, or output validation failed. No output was approved.",
+          error: failureReason,
           updatedAt: new Date(),
         })
         .where(eq(agentRuns.id, id));
       const stopped = await tx
         .update(agentRuns)
-        .set({ status: "cancelled", updatedAt: new Date() })
+        .set({ status: "cancelled", error: childCancellationReason, updatedAt: new Date() })
         .where(
           and(
             eq(agentRuns.parentRunId, id),
@@ -925,8 +950,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             .update(tasks)
             .set({ status: "cancelled" })
             .where(eq(tasks.id, child.taskId));
+        await log(d, tx, child, "cancelled", undefined, childCancellationReason);
       }
-      await log(d, tx, run, "supervisor_failed");
+      await log(d, tx, run, "supervisor_failed", undefined, failureReason);
     });
   } finally {
     clearInterval(heartbeat);

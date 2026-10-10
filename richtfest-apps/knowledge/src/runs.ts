@@ -25,6 +25,15 @@ import {
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
 import { recordProviderUsage, summarizeUsageRows } from "./usage";
+import {
+  classifyRunFailure,
+  formatChildCancellationReason,
+  formatRunFailureReason,
+  reviewRejectionReason,
+  userCancellationReason,
+  type RunFailureCategory,
+  type RunFailurePhase,
+} from "./run-reasons";
 const runInput = z.object({
   effort: z.enum(["low", "medium", "high", "ultra"]).default("medium"),
   messageId: z.string().uuid().optional(),
@@ -171,6 +180,8 @@ async function active(d: AppDeps, run: any, fn: (tx: any) => Promise<unknown>) {
   });
 }
 export async function executeRun(d: AppDeps, run: any) {
+  let failurePhase: RunFailurePhase = "execution";
+  let failureCategory: RunFailureCategory = "execution";
   try {
     const claimed = await d.db.transaction(async (tx: any) => {
       const current = await getRun(d, run.id, tx, true);
@@ -190,6 +201,8 @@ export async function executeRun(d: AppDeps, run: any) {
       return true;
     });
     if (!claimed) return;
+    failurePhase = "source_resolution";
+    failureCategory = "execution";
     const sourceInventory = await d.listProjectSources(run.projectId);
     const evidence = new Set<string>();
     const sourceContent = [];
@@ -314,6 +327,8 @@ export async function executeRun(d: AppDeps, run: any) {
       });
     };
     const providerStartedAt = new Date();
+    failurePhase = "provider";
+    failureCategory = "provider";
     let response = await d.executeProvider({
       runId: run.id,
       onSummaryDelta,
@@ -325,6 +340,8 @@ export async function executeRun(d: AppDeps, run: any) {
       context,
       onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
     });
+    failurePhase = "execution";
+    failureCategory = "execution";
     if (response.status === "unconfigured") {
       await active(d, run, async (tx) => {
         await tx
@@ -356,6 +373,8 @@ export async function executeRun(d: AppDeps, run: any) {
       ) =>
         d.auditRun(tx, action, type, id, run.id, run.correlationId, metadata),
     };
+    failurePhase = "tool_execution";
+    failureCategory = "execution";
     for (const tool of output.tools) {
       const input = validateTool(tool.name, tool.input) as any;
       if (tool.name === "delegate_source_review") {
@@ -508,6 +527,8 @@ export async function executeRun(d: AppDeps, run: any) {
     if (results.length) {
       partialOutput = "";
       const followupStartedAt = new Date();
+      failurePhase = "provider";
+      failureCategory = "provider";
       response = await d.executeProvider({
         runId: run.id,
         onSummaryDelta,
@@ -520,6 +541,8 @@ export async function executeRun(d: AppDeps, run: any) {
         toolResults: results,
         onUsage: (usage) => recordProviderUsage(d, run, usage, followupStartedAt).then(() => undefined),
       });
+      failurePhase = "execution";
+      failureCategory = "execution";
       if (response.status !== "completed")
         throw conflict("Provider connection is no longer configured");
       output = outputInput.parse(response.output);
@@ -547,6 +570,8 @@ export async function executeRun(d: AppDeps, run: any) {
       if (!artifact)
         throw missing("Generated artifact reference is not in project");
     }
+    failurePhase = "finalization";
+    failureCategory = "execution";
     await active(d, run, async (tx) => {
       if (output.artifact) {
         d.requirePermission("knowledge:write");
@@ -607,7 +632,12 @@ export async function executeRun(d: AppDeps, run: any) {
         "Output persisted for human review",
       );
     });
-  } catch {
+  } catch (error) {
+    const category =
+      failureCategory === "execution"
+        ? classifyRunFailure(error, failurePhase)
+        : failureCategory;
+    const failureReason = formatRunFailureReason(failurePhase, category);
     // Never persist provider exceptions or raw tool arguments; errors may contain credentials.
     await d.db.transaction(async (tx: any) => {
       const current = await getRun(d, run.id, tx, true);
@@ -616,8 +646,7 @@ export async function executeRun(d: AppDeps, run: any) {
         .update(agentRuns)
         .set({
           status: "failed",
-          error:
-            "Execution failed or returned unsupported output. Check the provider connection and retry. No output was approved.",
+          error: failureReason,
           updatedAt: new Date(),
         })
         .where(eq(agentRuns.id, run.id));
@@ -627,7 +656,7 @@ export async function executeRun(d: AppDeps, run: any) {
         run,
         "failed",
         undefined,
-        "Provider or tool validation failed; no output approved",
+        failureReason,
       );
     });
   }
@@ -989,15 +1018,26 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           .returning();
         steeringMessageId = message.id;
       }
-      await tx
+      const steeringCancellationReason = formatChildCancellationReason(
+        "cancellation",
+        "cancellation",
+        "supervisor_steered",
+      );
+      const stoppedChildren = await tx
         .update(agentRuns)
-        .set({ status: "cancelled", updatedAt: new Date() })
+        .set({
+          status: "cancelled",
+          error: steeringCancellationReason,
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(agentRuns.parentRunId, run.id),
             eq(agentRuns.tenantId, d.tenantId),
+            inArray(agentRuns.status, ["queued", "running", "needs_review"]),
           ),
-        );
+        )
+        .returning();
       for (const assignment of state.assignments as any[]) {
         d.cancelExecution(assignment.runId);
         await tx
@@ -1010,6 +1050,8 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
             ),
           );
       }
+      for (const child of stoppedChildren)
+        await event(d, tx, child, "cancelled", undefined, steeringCancellationReason);
       await tx
         .update(supervisorRuns)
         .set({
@@ -1108,12 +1150,20 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         throw conflict("Run cannot be cancelled in its current state");
       const [updated] = await tx
         .update(agentRuns)
-        .set({ status: "cancelled", updatedAt: new Date() })
+        .set({ status: "cancelled", error: userCancellationReason, updatedAt: new Date() })
         .where(eq(agentRuns.id, run.id))
         .returning();
       const children = await tx
         .update(agentRuns)
-        .set({ status: "cancelled", updatedAt: new Date() })
+        .set({
+          status: "cancelled",
+          error: formatChildCancellationReason(
+            "cancellation",
+            "cancellation",
+            "supervisor_cancelled",
+          ),
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(agentRuns.parentRunId, run.id),
@@ -1137,7 +1187,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           child,
           "cancelled",
           undefined,
-          "Parent run cancelled",
+          "Parent run cancelled by user; child run cancelled as a consequence",
         );
       }
       d.cancelExecution(run.id);
@@ -1176,6 +1226,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         .update(agentRuns)
         .set({
           status: input.decision === "approved" ? "approved" : "cancelled",
+          error: input.decision === "approved" ? null : reviewRejectionReason,
           updatedAt: new Date(),
         })
         .where(eq(agentRuns.id, run.id))
