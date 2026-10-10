@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Supervisor workers now advance queued project runs through persisted Mastra workflow checkpoints provisioned by the standard application migration; worker startup, polling failures and per-run execution failures are visible in API logs with run context.
 - Project status is selected from translated Planning, Active and Completed options.
 - Project agent conversations distinguish queued runs from active work while keeping the crane visible in a waiting pose; running work shows live activity, source and specialist links, and a shimmering current-task line.
 - Project run details distinguish worker queue wait, supervisor phase and provider-call duration while work is active.

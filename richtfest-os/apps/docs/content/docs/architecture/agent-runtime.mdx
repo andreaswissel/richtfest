@@ -22,6 +22,8 @@ The supervisor owns coordination and revision. It delegates focused source extra
 
 Mastra workflow checkpoints and workflow run IDs use the Mastra Postgres store. Richtfest domain Postgres records hold conversations, assignments, tasks, evidence links, approvals, events and the policy snapshot. Lease state, replica coordination through Postgres advisory locks, row locks and generation fences make cancellation, restart and resume durable; restart and generation-fencing behavior is covered by the runtime tests. Project source files and revisions remain in private Railway Buckets, while Postgres stores their metadata and references.
 
+The enabled supervisor worker polls queued runs and advances them through the persisted Mastra workflow runtime. Each run uses a Postgres advisory lock while its checkpoint is read or written, so multiple service replicas can share the queue without advancing the same generation concurrently. Mastra storage keeps workflow checkpoints and run IDs; the Richtfest records remain the source of truth for phase state, assignments, evidence and review outcomes. A queued run therefore remains queued until a worker claims it, then moves through the same durable runtime used for restart and resume.
+
 ## Review and control
 
 The supervisor may propose a plan and ask specialists to work, but it does not silently approve consequential outcomes. Project participants can steer a queued or running run, revising its direction; steering cancels its current specialist assignments and starts a new planning generation. A message sent after a run has finished starts a new run. Participants can also cancel active work. Results should remain attributable to the assignment and source evidence that produced them. Unconfigured providers, tools or external actions stay explicit in the UI.
@@ -52,15 +54,16 @@ Workspace instructions remain subordinate to the platform safety and output cont
 
 ## Runtime setup
 
-The supervisor worker is disabled by default in local development and enabled in production with `AGENT_SUPERVISOR_ENABLED=true`. Before enabling it in a new environment, apply the standard application migrations, initialize the Mastra workflow store, and configure model presets. The planner routes file-based work to source and requirements reviewers. Project files are readable as unreviewed evidence; human review applies to the proposed result. If a user explicitly asks to review every project source, assignments cover the available inventory or report the coverage limit.
+The supervisor worker is disabled by default in local development and enabled in production with `AGENT_SUPERVISOR_ENABLED=true`. Before enabling it in a new environment, apply the standard application migrations and configure model presets. The application migration provisions the Mastra workflow checkpoint schema in `rf_agent_runtime` and copies compatible snapshots from the former runtime schema when present. The planner routes file-based work to source and requirements reviewers. Project files are readable as unreviewed evidence; human review applies to the proposed result. If a user explicitly asks to review every project source, assignments cover the available inventory or report the coverage limit.
 
-For a new environment, apply the standard application migrations first, then initialize the Mastra workflow store, configure model presets, and only then enable the worker:
+For a new environment, apply the standard application migrations first, configure model presets, and only then enable the worker:
 
 ```sh
 bun run --filter '@richtfest/api' db:migrate
-bun run --filter '@richtfest/api' db:migrate-agent-runtime
 AGENT_SUPERVISOR_ENABLED=true bun run --filter '@richtfest/api' dev
 ```
+
+The application starts the worker with automatic Mastra store initialization disabled, so `db:migrate` must complete before queued runs can be claimed. The `db:migrate-agent-runtime` script remains available for explicit full-store setup, but it is not required for the supervisor workflow checkpoint tables. When enabled, the worker logs its startup, polling failures and per-run execution failures with the run ID and generation; repeated errors are rate-limited to keep the API log useful.
 
 The enablement flag only turns on the worker. A workspace administrator must configure a valid model ID and bounded preset values for the selected provider and effort in Settings before starting a run. Vendor model environment variables may provide defaults, but Richtfest does not automatically choose a frontier model, infer a paid model or treat a provider API key as a complete preset. Anthropic presets omit reasoning effort because that adapter does not accept the field.
 

@@ -2,12 +2,15 @@ import { Mastra } from "@mastra/core/mastra";
 import { noopLogger } from "@mastra/core/logger";
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import type { MastraCompositeStore } from "@mastra/core/storage";
-import { PostgresStore, exportSchemas } from "@mastra/pg";
+import { PostgresStore, WorkflowsPG } from "@mastra/pg";
 import { z } from "zod";
 
-export const MASTRA_SCHEMA = "richtfest_agent_runtime";
-/** Explicit migration/setup only. Runtime always uses disableInit. */
-export const mastraMigrationSql = () => exportSchemas(MASTRA_SCHEMA);
+export const MASTRA_SCHEMA = "rf_agent_runtime";
+/** Workflow checkpoints only; runtime always uses disableInit. */
+export const mastraMigrationSql = () => [
+  `CREATE SCHEMA IF NOT EXISTS "${MASTRA_SCHEMA}";`,
+  ...WorkflowsPG.getExportDDL(MASTRA_SCHEMA),
+].join("\n--> statement-breakpoint\n");
 export function createMastraStorage(connectionString: string) {
   return new PostgresStore({ id: "richtfest-agent-runtime", connectionString, schemaName: MASTRA_SCHEMA, disableInit: true });
 }

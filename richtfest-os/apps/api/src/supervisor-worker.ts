@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { Request } from "express";
 import { listPendingSupervisors, stepSupervisor, supervisorProgress } from "@richtfest/knowledge";
 import type { AppDeps } from "@richtfest/knowledge/deps";
@@ -41,12 +41,23 @@ export async function startSupervisorWorker(db: Database, pool: Pool, options: {
   const resolveDeps = options.resolveDeps ?? ((tenantId, actorId) => backgroundKnowledgeDeps(db, tenantId, actorId));
   let stopping = false;
   let current: Promise<void> | undefined;
+  let lastTickErrorAt = 0;
+  const lastRunErrorAt = new Map<string, number>();
+  const errorDetails = (error: unknown) => ({
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    ...(typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? { errorCode: error.code }
+      : {}),
+  });
   async function tick() {
     const pending = await listPendingSupervisors(db, 3);
-    await Promise.allSettled(pending.map(async entry => {
-      const connection = await pool.connect();
+    const pendingIds = new Set(pending.map(entry => entry.runId));
+    for (const runId of lastRunErrorAt.keys()) if (!pendingIds.has(runId)) lastRunErrorAt.delete(runId);
+    await Promise.all(pending.map(async entry => {
+      let connection: PoolClient | undefined;
       let locked = false;
       try {
+        connection = await pool.connect();
         // A session lock spans framework checkpoints and coordinates replicas without Redis.
         const result = await connection.query("select pg_try_advisory_lock(hashtextextended($1, 0)) as locked", [`richtfest-supervisor:${entry.runId}`]);
         locked = result.rows[0]?.locked === true;
@@ -61,18 +72,38 @@ export async function startSupervisorWorker(db: Database, pool: Pool, options: {
           return { done: after.generation !== entry.generation || !["queued", "running"].includes(after.status) };
         } });
         await runtime.execute(entry.runId, entry.generation);
+        lastRunErrorAt.delete(entry.runId);
+      } catch (error) {
+        const now = Date.now();
+        if (now - (lastRunErrorAt.get(entry.runId) ?? 0) >= 60_000) {
+          console.error("Supervisor worker could not execute a queued run", {
+            runId: entry.runId,
+            generation: entry.generation,
+            ...errorDetails(error),
+          });
+          lastRunErrorAt.set(entry.runId, now);
+        }
       } finally {
-        if (locked) await connection.query("select pg_advisory_unlock(hashtextextended($1, 0))", [`richtfest-supervisor:${entry.runId}`]).catch(() => undefined);
-        connection.release();
+        if (connection) {
+          if (locked) await connection.query("select pg_advisory_unlock(hashtextextended($1, 0))", [`richtfest-supervisor:${entry.runId}`]).catch(() => undefined);
+          connection.release();
+        }
       }
     }));
   }
   const schedule = () => {
     if (stopping || current) return;
-    current = tick().catch(() => console.error("Supervisor worker could not dispatch work; check database and runtime migrations.")).finally(() => { current = undefined; });
+    current = tick().catch(error => {
+      const now = Date.now();
+      if (now - lastTickErrorAt >= 60_000) {
+        console.error("Supervisor worker could not poll queued runs", errorDetails(error));
+        lastTickErrorAt = now;
+      }
+    }).finally(() => { current = undefined; });
   };
   const timer = setInterval(schedule, 1500);
   timer.unref();
+  console.info("Supervisor worker started; polling queued runs.");
   schedule();
   return { stop: async () => { stopping = true; clearInterval(timer); await current; await storage.close(); } };
 }
