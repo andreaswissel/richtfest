@@ -111,12 +111,14 @@ export const createAccessRouter = (
       const pending = await db
         .select({
           id: invitations.id,
+          name: users.name,
           email: invitations.email,
           expiresAt: invitations.expiresAt,
           role: roles.name,
         })
         .from(invitations)
         .innerJoin(roles, eq(roles.id, invitations.roleId))
+        .leftJoin(users, eq(users.email, invitations.email))
         .where(
           and(
             eq(invitations.tenantId, current.tenantId),
@@ -146,7 +148,11 @@ export const createAccessRouter = (
       const current = manage(req);
       const input = z
         .object({
-          email: z.string().email().transform((value) => value.toLowerCase()),
+          name: z.string().trim().min(1).max(120),
+          email: z
+            .string()
+            .email()
+            .transform((value) => value.toLowerCase()),
           roleId: z.string().uuid(),
           expiresInDays: z.coerce.number().int().min(1).max(30).default(7),
         })
@@ -207,14 +213,25 @@ export const createAccessRouter = (
           await tx.insert(users).values({
             id: userId,
             email: input.email,
-            name: input.email,
+            name: input.name,
           });
           await tx.insert(authUser).values({
             id: userId,
             email: input.email,
-            name: input.email,
+            name: input.name,
             emailVerified: false,
           });
+        }
+
+        if (existing) {
+          await tx
+            .update(users)
+            .set({ name: input.name })
+            .where(eq(users.id, userId));
+          await tx
+            .update(authUser)
+            .set({ name: input.name })
+            .where(eq(authUser.id, userId));
         }
 
         await tx

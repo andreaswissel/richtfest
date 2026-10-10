@@ -113,6 +113,7 @@ export function Team() {
             {list(query.data.invitations).length ? (
               <Table
                 headers={[
+                  t("name"),
                   t("email"),
                   t("role"),
                   t("status"),
@@ -122,6 +123,7 @@ export function Team() {
                 rows={list(query.data.invitations).map((i) => ({
                   id: i.id,
                   cells: [
+                    i.name || "—",
                     i.email,
                     i.roleName || i.role,
                     <Badge>{i.status}</Badge>,
@@ -139,7 +141,13 @@ export function Team() {
                         ]
                       : []),
                   ],
-                  sort: [i.email, i.roleName || i.role, i.status, i.expiresAt],
+                  sort: [
+                    i.name || "",
+                    i.email,
+                    i.roleName || i.role,
+                    i.status,
+                    i.expiresAt,
+                  ],
                 }))}
               />
             ) : (
@@ -193,8 +201,11 @@ export function Team() {
             }
           >
             <Callout>{t("emailInvitationHint")}</Callout>
+            <Field label={t("name")}>
+              <Input autoFocus required name="name" maxLength={120} />
+            </Field>
             <Field label={t("email")}>
-              <Input autoFocus type="email" required name="email" />
+              <Input type="email" required name="email" />
             </Field>
             <Field label={t("role")}>
               <NativeSelect name="roleId" required defaultValue="">

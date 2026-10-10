@@ -5,7 +5,7 @@ description: The agreed identity and provider-connection model for the prototype
 
 ## Invitations and sign-in
 
-The prototype uses invite-only membership. An administrator invites a person by email; a time-limited, single-use magic link verifies first access. Resend is the selected delivery provider. An unconfigured delivery service must not report that it sent an email.
+The prototype uses invite-only membership. An administrator invites a person by name and email, assigns a workspace role and sets the invitation expiry; pending invitations show the person's name and email. A time-limited, single-use magic link verifies first access. Resend is the selected delivery provider. An unconfigured delivery service must not report that it sent an email.
 
 Sign-in emails use a lightweight Richtfest-branded layout with a sign-in button, a copyable fallback link and a plain-text alternative. The sender must be an email address on a verified Resend domain; the default Resend sender is limited to testing with the Resend account owner's address. A configured status on the sign-in page confirms the environment variables are present, not that a particular message has been delivered.
 

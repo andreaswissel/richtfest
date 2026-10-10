@@ -4,6 +4,8 @@
 
 - Recheck server messages whenever a project conversation is reopened, so newly saved agent answers do not stay hidden behind a fresh client cache.
 
+- Invite users with their name; pending invitations show each person’s name and email.
+
 - Serve the public Richtfest landing page from the Railway service, with a preview URL while the custom domain is being activated.
 
 - Project agent failures and cancellations now show recorded reasons in run details and sub-agent lists, including why child runs stopped when their supervisor failed. Older runs with only a generic error are labeled as having no specific recorded reason.
