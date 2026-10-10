@@ -722,5 +722,10 @@
   "agentProfileSave": "Save role",
   "agentProfileSaved": "Role saved",
   "agentProfileAdminOnly": "Only workspace administrators can edit agent settings.",
-  "agentProfilesDisabled": "The supervisor workflow is disabled. Saved settings take effect when it is enabled."
+  "agentProfilesDisabled": "The supervisor workflow is disabled. Saved settings take effect when it is enabled.",
+  "workspaceRichtfestTitle": "Richtfest!",
+  "workspaceRichtfestResult": "Your result is ready.",
+  "workspaceRichtfestEnabled": "Richtfest mode · until you leave this chat",
+  "workspaceRichtfestDisable": "Turn off Richtfest mode",
+  "workspaceRichtfestDismiss": "Dismiss celebration"
 }

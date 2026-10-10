@@ -48,6 +48,7 @@ import { ChatMarkdown } from "../chat-markdown";
 import { formatSourceCitations, sourceReferenceLabel } from "@richtfest/shared";
 import { Marker, MarkerContent } from "../ui/marker";
 import { LiveRun } from "./live-run";
+import { useRichtfestCelebration } from "./richtfest-celebration";
 import { TokenLimitAction } from "./token-limit-action";
 import {
   providerActivityExplanation,
@@ -613,6 +614,7 @@ function Conversation({
         : messages,
     [direct.data, messages],
   );
+  const richtfest = useRichtfestCelebration(conversationId, runs, persistedMessages);
   const canonicalRunMessageIds = new Map<string, string>();
   for (const run of runs) {
     if (!run.outputSummary) continue;
@@ -723,7 +725,16 @@ function Conversation({
   ).length;
   return (
     <div className="project-conversation">
+      {richtfest.celebration}
       <div className="workspace-conversation-tools">
+        {richtfest.enabled && (
+          <div className="mr-auto flex items-center gap-stack text-ui-xs text-muted-foreground">
+            <span role="status">{t("workspaceRichtfestEnabled")}</span>
+            <Button variant="ghost" size="icon-sm" onClick={richtfest.disable} aria-label={t("workspaceRichtfestDisable")}>
+              <X aria-hidden="true" />
+            </Button>
+          </div>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -835,6 +846,7 @@ function Conversation({
           onTouchMove={() => setFollowing(false)}
           onKeyDown={() => setFollowing(false)}
           onClick={(e) => {
+            richtfest.onChatClick(e);
             if ((e.target as HTMLElement).closest("a")) setFollowing(false);
           }}
         >

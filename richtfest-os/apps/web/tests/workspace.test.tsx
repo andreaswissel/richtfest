@@ -307,6 +307,8 @@ describe("workspace records and navigation", () => {
     expect(html).toContain('href="/settings"');
     expect(html).toContain('data-slot="message-scroller-viewport"');
     expect(html).not.toContain("Jump to latest");
+    expect(html).not.toContain("Richtfest mode");
+    expect(html).not.toContain('class="richtfest-celebration"');
   });
   test("failed runs remain visible in an otherwise empty conversation", () => {
     const runId = "550e8400-e29b-41d4-a716-446655440006";
