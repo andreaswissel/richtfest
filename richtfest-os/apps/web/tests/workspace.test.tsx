@@ -175,6 +175,48 @@ describe("workspace records and navigation", () => {
     );
     expect(html).toContain("Affinity Publisher preview: site-plan.afpub");
   });
+  test("artifact revision can be saved as a PDF with its source version references", () => {
+    const artifactId = "550e8400-e29b-41d4-a716-446655440007";
+    const revisionId = "550e8400-e29b-41d4-a716-446655440008";
+    const sourceVersionId = "550e8400-e29b-41d4-a716-446655440009";
+    const html = render(
+      <ArtifactPanel
+        projectId={projectId}
+        artifacts={[]}
+        runs={[]}
+        tasks={[]}
+        initialFiles={[]}
+      />,
+      `/projects/${projectId}?panel=artifacts&artifact=${artifactId}&revision=${revisionId}`,
+      {
+        [`/knowledge/artifacts/${artifactId}`]: {
+          artifact: {
+            id: artifactId,
+            projectId,
+            title: "Acoustic planning draft",
+            type: "report",
+            status: "draft",
+          },
+          revisions: [
+            {
+              id: revisionId,
+              version: 2,
+              title: "Preliminary measures",
+              content: "## Open checks\n\n- Verify the facade assembly",
+              sourceVersionIds: [sourceVersionId],
+              createdAt: "2026-10-10T10:00:00.000Z",
+            },
+          ],
+          annotations: [],
+        },
+      },
+    );
+    expect(html).toContain("Save as PDF");
+    expect(html).toContain("Preliminary measures");
+    expect(html).toContain("Verify the facade assembly");
+    expect(html).toContain(sourceVersionId);
+    expect(html).toContain(`sourceVersion=${sourceVersionId}`);
+  });
   test("unconfigured composer shows an actionable alert without claiming a message was saved", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,
@@ -194,6 +236,43 @@ describe("workspace records and navigation", () => {
     expect(html).toContain('href="/settings"');
     expect(html).toContain('data-slot="message-scroller-viewport"');
     expect(html).not.toContain("Jump to latest");
+  });
+  test("failed runs remain visible in an otherwise empty conversation", () => {
+    const runId = "550e8400-e29b-41d4-a716-446655440006";
+    const html = render(
+      <Transcript
+        projectId={projectId}
+        conversationId={conversationId}
+        runs={[
+          {
+            id: runId,
+            projectId,
+            conversationId,
+            status: "failed",
+            failureReason:
+              "phase=review; category=provider; The provider call could not complete.",
+            createdAt: "2026-10-10T10:00:00.000Z",
+            finishedAt: "2026-10-10T10:02:00.000Z",
+          },
+        ]}
+      />,
+      `/projects/${projectId}`,
+      {
+        "/agent/readiness": {
+          configured: true,
+          executionAvailable: true,
+          source: "workspace",
+          supervisor: {
+            enabled: true,
+            presets: [{ effort: "medium", configured: true }],
+          },
+        },
+      },
+    );
+    expect(html).toContain("The agent could not finish");
+    expect(html).toContain("Failed during review");
+    expect(html).toContain(`agentRun=${runId}`);
+    expect(html).not.toContain("No messages yet.");
   });
   test("composer uses the first configured effort when medium is unavailable", () => {
     const html = render(

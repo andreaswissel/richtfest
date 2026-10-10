@@ -246,7 +246,6 @@ export async function stepSupervisor(d: AppDeps, id: string) {
   if (!run) return;
   let failurePhase: RunFailurePhase =
     state.phase === "specialists" ? "specialist" : (state.phase as RunFailurePhase);
-  let failureCategory: RunFailureCategory = "execution";
   const heartbeat = setInterval(() => {
     void commit(d, run, token, async (tx) => {
       await tx
@@ -290,65 +289,115 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     ) => {
       const callId = crypto.randomUUID();
       failurePhase = phase;
-      failureCategory = "execution";
       await assertActive();
       const started = await commit(d, run, token, async (tx) => {
         await log(d, tx, run, "provider_call_started", phase, callId);
       });
       if (!started) throw conflict("Supervisor no longer active");
-      const providerStartedAt = new Date();
-      try {
-        const response = await d.executeSupervisor!({
-          phase,
-          provider: run.provider,
-          runId,
-          goal,
-          context: {
-            ...(context as object),
-            workspaceGuidance: (() => {
-              // Pre-existing runs retain original defaults rather than adopting later settings.
-              const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
-              const role = phase === "specialist" || phase === "independent_review"
-                ? (context as { role: string }).role
-                : "supervisor";
-              const profile = profiles.find(profile => profile.key === role) ?? (
-                role === "independent_reviewer"
-                  ? { ...defaultProfiles().find(profile => profile.key === role)!, knowledge: [] }
-                  : undefined
+      const maxAttempts = 3;
+      const providerContext = {
+        ...(context as object),
+        workspaceGuidance: (() => {
+          // Pre-existing runs retain original defaults rather than adopting later settings.
+          const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
+          const role = phase === "specialist" || phase === "independent_review"
+            ? (context as { role: string }).role
+            : "supervisor";
+          const profile = profiles.find(profile => profile.key === role) ?? (
+            role === "independent_reviewer"
+              ? { ...defaultProfiles().find(profile => profile.key === role)!, knowledge: [] }
+              : undefined
+          );
+          return {
+            profile,
+            routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
+          };
+        })(),
+        budgets: {
+          maxTasks: state.modelPolicy?.maxTasks,
+          maxRevisions: state.modelPolicy?.maxRevisions,
+        },
+      };
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        await assertActive();
+        if (phase === "review") {
+          partialOutput = "";
+          lastCheckpoint = 0;
+          await onSummaryDelta("");
+        }
+        const providerStartedAt = new Date();
+        try {
+          const response = await d.executeSupervisor!({
+            phase,
+            provider: run.provider,
+            runId,
+            goal,
+            context: providerContext,
+            modelPolicy: state.modelPolicy,
+            onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
+            onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
+          });
+          if (response.status !== "completed") throw conflict("Provider unavailable");
+          const completed = await commit(d, run, token, async (tx) => {
+            await log(d, tx, run, "provider_call_completed", phase, callId);
+          });
+          if (!completed) throw conflict("Supervisor no longer active");
+          return response.output;
+        } catch (error) {
+          const metadata = typeof error === "object" && error !== null
+            ? error as { retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown }
+            : {};
+          const providerFailureStatus = typeof metadata.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
+            && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : undefined;
+          const failureCategory: RunFailureCategory = metadata.providerFailure === true
+            ? providerFailureStatus === 401 || providerFailureStatus === 403 ? "permission"
+              : metadata.failureCategory === "validation" ? "validation" : "provider"
+            : classifyRunFailure(error, phase);
+          const cooldownExceedsBudget = typeof metadata.retryAfterMs === "number" && metadata.retryAfterMs > 300000;
+          const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
+            && failureCategory !== "permission" && !cooldownExceedsBudget && attempt < maxAttempts;
+          if (shouldRetry) {
+            const fallbackMs = providerFailureStatus === 429 ? 5000 * attempt : attempt === 1 ? 350 : 800;
+            const delayMs = typeof metadata.retryAfterMs === "number" && Number.isFinite(metadata.retryAfterMs)
+              ? Math.min(300000, Math.max(fallbackMs, metadata.retryAfterMs)) : fallbackMs;
+            const retryLogged = await commit(d, run, token, async (tx) => {
+              await log(
+                d,
+                tx,
+                run,
+                "provider_call_retrying",
+                `${phase}; attempt ${attempt} of ${maxAttempts}; retrying after transient provider failure`,
+                `${callId}:${attempt}`,
               );
-              return {
-                profile,
-                routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
-              };
-            })(),
-            budgets: {
-              maxTasks: state.modelPolicy?.maxTasks,
-              maxRevisions: state.modelPolicy?.maxRevisions,
-            },
-          },
-          modelPolicy: state.modelPolicy,
-          onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
-          onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
-        });
-        if (response.status !== "completed")
-          throw conflict("Provider unavailable");
-        const completed = await commit(d, run, token, async (tx) => {
-          await log(d, tx, run, "provider_call_completed", phase, callId);
-        });
-        if (!completed) throw conflict("Supervisor no longer active");
-        return response.output;
-      } catch (error) {
-        // Keep this event deliberately bounded: the phase is enough to explain where
-        // execution stopped without persisting prompts, source text, or provider errors.
-        // The supervisor execution adapter is the provider boundary. Provider SDK
-        // exceptions are intentionally reduced to this stable category; their
-        // messages can contain prompts, credentials, or response bodies.
-        failureCategory = "provider";
-        await commit(d, run, token, async (tx) => {
-          await log(d, tx, run, "provider_call_failed", phase, callId);
-        });
-        throw error;
+            });
+            if (!retryLogged) throw conflict("Supervisor no longer active");
+            // Check persisted cancellation/steering while cooling down.
+            const retryAt = Date.now() + delayMs;
+            do {
+              await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(0, retryAt - Date.now()))));
+              await assertActive();
+            } while (Date.now() < retryAt);
+            continue;
+          }
+          // Provider errors are reduced to phase/category/attempt events only;
+          // SDK messages and response bodies are never persisted.
+          await commit(d, run, token, async (tx) => {
+            await log(
+              d,
+              tx,
+              run,
+              "provider_call_failed",
+              `${phase}${providerFailureStatus === undefined ? "" : `; HTTP ${providerFailureStatus}`}${cooldownExceedsBudget ? "; provider cooldown exceeds five-minute automatic retry budget" : ""}`,
+              `${callId}:${attempt}`,
+            );
+          });
+          // Carry only this call's sanitized metadata: parallel siblings cannot overwrite it.
+          throw Object.assign(new Error("Supervisor model execution failed."), {
+            failurePhase: phase, failureCategory, providerStatus: providerFailureStatus,
+          });
+        }
       }
+      throw new Error("Provider retry loop ended unexpectedly");
     };
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
@@ -948,13 +997,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       }
     }
   } catch (error) {
-    const category =
-      failureCategory === "execution"
-        ? classifyRunFailure(error, failurePhase)
-        : failureCategory;
-    const failureReason = formatRunFailureReason(failurePhase, category);
+    const metadata: { failurePhase?: RunFailurePhase; failureCategory?: RunFailureCategory; providerStatus?: number } = error instanceof Error
+      ? error as Error & { failurePhase?: RunFailurePhase; failureCategory?: RunFailureCategory; providerStatus?: number }
+      : {};
+    const phase = metadata.failurePhase ?? failurePhase;
+    const category = metadata.failureCategory ?? classifyRunFailure(error, phase);
+    const providerFailureStatus = metadata.providerStatus;
+    const failureReason = formatRunFailureReason(phase, category, providerFailureStatus);
     const childCancellationReason = formatChildCancellationReason(
-      failurePhase,
+      phase,
       category,
       "supervisor_failed",
     );

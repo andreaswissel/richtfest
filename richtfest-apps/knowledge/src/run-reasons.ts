@@ -42,6 +42,7 @@ export function classifyRunFailure(
   const name = typeof value.name === "string" ? value.name : "";
   const status = typeof value.status === "number" ? value.status : undefined;
 
+  if (code === "cancelled" || name === "AbortError") return "cancellation";
   if (status === 401 || status === 403 || ["forbidden", "unauthorized", "permission_denied"].includes(code))
     return "permission";
   if (phase === "source_resolution") return "source";
@@ -64,8 +65,10 @@ const actionableMessage: Record<RunFailureCategory, string> = {
 export function formatRunFailureReason(
   phase: RunFailurePhase,
   category: RunFailureCategory,
+  providerStatus?: number,
 ): string {
-  return `phase=${phase}; category=${category}; ${actionableMessage[category]}`;
+  const status = providerStatus === undefined ? "" : `; provider_http_status=${providerStatus}`;
+  return `phase=${phase}; category=${category}; ${actionableMessage[category]}${status}`;
 }
 
 export function formatChildCancellationReason(

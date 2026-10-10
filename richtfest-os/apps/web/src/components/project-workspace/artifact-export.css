@@ -1,0 +1,152 @@
+.artifact-export-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.artifact-export-print-document {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 18mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .artifact-export-print-document,
+  .artifact-export-print-document * {
+    visibility: visible !important;
+  }
+
+  .artifact-export-print-document {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0;
+    color: #111;
+    background: #fff;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+  }
+
+  .artifact-export-print-header {
+    padding-bottom: 14pt;
+    border-bottom: 1pt solid #c7c7c7;
+  }
+
+  .artifact-export-print-eyebrow {
+    margin: 0 0 8pt;
+    color: #5f5f5f;
+    font-size: 8.5pt;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .artifact-export-print-document h1 {
+    margin: 0;
+    font-size: 22pt;
+    line-height: 1.15;
+  }
+
+  .artifact-export-print-document h2 {
+    margin: 0 0 8pt;
+    font-size: 13pt;
+    line-height: 1.25;
+  }
+
+  .artifact-export-print-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6pt 18pt;
+    margin: 14pt 0 0;
+  }
+
+  .artifact-export-print-meta div {
+    min-width: 0;
+  }
+
+  .artifact-export-print-meta dt {
+    color: #5f5f5f;
+    font-size: 8.5pt;
+  }
+
+  .artifact-export-print-meta dd {
+    margin: 1pt 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .artifact-export-print-content,
+  .artifact-export-print-sources {
+    margin-top: 18pt;
+  }
+
+  .artifact-export-print-content p,
+  .artifact-export-print-content ul,
+  .artifact-export-print-content ol {
+    margin: 0 0 8pt;
+  }
+
+  .artifact-export-print-content ul,
+  .artifact-export-print-content ol {
+    padding-left: 18pt;
+  }
+
+  .artifact-export-markdown-heading {
+    margin: 14pt 0 6pt;
+    font-weight: 700;
+  }
+
+  .artifact-export-markdown-heading[data-level="1"] {
+    font-size: 16pt;
+  }
+
+  .artifact-export-markdown-heading[data-level="2"] {
+    font-size: 14pt;
+  }
+
+  .artifact-export-markdown-heading[data-level="3"],
+  .artifact-export-markdown-heading[data-level="4"],
+  .artifact-export-markdown-heading[data-level="5"],
+  .artifact-export-markdown-heading[data-level="6"] {
+    font-size: 11pt;
+  }
+
+  .artifact-export-markdown-blank {
+    height: 5pt;
+  }
+
+  .artifact-export-print-content pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+  }
+
+  .artifact-export-print-sources ol {
+    margin: 0;
+    padding-left: 18pt;
+  }
+
+  .artifact-export-print-sources p {
+    margin: 0;
+  }
+
+  .artifact-export-print-document a {
+    color: #111;
+    overflow-wrap: anywhere;
+  }
+
+  .artifact-export-print-footer {
+    margin-top: 28pt;
+    padding-top: 8pt;
+    border-top: 1pt solid #c7c7c7;
+    color: #5f5f5f;
+    font-size: 8.5pt;
+  }
+}

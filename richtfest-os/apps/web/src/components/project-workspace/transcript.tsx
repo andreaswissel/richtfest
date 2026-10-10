@@ -18,7 +18,15 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
 import { AgentEffortControl } from "../agent-effort-control";
-import { ArrowUp, Check, Copy, Search, Square, X } from "lucide-react";
+import {
+  ArrowUp,
+  ArrowUpRight,
+  Check,
+  Copy,
+  Search,
+  Square,
+  X,
+} from "lucide-react";
 import {
   MessageScrollerProvider,
   MessageScroller,
@@ -50,6 +58,116 @@ import {
   type ReadState,
 } from "./types";
 const ProjectOpenUI = lazy(() => import("./openui"));
+
+const runFailureCategoryLabels: Record<string, string> = {
+  provider: "workspaceRunCategoryProvider",
+  permission: "workspaceRunCategoryPermission",
+  validation: "workspaceRunCategoryValidation",
+  source: "workspaceRunCategorySource",
+  project: "workspaceRunCategoryProject",
+  cancellation: "workspaceRunCategoryCancellation",
+  execution: "workspaceRunCategoryExecution",
+};
+
+const runFailurePhaseLabels: Record<string, string> = {
+  plan: "workspaceRunPhasePlan",
+  specialist: "workspaceRunPhaseSpecialist",
+  review: "workspaceRunPhaseReview",
+  independent_review: "workspaceRunPhaseIndependentReview",
+  provider: "workspaceRunPhaseProvider",
+  execution: "workspaceRunPhaseExecution",
+  source_resolution: "workspaceRunPhaseSourceResolution",
+  tool_execution: "workspaceRunPhaseToolExecution",
+  finalization: "workspaceRunPhaseFinalization",
+  cancellation: "workspaceRunPhaseCancellation",
+  approval: "workspaceRunPhaseApproval",
+};
+
+function safeRunFailureReason(run: RecordData, t: ReturnType<typeof useT>) {
+  const reason = [run.error, run.failureReason].find(
+    (value) => typeof value === "string" && value.trim(),
+  );
+  const category =
+    typeof reason === "string"
+      ? /(?:^|;)\s*category=([a-z_]+)/.exec(reason)?.[1]
+      : undefined;
+  const phase =
+    typeof reason === "string"
+      ? /(?:^|;)\s*phase=([a-z_]+)/.exec(reason)?.[1]
+      : undefined;
+  const providerStatus =
+    typeof reason === "string"
+      ? /(?:^|;)\s*provider_http_status=(\d{3})/.exec(reason)?.[1]
+      : undefined;
+  const translation = category && runFailureCategoryLabels[category];
+  const translatedPhase = phase && runFailurePhaseLabels[phase];
+  if (!translation) return t("workspaceRunFailedNoReason");
+  const categoryReason = t(translation as Parameters<typeof t>[0]);
+  const reasonText = translatedPhase
+    ? `${t("workspaceRunFailedDuring")} ${t(translatedPhase as Parameters<typeof t>[0])}: ${categoryReason}`
+    : categoryReason;
+  return providerStatus
+    ? `${reasonText} (${t("workspaceRunProviderHttpStatus")}: ${providerStatus})`
+    : reasonText;
+}
+
+function FailedRunOutcome({
+  run,
+  projectId,
+  conversationId,
+  hasRetry,
+  hasActiveRun,
+}: {
+  run: RecordData;
+  projectId: string;
+  conversationId: string;
+  hasRetry: boolean;
+  hasActiveRun: boolean;
+}) {
+  const t = useT();
+  const retry = useMutation({
+    mutationFn: () => api(`/knowledge/runs/${run.id}/retry`, {}),
+    onSuccess: () => void queryClient.invalidateQueries(),
+  });
+  const params = new URLSearchParams({
+    conversation: conversationId,
+    agentRun: run.id,
+  });
+
+  return (
+    <Message>
+      <MessageContent>
+        <MessageHeader>{t("workspaceRunOutcomeTitle")}</MessageHeader>
+        <Callout tone="error">{safeRunFailureReason(run, t)}</Callout>
+        <div className="flex flex-wrap items-center gap-stack">
+          <Button asChild variant="link" size="sm">
+            <Link to={`/projects/${projectId}?${params}`}>
+              {t("workspaceRunOutcomeDetails")}
+              <ArrowUpRight aria-hidden="true" />
+            </Link>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={
+              retry.isPending || retry.isSuccess || hasRetry || hasActiveRun
+            }
+            onClick={() => retry.mutate()}
+          >
+            {retry.isPending
+              ? t("workspaceRunRetrying")
+              : retry.isSuccess || hasRetry
+                ? t("workspaceRunRetryStarted")
+                : t("workspaceRetryRun")}
+          </Button>
+        </div>
+        {retry.error && (
+          <Callout tone="error">{t("workspaceRunRetryFailed")}</Callout>
+        )}
+      </MessageContent>
+    </Message>
+  );
+}
 
 export function Transcript({
   conversationId,
@@ -217,8 +335,8 @@ function Conversation({
   );
   const initial = query.data?.pages[0]?.readState || readState;
   const [draft, setDraft] = useState(
-    readState?.composerDraft || initialMessage || "",
-  ),
+      readState?.composerDraft || initialMessage || "",
+    ),
     [search, setSearch] = useState(""),
     [reply, setReply] = useState<string>();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -476,9 +594,27 @@ function Conversation({
       createdAt: run.createdAt,
       metadata: {},
     }));
-  const displayMessages = [...persistedMessages, ...partialMessages].sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt),
+  const failedRuns = runs.filter(
+    (run) =>
+      !run.parentRunId &&
+      run.conversationId === conversationId &&
+      run.status === "failed",
   );
+  const failedOutcomes = new Map(
+    failedRuns.map((run) => [`run-${run.id}-outcome`, run]),
+  );
+  const outcomeMessages: WorkspaceMessage[] = failedRuns.map((run) => ({
+    id: `run-${run.id}-outcome`,
+    runId: run.id,
+    body: "",
+    actorKind: "agent",
+    createdAt: run.finishedAt || run.updatedAt || run.createdAt,
+  }));
+  const displayMessages = [
+    ...persistedMessages,
+    ...partialMessages,
+    ...outcomeMessages,
+  ].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   useLayoutEffect(() => {
     if (!query.data || restored.current) return;
     if (
@@ -679,11 +815,14 @@ function Conversation({
             {displayMessages.map((message, index) => (
               <MessageScrollerItem
                 key={
-                  message.id.startsWith("run-") ||
-                  (message.runId &&
-                    canonicalRunMessageIds.get(message.runId) === message.id)
-                    ? `run-${message.runId}`
-                    : message.id
+                  failedOutcomes.has(message.id)
+                    ? message.id
+                    : message.id.startsWith("run-") ||
+                        (message.runId &&
+                          canonicalRunMessageIds.get(message.runId) ===
+                            message.id)
+                      ? `run-${message.runId}`
+                      : message.id
                 }
                 messageId={message.id}
                 scrollAnchor={
@@ -700,7 +839,8 @@ function Conversation({
                       <MarkerContent>{t("workspaceUnread")}</MarkerContent>
                     </Marker>
                   )}
-                {message.id.startsWith("run-") &&
+                {!failedOutcomes.has(message.id) &&
+                  message.id.startsWith("run-") &&
                   ["stopped", "cancelled", "failed"].includes(
                     runs.find((run) => run.id === message.runId)?.status,
                   ) && (
@@ -708,25 +848,43 @@ function Conversation({
                       <MarkerContent>{t("workspaceInterrupted")}</MarkerContent>
                     </Marker>
                   )}
-                <MessageRow
-                  message={message}
-                  projectId={projectId}
-                  conversationId={conversationId}
-                  reviewRun={
-                    message.runId
-                      ? canonicalRunMessageIds.get(message.runId) === message.id
-                        ? runs.find(
-                            (run) =>
-                              run.id === message.runId &&
-                              !run.parentRunId &&
-                              run.status === "needs_review",
-                          )
+                {failedOutcomes.has(message.id) ? (
+                  <FailedRunOutcome
+                    run={failedOutcomes.get(message.id)!}
+                    projectId={projectId}
+                    conversationId={conversationId}
+                    hasRetry={runs.some(
+                      (run) => run.retryOfRunId === message.runId,
+                    )}
+                    hasActiveRun={runs.some(
+                      (run) =>
+                        !run.parentRunId &&
+                        run.conversationId === conversationId &&
+                        ["queued", "running"].includes(run.status),
+                    )}
+                  />
+                ) : (
+                  <MessageRow
+                    message={message}
+                    projectId={projectId}
+                    conversationId={conversationId}
+                    reviewRun={
+                      message.runId
+                        ? canonicalRunMessageIds.get(message.runId) ===
+                          message.id
+                          ? runs.find(
+                              (run) =>
+                                run.id === message.runId &&
+                                !run.parentRunId &&
+                                run.status === "needs_review",
+                            )
+                          : undefined
                         : undefined
-                      : undefined
-                  }
-                  onReply={handleReply}
-                  onInput={handleInput}
-                />
+                    }
+                    onReply={handleReply}
+                    onInput={handleInput}
+                  />
+                )}
               </MessageScrollerItem>
             ))}
             {runs
@@ -749,10 +907,13 @@ function Conversation({
                           const activeChild = children.find((child) =>
                             ["queued", "running"].includes(child.status),
                           );
-                          return activeChild?.goal || t(
-                            children.length
-                              ? "workspaceTaskReviewing"
-                              : "workspaceTaskPlanning",
+                          return (
+                            activeChild?.goal ||
+                            t(
+                              children.length
+                                ? "workspaceTaskReviewing"
+                                : "workspaceTaskPlanning",
+                            )
                           );
                         })()}
                       />
@@ -760,7 +921,7 @@ function Conversation({
                   </Message>
                 </MessageScrollerItem>
               ))}
-            {!messages.length && (
+            {!displayMessages.length && (
               <Marker>
                 <MarkerContent>{t("noMessages")}</MarkerContent>
               </Marker>

@@ -78,6 +78,70 @@ function attachUsage(output: unknown, usage: ProviderUsage): unknown {
   Object.defineProperty(output, "__usage", { value: usage, enumerable: false, configurable: true });
   return output;
 }
+const transientHttpStatuses = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+const transientNetworkCodes = new Set([
+  "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH",
+  "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+]);
+function providerFailureMetadata(error: unknown): {
+  retryable: boolean;
+  status?: number;
+  retryAfterMs?: number;
+  category?: "provider" | "validation";
+} {
+  let current: unknown = error;
+  let retryable = false;
+  let category: "provider" | "validation" = "provider";
+  let status: number | undefined;
+  let retryAfterMs: number | undefined;
+  // Inspect structured metadata only; never retain SDK bodies, messages or causes.
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
+    const value = current as Record<string, unknown>;
+    const response = value.response && typeof value.response === "object"
+      ? value.response as Record<string, unknown> : undefined;
+    const statusValue = value.status ?? value.statusCode ?? response?.status;
+    if (typeof statusValue === "number" && Number.isInteger(statusValue) && statusValue >= 100 && statusValue <= 599) {
+      status = statusValue;
+      if (status === 401 || status === 403) return { retryable: false, status };
+    }
+    const headers = value.responseHeaders ?? response?.headers;
+    const header = headers instanceof Headers ? headers.get("retry-after")
+      : headers && typeof headers === "object"
+        ? Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after")?.[1]
+        : undefined;
+    if (typeof header === "string" || typeof header === "number") {
+      const seconds = Number(header);
+      const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(String(header)) - Date.now();
+      if (Number.isFinite(delay)) retryAfterMs = Math.min(300001, Math.max(0, delay));
+    }
+    const name = value.name;
+    if (["ZodError", "SyntaxError", "NoObjectGeneratedError", "AI_NoObjectGeneratedError",
+      "AI_TypeValidationError", "AI_JSONParseError"].includes(String(name)) || value.code === "invalid_provider_output") {
+      category = "validation";
+      retryable = true;
+    }
+    if (value.isRetryable === true || transientNetworkCodes.has(String(value.code)) || name === "TimeoutError") retryable = true;
+    current = value.cause;
+  }
+  // A permanent HTTP response overrides wrapper retry hints and parse errors.
+  return { retryable: status === undefined ? retryable : transientHttpStatuses.has(status), status, retryAfterMs,
+    category: status === undefined ? category : "provider" };
+}
+function safeProviderError(
+  retryable: boolean,
+  status?: number,
+  category: "provider" | "validation" = "provider",
+  retryAfterMs?: number,
+) {
+  return Object.assign(new Error("Supervisor model execution failed. Check the selected connection and retry."), {
+    code: category === "validation" ? "invalid_provider_output" : retryable ? "transient_provider_error" : "provider_error",
+    providerFailure: true,
+    retryable,
+    providerStatus: status,
+    failureCategory: category,
+    retryAfterMs,
+  });
+}
 /** Stateless inference only. Credentials live in this call, never in workflow input or storage. */
 export async function callMastraSupervisor(
   input: SupervisorRequest,
@@ -108,6 +172,8 @@ export async function callMastraSupervisor(
   const redact = (text: string) => text.split(apiKey).join("[redacted]")
     .replace(/\bsk-[a-zA-Z0-9_-]+/g, "[redacted]")
     .replace(/Bearer\s+[^\s"']+/gi, "Bearer [redacted]");
+  let inferenceCompleted = false;
+  let emitted = "";
   try {
     abortSignal.throwIfAborted();
     const reasoningEffort = modelConfig?.modelId ? reasoningEffortForModel(input.provider, modelConfig.modelId, modelConfig.reasoningEffort) : undefined;
@@ -121,14 +187,12 @@ export async function callMastraSupervisor(
     const prompt = JSON.stringify({ goal: input.goal, context: input.context });
     let object: unknown;
     let rawUsage: unknown;
-    let emitted = "";
     if (input.onSummaryDelta && input.phase !== "plan") {
       const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);
       for await (const partial of stream.objectStream) {
         abortSignal.throwIfAborted();
         if (typeof partial.summary !== "string") continue;
         // Hold the trailing token and enough characters for a split credential.
-        // Only decoded summary prose streams; never JSON, rationale or tool inputs.
         const summary = redact(partial.summary);
         const safe = summary.slice(0, Math.max(0, summary.length - apiKey.length)).replace(/\S+$/, "");
         if (safe.startsWith(emitted) && safe.length > emitted.length) {
@@ -147,15 +211,30 @@ export async function callMastraSupervisor(
       if (rawUsage) await input.onUsage?.(usageFor(input, rawUsage, modelConfig?.modelId ?? null));
       object = result.object;
     }
+    inferenceCompleted = true;
     abortSignal.throwIfAborted();
-    const output = supervisorSchemas[input.phase].parse(JSON.parse(redact(JSON.stringify(object))));
+    const serialized = JSON.stringify(object);
+    if (typeof serialized !== "string") throw safeProviderError(true, undefined, "validation");
+    const output = supervisorSchemas[input.phase].parse(JSON.parse(redact(serialized)));
     if (input.onSummaryDelta && "summary" in output) {
-      if (!output.summary.startsWith(emitted)) throw new Error("Summary stream changed its emitted prefix");
+      if (!output.summary.startsWith(emitted)) throw safeProviderError(true, undefined, "validation");
       if (output.summary.length > emitted.length) await input.onSummaryDelta(output.summary.slice(emitted.length));
     }
     return attachUsage(output, usageFor(input, rawUsage, modelConfig?.modelId ?? null));
-  } catch {
+  } catch (error) {
     // Provider and SDK exceptions can contain request bodies or auth headers.
-    throw new Error("Supervisor model execution failed. Check the selected connection and retry.");
+    if (options.signal?.aborted) {
+      const cancelled = new Error("Supervisor model execution failed. Execution was cancelled.") as Error & { code: string };
+      cancelled.code = "cancelled";
+      throw cancelled;
+    }
+    if (abortSignal.aborted) throw safeProviderError(true);
+    const metadata = providerFailureMetadata(error);
+    throw safeProviderError(
+      inferenceCompleted ? metadata.category === "validation" : metadata.retryable,
+      metadata.status,
+      metadata.category,
+      metadata.retryAfterMs,
+    );
   }
 }

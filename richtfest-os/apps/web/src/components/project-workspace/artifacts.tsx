@@ -5,6 +5,10 @@ import { api, list, uploadFile, type RecordData } from "../../api";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
+import {
+  ArtifactExportActions,
+  ArtifactPrintDocument,
+} from "./artifact-export";
 import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
@@ -348,6 +352,19 @@ export function ArtifactPanel({
                 </Field>
                 {revision ? (
                   <>
+                    <ArtifactExportActions
+                      artifact={
+                        artifact.data?.artifact || { title: "Artifact" }
+                      }
+                      revision={revision}
+                    />
+                    <ArtifactPrintDocument
+                      projectId={projectId}
+                      artifact={
+                        artifact.data?.artifact || { title: "Artifact" }
+                      }
+                      revision={revision}
+                    />
                     <Badge>
                       {revision.status === "approved"
                         ? t("approved")

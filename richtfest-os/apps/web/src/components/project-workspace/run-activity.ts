@@ -5,6 +5,7 @@ const activityLabels = {
   supervisor_started: "workspaceActivityStarted",
   provider_call_started: "workspaceActivityProviderCallStarted",
   provider_call_completed: "workspaceActivityProviderCallCompleted",
+  provider_call_retrying: "workspaceActivityProviderCallRetrying",
   provider_call_failed: "workspaceActivityProviderCallFailed",
   resumed: "workspaceActivityResumed",
   supervisor_planned: "workspaceActivityPlanned",

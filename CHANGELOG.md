@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project agent runs retry temporary provider failures and invalid responses with up to three attempts, and failed runs show a clear outcome with run details and a retry action. Project artifacts can be saved as PDFs with their selected revision and source references.
+
 - Omit unset conversation message IDs from read-state saves, and save reading positions only for persisted messages, preventing composer draft-save errors on empty threads and temporary agent-run rows.
 
 - Specialist source reviews now receive citation IDs only for readable source text, while unreadable assigned files remain visible as coverage gaps.
