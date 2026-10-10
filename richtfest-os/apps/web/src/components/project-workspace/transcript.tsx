@@ -5,6 +5,7 @@ import {
   useEffect,
   useCallback,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -210,7 +211,10 @@ function Conversation({
       ),
     getNextPageParam: (page) => page.nextCursor || undefined,
   });
-  const messages = mergeMessages(query.data?.pages || []);
+  const messages = useMemo(
+    () => mergeMessages(query.data?.pages || []),
+    [query.data?.pages],
+  );
   const initial = query.data?.pages[0]?.readState || readState;
   const [draft, setDraft] = useState(
     readState?.composerDraft || initialMessage || "",
@@ -438,10 +442,13 @@ function Conversation({
     enabled: !!target && !!query.data && !messages.some((m) => m.id === target),
     queryFn: () => api<WorkspaceMessage>(`${path}/messages/${target}`),
   });
-  const persistedMessages =
-    direct.data && !messages.some((m) => m.id === direct.data.id)
-      ? [direct.data, ...messages]
-      : messages;
+  const persistedMessages = useMemo(
+    () =>
+      direct.data && !messages.some((m) => m.id === direct.data.id)
+        ? [direct.data, ...messages]
+        : messages,
+    [direct.data, messages],
+  );
   const canonicalRunMessageIds = new Map<string, string>();
   for (const run of runs) {
     if (!run.outputSummary) continue;
@@ -493,7 +500,11 @@ function Conversation({
   useEffect(() => {
     if (!ready) return;
     const meaningful = visibility.currentAnchorId;
-    if (meaningful) reader.current.meaningfulMessageId = meaningful;
+    if (
+      meaningful &&
+      persistedMessages.some((message) => message.id === meaningful)
+    )
+      reader.current.meaningfulMessageId = meaningful;
     const last = visibility.visibleMessageIds
       .filter((id) => !id.startsWith("run-"))
       .at(-1);
@@ -506,6 +517,7 @@ function Conversation({
   }, [
     visibility.currentAnchorId,
     visibility.visibleMessageIds.join(","),
+    persistedMessages,
     draft,
     ready,
     following,
