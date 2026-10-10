@@ -33,6 +33,8 @@ Application UI strings belong in both English and German locale files. Reuse sha
 
 The app requests a fixed 100% mobile viewport, including when focusing form fields. Its viewport metadata disables user scaling, and `touch-action: pan-x pan-y` disables page pinch/double-tap zoom while preserving horizontal and vertical scrolling. Keep desktop browser zoom shortcuts intact; do not add global gesture or keyboard event cancellation. The public landing page and documentation are separate documents and do not inherit this policy.
 
+Viewport restrictions alone do not reliably prevent iOS form-focus zoom. At widths below 768px or with a coarse primary pointer, inputs, textareas, native selects and editable content use at least 16px text in both density modes, before and during focus. This shared CSS rule intentionally overrides smaller density and workspace form styles; desktop controls keep their normal density sizing. Do not shrink mobile fields with transforms or focus-only font changes.
+
 This native-style interaction trades away page-zoom accessibility; browser and operating-system accessibility overrides may still allow magnification. Verify narrow layouts in both density modes rather than using zoom restrictions or hidden overflow to conceal content that does not fit.
 
 ## Agentic workspace components

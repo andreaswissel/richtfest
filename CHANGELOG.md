@@ -6,7 +6,7 @@
 
 - Project threads use a first-message title if AI naming is unavailable, and older numbered threads recover their titles when reopened. Manual names are preserved.
 
-- Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; fix sign-in content overflowing narrow screens.
+- Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; use readable 16px form text on mobile to avoid focus-triggered zoom, and fix sign-in content overflowing narrow screens.
 
 - Added an opt-in local demo project with PDF sources, concept revisions and agent failure scenarios for portal testing; repeat seeding preserves edits and settings without live model calls.
 
