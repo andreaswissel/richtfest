@@ -8,6 +8,10 @@
 
 - Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; fix sign-in content overflowing narrow screens.
 
+- Added an opt-in local demo project with PDF sources, concept revisions and agent failure scenarios for portal testing; repeat seeding preserves edits and settings without live model calls.
+
+- Project agents produce a separate formatted draft document with named source versions and readable Unicode PDFs. Chat explains character-limit versus token-limit failures; confirmed token truncation offers Yes / No / Describe, with an administrator-approved increase for new runs only.
+
 - Project agents read PDFs beyond page ten, with German/English OCR for scanned pages, original page references and explicit extraction limits. Failed provider attempts retain safe diagnostic details and reported token usage for troubleshooting.
 
 - Project agent runs record per-call settings, retries and reported usage, including failures without usage. Human reviews can optionally score the original generated outcome and rework needed, with notes retained for approval and rejection; scores do not approve artifacts or validate engineering results.

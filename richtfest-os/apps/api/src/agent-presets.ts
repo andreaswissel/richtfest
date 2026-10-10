@@ -1,6 +1,7 @@
 import { Router, type Request } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import {
+  AGENT_MAX_OUTPUT_TOKENS,
   agentEffortSchema, agentProviderSchema, agentPresetConfigSchema,
   type AgentEffort, type AgentProvider, type AgentPresetConfig, type AgentPresetSnapshot, ok,
 } from "@richtfest/shared";
@@ -146,5 +147,35 @@ export function createAgentPresetsRouter(db: Database) {
   };
   router.put("/agent/presets/:provider/:effort", save(false));
   router.delete("/agent/presets/:provider/:effort", save(true));
+  router.patch("/agent/presets/:provider/:effort/output-limit", async (req, res, next) => {
+    try {
+      const current = actor(req);
+      if (!current.permissions.has("access:manage")) throw new HttpError(403, "forbidden", "Workspace administration access is required.");
+      const provider = agentProviderSchema.parse(req.params.provider);
+      const effort = agentEffortSchema.parse(req.params.effort);
+      const input = z.object({
+        role: z.enum(["supervisor", "source_reviewer", "requirements_reviewer"]),
+        expectedVersion: z.number().int().positive(),
+        expectedModelId: z.string().min(1),
+        expectedMaxOutputTokens: z.number().int().min(256).max(AGENT_MAX_OUTPUT_TOKENS),
+      }).strict().parse(req.body);
+      await db.transaction(async tx => {
+        // Materialize vendor defaults, then lock the unique preset row. A concurrent
+        // full save/reset takes the same row lock; every guard is checked inside it.
+        await tx.insert(agentPresets).values({ tenantId: current.tenantId, provider, effort, config: null, updatedBy: current.id }).onConflictDoNothing();
+        const [row] = await tx.select().from(agentPresets).where(and(eq(agentPresets.tenantId, current.tenantId), eq(agentPresets.provider, provider), eq(agentPresets.effort, effort))).for("update");
+        const config = row.config ? agentPresetConfigSchema.parse(row.config) : vendorPreset(provider, effort);
+        const role = input.role === "supervisor" ? config.supervisor : config.specialists[input.role];
+        if (!isConfiguredPreset(provider, config) || row.version !== input.expectedVersion || role.modelId !== input.expectedModelId || role.maxOutputTokens !== input.expectedMaxOutputTokens || role.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) {
+          throw new HttpError(409, "agent_preset_conflict", "The workspace preset changed or cannot be increased. Reopen the action to check its current settings.");
+        }
+        const previousLimit = role.maxOutputTokens;
+        role.maxOutputTokens = Math.min(previousLimit * 2, AGENT_MAX_OUTPUT_TOKENS);
+        await tx.update(agentPresets).set({ config, version: row.version + 1, updatedBy: current.id, updatedAt: new Date() }).where(eq(agentPresets.id, row.id));
+        await recordAudit(tx, current.id, current.tenantId, "agent.preset.updated", "agent_preset", row.id, { provider, effort, role: input.role, version: row.version + 1, previousMaxOutputTokens: previousLimit, maxOutputTokens: role.maxOutputTokens });
+      });
+      res.json(ok((await listAgentPresets(db, current.tenantId, provider)).find(item => item.effort === effort)));
+    } catch (error) { next(error); }
+  });
   return router;
 }

@@ -12,6 +12,9 @@ import {
 } from "../src/components/project-workspace/types";
 import { ArtifactPanel } from "../src/components/project-workspace/artifacts";
 import { Transcript } from "../src/components/project-workspace/transcript";
+import MarkdownContent from "../src/components/chat-markdown-content";
+import { ArtifactSourceRegister } from "../src/components/project-workspace/artifact-export";
+import { formatSourceCitations } from "@richtfest/shared";
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 const conversationId = "550e8400-e29b-41d4-a716-446655440001";
 function render(
@@ -31,6 +34,66 @@ function render(
   );
 }
 describe("registered OpenUI boundary", () => {
+  test("PDF attachment title opens the exact revision while its action downloads PDF", () => {
+    const artifactId = "550e8400-e29b-41d4-a716-446655440002";
+    const revisionId = "550e8400-e29b-41d4-a716-446655440003";
+    const html = render(
+      <ProjectOpenUI
+        projectId={projectId}
+        conversationId={conversationId}
+        response={`root = ArtifactPdf("${artifactId}", "${revisionId}")`}
+      />,
+      "/",
+      {
+        [`/knowledge/workspaces/${projectId}`]: {
+          artifacts: [
+            { id: artifactId, projectId, title: "Completed concept" },
+          ],
+        },
+      },
+    );
+    expect(html).toContain(
+      `href="/projects/${projectId}?panel=artifacts&amp;artifact=${artifactId}&amp;revision=${revisionId}&amp;conversation=${conversationId}"`,
+    );
+    expect(html).toContain(
+      `href="/api/knowledge/artifacts/${artifactId}/revisions/${revisionId}/pdf" download`,
+    );
+  });
+
+  test("Markdown concepts render tables, emphasis and trusted exact-version citations", () => {
+    const versionId = "550e8400-e29b-41d4-a716-446655440009";
+    const missingId = "550e8400-e29b-41d4-a716-446655440010";
+    const sources = [
+      { versionId, fileName: "Facade [original].pdf", version: 2 },
+    ];
+    const text = `## Concept\n\n**Review** [${versionId}]\n\n| Check | Result |\n| --- | --- |\n| Wall | Pending |\n\n[${missingId}]`;
+    const html = renderToStaticMarkup(
+      <MarkdownContent>
+        {formatSourceCitations(text, projectId, sources, "Source unavailable")}
+      </MarkdownContent>,
+    );
+    expect(html).toContain("<h2>Concept</h2>");
+    expect(html).toContain("<strong>Review</strong>");
+    expect(html).toContain("<table>");
+    expect(html).toContain("Facade [original].pdf · v2");
+    expect(html).toContain(`sourceVersion=${versionId}`);
+    expect(html).toContain("Source unavailable");
+    expect(html).not.toContain(missingId);
+    const register = render(
+      <ArtifactSourceRegister
+        projectId={projectId}
+        revision={{
+          sourceVersionIds: [versionId, missingId, versionId],
+          sourceReferences: sources,
+        }}
+      />,
+    );
+    expect(register).toContain("Facade [original].pdf · v2");
+    expect(register).toContain("Source unavailable");
+    expect(register).not.toContain(missingId);
+    expect(register.match(/<li>/g)).toHaveLength(2);
+  });
+
   test("artifact previews resolve trusted titles and preserve the exact revision", () => {
     const artifactId = "550e8400-e29b-41d4-a716-446655440002";
     const revisionId = "550e8400-e29b-41d4-a716-446655440003";
@@ -204,6 +267,13 @@ describe("workspace records and navigation", () => {
               title: "Preliminary measures",
               content: "## Open checks\n\n- Verify the facade assembly",
               sourceVersionIds: [sourceVersionId],
+              sourceReferences: [
+                {
+                  versionId: sourceVersionId,
+                  fileName: "Facade.pdf",
+                  version: 1,
+                },
+              ],
               createdAt: "2026-10-10T10:00:00.000Z",
             },
           ],
@@ -214,6 +284,7 @@ describe("workspace records and navigation", () => {
     expect(html).toContain("Save as PDF");
     expect(html).toContain("Preliminary measures");
     expect(html).toContain("Verify the facade assembly");
+    expect(html).toContain("Facade.pdf · v1");
     expect(html).toContain(sourceVersionId);
     expect(html).toContain(`sourceVersion=${sourceVersionId}`);
   });

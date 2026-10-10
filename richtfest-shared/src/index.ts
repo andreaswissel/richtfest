@@ -1,6 +1,7 @@
 export * from "./auth";
 export * from "./response";
 export * from "./agent-policy";
+export * from "./agent-document";
 export * from "./customer";
 export * from "./support";
 export * from "./location";

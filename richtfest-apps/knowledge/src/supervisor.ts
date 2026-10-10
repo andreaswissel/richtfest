@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, or, isNull, lt } from "drizzle-orm";
-import { agentPresetSnapshotSchema } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -41,6 +41,8 @@ export const supervisorPlan = z.object({
     .max(4),
 });
 export const supervisorReview = specialistOutput.extend({
+  // Older persisted runs and host fixtures contain only the conversational summary.
+  document: agentDocumentSchema.nullish(),
   decision: z.enum(["accept", "revise"]),
   revisions: z
     .array(
@@ -74,6 +76,16 @@ export type Assignment = {
   sourceVersionIds: string[];
   output?: z.infer<typeof specialistOutput>;
 };
+export function assertDocumentCitations(
+  document: z.infer<typeof agentDocumentSchema> | null | undefined,
+  citations: string[],
+) {
+  const declared = new Set(citations.map((id) => id.toLowerCase()));
+  const inline = document?.content.matchAll(/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi) ?? [];
+  for (const match of inline)
+    if (!declared.has(match[1]!.toLowerCase()))
+      throw conflict("Document introduced undeclared source citations");
+}
 export function assertIndependentReviewCitations(
   review: z.infer<typeof independentReview>,
   readableSourceIds: ReadonlySet<string>,
@@ -659,6 +671,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       );
       if (review.citations.some((v) => !allowedCitations.includes(v)))
         throw conflict("Review introduced unsupported citations");
+      assertDocumentCitations(review.document, review.citations);
       if (
         review.decision === "revise" &&
         state.revision < policy.maxRevisions
@@ -746,9 +759,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             tx,
             {
               projectId: run.projectId,
-              title: run.goal.slice(0, 200),
+              title: review.document?.title ?? run.goal.slice(0, 200),
               type: "draft",
-              content: `${summary}\n\nReview rationale\n\n${review.rationale}`,
+              content: `${review.document?.content ?? review.summary}\n\nReview rationale\n\n${review.rationale}${review.decision === "revise" ? "\n\nRevision limit reached. Unresolved issues require human review." : ""}`,
               payload: {
                 kind: "summary",
                 data: [{ summary, rationale: review.rationale }],
@@ -938,10 +951,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           const summary = [
             firstPassReview?.summary,
             `Independent review: ${output.summary}`,
-            ...findingsSummary,
-            coverageNote,
             unresolved ? "Revision limit reached. Unresolved independent-review issues require human review." : "",
-          ].filter(Boolean).join("\n\n");
+          ].filter(Boolean).join("\n\n").slice(0, 10000);
           const rationale = [
             firstPassReview?.rationale,
             `Independent review rationale\n\n${output.rationale}`,
@@ -949,6 +960,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             coverageNote,
           ].filter(Boolean).join("\n\n");
           const reviewCitations = [...new Set([
+            ...(firstPassReview?.citations ?? []),
             ...output.citations,
             ...output.findings.flatMap((finding) => finding.citations),
           ])];
@@ -958,9 +970,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             audit: (tx, action, type, entityId, metadata) => d.auditRun(tx, action, type, entityId, id, run.correlationId, metadata),
           }, tx, {
             projectId: run.projectId,
-            title: run.goal.slice(0, 200),
+            title: firstPassReview?.document?.title ?? run.goal.slice(0, 200),
             type: "draft",
-            content: `${summary}\n\n${rationale}`,
+            content: `${firstPassReview?.document?.content ?? firstPassReview?.summary ?? summary}\n\nReview rationale\n\n${rationale}${unresolved ? "\n\nRevision limit reached. Unresolved independent-review issues require human review." : ""}`,
             payload: { kind: "summary", data: [{ summary, rationale }] },
             sourceVersionIds: reviewCitations,
           }, id);

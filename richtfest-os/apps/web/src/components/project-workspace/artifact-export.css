@@ -7,6 +7,16 @@
   display: none;
 }
 
+.artifact-source-register ol {
+  list-style: decimal;
+  padding-inline-start: 1.5em;
+}
+
+.artifact-source-register a {
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 @media print {
   @page {
     margin: 18mm;
@@ -16,6 +26,23 @@
     visibility: hidden !important;
   }
 
+  /* Hidden application layout must not reserve extra printed pages. */
+  body *:not(:has(.artifact-export-print-document)):not(.artifact-export-print-document):not(.artifact-export-print-document *) {
+    display: none !important;
+  }
+
+  body,
+  body *:has(.artifact-export-print-document) {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    min-height: 0 !important;
+    width: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   .artifact-export-print-document,
   .artifact-export-print-document * {
     visibility: visible !important;
@@ -23,8 +50,7 @@
 
   .artifact-export-print-document {
     display: block !important;
-    position: absolute;
-    inset: 0;
+    position: static;
     width: 100%;
     box-sizing: border-box;
     padding: 0;
@@ -97,33 +123,38 @@
     padding-left: 18pt;
   }
 
-  .artifact-export-markdown-heading {
+  .artifact-export-print-document .chat-markdown :is(h1, h2, h3, h4, h5, h6) {
     margin: 14pt 0 6pt;
-    font-weight: 700;
+    font-size: 12pt;
+    break-after: avoid;
   }
 
-  .artifact-export-markdown-heading[data-level="1"] {
-    font-size: 16pt;
+  .artifact-export-print-document .chat-markdown-table {
+    overflow: visible;
+    max-width: none;
   }
 
-  .artifact-export-markdown-heading[data-level="2"] {
-    font-size: 14pt;
+  .artifact-export-print-document .chat-markdown table {
+    width: 100%;
+    table-layout: fixed;
+    font-size: 9pt;
   }
 
-  .artifact-export-markdown-heading[data-level="3"],
-  .artifact-export-markdown-heading[data-level="4"],
-  .artifact-export-markdown-heading[data-level="5"],
-  .artifact-export-markdown-heading[data-level="6"] {
-    font-size: 11pt;
+  .artifact-export-print-document .chat-markdown :is(th, td) {
+    overflow-wrap: anywhere;
+    white-space: normal;
+    border-color: #c7c7c7;
   }
 
-  .artifact-export-markdown-blank {
-    height: 5pt;
+  .artifact-export-print-document .chat-markdown tr {
+    break-inside: avoid;
   }
 
-  .artifact-export-print-content pre {
+  .artifact-export-print-document .chat-markdown pre,
+  .artifact-export-print-content > pre {
     margin: 0;
     white-space: pre-wrap;
+    overflow: visible;
     overflow-wrap: anywhere;
     font: inherit;
   }

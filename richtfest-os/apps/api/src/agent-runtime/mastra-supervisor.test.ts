@@ -1,9 +1,26 @@
 import { expect, test } from "bun:test";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
-import { callMastraSupervisor } from "./mastra-supervisor";
+import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
+import { assertDocumentCitations, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("review document survives real Mastra while only the handoff streams", async () => {
+  const versionId = crypto.randomUUID();
+  const review = { summary: "The concept is ready for human review.", rationale: "Evidence checked", citations: [versionId], decision: "accept", revisions: [],
+    document: { title: "Project concept", content: `# Scope\n\nSource-backed measures [${versionId}]\n\n${"Detailed proposed measure. ".repeat(500)}`.trim() } };
+  const deltas: string[] = [];
+  expect(await callMastraSupervisor({ ...base, phase: "review", onSummaryDelta: async delta => { deltas.push(delta); } }, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: review }),
+  })).toEqual(review);
+  expect(deltas.join("")).toBe(review.summary);
+  const { document, ...legacy } = review;
+  expect(supervisorSchemas.review.safeParse(legacy).success).toBe(false);
+  expect(supervisorReview.safeParse(legacy).success).toBe(true);
+  expect(supervisorReview.safeParse({ ...legacy, document: null }).success).toBe(true);
+  expect(() => assertDocumentCitations(document, [versionId])).not.toThrow();
+  expect(() => assertDocumentCitations(document, [])).toThrow("undeclared");
+});
 test("Mastra telemetry reports filtered effort and no configured-model response fallback", async () => {
   let settings: any;
   let metadata: any;

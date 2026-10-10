@@ -131,6 +131,9 @@ integration(
       cancelExecution: () => {},
       providerConfigured: async () => true,
       executeProvider: async () => ({ status: "unconfigured" }),
+      sourceReferences: async (_projectId, versionIds) => fixture.sources
+        .filter(source => versionIds.includes(source.versionId))
+        .map(source => ({ versionId: source.versionId, fileName: source.name, version: 1 })),
       listProjectSources: async () => ({
         sources: [...fixture.sources],
         truncated: false,
@@ -303,9 +306,12 @@ integration(
       expect(pdfResponse.status).toBe(200);
       expect(pdfResponse.headers.get("content-type")).toContain("application/pdf");
       expect(pdfResponse.headers.get("content-disposition")).toContain("attachment");
-      const pdf = Buffer.from(await pdfResponse.arrayBuffer()).toString("ascii");
-      expect(pdf.startsWith("%PDF-1.4")).toBe(true);
-      expect(pdf).toContain(inventoryVersionId);
+      const pdf = Buffer.from(await pdfResponse.arrayBuffer());
+      expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+      const extracted = Bun.spawnSync(["pdftotext", "-", "-"], { stdin: pdf });
+      expect(extracted.exitCode).toBe(0);
+      expect(extracted.stdout.toString()).toContain(fixture.sources[0].name);
+      expect(extracted.stdout.toString()).not.toContain(inventoryVersionId);
       await stepSupervisor({ ...d }, id); // terminal is idempotent
       expect(calls.filter((c) => c.phase === "review")).toHaveLength(2);
       const [final] = await db

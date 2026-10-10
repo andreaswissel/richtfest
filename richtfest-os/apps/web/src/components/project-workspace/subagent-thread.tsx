@@ -18,7 +18,12 @@ import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { ChatMarkdown } from "../chat-markdown";
 import { Marker, MarkerContent } from "../ui/marker";
-import { runActivityLabel } from "./run-activity";
+import {
+  runActivityLabel,
+  providerActivityMetadata,
+  providerActivityExplanation,
+  terminalProviderFailure,
+} from "./run-activity";
 import { RunActivityFeed } from "./run-activity-feed";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { AgentRunMetrics, isAgentRunActive } from "../agent-run-metrics";
@@ -88,11 +93,11 @@ function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
   if (genericLegacyRunReasons.has(reason))
     return t("workspaceRunNoSpecificReason");
   const match = /^phase=([^;]+);\s*category=([^;]+);\s*(.*)$/s.exec(reason);
-  if (!match) return reason;
+  if (!match) return t("workspaceRunNoSpecificReason");
   const phaseKey = runReasonPhases[match[1] as keyof typeof runReasonPhases];
   const categoryKey =
     runReasonCategories[match[2] as keyof typeof runReasonCategories];
-  if (!phaseKey || !categoryKey) return reason;
+  if (!phaseKey || !categoryKey) return t("workspaceRunNoSpecificReason");
   const phase = t(phaseKey);
   const category = t(categoryKey);
   const cause = match[3];
@@ -113,7 +118,7 @@ function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
     match[2] === "cancellation" &&
     !cause.startsWith("The run was cancelled by a user")
   )
-    return reason;
+    return t("workspaceRunNoSpecificReason");
   if (
     match[2] !== "cancellation" &&
     !cause.startsWith(
@@ -122,7 +127,7 @@ function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
       ],
     )
   )
-    return reason;
+    return t("workspaceRunNoSpecificReason");
   return `${t(
     match[2] === "cancellation"
       ? "workspaceRunCancelledDuring"
@@ -304,7 +309,7 @@ function formatElapsed(milliseconds: number) {
 }
 
 function providerCallId(event: RecordData, index: number) {
-  const value = event.paramsSummary;
+  const value = providerActivityMetadata(event).callId;
   return typeof value === "string" && value.trim()
     ? value.trim()
     : `legacy-provider-call-${index}`;
@@ -337,7 +342,7 @@ function activeProviderCalls(events: RecordData[]) {
       )
     )
       return;
-    const id = event.paramsSummary;
+    const id = providerActivityMetadata(event).callId;
     if (typeof id === "string" && id.trim()) {
       const call = calls.get(id.trim());
       if (call) call.active = false;
@@ -582,7 +587,13 @@ export function SubagentThread({
     ? activeChild?.goal ||
       t(childRuns.length ? "workspaceTaskReviewing" : "workspaceTaskPlanning")
     : run.goal;
-  const reason = terminalRunReason(run, t);
+  const reason =
+    terminalProviderFailure(
+      run,
+      activityEvents,
+      list(query.data?.attempts),
+      t,
+    ) ?? terminalRunReason(run, t);
   return (
     <section className="agent-thread" aria-label={agentName(run, t)}>
       <header className="agent-thread-header">
@@ -680,13 +691,34 @@ export function SubagentThread({
                           {attempt.failureCategory && (
                             <p>
                               {t("workspaceRunReason")}:{" "}
-                              {t(
-                                attempt.failureCategory === "timeout"
-                                  ? "runExecutionTimeout"
-                                  : (runReasonCategories[
-                                      attempt.failureCategory as keyof typeof runReasonCategories
-                                    ] ?? "runExecutionUnknown"),
-                              )}
+                              {providerActivityExplanation(
+                                activityEvents.find((event) => {
+                                  const metadata =
+                                    providerActivityMetadata(event);
+                                  return (
+                                    [
+                                      "provider_call_failed",
+                                      "provider_call_retrying",
+                                    ].includes(event.eventType) &&
+                                    metadata.callId === attempt.operationId &&
+                                    metadata.attempt ===
+                                      attempt.attemptNumber &&
+                                    metadata.runId === attempt.runId
+                                  );
+                                }) ?? {},
+                                t,
+                              ) ??
+                                t(
+                                  attempt.failureCategory === "timeout"
+                                    ? "runExecutionTimeout"
+                                    : (runReasonCategories[
+                                        attempt.failureCategory as keyof typeof runReasonCategories
+                                      ] ?? "runExecutionUnknown"),
+                                )}
+                              {Number.isInteger(attempt.providerStatus) &&
+                                attempt.providerStatus >= 100 &&
+                                attempt.providerStatus <= 599 &&
+                                ` · ${t("workspaceRunProviderHttpStatus")}: ${attempt.providerStatus}`}
                             </p>
                           )}
                         </section>

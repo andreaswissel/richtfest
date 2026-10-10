@@ -6,6 +6,8 @@ import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
 import {
+  ArtifactContent,
+  ArtifactSourceRegister,
   ArtifactExportActions,
   ArtifactPrintDocument,
 } from "./artifact-export";
@@ -389,12 +391,17 @@ export function ArtifactPanel({
                         />
                       </Suspense>
                     ) : (
-                      <div className="preserve-lines artifact-content">
-                        {typeof revision.content === "string"
-                          ? revision.content
-                          : JSON.stringify(revision.content, null, 2)}
+                      <div className="artifact-content">
+                        <ArtifactContent
+                          projectId={projectId}
+                          revision={revision}
+                        />
                       </div>
                     )}
+                    <ArtifactSourceRegister
+                      projectId={projectId}
+                      revision={revision}
+                    />
                     {artifact.data?.artifact?.status === "approved" ? (
                       <Callout tone="success">
                         {t("workspaceReviewedFinding")} ·{" "}

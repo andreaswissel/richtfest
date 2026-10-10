@@ -19,6 +19,20 @@ From the repository root, run `bun run typecheck`, `bun test`, and `bun run buil
 
 Generated `.amp/portals` links, `.env`, database files, uploads, and dependencies stay out of Git. Lifecycle changes must reach the project's default branch before future orbs can use them. Committing or testing these files locally does not deploy or change Railway.
 
+### Seed a project for portal testing
+
+After starting the local services, run `bun run db:seed:demo` from the repository root. It reuses the development identity seed and adds **DEMO · Wohnhaus Lindenhof** to Alpha. Sign in as Andreas or Luca in the Richtfest portal.
+
+The project contains three labeled threads:
+
+- **01 · Konzept und Quellen:** a formatted German concept in two revisions, with named citations and downloadable PDFs. Two source documents include three real PDF files: the original project brief, its changed revision (eight → six apartments), and a component overview with Unicode/acoustic symbols. Open an attachment to compare artifact revisions or follow a citation to its exact source version.
+- **02 · Tokenlimit – Entscheidung testen:** a simulated failed source-reviewer run with three recorded attempts and the Yes / No / Describe decision. Yes uses the real permission-checked local preset update; it does not start an agent run.
+- **03 · Zeichenlimit – kein Tokenproblem:** a simulated 10,000-character summary failure, deliberately without a token-increase offer.
+
+These are synthetic records, not live model results, engineering requirements or approved findings. The command writes PDF bytes through the local storage adapter, makes no provider calls, and refuses production mode, non-loopback databases, database host overrides and bucket storage. All runs are terminal; the orb's supervisor remains disabled. Provider credentials are still required for new agent replies.
+
+Stable IDs make repeat seeding non-destructive: it fills missing fixture rows without duplicating the project or replacing edits, approvals, messages or model settings. It snapshots the existing OpenAI/Medium preset and never changes it. After testing Yes, re-seeding does not reset that limit or the failed run's snapshot; use Agent model settings to restore the source reviewer's original limit if you want to repeat that decision. The command prints the three thread paths. Use the same root `.env` and `FILE_STORAGE_PATH` as the API so PDF downloads resolve.
+
 ## Hosting shape
 
 The selected Railway project is `richtfest-os`, with `richtfest-monorepo` serving API and web on one origin, a separate `Postgres` service and the private `richtfest-files` bucket, all in EU West (Amsterdam). Connect through Railway's private `DATABASE_URL` reference. AWS and Neon are not part of this architecture.

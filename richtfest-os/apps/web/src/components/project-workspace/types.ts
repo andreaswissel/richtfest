@@ -1,3 +1,5 @@
+import type { SourceReference } from "@richtfest/shared";
+
 export type WorkspaceMessage = {
   id: string;
   body: string;
@@ -9,6 +11,7 @@ export type WorkspaceMessage = {
   authorType?: string;
   parentMessageId?: string;
   sourceVersionIds?: string[];
+  sourceReferences?: SourceReference[];
   createdAt: string;
   openui?: string;
   annotation?: {

@@ -1,4 +1,4 @@
-import type { PermissionKey, AgentPresetSnapshot, AgentProvider } from "@richtfest/shared";
+import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference } from "@richtfest/shared";
 
 /** Only these structural facts may cross the provider/event boundary. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
@@ -53,6 +53,7 @@ export type AppDeps = {
   /** Generate a title from the first user message using the active provider. */
   generateConversationTitle?: (input: { message: string }) => Promise<string | null>;
   listProjectSources: (projectId: string) => Promise<ProjectSourceInventory>;
+  sourceReferences: (projectId: string, versionIds: string[]) => Promise<SourceReference[]>;
   resolveSource: (
     projectId: string,
     input: {

@@ -1,6 +1,6 @@
 import { list, type RecordData } from "../../api";
 import { useT } from "../../i18n";
-import { runActivityLabel } from "./run-activity";
+import { runActivityLabel, providerActivityExplanation } from "./run-activity";
 
 export function RunActivityFeed({
   events,
@@ -54,7 +54,11 @@ export function RunActivityFeed({
                     })}
                   </time>
                 )}
-                <span>{t(label)}</span>
+                <span>
+                  {t(label)}
+                  {providerActivityExplanation(activity, t) &&
+                    ` · ${providerActivityExplanation(activity, t)}`}
+                </span>
               </li>
             );
           })}

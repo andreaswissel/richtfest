@@ -38,6 +38,7 @@ integration(
       maxRevisions: 2,
     };
     let providerCalls = 0;
+    const document = { title: "Source-based project concept", content: `# Requested concept\n\nProposed measures [${sourceId}]\n\n${"Full review-ready detail. ".repeat(500)}`.trim() };
     const d: any = {
       db,
       tenantId,
@@ -46,17 +47,24 @@ integration(
       validateProject: async () => true,
       validateSourceVersion: async () => true,
       auditRun: async () => {},
+      resolveSource: async () => ({ status: "resolved", source: { versionId: sourceId, name: "Evidence" }, content: { status: "available", text: "Source requirements" } }),
       executeSupervisor: async (input: any) => {
         providerCalls++;
         await input.onUsage?.({ provider: "openai", modelId: "test-model", inputTokens: 17, outputTokens: 3, totalTokens: 20, reasoningTokens: null, cachedInputTokens: null });
         if (providerCalls === 1) throw Object.assign(new Error("sk-do-not-persist"), {
           providerFailure: true, retryable: true, failureCategory: "validation",
         });
+        if (input.phase === "independent_review") {
+          expect(input.context.firstPassReview.document).toEqual(document);
+          return { status: "completed", output: { decision: "accept", summary: "Independently checked", rationale: "Source reread", citations: [], revisions: [],
+            findings: [{ severity: "note", issue: "Keep assumptions visible", recommendation: "Confirm scope", citations: [] }] } };
+        }
         return {
         status: "completed",
         output: {
           decision: "accept",
           summary: "Actual reviewed result",
+          document,
           rationale: "Checked source evidence",
           citations: [sourceId],
           revisions: [],
@@ -119,12 +127,13 @@ integration(
         .where(eq(artifacts.runId, run!.id));
       expect(artifactRows).toHaveLength(1);
       expect(artifactRows[0]!.status).toBe("draft");
+      expect(artifactRows[0]!.title).toBe(document.title);
       const revisions = await db
         .select()
         .from(artifactRevisions)
         .where(eq(artifactRevisions.artifactId, artifactRows[0]!.id));
       expect(revisions).toHaveLength(1);
-      expect(revisions[0]!.content).toContain("Actual reviewed result");
+      expect(revisions[0]!.content).toContain(document.content);
       expect(revisions[0]!.content).toContain("Checked source evidence");
       expect(revisions[0]!.sourceVersionIds).toEqual([sourceId]);
       const outputs = await db
@@ -132,6 +141,7 @@ integration(
         .from(messages)
         .where(eq(messages.runId, run!.id));
       expect(outputs).toHaveLength(1);
+      expect(outputs[0]!.body).toBe("Actual reviewed result");
       const reference = {
         kind: "supervisor_result",
         artifactId: artifactRows[0]!.id,
@@ -147,15 +157,17 @@ integration(
         .from(agentRuns)
         .where(eq(agentRuns.id, run!.id));
       expect(parent!.status).toBe("needs_review");
+      expect(parent!.outputSummary).toBe("Actual reviewed result");
       // A later human-steered generation must have its own immutable proposal and exact reference.
       await db
         .update(supervisorRuns)
-        .set({ generation: 1, phase: "review" })
+        .set({ generation: 1, phase: "review", modelPolicy: { ...policy, independentReviewEnabled: true } })
         .where(eq(supervisorRuns.runId, run!.id));
       await db
         .update(agentRuns)
         .set({ status: "queued" })
         .where(eq(agentRuns.id, run!.id));
+      await stepSupervisor(d, run!.id);
       await stepSupervisor(d, run!.id);
       await stepSupervisor(d, run!.id);
       const later = await db
@@ -177,6 +189,12 @@ integration(
       ).toBe(true);
       expect(newest.artifactId).not.toBe(reference.artifactId);
       expect(newest.revisionId).not.toBe(reference.revisionId);
+      const [independentlyReviewed] = await db.select().from(artifactRevisions).where(eq(artifactRevisions.id, newest.revisionId));
+      expect(independentlyReviewed!.content).toContain(document.content);
+      expect(independentlyReviewed!.content).toContain("Keep assumptions visible");
+      expect(independentlyReviewed!.content).toContain("coverage complete");
+      expect(independentlyReviewed!.sourceVersionIds).toEqual([sourceId]);
+      expect(later.every(message => !message.body.includes("Full review-ready detail"))).toBe(true);
       expect(
         await db
           .select()

@@ -105,7 +105,9 @@ function ArtifactPreview({
         <AttachmentTitle>
           <Link to={`/projects/${projectId}?${target}`}>{artifact.title}</Link>
         </AttachmentTitle>
-        <AttachmentDescription>{t("workspacePdfAttachment")}</AttachmentDescription>
+        <AttachmentDescription>
+          {t("workspacePdfAttachment")}
+        </AttachmentDescription>
       </AttachmentContent>
       <AttachmentActions>
         <AttachmentAction asChild aria-label={t("workspaceDownloadPdf")}>
@@ -129,7 +131,7 @@ function ArtifactPdf({
   artifactId: string;
   revisionId: string;
 }) {
-  const { projectId } = useContext(ProjectContext);
+  const { projectId, conversationId } = useContext(ProjectContext);
   const t = useT();
   const validIds =
     z.string().uuid().safeParse(artifactId).success &&
@@ -151,6 +153,12 @@ function ArtifactPdf({
     );
 
   const pdfUrl = artifactPdfUrl(artifactId, revisionId);
+  const target = new URLSearchParams({
+    panel: "artifacts",
+    artifact: artifactId,
+    revision: revisionId,
+  });
+  if (conversationId) target.set("conversation", conversationId);
   return (
     <Attachment size="sm">
       <AttachmentMedia>
@@ -158,11 +166,11 @@ function ArtifactPdf({
       </AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle>
-          <a href={pdfUrl} download>
-            {artifact.title}
-          </a>
+          <Link to={`/projects/${projectId}?${target}`}>{artifact.title}</Link>
         </AttachmentTitle>
-        <AttachmentDescription>{t("workspacePdfAttachment")}</AttachmentDescription>
+        <AttachmentDescription>
+          {t("workspacePdfAttachment")}
+        </AttachmentDescription>
       </AttachmentContent>
       <AttachmentActions>
         <AttachmentAction asChild aria-label={t("workspaceDownloadPdf")}>

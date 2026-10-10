@@ -1,5 +1,11 @@
 import { Printer } from "lucide-react";
-import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
+import {
+  formatSourceCitations,
+  sourceReferenceLabel,
+  type SourceReference,
+} from "@richtfest/shared";
+import { ChatMarkdown } from "../chat-markdown";
 import { Button } from "../ui/button";
 import { useT } from "../../i18n";
 import "./artifact-export.css";
@@ -9,36 +15,90 @@ type ExportArtifact = {
   status?: string | null;
   type?: string | null;
 };
-
 type ExportRevision = {
   id?: string | null;
   version?: number | null;
   title?: string | null;
   content?: unknown;
   sourceVersionIds?: unknown;
+  sourceReferences?: SourceReference[];
   createdAt?: string | Date | null;
 };
-
 type ArtifactExportProps = {
   projectId: string;
   artifact: ExportArtifact;
   revision: ExportRevision;
 };
 
-function artifactSourceVersionIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((ref) => {
-    if (typeof ref === "string" && ref.trim()) return [ref];
-    if (!ref || typeof ref !== "object" || !("id" in ref)) return [];
-    const id = (ref as { id?: unknown }).id;
-    return typeof id === "string" && id.trim() ? [id] : [];
-  });
+export function ArtifactContent({
+  projectId,
+  revision,
+}: Pick<ArtifactExportProps, "projectId" | "revision">) {
+  const t = useT();
+  if (typeof revision.content !== "string")
+    return (
+      <pre className="preserve-lines">
+        {JSON.stringify(revision.content, null, 2) ||
+          t("workspaceExportNoContent")}
+      </pre>
+    );
+  return (
+    <ChatMarkdown>
+      {formatSourceCitations(
+        revision.content,
+        projectId,
+        revision.sourceReferences ?? [],
+        t("workspaceSourceUnavailable"),
+      ) || t("workspaceExportNoContent")}
+    </ChatMarkdown>
+  );
 }
 
-function revisionContent(content: unknown) {
-  if (typeof content === "string") return content;
-  if (content === undefined || content === null) return "";
-  return JSON.stringify(content, null, 2);
+export function ArtifactSourceRegister({
+  projectId,
+  revision,
+}: Pick<ArtifactExportProps, "projectId" | "revision">) {
+  const t = useT();
+  const sources = revision.sourceReferences ?? [];
+  const ids = Array.isArray(revision.sourceVersionIds)
+    ? revision.sourceVersionIds.flatMap((ref) =>
+        typeof ref === "string"
+          ? [ref]
+          : ref && typeof ref.id === "string"
+            ? [ref.id]
+            : [],
+      )
+    : [];
+  const sourceIds = [
+    ...new Set([...ids, ...sources.map((source) => source.versionId)]),
+  ];
+  return (
+    <section className="artifact-source-register">
+      <h3>{t("workspaceExportSourceRefs")}</h3>
+      {sourceIds.length ? (
+        <ol>
+          {sourceIds.map((id) => {
+            const source = sources.find((item) => item.versionId === id);
+            return (
+              <li key={id}>
+                {source ? (
+                  <Link
+                    to={`/projects/${encodeURIComponent(projectId)}?panel=documents&sourceVersion=${encodeURIComponent(id)}`}
+                  >
+                    {sourceReferenceLabel(source)}
+                  </Link>
+                ) : (
+                  t("workspaceSourceUnavailable")
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p>{t("workspaceExportNoSourceRefs")}</p>
+      )}
+    </section>
+  );
 }
 
 function revisionLabel(revision: ExportRevision, t: ReturnType<typeof useT>) {
@@ -53,102 +113,26 @@ function formattedCreatedAt(value: ExportRevision["createdAt"]) {
   return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
 }
 
-function renderArtifactContent(
-  content: string,
-  t: ReturnType<typeof useT>,
-): ReactNode {
-  const lines = content.split(/\r?\n/);
-  const output: ReactNode[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const line = lines[index];
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    if (heading) {
-      output.push(
-        <div
-          className="artifact-export-markdown-heading"
-          data-level={heading[1].length}
-          key={`heading-${index}`}
-        >
-          {heading[2]}
-        </div>,
-      );
-      index += 1;
-      continue;
-    }
-
-    if (/^(?:[-*+])\s+(.+)$/.test(line)) {
-      const items: string[] = [];
-      while (index < lines.length) {
-        const item = /^(?:[-*+])\s+(.+)$/.exec(lines[index]);
-        if (!item) break;
-        items.push(item[1]);
-        index += 1;
-      }
-      output.push(
-        <ul key={`unordered-${index}`}>
-          {items.map((item, itemIndex) => (
-            <li key={`${itemIndex}-${item}`}>{item}</li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    if (/^\d+[.)]\s+(.+)$/.test(line)) {
-      const items: string[] = [];
-      while (index < lines.length) {
-        const item = /^\d+[.)]\s+(.+)$/.exec(lines[index]);
-        if (!item) break;
-        items.push(item[1]);
-        index += 1;
-      }
-      output.push(
-        <ol key={`ordered-${index}`}>
-          {items.map((item, itemIndex) => (
-            <li key={`${itemIndex}-${item}`}>{item}</li>
-          ))}
-        </ol>,
-      );
-      continue;
-    }
-
-    output.push(
-      line ? (
-        <p key={`line-${index}`}>{line}</p>
-      ) : (
-        <div
-          aria-hidden="true"
-          className="artifact-export-markdown-blank"
-          key={`blank-${index}`}
-        />
-      ),
-    );
-    index += 1;
-  }
-
-  return output.length ? output : <p>{t("workspaceExportNoContent")}</p>;
-}
-
 export function ArtifactExportActions({
   artifact,
   revision,
 }: Pick<ArtifactExportProps, "artifact" | "revision">) {
   const t = useT();
-  const print = () => {
+  const print = async () => {
+    // Ensure the shared lazy renderer has loaded before opening the print dialog.
+    await import("../chat-markdown-content");
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
     const previousTitle = document.title;
-    const title = artifact.title.trim() || t("workspaceExportArtifact");
     const restoreTitle = () => {
       document.title = previousTitle;
       window.removeEventListener("afterprint", restoreTitle);
     };
-
-    document.title = `${title} · ${revisionLabel(revision, t)}`;
+    document.title = `${artifact.title.trim() || t("workspaceExportArtifact")} · ${revisionLabel(revision, t)}`;
     window.addEventListener("afterprint", restoreTitle);
     window.print();
   };
-
   return (
     <div className="artifact-export-actions">
       <Button
@@ -171,10 +155,7 @@ export function ArtifactPrintDocument({
   revision,
 }: ArtifactExportProps) {
   const t = useT();
-  const sourceVersionIds = artifactSourceVersionIds(revision.sourceVersionIds);
-  const content = revisionContent(revision.content);
   const createdAt = formattedCreatedAt(revision.createdAt);
-
   return (
     <section className="artifact-export-print-document">
       <header className="artifact-export-print-header">
@@ -213,31 +194,13 @@ export function ArtifactPrintDocument({
           )}
         </dl>
       </header>
-
       <article className="artifact-export-print-content">
         <h2>{revision.title || artifact.title}</h2>
-        {renderArtifactContent(content, t)}
+        <ArtifactContent projectId={projectId} revision={revision} />
       </article>
-
-      <section className="artifact-export-print-sources">
-        <h2>{t("workspaceExportSourceRefs")}</h2>
-        {sourceVersionIds.length ? (
-          <ol>
-            {sourceVersionIds.map((sourceVersionId, index) => (
-              <li key={`${sourceVersionId}-${index}`}>
-                <a
-                  href={`/projects/${projectId}?panel=documents&sourceVersion=${encodeURIComponent(sourceVersionId)}`}
-                >
-                  {sourceVersionId}
-                </a>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p>{t("workspaceExportNoSourceRefs")}</p>
-        )}
-      </section>
-
+      <div className="artifact-export-print-sources">
+        <ArtifactSourceRegister projectId={projectId} revision={revision} />
+      </div>
       <footer className="artifact-export-print-footer">
         {t("workspaceExportFooter")}
       </footer>

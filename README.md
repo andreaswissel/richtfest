@@ -36,6 +36,8 @@ amp orb service logs api
 
 Run `bun run typecheck`, `bun test`, and `bun run build` from the root. The generated `.env` enables the PostgreSQL integration tests, including Mastra recovery tests, against this disposable database. Existing `.env` files are preserved; setup migrations always target the orb database regardless of an inherited `DATABASE_URL`. No Railway access, live email, provider credentials or customer files are needed. See Richtfest Docs → Engineering → Deployment preparation for lifecycle and safety details.
 
+For a populated portal, run `bun run db:seed:demo` from the root after starting services. Sign in as Andreas or Luca and open **DEMO · Wohnhaus Lindenhof**: it includes real synthetic PDF uploads, two concept revisions, and separate token-limit and character-limit failure threads. Re-running preserves edits and model settings. The command refuses production/remote databases and bucket storage and never calls a model. See the Docs deployment page for the test scenarios and how to repeat the token-limit decision.
+
 ## Railway setup
 
 The Railway project `richtfest-os` is defined in `.railway/railway.ts` (Railway Infrastructure as Code): one service named `richtfest-monorepo`, a Railway Postgres service, and the private Railway Bucket `richtfest-files`, all in EU West (Amsterdam). Railway does not read this file during deploys, so do not create services from the Railway dashboard's GitHub import; it stages one failing service per workspace package. Apply the file with the Railway CLI instead:

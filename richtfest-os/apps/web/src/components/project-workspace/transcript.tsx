@@ -45,8 +45,14 @@ import {
 } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { ChatMarkdown } from "../chat-markdown";
+import { formatSourceCitations, sourceReferenceLabel } from "@richtfest/shared";
 import { Marker, MarkerContent } from "../ui/marker";
 import { LiveRun } from "./live-run";
+import { TokenLimitAction } from "./token-limit-action";
+import {
+  providerActivityExplanation,
+  terminalProviderFailure,
+} from "./run-activity";
 import {
   Attachment,
   AttachmentContent,
@@ -118,14 +124,33 @@ function FailedRunOutcome({
   conversationId,
   hasRetry,
   hasActiveRun,
+  onDescribe,
 }: {
   run: RecordData;
   projectId: string;
   conversationId: string;
   hasRetry: boolean;
   hasActiveRun: boolean;
+  onDescribe: () => void;
 }) {
   const t = useT();
+  // Reuse details already loaded in this workspace; no per-outcome requests.
+  const details = useQuery<RecordData>({
+    queryKey: [`/knowledge/runs/${run.id}`],
+    queryFn: () => api(`/knowledge/runs/${run.id}`),
+    enabled: false,
+  });
+  const failure =
+    (run.failureEvent
+      ? providerActivityExplanation(run.failureEvent, t)
+      : undefined) ??
+    terminalProviderFailure(
+      run,
+      list(details.data?.events),
+      list(details.data?.attempts),
+      t,
+    ) ??
+    safeRunFailureReason(run, t);
   const retry = useMutation({
     mutationFn: () => api(`/knowledge/runs/${run.id}/retry`, {}),
     onSuccess: () => void queryClient.invalidateQueries(),
@@ -139,7 +164,8 @@ function FailedRunOutcome({
     <Message>
       <MessageContent>
         <MessageHeader>{t("workspaceRunOutcomeTitle")}</MessageHeader>
-        <Callout tone="error">{safeRunFailureReason(run, t)}</Callout>
+        <Callout tone="error">{failure}</Callout>
+        <TokenLimitAction run={run} onDescribe={onDescribe} />
         <div className="flex flex-wrap items-center gap-stack">
           <Button asChild variant="link" size="sm">
             <Link to={`/projects/${projectId}?${params}`}>
@@ -392,6 +418,11 @@ function Conversation({
     draftDirty.current = true;
     composer.current?.focus();
   }, []);
+  const describeDifferentApproach = useCallback(() => {
+    setDraft((current) => current || t("tokenLimitDescribePrompt"));
+    draftDirty.current = true;
+    composer.current?.focus();
+  }, [t]);
   const latestDraft = useRef(draft);
   latestDraft.current = draft;
   const [searchTerm, setSearchTerm] = useState("");
@@ -864,6 +895,7 @@ function Conversation({
                     run={failedOutcomes.get(message.id)!}
                     projectId={projectId}
                     conversationId={conversationId}
+                    onDescribe={describeDifferentApproach}
                     hasRetry={runs.some(
                       (run) => run.retryOfRunId === message.runId,
                     )}
@@ -1208,7 +1240,14 @@ const MessageRow = memo(function MessageRow({
             }
           >
             {role === "agent" || role === "assistant" ? (
-              <ChatMarkdown>{message.body}</ChatMarkdown>
+              <ChatMarkdown>
+                {formatSourceCitations(
+                  message.body,
+                  projectId,
+                  message.sourceReferences ?? [],
+                  t("workspaceSourceUnavailable"),
+                )}
+              </ChatMarkdown>
             ) : (
               message.body
             )}
@@ -1237,14 +1276,29 @@ const MessageRow = memo(function MessageRow({
             )}
           </blockquote>
         )}
-        {message.sourceVersionIds?.map((id) => (
+        {[
+          ...new Set([
+            ...(message.sourceVersionIds ?? []),
+            ...(message.sourceReferences ?? []).map(
+              (source) => source.versionId,
+            ),
+          ]),
+        ].map((id) => (
           <Attachment key={id}>
             <AttachmentContent>
               <AttachmentTitle>
                 <Link
-                  to={`/projects/${projectId}?conversation=${conversationId}&sourceVersion=${id}${message.annotation?.page ? `&page=${message.annotation.page}` : ""}`}
+                  to={`/projects/${projectId}?panel=documents&conversation=${conversationId}&sourceVersion=${id}${message.annotation?.page ? `&page=${message.annotation.page}` : ""}`}
                 >
-                  {t("source")} · {id}
+                  {message.sourceReferences?.find(
+                    (source) => source.versionId === id,
+                  )
+                    ? sourceReferenceLabel(
+                        message.sourceReferences.find(
+                          (source) => source.versionId === id,
+                        )!,
+                      )
+                    : t("workspaceSourceUnavailable")}
                 </Link>
               </AttachmentTitle>
             </AttachmentContent>

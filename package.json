@@ -13,6 +13,7 @@
     "test": "bun test",
     "db:migrate": "bun run --filter @richtfest/api db:migrate",
     "db:seed": "bun run --filter @richtfest/api db:seed",
+    "db:seed:demo": "bun --env-file=.env scripts/seed-agent-demo.ts",
     "backup": "./scripts/backup.sh",
     "restore": "./scripts/restore.sh"
   },
