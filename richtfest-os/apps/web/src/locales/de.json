@@ -1,7 +1,12 @@
 {
   "locationEditor": "3D-Standort",
   "locationSetup": "Standortdaten laden",
-  "locationSetupHint": "Start mit Giersstraße 20, Berlin. Amtliche Umgebungsgebäude und erfasste Bäume importieren; LiDAR wird nur auf Anforderung geladen. Besprechungsnotizen erzeugen keine Standortgeometrie.",
+  "locationSetupHint": "Die gespeicherte Projektadresse lädt amtliche Berliner Gebäude und Bäume. Nur eindeutige Hausnummerntreffer. LiDAR wird auf Anforderung geladen; die Abdeckung ist auf verfügbare Kacheln im Mitte-Archiv begrenzt. Besprechungsnotizen erzeugen keine Geometrie.",
+  "projectStreet": "Straße und Hausnummer",
+  "locationAddressMissing": "Straße, Hausnummer und Ort in den Projektdetails ergänzen, um den Standort zu laden. Vorhandene Szenenkoordinaten bleiben unverändert.",
+  "locationAddressChanged": "Die Projektadresse weicht vom importierten Standort ab. Die Szene bleibt am ursprünglichen Standort.",
+  "locationAddressObjects": "Zum Standortwechsel zuerst Planungsobjekte und IFC-Overlays entfernen und speichern. Das Laden der neuen Adresse ersetzt Referenzebenen und entfernt LiDAR; Notizen und Quelldateien bleiben erhalten.",
+  "locationUseProjectAddress": "Projektadresse laden",
   "locationLayers": "Szenenebenen",
   "locationBuildings": "Gebäude · 2022",
   "locationTrees": "Baumkataster",

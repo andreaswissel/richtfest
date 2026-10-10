@@ -1,7 +1,12 @@
 {
   "locationEditor": "3D location",
   "locationSetup": "Load site context",
-  "locationSetupHint": "Start with Giersstraße 20, Berlin. Import official surrounding buildings and inventoried trees; LiDAR loads only when requested. No site geometry is inferred from meeting notes.",
+  "locationSetupHint": "Use the saved project address to load official Berlin buildings and tree inventory. Exact house-number matches only. LiDAR loads on request; coverage is limited to the available Mitte archive tiles. No geometry is inferred from meeting notes.",
+  "projectStreet": "Street and house number",
+  "locationAddressMissing": "Add a street, house number and city in project details to load the site. Existing scene coordinates remain unchanged.",
+  "locationAddressChanged": "The project address differs from this imported site. The scene remains at its original location.",
+  "locationAddressObjects": "To switch sites, remove planning objects and IFC overlays and save first. Loading the new address replaces reference layers and clears LiDAR; notes and source files are kept.",
+  "locationUseProjectAddress": "Load project address",
   "locationLayers": "Scene layers",
   "locationBuildings": "Buildings · 2022",
   "locationTrees": "Tree inventory",

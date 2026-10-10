@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
+import { formatProjectAddress } from "@richtfest/shared";
 import { api, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
@@ -182,7 +183,7 @@ export function ProjectWorkspace() {
       </nav>
       <LoadState query={project} />
       {view === "location" && project.isSuccess && (
-        <LocationMode projectId={id!} />
+        <LocationMode projectId={id!} address={details} />
       )}
       {view === "workspace" && (
         <>
@@ -363,6 +364,10 @@ export function ProjectWorkspace() {
               const body: Record<string, unknown> = {
                 name: values.name,
                 status: values.status,
+                street: values.street,
+                postalCode: values.postalCode,
+                city: values.city,
+                country: values.country,
               };
               if (typeof values.customerId === "string")
                 body.customerId = values.customerId || null;
@@ -378,6 +383,25 @@ export function ProjectWorkspace() {
                 defaultValue={details.name || ""}
               />
             </Field>
+            <fieldset className="grid gap-stack">
+              <legend className="text-ui-sm">{t("address")}</legend>
+              {(
+                [
+                  ["street", "projectStreet", 300],
+                  ["postalCode", "customerPostalCode", 32],
+                  ["city", "customerCity", 200],
+                  ["country", "customerCountry", 100],
+                ] as const
+              ).map(([name, label, maxLength]) => (
+                <Field key={name} label={t(label)}>
+                  <Input
+                    name={name}
+                    maxLength={maxLength}
+                    defaultValue={details[name] || ""}
+                  />
+                </Field>
+              ))}
+            </fieldset>
             <Field label={t("customer")}>
               <NativeSelect
                 name="customerId"
@@ -440,6 +464,8 @@ export function ProjectWorkspace() {
           <dl className="project-details">
             <dt>{t("name")}</dt>
             <dd>{title}</dd>
+            <dt>{t("address")}</dt>
+            <dd>{formatProjectAddress(details) || "—"}</dd>
             <dt>{t("customer")}</dt>
             <dd>{project.data?.customerName || t("noCustomer")}</dd>
             <dt>{t("status")}</dt>

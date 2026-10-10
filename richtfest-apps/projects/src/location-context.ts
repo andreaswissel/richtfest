@@ -1,13 +1,45 @@
-import type { LocationContext, LocationBuilding, LocationTree } from "@richtfest/shared";
+import { projectAddressInput, type ProjectAddress, type LocationContext, type LocationBuilding, type LocationTree } from "@richtfest/shared";
 
-/** Verified exact house-number match, OSM way 173050070, queried 2026-10-10.
- * This is a geocoded building centre, not a surveyed setting-out point. */
-export const SITE = {
-  siteId: "berlin-giersstrasse-20" as const,
-  address: "Giersstraße 20, 13088 Berlin",
-  longitude: 13.4827108, latitude: 52.5575494, radius: 100,
-  evidence: "https://nominatim.openstreetmap.org/search?street=20%20Giersstra%C3%9Fe&city=Berlin&format=jsonv2&addressdetails=1",
-};
+export function validateLocationAddress(input: ProjectAddress) {
+  const address = projectAddressInput.parse(input);
+  if (!address.street || !address.city) throw new Error("Site address requires a street, house number and city in project details");
+  if (address.city.toLowerCase() !== "berlin" || (address.country && !["de", "deutschland", "germany"].includes(address.country.toLowerCase())))
+    throw new Error("Site context currently supports Berlin, Germany only");
+  const parts = address.street.match(/^(.+?)\s+(\d+)\s*([a-z]?)$/i);
+  if (!parts || (address.postalCode && !/^\d{5}$/.test(address.postalCode)))
+    throw new Error("Site address needs a street and exact house number (for example Giersstraße 20); check the postal code too");
+  return { address, street: parts[1]!, house: Number(parts[2]), suffix: parts[3]!.toLowerCase() };
+}
+
+/** Resolve one exact official Berlin address. Never substitute a street/city centroid. */
+export async function resolveLocationAddress(input: ProjectAddress, signal: AbortSignal) {
+  const { address, street, house, suffix } = validateLocationAddress(input);
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const normal = (value: string) => value.trim().toLowerCase().replaceAll("ß", "ss");
+  // Fetch bounded spelling candidates, then require exact normalized equality
+  // below. Replacing every "ss" with "ß" corrupts names such as Giersstrasse.
+  const pattern = street.replace(/ß|ss/gi, "%");
+  const filter = `str_name ILIKE ${quote(pattern)} AND hnr=${house}${address.postalCode ? ` AND plz=${quote(address.postalCode)}` : ""}`;
+  const url = new URL("https://gdi.berlin.de/services/wfs/adressen_berlin");
+  url.search = new URLSearchParams({ service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: "adressen_berlin:adressen_berlin", outputFormat: "application/json", srsName: "EPSG:4326", CQL_FILTER: filter, count: "100" }).toString();
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`Berlin address service unavailable (${response.status}); retry import`);
+  const json = JSON.parse((await boundedBody(response, 1_000_000)).toString());
+  if (!Array.isArray(json.features) || Number(json.numberMatched) > json.features.length) throw new Error("Site address lookup incomplete; add the postal code or retry");
+  const matches = (json.features as Feature[]).filter(f => normal(String(f.properties.str_name ?? "")) === normal(street)
+    && Number(f.properties.hnr) === house && normal(String(f.properties.hnr_zusatz ?? "")) === suffix
+    && (!address.postalCode || f.properties.plz === address.postalCode));
+  if (!matches.length) throw new Error("Site address not found in the official Berlin address register; check project details");
+  if (matches.length !== 1) throw new Error("Site address is ambiguous; add the postal code in project details");
+  const match = matches[0]!, p = match.properties;
+  const [longitude, latitude] = match.geometry?.coordinates ?? [];
+  if (match.geometry?.type !== "Point" || !Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < 13 || longitude > 14 || latitude < 52 || latitude > 53)
+    throw new Error("Berlin address service returned invalid coordinates");
+  return { siteId: `berlin-address:${p.adressid}`, projectAddress: address,
+    address: `${p.str_name} ${p.hnr}${p.hnr_zusatz || ""}, ${p.plz} Berlin`, longitude, latitude,
+    radius: 100, origin: toUtm33(longitude, latitude),
+    sources: [{ label: "Official Berlin address register (CC BY 3.0 DE); Amt für Statistik Berlin-Brandenburg; not a surveyed setting-out point", url: url.href, surveyedAt: null }] };
+}
 /** WGS84 -> ETRS89 / UTM zone 33N. WGS84/ETRS89 difference is immaterial
  * for this unsurveyed display; this must not be used for engineering clearance. */
 export function toUtm33(longitude: number, latitude: number): [number, number] {
@@ -22,7 +54,6 @@ export function toUtm33(longitude: number, latitude: number): [number, number] {
   return [500000 + k * n * (A + (1 - t + c) * A ** 3 / 6 + (5 - 18 * t + t ** 2 + 72 * c - 58 * ep) * A ** 5 / 120),
     k * (m + n * Math.tan(p) * (A ** 2 / 2 + (5 - t + 9 * c + 4 * c ** 2) * A ** 4 / 24 + (61 - 58 * t + t ** 2 + 600 * c - 330 * ep) * A ** 6 / 720))];
 }
-export const SITE_ORIGIN = toUtm33(SITE.longitude, SITE.latitude);
 export const localXZ = (point: number[], origin: [number, number]): [number, number] => [point[0]! - origin[0], origin[1] - point[1]!];
 export const measuredHeight = (value: unknown): number | null => {
   if (value === null || value === undefined || value === "") return null;
@@ -56,13 +87,14 @@ export async function boundedBody(response: Response, max: number): Promise<Buff
   } finally { await reader.cancel().catch(() => {}); }
   return Buffer.concat(chunks);
 }
-export async function importLocationContext(signal: AbortSignal): Promise<LocationContext> {
-  const origin = SITE_ORIGIN, r = SITE.radius;
+export async function importLocationContext(address: ProjectAddress, signal: AbortSignal): Promise<LocationContext> {
+  const site = await resolveLocationAddress(address, signal);
+  const { origin, radius: r } = site;
   const bbox = [origin[0] - r, origin[1] - r, origin[0] + r, origin[1] + r, "EPSG:25833"].join(",");
   const layers = [
     ["ua_gebaeudehoehen", "gebaeudehoehen"], ["baumbestand", "strassenbaeume"], ["baumbestand", "anlagenbaeume"],
   ];
-  const sources: LocationContext["sources"] = [{ label: "Exact address geocoder: OSM way 173050070 (ODbL); building centre, not surveyed", url: SITE.evidence, surveyedAt: null }];
+  const sources: LocationContext["sources"] = [...site.sources];
   const collections = await Promise.all(layers.map(async ([service, layer]) => {
     const url = new URL(`https://gdi.berlin.de/services/wfs/${service}`);
     url.search = new URLSearchParams({ service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: `${service}:${layer}`, outputFormat: "application/json", srsName: "EPSG:25833", bbox, count: "10000" }).toString();
@@ -73,6 +105,5 @@ export async function importLocationContext(signal: AbortSignal): Promise<Locati
     sources.push({ label: `Berlin ${service}:${layer} (unreviewed context)`, url: url.href, surveyedAt: null });
     return json.features as Feature[];
   }));
-  const { evidence: _evidence, ...site } = SITE;
   return { ...site, origin, buildings: collections[0]!.map(f => buildingFeature(f, origin)).filter((f): f is LocationBuilding => !!f), trees: collections.slice(1).flat().map(f => treeFeature(f, origin)).filter((f): f is LocationTree => !!f), sources, importedAt: new Date().toISOString() };
 }

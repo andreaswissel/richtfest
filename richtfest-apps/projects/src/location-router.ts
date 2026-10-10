@@ -1,9 +1,10 @@
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import { ok, type LocationState } from "@richtfest/shared";
+import { ok, projectAddressInput, locationMatchesAddress, type LocationState } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
+import { validateLocationAddress } from "./location-context";
 
 const vector = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const sceneInput = z.object({
@@ -32,9 +33,9 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
     const d = getDeps(req);
     d.requirePermission(write ? "projects:write" : "projects:read");
     const projectId = z.string().uuid().parse(req.params.projectId);
-    const [project] = await d.db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).limit(1);
+    const [project] = await d.db.select().from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).limit(1);
     if (!project) throw failure("Project not found", 404, "not_found");
-    return { d, projectId, where: and(eq(locations.projectId, projectId), eq(locations.tenantId, d.tenantId)) };
+    return { d, projectId, address: projectAddressInput.parse(project), where: and(eq(locations.projectId, projectId), eq(locations.tenantId, d.tenantId)) };
   };
   router.get("/projects/:projectId/location", async (req, res, next) => {
     try {
@@ -56,6 +57,8 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
           if (!source) throw failure("IFC source version not found in this project", 404, "not_found");
         }
         await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
+        const [current] = await tx.select(stateColumns).from(locations).where(where).for("update");
+        if (["queued", "running"].includes(current.contextStatus)) throw failure("Wait for the site import before saving scene changes", 409, "location_import_busy");
         const [saved] = await tx.update(locations).set({ scene: input.scene, revision: sql`${locations.revision} + 1`, updatedAt: new Date() }).where(and(where, eq(locations.revision, input.revision))).returning(stateColumns);
         if (!saved) throw failure("Location revision changed; reload before saving", 409, "revision_conflict");
         await d.audit(tx, "projects.location.saved", "project", projectId, { revision: saved.revision });
@@ -67,17 +70,32 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
   for (const kind of ["context", "lidar"] as const) {
     router.post(`/projects/:projectId/location/${kind === "context" ? "import" : "lidar"}`, async (req, res, next) => {
       try {
-        const { d, projectId, where } = await scope(req, true);
-        if (kind === "context") z.object({ siteId: z.literal("berlin-giersstrasse-20") }).strict().parse(req.body);
-        else z.object({}).strict().parse(req.body ?? {});
+        const { d, projectId, address, where } = await scope(req, true);
+        const input = kind === "context"
+          ? z.object({ revision: z.number().int().nonnegative().max(2147483646) }).strict().parse(req.body)
+          : z.object({}).strict().parse(req.body ?? {});
+        if (kind === "context") {
+          try { validateLocationAddress(address); }
+          catch (error) { throw failure((error as Error).message, 422, "location_address_invalid"); }
+        }
         const row = await d.db.transaction(async (tx: any) => {
           await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
           const [current] = await tx.select(stateColumns).from(locations).where(where).for("update");
           if (kind === "lidar" && !current.context) throw failure("Import location context first", 409, "context_required");
           const status = kind === "context" ? current.contextStatus : current.lidarStatus;
-          if (["queued", "running", "ready"].includes(status)) return current;
-          const [queued] = await tx.update(locations).set(kind === "context" ? { contextStatus: "queued", contextError: null, updatedAt: new Date() } : { lidarStatus: "queued", lidarError: null, updatedAt: new Date() }).where(where).returning(stateColumns);
-          await d.audit(tx, `projects.location.${kind}.queued`, "project", projectId, { siteId: "berlin-giersstrasse-20" });
+          if (["queued", "running"].includes(status)) return current;
+          if (status === "ready" && (kind === "lidar" || (current.context && locationMatchesAddress(current.context, address)))) return current;
+          if (kind === "context") {
+            if (current.revision !== (input as { revision: number }).revision) throw failure("Location revision changed; reload before importing", 409, "revision_conflict");
+            if (current.scene.objects.length) throw failure("Existing objects are anchored to the imported site. Remove objects and save before loading a different address", 409, "location_has_objects");
+            if (["queued", "running"].includes(current.lidarStatus)) throw failure("Wait for the LiDAR import before changing sites", 409, "location_import_busy");
+          }
+          const [queued] = await tx.update(locations).set(kind === "context" ? {
+            requestedAddress: address, contextStatus: "queued", contextError: null,
+            context: null, cloud: null, lidarStatus: "idle", lidarError: null,
+            revision: sql`${locations.revision} + 1`, leaseToken: null, leaseUntil: null, updatedAt: new Date(),
+          } : { lidarStatus: "queued", lidarError: null, updatedAt: new Date() }).where(where).returning(stateColumns);
+          await d.audit(tx, `projects.location.${kind}.queued`, "project", projectId, { revision: queued.revision });
           return queued;
         });
         res.status(202).json(ok(locationState(row)));

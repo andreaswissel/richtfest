@@ -8,7 +8,7 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
-import type { LocationContext, LocationPointCloud, LocationScene } from "@richtfest/shared";
+import type { LocationContext, LocationPointCloud, LocationScene, ProjectAddress } from "@richtfest/shared";
 
 export const projectLocations = pgTable("projects_locations", {
   projectId: uuid("project_id").primaryKey(),
@@ -17,6 +17,7 @@ export const projectLocations = pgTable("projects_locations", {
   scene: jsonb("scene").$type<LocationScene>().notNull().default({ objects: [], planningNotes: "" }),
   context: jsonb("context").$type<LocationContext>(),
   cloud: jsonb("cloud").$type<LocationPointCloud>(),
+  requestedAddress: jsonb("requested_address").$type<ProjectAddress>(),
   contextStatus: text("context_status").notNull().default("idle"),
   contextError: text("context_error"),
   lidarStatus: text("lidar_status").notNull().default("idle"),
@@ -30,6 +31,10 @@ export const projects = pgTable("projects_projects", {
   tenantId: uuid("tenant_id").notNull(),
   customerId: uuid("customer_id"),
   name: text("name").notNull(),
+  street: text("street"),
+  postalCode: text("postal_code"),
+  city: text("city"),
+  country: text("country"),
   status: text("status").notNull().default("planning"),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })

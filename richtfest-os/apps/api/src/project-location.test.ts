@@ -32,9 +32,10 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     await pool.query(`CREATE TABLE projects_projects (id uuid primary key, tenant_id uuid, name text, created_by uuid, status text, customer_id uuid, created_at timestamptz);
       CREATE TABLE test_audit (action text, project_id uuid)`);
     await pool.query(await Bun.file(new URL("../drizzle/0023_project_locations.sql", import.meta.url)).text());
+    await pool.query(await Bun.file(new URL("../drizzle/0024_project_address.sql", import.meta.url)).text());
     await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Location test',$3)", [project,tenant,actor]);
     expect((await request()).body.data).toMatchObject({ revision:0, scene:{objects:[],planningNotes:""}, context:null, contextJob:{status:"idle"}, lidarJob:{status:"idle"} });
-    for (const [suffix,method,body] of [["","GET",undefined],["","PUT",{revision:0,scene:{objects:[],planningNotes:"x"}}],["/import","POST",{siteId:"berlin-giersstrasse-20"}],["/lidar","POST",{}],["/lidar","GET",undefined]] as const) {
+    for (const [suffix,method,body] of [["","GET",undefined],["","PUT",{revision:0,scene:{objects:[],planningNotes:"x"}}],["/import","POST",{revision:0}],["/lidar","POST",{}],["/lidar","GET",undefined]] as const) {
       expect((await request(suffix,method,body,{"x-test-tenant":"other"})).status).toBe(404);
       expect((await request(suffix,method,body,{"x-test-access":"none"})).status).toBe(403);
     }
@@ -45,9 +46,24 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(results.map(r=>r.status).sort()).toEqual([200,409]);
     expect((await request()).body.data).toMatchObject({ revision:1,scene:input.scene });
     expect((await request("/import","POST",{siteId:"wrong"})).status).toBe(400);
-    const before = auditCount, queued = await request("/import","POST",{siteId:"berlin-giersstrasse-20"});
-    expect(queued.status).toBe(202); expect(queued.body.data.contextJob.status).toBe("queued"); expect(queued.body.data.revision).toBe(1);
-    expect((await request("/import","POST",{siteId:"berlin-giersstrasse-20"})).body.data.contextJob.status).toBe("queued"); expect(auditCount).toBe(before+1);
+    expect((await request("/import","POST",{revision:1})).status).toBe(422);
+    const address = { street:"Giersstraße 20", postalCode:"13088", city:"Berlin", country:"DE" };
+    const patchProject = async (body: unknown, headers: Record<string,string> = {}) => {
+      const response = await fetch(base.replace(/\/location$/, ""), { method:"PATCH", headers:{"content-type":"application/json",...headers}, body:JSON.stringify(body) });
+      return { status:response.status, body:await response.json() };
+    };
+    expect((await patchProject(address,{"x-test-tenant":"other"})).status).toBe(404);
+    expect((await patchProject(address,{"x-test-access":"read"})).status).toBe(403);
+    expect((await patchProject({ ...address, street:"  Giersstraße 20  " })).body.data).toMatchObject(address);
+    expect((await patchProject({ name:"Renamed" })).body.data).toMatchObject(address);
+    expect((await request("/import","POST",{revision:0})).status).toBe(409);
+    const before = auditCount, queued = await request("/import","POST",{revision:1});
+    expect(queued.status).toBe(202); expect(queued.body.data.contextJob.status).toBe("queued"); expect(queued.body.data.revision).toBe(2);
+    expect((await request("/import","POST",{revision:2})).body.data.contextJob.status).toBe("queued"); expect(auditCount).toBe(before+1);
+    expect((await request("","PUT",{revision:2,scene:input.scene})).status).toBe(409);
+    await patchProject({street:"Giersstraße 21"});
+    expect((await pool.query("select requested_address from projects_locations")).rows[0].requested_address).toEqual(address);
+    await patchProject(address);
     // Simulated abrupt stop: database retains an expired running job. An aborted
     // upstream request avoids network dependency while exercising claim/recovery.
     await pool.query("update projects_locations set context_status='running', lease_token=$1, lease_until=now()-interval '1 minute'",[crypto.randomUUID()]);
@@ -60,10 +76,10 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(await runLocationJob(worker,new AbortController().signal)).toBe(true);
     expect((await request()).body.data.lidarJob).toMatchObject({status:"failed",error:"Location context missing; import first"});
     await pool.query("update projects_locations set context_status='failed'");
-    expect((await request("/import","POST",{siteId:"berlin-giersstrasse-20"})).body.data.contextJob.status).toBe("queued");
+    expect((await request("/import","POST",{revision:2})).body.data.contextJob.status).toBe("queued");
     await pool.query("update projects_locations set context_status='running',lease_until=now()+interval '1 minute'");
     expect(await runLocationJob(worker,controller.signal)).toBe(false);
-    const context = { siteId:"berlin-giersstrasse-20", origin:[397139.418,5824134.851], radius:100 }, cloud = { positions:[0,0,0], classifications:[2], groundElevation:40, sourcePointCount:1, sampled:false, surveyedAt:"2021", sourceUrl:"https://gdi.berlin.de" };
+    const context = { siteId:"berlin-giersstrasse-20", address:"Giersstraße 20, 13088 Berlin", origin:[397139.418,5824134.851], radius:100 }, cloud = { positions:[0,0,0], classifications:[2], groundElevation:40, sourcePointCount:1, sampled:false, surveyedAt:"2021", sourceUrl:"https://gdi.berlin.de" };
     await pool.query("update projects_locations set context=$1,context_status='ready',lease_until=null",[JSON.stringify(context)]);
     expect((await request("/lidar","POST",{})).body.data.lidarJob.status).toBe("queued");
     expect((await request("/lidar")).status).toBe(409);
@@ -77,8 +93,13 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     await pool.query("insert into projects_files values ($1,$2,$3)", [sourceId, tenant, project]);
     await pool.query("insert into projects_file_versions values ($1,$2,1,'ready')", [sourceId, tenant]);
     const scene = { objects: [{ id: "ifc", kind: "ifc", label: "Source", note: "", position: [-7.5,0,9.25], size: [3,4,2], rotation: 30, source: { fileId: sourceId, version: 1 } }], planningNotes: "Source-linked IFC" };
-    expect((await request("", "PUT", { revision: 1, scene })).status).toBe(200);
+    expect((await request("", "PUT", { revision: 3, scene })).status).toBe(200);
     expect((await request()).body.data.scene).toEqual(scene);
+    // Matching legacy sites stay exactly where imported, including IFC alignment.
+    expect((await request("/import","POST",{revision:4})).body.data.context).toEqual(context);
+    await patchProject({ street:"Giersstraße 21" });
+    expect((await request("/import","POST",{revision:4})).body.error.code).toBe("location_has_objects");
+    expect((await request()).body.data).toMatchObject({context,scene,revision:4});
     for (const [query, args] of [
       ["update projects_files set tenant_id=$1", [other]],
       ["update projects_files set tenant_id=$1, project_id=$2", [tenant, crypto.randomUUID()]],
@@ -86,8 +107,13 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     ] as [string, string[]][]) {
       // Separate statements because PostgreSQL prepared queries accept one command.
       for (const statement of query.split(";")) await pool.query(statement, statement.includes("$1") ? args : []);
-      expect((await request("", "PUT", { revision: 2, scene })).status).toBe(404);
-      expect((await request()).body.data.revision).toBe(2);
+      expect((await request("", "PUT", { revision: 4, scene })).status).toBe(404);
+      expect((await request()).body.data.revision).toBe(4);
     }
+    expect((await request("", "PUT", { revision:4, scene:input.scene })).status).toBe(200);
+    const replaced = await request("/import", "POST", {revision:5});
+    expect(replaced.body.data).toMatchObject({revision:6, context:null, scene:input.scene, contextJob:{status:"queued"}, lidarJob:{status:"idle"}});
+    expect((await request("/lidar")).status).toBe(409);
+    expect((await request("", "PUT", {revision:4,scene:input.scene})).status).toBe(409);
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`); await admin.pool.end(); }
 }, 30000);

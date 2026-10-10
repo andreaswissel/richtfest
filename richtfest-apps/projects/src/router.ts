@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { ok } from "@richtfest/shared";
+import { ok, projectAddressInput } from "@richtfest/shared";
 import { files, fileVersions, projectMembers, projects } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
@@ -10,12 +10,14 @@ import { createLocationRouter } from "./location-router";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
+  ...projectAddressInput.shape,
   name: z.string().trim().min(1).max(200),
   customerId: z.string().uuid().optional(),
   status: z.string().max(40).optional(),
 });
 const projectUpdateInput = z
   .object({
+    ...projectAddressInput.shape,
     name: z.string().trim().min(1).max(200).optional(),
     customerId: z.string().uuid().nullable().optional(),
     status: z.string().trim().min(1).max(40).optional(),

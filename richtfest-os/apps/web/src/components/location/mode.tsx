@@ -1,12 +1,20 @@
 import { useEffect, useState, type ComponentType } from "react";
+import type { ProjectAddress } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Callout } from "../ui/primitives";
 
 /** A subview import, not a Suspense boundary around route content. */
-export function LocationMode({ projectId }: { projectId: string }) {
+export function LocationMode({
+  projectId,
+  address,
+}: {
+  projectId: string;
+  address: ProjectAddress;
+}) {
   const t = useT();
   const [Editor, setEditor] = useState<ComponentType<{
     projectId: string;
+    address: ProjectAddress;
   }> | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -23,7 +31,7 @@ export function LocationMode({ projectId }: { projectId: string }) {
     };
   }, []);
   return Editor ? (
-    <Editor key={projectId} projectId={projectId} />
+    <Editor key={projectId} projectId={projectId} address={address} />
   ) : (
     <Callout tone={error ? "error" : "info"}>
       {t(error ? "locationWebgl" : "locationLoading")}

@@ -1,3 +1,21 @@
+import { z } from "zod";
+
+const addressText = (max: number) => z.string().trim().max(max).nullable().optional().transform(value => value === "" ? null : value);
+export const projectAddressInput = z.object({
+  street: addressText(300),
+  postalCode: addressText(32),
+  city: addressText(200),
+  country: addressText(100),
+});
+export type ProjectAddress = z.infer<typeof projectAddressInput>;
+export const formatProjectAddress = (address: ProjectAddress) => [address.street, [address.postalCode, address.city].filter(Boolean).join(" "), address.country].filter(Boolean).join(", ");
+const normalAddress = (text: string) => text.trim().toLocaleLowerCase("de").replaceAll("ß", "ss").replace(/[\s,]+/g, " ");
+const germanAddress = (address: ProjectAddress) => !address.country || ["de", "deutschland", "germany"].includes(normalAddress(address.country));
+const projectAddressKey = (address: ProjectAddress) => [address.street, address.postalCode, address.city, germanAddress(address) ? "de" : address.country].map(value => normalAddress(value || "")).join("|");
+export const locationMatchesAddress = (context: LocationContext, address: ProjectAddress) => context.projectAddress
+  ? projectAddressKey(context.projectAddress) === projectAddressKey(address)
+  : germanAddress(address) && normalAddress(context.address) === normalAddress(formatProjectAddress({ ...address, country: null }));
+
 /** Scene coordinates are metres: X east, Y up, Z south. Ground is a local reference, not surveyed flat terrain. */
 export type SceneVector = [number, number, number];
 export type SceneObject = {
@@ -32,7 +50,9 @@ export type LocationTree = {
   sourceId: string;
 };
 export type LocationContext = {
-  siteId: "berlin-giersstrasse-20";
+  siteId: string;
+  /** Saved address used for this import; absent on legacy fixed-site scenes. */
+  projectAddress?: ProjectAddress;
   address: string;
   /** EPSG:25833 */
   origin: [number, number];

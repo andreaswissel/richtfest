@@ -25,7 +25,10 @@ export async function runLocationJob(d: LocationWorkerDeps, signal: AbortSignal)
   const jobSignal = AbortSignal.any([signal, AbortSignal.timeout(8 * 60_000)]);
   let result: Record<string, unknown>;
   try {
-    if (kind === "context") result = { context: await importLocationContext(jobSignal), contextStatus: "ready", contextError: null };
+    if (kind === "context") {
+      if (!row.requestedAddress) throw new Error("Site address missing; save an address in project details and retry import");
+      result = { context: await importLocationContext(row.requestedAddress, jobSignal), contextStatus: "ready", contextError: null };
+    }
     else {
       if (!row.context) throw new Error("Location context missing; import first");
       result = { cloud: await fetchLocationLidar(row.context, jobSignal), lidarStatus: "ready", lidarError: null };

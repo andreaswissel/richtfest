@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
-import { buildingFeature, treeFeature, toUtm33, SITE_ORIGIN } from "./location-context";
+import { expect, test, spyOn } from "bun:test";
+import { buildingFeature, treeFeature, toUtm33, resolveLocationAddress, importLocationContext } from "./location-context";
 import { LasCrop, rangeResponse, zipDirectory } from "./location-lidar";
+import { locationMatchesAddress } from "@richtfest/shared";
 
 test("real Berlin coordinate conversion, south-positive rings and null heights", () => {
   // Independent EPSG:25833 reference for the first supplied Berlin street tree.
@@ -8,12 +9,51 @@ test("real Berlin coordinate conversion, south-positive rings and null heights",
   expect(tree[0]).toBeCloseTo(397116.74, 0);
   expect(tree[1]).toBeCloseTo(5824091.87, 0);
   const feature = { id: "tree.1", properties: { gisid: "1", baumhoehe: null, kronedurch: "0", art_dtsch: "Linde" }, geometry: { type: "Point", coordinates: tree } };
-  const result = treeFeature(feature, SITE_ORIGIN)!;
+  const result = treeFeature(feature, [397139.418, 5824134.851])!;
   expect(result.height).toBeNull(); expect(result.crownDiameter).toBeNull();
   expect(result.position[0]).toBeLessThan(0); expect(result.position[1]).toBeGreaterThan(0);
   const building = buildingFeature({ id: "b", properties: { hoehe: null, hnr: null, strasse: "Giersstraße" }, geometry: { type: "MultiPolygon", coordinates: [[[[10,20],[11,19],[10,20]],[[10.1,19.9],[10.2,19.8],[10.1,19.9]]]] } }, [10,20])!;
   expect(building.polygons[0]![0]![1]).toEqual([1,1]);
   expect(building.polygons[0]).toHaveLength(2); expect(building.height).toBeNull(); expect(building.label).toBe("Giersstraße");
+});
+
+test("project address resolves exact Berlin house numbers and anchors context to the resolved site", async () => {
+  const address = { street: "Giersstrasse 20", postalCode: "13088", city: "Berlin", country: "DE" };
+  const feature = { properties: { adressid: "61316", str_name: "Giersstraße", hnr: 20, hnr_zusatz: null, plz: "13088" }, geometry: { type: "Point", coordinates: [13.48266821,52.55754663] } };
+  let features: any[] = [feature];
+  const upstream = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("adressen_berlin")) {
+      const house = Number(url.searchParams.get("CQL_FILTER")?.match(/hnr=(\d+)/)?.[1]);
+      const matches = features.filter(f => f.properties.hnr === house);
+      return Response.json({ features: matches, numberMatched: matches.length });
+    }
+    const [x,y] = url.searchParams.get("bbox")!.split(",").map(Number);
+    expect(x).toBeCloseTo(397036.524, 1);
+    expect(y).toBeCloseTo(5824034.599, 1);
+    return Response.json({ features: [], numberMatched: 0 });
+  }, { preconnect: fetch.preconnect }));
+  try {
+    const context = await importLocationContext(address, new AbortController().signal);
+    expect(context).toMatchObject({ siteId: "berlin-address:61316", address: "Giersstraße 20, 13088 Berlin", projectAddress: address });
+    expect(context.origin[0]).toBeCloseTo(397136.524, 1);
+    expect(context.origin[1]).toBeCloseTo(5824134.599, 1);
+    expect(context.sources).toHaveLength(4);
+    expect(locationMatchesAddress(context, {...address,country:"Deutschland"})).toBe(true);
+    expect(locationMatchesAddress(context, {...address,country:"AT"})).toBe(false);
+    features = [{ ...feature, properties: {...feature.properties, hnr:21} }];
+    expect((await resolveLocationAddress({...address,street:"Giersstrasse 21"},new AbortController().signal)).address).toBe("Giersstraße 21, 13088 Berlin");
+    await expect(resolveLocationAddress(address,new AbortController().signal)).rejects.toThrow("not found");
+    features = [feature, { ...feature, properties: { ...feature.properties, adressid: "another" } }];
+    await expect(resolveLocationAddress(address, new AbortController().signal)).rejects.toThrow("ambiguous");
+    features = [{ ...feature, properties: { ...feature.properties, hnr_zusatz: "a" } }];
+    await expect(resolveLocationAddress(address, new AbortController().signal)).rejects.toThrow("not found");
+    expect((await resolveLocationAddress({ ...address, street: "Giersstrasse 20a" }, new AbortController().signal)).address).toContain("20a");
+    features = [];
+    await expect(resolveLocationAddress(address, new AbortController().signal)).rejects.toThrow("not found");
+    await expect(resolveLocationAddress({ ...address, city: "Hamburg" }, new AbortController().signal)).rejects.toThrow("Berlin");
+    await expect(resolveLocationAddress({}, new AbortController().signal)).rejects.toThrow("requires");
+  } finally { upstream.mockRestore(); }
 });
 
 const las = (points: number[][]) => {

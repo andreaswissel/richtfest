@@ -26,6 +26,11 @@ import type {
   LocationPointCloud,
   SceneObject,
   SceneVector,
+  ProjectAddress,
+} from "@richtfest/shared";
+import {
+  formatProjectAddress,
+  locationMatchesAddress,
 } from "@richtfest/shared";
 import { api, ApiError, uploadFile } from "../../api";
 import { queryClient } from "../../query";
@@ -81,9 +86,17 @@ function NumberField({
   );
 }
 
-export function LocationEditor({ projectId }: { projectId: string }) {
+export function LocationEditor({
+  projectId,
+  address,
+}: {
+  projectId: string;
+  address: ProjectAddress;
+}) {
   const t = useT(),
     theme = usePreferences((s) => s.theme);
+  const addressLabel = formatProjectAddress(address);
+  const hasAddress = !!address.street && !!address.city;
   const path = `/projects/${projectId}/location`;
   const state = useQuery({
     queryKey: [path],
@@ -178,16 +191,23 @@ export function LocationEditor({ projectId }: { projectId: string }) {
   const importContext = useMutation({
     mutationFn: () =>
       api<LocationState>(`${path}/import`, {
-        siteId: "berlin-giersstrasse-20",
+        revision: state.data?.revision ?? 0,
       }),
-    onSuccess: acceptState,
+    onSuccess(data) {
+      setPast([]);
+      setFuture([]);
+      setSelected(null);
+      setMeasurement([]);
+      setLayers((current) => ({ ...current, lidar: false }));
+      acceptState(data);
+    },
   });
   const importLidar = useMutation({
     mutationFn: () => api<LocationState>(`${path}/lidar`, {}),
     onSuccess: acceptState,
   });
   const cloud = useQuery({
-    queryKey: [`${path}/lidar`],
+    queryKey: [`${path}/lidar`, state.data?.context?.importedAt],
     queryFn: () => api<LocationPointCloud>(`${path}/lidar`),
     enabled: layers.lidar && state.data?.lidarJob.status === "ready",
     staleTime: Infinity,
@@ -488,16 +508,58 @@ export function LocationEditor({ projectId }: { projectId: string }) {
           )}
         </Callout>
       )}
+      {hasContext &&
+        (!hasAddress ||
+          !locationMatchesAddress(state.data!.context!, address)) && (
+          <Callout>
+            <p>
+              {t(
+                hasAddress
+                  ? "locationAddressChanged"
+                  : "locationAddressMissing",
+              )}
+            </p>
+            {hasAddress && <p>{addressLabel}</p>}
+            <Link to={`/projects/${projectId}?view=details`}>
+              {t("projectDetails")} ↗
+            </Link>
+            {hasAddress && (
+              <>
+                <p>{t("locationAddressObjects")}</p>
+                <Button
+                  variant="outline"
+                  disabled={
+                    !!draft ||
+                    scene.objects.length > 0 ||
+                    importContext.isPending ||
+                    busy(state.data?.contextJob.status) ||
+                    busy(state.data?.lidarJob.status)
+                  }
+                  onClick={() => importContext.mutate()}
+                >
+                  {t("locationUseProjectAddress")}
+                </Button>
+              </>
+            )}
+          </Callout>
+        )}
       {!hasContext ? (
         <div className="location-empty">
           <Scan className="size-icon" />
-          <h2>Giersstraße 20, Berlin</h2>
-          <p>{t("locationSetupHint")}</p>
+          <h2>{addressLabel || t("address")}</h2>
+          <p>
+            {t(hasAddress ? "locationSetupHint" : "locationAddressMissing")}
+          </p>
+          <Link to={`/projects/${projectId}?view=details`}>
+            {t("projectDetails")} ↗
+          </Link>
           {state.data?.contextJob.error && (
             <Callout tone="error">{state.data.contextJob.error}</Callout>
           )}
           <Button
             disabled={
+              !hasAddress ||
+              !!draft ||
               state.isPending ||
               state.isError ||
               importContext.isPending ||
@@ -592,7 +654,8 @@ export function LocationEditor({ projectId }: { projectId: string }) {
                 {t("locationLayers")}
               </h2>
               <p className="location-site-label">
-                Giersstraße 20<small>Berlin · 100 m</small>
+                {state.data!.context!.address}
+                <small>{state.data!.context!.radius} m</small>
               </p>
               <div className="location-layer-section">
                 {layer(
