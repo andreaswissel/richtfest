@@ -44,6 +44,7 @@ import {
   MessageFooter,
 } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
+import { ChatMarkdown } from "../chat-markdown";
 import { Marker, MarkerContent } from "../ui/marker";
 import { LiveRun } from "./live-run";
 import {
@@ -1189,8 +1190,18 @@ const MessageRow = memo(function MessageRow({
           variant={role === "user" ? "muted" : "ghost"}
           className="max-w-full"
         >
-          <BubbleContent className="preserve-lines">
-            {message.body}
+          <BubbleContent
+            className={
+              role === "agent" || role === "assistant"
+                ? undefined
+                : "preserve-lines"
+            }
+          >
+            {role === "agent" || role === "assistant" ? (
+              <ChatMarkdown>{message.body}</ChatMarkdown>
+            ) : (
+              message.body
+            )}
           </BubbleContent>
         </Bubble>
         {(message.openui || message.metadata?.openui) && (

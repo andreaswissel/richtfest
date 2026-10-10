@@ -33,6 +33,8 @@ Application UI strings belong in both English and German locale files. Reuse sha
 
 The project conversation uses shadcn's `MessageScroller`, `Message`, `Bubble`, `Attachment` and `Marker`. OpenUI renders the registered Richtfest components inside conversation turns and artifacts; it cannot generate arbitrary HTML, URLs or mutations. The registry snapshot is generated from the web library and checked against the server parser.
 
+Assistant and agent message bodies render Markdown for headings, lists, tables, links and code. User-authored messages remain literal text. Raw HTML and remote images are not rendered; preserve the conversation's streaming, selection and reading-position behavior when changing the renderer.
+
 Reading-position, selection, history-restoration and keyboard acceptance criteria are maintained in `DESIGN-PRINCIPLES.md`. Keep route and OpenUI code lazy so the initial bundle remains within budget.
 
 Before introducing a new component, check whether an existing primitive or semantic wrapper covers the need. Extend the shared component when the behavior is reusable. Keep workflow-specific composition inside its feature.

@@ -118,7 +118,7 @@ integration(
         generation: 0,
       };
       expect(outputs[0]!.openui).toBe(
-        `root = ArtifactPreview(${JSON.stringify(reference.artifactId)}, ${JSON.stringify(reference.revisionId)})`,
+        `root = ArtifactPdf(${JSON.stringify(reference.artifactId)}, ${JSON.stringify(reference.revisionId)})`,
       );
       expect(outputs[0]!.sourceRef).toBeNull();
       const [parent] = await db
@@ -151,7 +151,7 @@ integration(
         later.some(
           (m) =>
             m.openui ===
-            `root = ArtifactPreview(${JSON.stringify(newest.artifactId)}, ${JSON.stringify(newest.revisionId)})`,
+            `root = ArtifactPdf(${JSON.stringify(newest.artifactId)}, ${JSON.stringify(newest.revisionId)})`,
         ),
       ).toBe(true);
       expect(newest.artifactId).not.toBe(reference.artifactId);

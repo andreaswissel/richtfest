@@ -35,6 +35,7 @@ import {
   MessageHeader,
 } from "../components/ui/message";
 import { Bubble, BubbleContent } from "../components/ui/bubble";
+import { ChatMarkdown } from "../components/chat-markdown";
 import { Marker, MarkerContent } from "../components/ui/marker";
 import {
   MessageScrollerProvider,
@@ -325,8 +326,18 @@ function SupportChat({
                         <Bubble
                           variant={message.role === "user" ? "muted" : "ghost"}
                         >
-                          <BubbleContent className="whitespace-pre-wrap">
-                            {message.body}
+                          <BubbleContent
+                            className={
+                              message.role === "user"
+                                ? "whitespace-pre-wrap"
+                                : undefined
+                            }
+                          >
+                            {message.role === "user" ? (
+                              message.body
+                            ) : (
+                              <ChatMarkdown>{message.body}</ChatMarkdown>
+                            )}
                           </BubbleContent>
                         </Bubble>
                         {message.status !== "completed" && (

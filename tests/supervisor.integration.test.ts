@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import express from "../richtfest-os/apps/api/node_modules/express";
 import { and, eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import {
@@ -8,11 +9,15 @@ import {
   supervisorRuns,
   tasks,
   agentRunEvents,
+  conversations,
+  messages,
 } from "../richtfest-apps/knowledge/src/schema";
 import {
   stepSupervisor,
   createSupervisor,
 } from "../richtfest-apps/knowledge/src/supervisor";
+import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
+import { soundInsulationPlanningFixture as fixture } from "./fixtures/sound-insulation-planning";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 const config = { modelId: "test-model", maxOutputTokens: 1024, maxSteps: 1 };
@@ -28,15 +33,17 @@ const policy = {
   maxRevisions: 2,
 };
 integration(
-  "supervisor resumes saved specialists, reviews actual results and revises before human review",
+  "Bendenweg sound-insulation fixture reaches specialist review and a downloadable OpenUI PDF",
   async () => {
     const { db, pool } = createDatabase(process.env.DATABASE_URL!);
     const tenantId = crypto.randomUUID(),
       actorId = crypto.randomUUID(),
       projectId = crypto.randomUUID(),
-      inventoryVersionId = crypto.randomUUID();
-    const calls: { phase: string; context: any }[] = [];
+      inventoryVersionId = fixture.sources[0].versionId;
+    const calls: { phase: string; goal: string; context: any }[] = [];
     let reviewCount = 0;
+    let conversationId = "";
+    let server: any;
     const d: AppDeps = {
       db,
       tenantId,
@@ -54,19 +61,27 @@ integration(
       providerConfigured: async () => true,
       executeProvider: async () => ({ status: "unconfigured" }),
       listProjectSources: async () => ({
-        sources: [{
-          fileId: crypto.randomUUID(),
-          name: "DIN 4109 2025 159 Calculation IL.pdf",
-          versionId: inventoryVersionId,
-          version: 1,
-          mimeType: "application/pdf",
-        }],
+        sources: [...fixture.sources],
         truncated: false,
         authority: "unreviewed_source_inventory",
       }),
-      resolveSource: async () => ({ text: "source" }),
+      resolveSource: async (_projectId: string, input: { versionId?: string }) => {
+        const source = fixture.sources.find(
+          (item) => item.versionId === input.versionId,
+        );
+        const text = input.versionId
+          ? fixture.excerpts[input.versionId as keyof typeof fixture.excerpts]
+          : undefined;
+        return source && text
+          ? {
+              status: "resolved",
+              source: { versionId: source.versionId, name: source.name },
+              content: { status: "available", text },
+            }
+          : { status: "unavailable" };
+      },
       executeSupervisor: async (input) => {
-        calls.push({ phase: input.phase, context: input.context });
+        calls.push({ phase: input.phase, goal: input.goal, context: input.context });
         if (input.phase === "plan")
           return {
             status: "completed",
@@ -94,12 +109,12 @@ integration(
               citations: [],
             },
           };
-        await input.onSummaryDelta?.("Provisional synthesis");
+        await input.onSummaryDelta?.("Vorläufige Planungsvorlage");
         const [checkpoint] = await db
           .select()
           .from(agentRuns)
           .where(eq(agentRuns.id, input.runId));
-        expect(checkpoint!.partialOutput).toBe("Provisional synthesis");
+        expect(checkpoint!.partialOutput).toBe("Vorläufige Planungsvorlage");
         const context = input.context as any;
         expect(
           context.assignments.every((a: any) =>
@@ -110,9 +125,10 @@ integration(
           status: "completed",
           output: {
             decision: reviewCount++ === 0 ? "revise" : "accept",
-            summary: "Reviewed synthesis",
-            rationale: "Actual child outputs reviewed",
-            citations: [],
+            summary: fixture.expectedSummary,
+            rationale:
+              "Die Quellen wurden abgeglichen. Maße und Bauteilaufbauten sind vor Ausführung durch eine Fachplanung zu prüfen.",
+            citations: [inventoryVersionId],
             revisions:
               reviewCount === 1
                 ? [{ taskId: context.assignments[0].taskId, goal: "Recheck A" }]
@@ -123,12 +139,23 @@ integration(
     };
     let id = "";
     try {
+      const [thread] = await db
+        .insert(conversations)
+        .values({
+          tenantId,
+          projectId,
+          title: fixture.projectName,
+          createdBy: actorId,
+        })
+        .returning();
+      conversationId = thread!.id;
       const [run] = await db
         .insert(agentRuns)
         .values({
           tenantId,
           projectId,
-          goal: "Review project",
+          conversationId,
+          goal: fixture.prompt,
           provider: "openai",
           requestedBy: actorId,
           correlationId: crypto.randomUUID(),
@@ -138,6 +165,10 @@ integration(
       await createSupervisor(d, db, run, "medium", policy);
       await stepSupervisor(d, id); // durable plan
       const planCall = calls.find((call) => call.phase === "plan");
+      expect(planCall!.goal).toBe(fixture.prompt);
+      expect((planCall!.context as any).sourceInventory.sources).toEqual(
+        fixture.sources,
+      );
       expect(
         (planCall!.context as any).sourceInventory.sources[0].versionId,
       ).toBe(inventoryVersionId);
@@ -172,7 +203,38 @@ integration(
         .from(agentRuns)
         .where(eq(agentRuns.id, id));
       expect(result!.status).toBe("needs_review");
-      expect(result!.outputSummary).toBe("Reviewed synthesis");
+      expect(result!.outputSummary).toBe(fixture.expectedSummary);
+      const outputMessages = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.runId, id));
+      expect(outputMessages).toHaveLength(1);
+      const [resultArtifact] = await db
+        .select()
+        .from(artifacts)
+        .where(eq(artifacts.runId, id));
+      const [resultRevision] = await db
+        .select()
+        .from(artifactRevisions)
+        .where(eq(artifactRevisions.artifactId, resultArtifact!.id));
+      expect(outputMessages[0]!.openui).toBe(
+        `root = ArtifactPdf(${JSON.stringify(resultArtifact!.id)}, ${JSON.stringify(resultRevision!.id)})`,
+      );
+      expect(resultRevision!.sourceVersionIds).toEqual([inventoryVersionId]);
+      server = express()
+        .use("/api/knowledge", workspaceRouter(() => d))
+        .listen(0);
+      await new Promise<void>((resolve) => server.once("listening", resolve));
+      const address = server.address();
+      const pdfResponse = await fetch(
+        `http://127.0.0.1:${address.port}/api/knowledge/artifacts/${resultArtifact!.id}/revisions/${resultRevision!.id}/pdf`,
+      );
+      expect(pdfResponse.status).toBe(200);
+      expect(pdfResponse.headers.get("content-type")).toContain("application/pdf");
+      expect(pdfResponse.headers.get("content-disposition")).toContain("attachment");
+      const pdf = Buffer.from(await pdfResponse.arrayBuffer()).toString("ascii");
+      expect(pdf.startsWith("%PDF-1.4")).toBe(true);
+      expect(pdf).toContain(inventoryVersionId);
       await stepSupervisor({ ...d }, id); // terminal is idempotent
       expect(calls.filter((c) => c.phase === "review")).toHaveLength(2);
       const [final] = await db
@@ -186,6 +248,7 @@ integration(
       await stepSupervisor({ ...d, tenantId: crypto.randomUUID() }, id);
       expect(calls).toHaveLength(5);
     } finally {
+      if (server) await new Promise<void>((resolve) => server.close(resolve));
       await db
         .delete(artifactRevisions)
         .where(eq(artifactRevisions.tenantId, tenantId));
@@ -198,6 +261,10 @@ integration(
         .where(eq(supervisorRuns.tenantId, tenantId));
       await db.delete(agentRuns).where(eq(agentRuns.tenantId, tenantId));
       await db.delete(tasks).where(eq(tasks.tenantId, tenantId));
+      await db.delete(messages).where(eq(messages.tenantId, tenantId));
+      await db
+        .delete(conversations)
+        .where(eq(conversations.tenantId, tenantId));
       await pool.end();
     }
   },

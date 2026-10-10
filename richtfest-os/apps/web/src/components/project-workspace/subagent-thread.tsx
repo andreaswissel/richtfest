@@ -16,6 +16,7 @@ import { Input } from "../ui/input";
 import { Badge, Callout, Field, Form, Modal } from "../ui/primitives";
 import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
+import { ChatMarkdown } from "../chat-markdown";
 import { Marker, MarkerContent } from "../ui/marker";
 import { runActivityLabel } from "./run-activity";
 import { RunActivityFeed } from "./run-activity-feed";
@@ -438,10 +439,11 @@ function RunDiagnosis({
         )}
         {lastProgress !== undefined && (
           <span>
-            {t("agentRunLastProgress")}: {new Date(lastProgress).toLocaleTimeString(
-              undefined,
-              { hour: "2-digit", minute: "2-digit" },
-            )}
+            {t("agentRunLastProgress")}:{" "}
+            {new Date(lastProgress).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
           </span>
         )}
       </div>
@@ -597,7 +599,8 @@ export function SubagentThread({
           />
           <h2>{agentName(run, t)}</h2>
           <Badge>
-            {t(`run_${currentStatus}` as Parameters<typeof t>[0]) || currentStatus}
+            {t(`run_${currentStatus}` as Parameters<typeof t>[0]) ||
+              currentStatus}
           </Badge>
           <AgentRunMetrics run={run} />
         </div>
@@ -637,8 +640,8 @@ export function SubagentThread({
                     <MessageHeader>{agentName(run, t)}</MessageHeader>
                     {output ? (
                       <Bubble variant="ghost">
-                        <BubbleContent className="whitespace-pre-wrap">
-                          {output}
+                        <BubbleContent>
+                          <ChatMarkdown>{output}</ChatMarkdown>
                         </BubbleContent>
                       </Bubble>
                     ) : (
@@ -663,7 +666,9 @@ export function SubagentThread({
                       <p className="agent-thread-rationale">{run.rationale}</p>
                     )}
                     {reason && (
-                      <Callout tone={run.status === "failed" ? "error" : undefined}>
+                      <Callout
+                        tone={run.status === "failed" ? "error" : undefined}
+                      >
                         <span className="agent-thread-run-reason-label">
                           {t("workspaceRunReason")}:
                         </span>{" "}
@@ -711,7 +716,8 @@ export function SubagentThread({
                 <MessageScrollerItem messageId={`${runId}-specialists`}>
                   <details className="agent-thread-details">
                     <summary>
-                      {t("agentThreadSpecialists")} · {list(query.data?.children).length}
+                      {t("agentThreadSpecialists")} ·{" "}
+                      {list(query.data?.children).length}
                     </summary>
                     <div className="agent-thread-specialists">
                       {list(query.data?.children).map((child) => {

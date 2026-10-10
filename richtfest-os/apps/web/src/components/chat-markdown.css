@@ -1,0 +1,102 @@
+.chat-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+.chat-markdown p,
+.chat-markdown ul,
+.chat-markdown ol,
+.chat-markdown blockquote,
+.chat-markdown pre,
+.chat-markdown-table {
+  margin-block: 0.65em;
+}
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1em 0.4em;
+  font-size: inherit;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.chat-markdown :is(h1, h2) {
+  font-size: var(--text-ui-lg);
+}
+.chat-markdown ul {
+  list-style: disc;
+  padding-inline-start: 1.5em;
+}
+.chat-markdown ol {
+  list-style: decimal;
+  padding-inline-start: 1.5em;
+}
+.chat-markdown li {
+  margin-block: 0.2em;
+}
+.chat-markdown li > p {
+  margin-block: 0.3em;
+}
+.chat-markdown blockquote {
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 0.8em;
+  color: var(--muted-foreground);
+}
+.chat-markdown a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.chat-markdown a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.chat-markdown code {
+  font-family: var(--font-mono, monospace);
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.25em;
+}
+.chat-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--muted);
+  border-radius: 0.375rem;
+  padding: 0.75em;
+  white-space: pre;
+}
+.chat-markdown pre code {
+  background: none;
+  padding: 0;
+}
+.chat-markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.chat-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.chat-markdown :is(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.65em;
+  vertical-align: top;
+  text-align: start;
+}
+.chat-markdown th {
+  font-weight: 600;
+  background: var(--muted);
+}
+.chat-markdown hr {
+  margin-block: 1em;
+  border-top: 1px solid var(--border);
+}
+.chat-markdown .contains-task-list {
+  list-style: none;
+  padding-inline-start: 0.25em;
+}
+.chat-markdown input[type="checkbox"] {
+  margin-inline-end: 0.5em;
+}
