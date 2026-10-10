@@ -76,6 +76,7 @@ COPY --from=checked /app/richtfest-os/apps/api/drizzle ./richtfest-os/apps/api/d
 COPY --from=checked /app/richtfest-os/apps/api/drizzle.config.ts ./richtfest-os/apps/api/drizzle.config.ts
 COPY --from=web /app/richtfest-os/apps/web/dist ./richtfest-os/apps/web/dist
 COPY --from=docs /app/richtfest-os/apps/docs/out ./richtfest-os/apps/docs/out
+COPY richtfest-landing ./richtfest-landing
 
 EXPOSE 3000
 

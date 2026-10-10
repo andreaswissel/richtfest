@@ -78,6 +78,15 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
   app.post("/api/agent/run", async (req, res, next) => { try { const actor = (req as any).actor; const provider = await getActiveProvider(db, actor.tenantId); const selected = await configuredProvider(db, actor.tenantId, actor.id, provider); if (!selected) return res.status(503).json(fail("agent_unconfigured", `No configured ${provider} connection is available for this user.`)); return res.status(400).json(fail("project_context_required", "Start a scoped run at /api/knowledge/runs with an explicit projectId.")); } catch (e) { next(e); } });
   app.use("/api", (_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   if (env.NODE_ENV === "production") {
+    const landingDirectory = path.resolve(import.meta.dir, "../../../../richtfest-landing");
+    // Keep a shareable Railway preview URL while the custom root domain is being configured.
+    app.use("/landing", express.static(landingDirectory, { index: "index.html", redirect: true }));
+    app.get("/", (req, res, next) => {
+      if (req.hostname.toLowerCase() === "richtfest.si") {
+        return res.sendFile(path.join(landingDirectory, "index.html"));
+      }
+      return next();
+    });
     const webDirectory = path.resolve(import.meta.dir, "../../web/dist");
     const webHtml = readFileSync(path.join(webDirectory, "index.html"), "utf8")
       .replaceAll("__PUBLIC_ORIGIN__", new URL(env.BETTER_AUTH_URL).origin);
