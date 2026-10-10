@@ -450,6 +450,9 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .workspace-runs { margin-top:1rem; }
 .workspace-runs > summary { cursor:pointer; font-weight:600; padding:.5rem 0; }
 .workspace-start { padding:1rem; }
+.workspace-empty-thread { flex:1; }
+.workspace-empty-prompt { display:grid; flex:1; place-items:center; padding:1rem; color:var(--muted-foreground); text-align:center; }
+.workspace-empty-prompt p { max-width:32rem; margin:0; }
 .project-details { display:grid; grid-template-columns:auto 1fr; gap:1rem; }
 .project-details-form { width:min(100%, 34rem); }
 .project-details-form .form-footer { gap:var(--stack); }

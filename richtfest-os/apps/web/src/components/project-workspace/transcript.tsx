@@ -55,11 +55,15 @@ export function Transcript({
   projectId,
   readState,
   runs = [],
+  initialMessage,
+  onInitialMessageSent,
 }: {
   conversationId: string;
   projectId: string;
   readState?: ReadState;
   runs?: RecordData[];
+  initialMessage?: string;
+  onInitialMessageSent?: () => void;
 }) {
   const [following, setFollowing] = useState(false);
   return (
@@ -75,6 +79,8 @@ export function Transcript({
         projectId={projectId}
         readState={readState}
         runs={runs}
+        initialMessage={initialMessage}
+        onInitialMessageSent={onInitialMessageSent}
         following={following}
         setFollowing={setFollowing}
       />
@@ -88,6 +94,8 @@ function Conversation({
   following,
   setFollowing,
   runs,
+  initialMessage,
+  onInitialMessageSent,
 }: {
   conversationId: string;
   projectId: string;
@@ -95,6 +103,8 @@ function Conversation({
   runs: RecordData[];
   following: boolean;
   setFollowing: (value: boolean) => void;
+  initialMessage?: string;
+  onInitialMessageSent?: () => void;
 }) {
   const t = useT(),
     [params, setParams] = useSearchParams();
@@ -201,7 +211,9 @@ function Conversation({
   });
   const messages = mergeMessages(query.data?.pages || []);
   const initial = query.data?.pages[0]?.readState || readState;
-  const [draft, setDraft] = useState(readState?.composerDraft || ""),
+  const [draft, setDraft] = useState(
+    readState?.composerDraft || initialMessage || "",
+  ),
     [search, setSearch] = useState(""),
     [reply, setReply] = useState<string>();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -388,6 +400,20 @@ function Conversation({
       });
     },
   });
+  const initialMessageSubmitted = useRef(false);
+  useEffect(() => {
+    if (
+      !initialMessage ||
+      !ready ||
+      !readiness.isFetched ||
+      messages.length > 0 ||
+      initialMessageSubmitted.current
+    )
+      return;
+    initialMessageSubmitted.current = true;
+    send.mutate({ body: initialMessage, sourceVersionIds: [] });
+    onInitialMessageSent?.();
+  }, [initialMessage, ready, readiness.isFetched, messages.length]);
   useEffect(() => {
     if (query.data && !hydrated.current) {
       hydrated.current = true;

@@ -6,7 +6,7 @@ import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
 import { Page, PageHeader } from "../components/layout";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
+import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import {
   Badge,
@@ -19,6 +19,7 @@ import { Transcript } from "../components/project-workspace/transcript";
 import { ArtifactPanel } from "../components/project-workspace/artifacts";
 import { LiveRun } from "../components/project-workspace/live-run";
 import { SubagentThread } from "../components/project-workspace/subagent-thread";
+import { ArrowUp } from "lucide-react";
 
 const MIN_ARTIFACT_WIDTH = 25;
 const MAX_ARTIFACT_WIDTH = 60;
@@ -94,6 +95,8 @@ export function ProjectWorkspace() {
     [params, setParams] = useSearchParams();
   const view = params.get("view") || "workspace";
   const [editingDetails, setEditingDetails] = useState(false);
+  const [initialMessage, setInitialMessage] = useState<string>();
+  const [initialMessageDraft, setInitialMessageDraft] = useState("");
   const project = useApi(`/projects/${id}`),
     workspace = useApi(`/knowledge/workspaces/${id}`),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
@@ -233,6 +236,11 @@ export function ProjectWorkspace() {
                       projectId={id!}
                       conversationId={selected.id}
                       readState={selected.readState}
+                      initialMessage={initialMessage}
+                      onInitialMessageSent={() => {
+                        setInitialMessage(undefined);
+                        setInitialMessageDraft("");
+                      }}
                       runs={list(workspace.data?.runs).filter(
                         (run) =>
                           run.conversationId === selected.id &&
@@ -240,8 +248,81 @@ export function ProjectWorkspace() {
                       )}
                     />
                   ) : (
-                    <div className="workspace-start">
-                      <p>{t("workspaceStart")}</p>
+                    <div className="project-conversation workspace-empty-thread">
+                      <div className="workspace-empty-prompt">
+                        <p>{t("workspaceStart")}</p>
+                      </div>
+                      <form
+                        className="workspace-composer"
+                        onSubmit={async (event) => {
+                          event.preventDefault();
+                          const body = initialMessageDraft.trim();
+                          if (
+                            !body ||
+                            create.isPending ||
+                            initialMessage !== undefined ||
+                            !workspace.isSuccess
+                          )
+                            return;
+                          setInitialMessage(body);
+                          try {
+                            await create.mutateAsync({
+                              projectId: id,
+                              title: `${t("threadRailThread")} ${conversations.length + 1}`,
+                              assigneeType: "user",
+                            });
+                          } catch {
+                            setInitialMessage(undefined);
+                          }
+                        }}
+                      >
+                        <div className="workspace-composer-shell">
+                          <div className="workspace-composer-input">
+                            <Textarea
+                              value={initialMessageDraft}
+                              required
+                              disabled={
+                                !workspace.isSuccess ||
+                                create.isPending ||
+                                initialMessage !== undefined
+                              }
+                              aria-label={t("message")}
+                              placeholder={t("workspaceUiComposerPlaceholder")}
+                              onChange={(event) =>
+                                setInitialMessageDraft(event.target.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (
+                                  event.key === "Enter" &&
+                                  !event.shiftKey &&
+                                  !event.nativeEvent.isComposing
+                                ) {
+                                  event.preventDefault();
+                                  event.currentTarget.form?.requestSubmit();
+                                }
+                              }}
+                            />
+                          </div>
+                          <div className="workspace-composer-controls">
+                            <span className="workspace-composer-status" />
+                            <Button
+                              type="submit"
+                              size="icon"
+                              className="workspace-send-button"
+                              aria-label={t("workspaceUiSendMessage")}
+                              title={t("workspaceUiSendShortcut")}
+                              disabled={
+                                !workspace.isSuccess ||
+                                create.isPending ||
+                                initialMessage !== undefined ||
+                                !initialMessageDraft.trim()
+                              }
+                            >
+                              <ArrowUp aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </div>
+                      </form>
                     </div>
                   )}
                   <WorkspaceResizeHandle
