@@ -559,7 +559,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
       const id = String(req.params.conversationId);
       const thread = await conversation(d, id);
       const input = z
-        .object({ messageId: z.string().uuid() })
+        .object({ messageId: z.string().uuid().optional() })
         .strict()
         .parse(req.body);
 
@@ -580,7 +580,10 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
         )
         .orderBy(asc(messages.createdAt), asc(messages.id))
         .limit(1);
-      if (!firstUserMessage || firstUserMessage.id !== input.messageId)
+      if (
+        !firstUserMessage ||
+        (input.messageId && firstUserMessage.id !== input.messageId)
+      )
         return { title: thread.title };
 
       let generated: string | null = null;
@@ -592,6 +595,15 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
       } catch {
         // Provider failures must not turn a successful message into an error.
         generated = null;
+      }
+      // A missing connection or failed provider must not leave a useful
+      // conversation with a numbered title. Keep this fallback provider-free.
+      if (!generated) {
+        const excerpt = firstUserMessage.body
+          .replace(/[\u0000-\u001f\u007f]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        generated = excerpt.length > 80 ? `${excerpt.slice(0, 79).trimEnd()}…` : excerpt;
       }
       if (!generated) return { title: thread.title };
 
@@ -625,7 +637,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           "knowledge.conversation.title_generated",
           "conversation",
           id,
-          { messageId: input.messageId },
+          { messageId: firstUserMessage.id },
         );
         return { title: updated.title };
       });

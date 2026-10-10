@@ -235,6 +235,7 @@ export function ProjectWorkspace() {
                       key={selected.id}
                       projectId={id!}
                       conversationId={selected.id}
+                      conversationTitle={selected.title}
                       readState={selected.readState}
                       initialMessage={initialMessage}
                       onInitialMessageSent={() => {

@@ -172,6 +172,7 @@ function FailedRunOutcome({
 
 export function Transcript({
   conversationId,
+  conversationTitle,
   projectId,
   readState,
   runs = [],
@@ -179,6 +180,7 @@ export function Transcript({
   onInitialMessageSent,
 }: {
   conversationId: string;
+  conversationTitle: string;
   projectId: string;
   readState?: ReadState;
   runs?: RecordData[];
@@ -196,6 +198,7 @@ export function Transcript({
       <Conversation
         key={conversationId}
         conversationId={conversationId}
+        conversationTitle={conversationTitle}
         projectId={projectId}
         readState={readState}
         runs={runs}
@@ -209,6 +212,7 @@ export function Transcript({
 }
 function Conversation({
   conversationId,
+  conversationTitle,
   projectId,
   readState,
   following,
@@ -218,6 +222,7 @@ function Conversation({
   onInitialMessageSent,
 }: {
   conversationId: string;
+  conversationTitle: string;
   projectId: string;
   readState?: ReadState;
   runs: RecordData[];
@@ -334,6 +339,34 @@ function Conversation({
     () => mergeMessages(query.data?.pages || []),
     [query.data?.pages],
   );
+  const title = useMutation({
+    mutationFn: (_originalTitle: string) => api<{ title: string }>(`${path}/title-from-message`, {}),
+    retry: (failureCount, error) =>
+      failureCount < 1 && (!(error instanceof ApiError) || error.status >= 500),
+    onSuccess: ({ title }, originalTitle) => {
+      queryClient.setQueryData(
+        [`/knowledge/workspaces/${projectId}`],
+        (old: any) =>
+          old
+            ? {
+                ...old,
+                conversations: old.conversations.map((conversation: any) =>
+                  conversation.id === conversationId &&
+                  conversation.title === originalTitle
+                    ? { ...conversation, title }
+                    : conversation,
+                ),
+              }
+            : old,
+      );
+    },
+  });
+  useEffect(() => {
+    // Recover missed naming requests on reopen, including paginated threads.
+    // The server, not the loaded message page, selects the first user message.
+    if (messages.length && /^Thread\s+\d+$/i.test(conversationTitle.trim()) && title.isIdle)
+      title.mutate(conversationTitle);
+  }, [messages.length, conversationTitle, title.isIdle, title.mutate]);
   const initial = query.data?.pages[0]?.readState || readState;
   const [draft, setDraft] = useState(
       readState?.composerDraft || initialMessage || "",
@@ -442,29 +475,6 @@ function Conversation({
       sourceVersionIds: string[];
     }) => api<WorkspaceMessage>(`${path}/messages`, body),
     onSuccess: async (message, submitted) => {
-      if (messages.length === 0 && !submitted.parentMessageId) {
-        void api<{ title: string }>(`${path}/title-from-message`, {
-          messageId: message.id,
-        })
-          .then(({ title }) => {
-            queryClient.setQueryData(
-              [`/knowledge/workspaces/${projectId}`],
-              (old: any) =>
-                old
-                  ? {
-                      ...old,
-                      conversations: old.conversations.map(
-                        (conversation: any) =>
-                          conversation.id === conversationId
-                            ? { ...conversation, title }
-                            : conversation,
-                      ),
-                    }
-                  : old,
-            );
-          })
-          .catch(() => undefined);
-      }
       if (readiness.data?.executionAvailable) {
         const nextRun = {
           goal: submitted.body,

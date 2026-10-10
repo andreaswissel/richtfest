@@ -9,7 +9,7 @@ Opening a project shows its active threads in a rail beside the conversation. Us
 
 Open **Project details** and choose **Edit project details** to change the project name, customer association or status inline on the page. Status is selected from Planning, Active or Completed; the labels follow the user's selected language. Choose **Save** to apply the changes or **Cancel** to discard them; clearing the customer removes the association. Editing requires project write access and records an audit event.
 
-New threads start with a temporary numbered title. After the first message, the active AI provider generates a concise title when its connection is available. Use the rename control beside any thread to set or change its title manually; the manual title is saved for everyone in the workspace.
+New threads start with a temporary numbered title. After the first message, the active AI provider generates a concise title when its connection is available. If generation fails or no connection is configured, the thread uses a shortened excerpt of its first message instead. Opening an older numbered thread with saved messages also attempts naming, without needing to load its oldest messages. Naming requires knowledge write access and runs in the background without blocking the conversation. Use the rename control beside any thread to set or change its title manually; the manual title is saved for everyone in the workspace and is not replaced by automatic naming.
 
 1. Create the customer and relevant contacts, then associate a project with that customer.
 2. Attach the original source files to the project. Uploading a revision creates another immutable version instead of replacing the evidence behind earlier decisions.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project threads use a first-message title if AI naming is unavailable, and older numbered threads recover their titles when reopened. Manual names are preserved.
+
 - Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; fix sign-in content overflowing narrow screens.
 
 - Project agents read PDFs beyond page ten, with German/English OCR for scanned pages, original page references and explicit extraction limits. Failed provider attempts retain safe diagnostic details and reported token usage for troubleshooting.
