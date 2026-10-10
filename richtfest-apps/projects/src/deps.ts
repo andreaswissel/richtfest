@@ -37,6 +37,7 @@ export type AppDeps = {
   db: any;
   tenantId: string;
   actorId: string;
+  publicDataUpdates?: (releaseIds: string[]) => Promise<import("@richtfest/shared").PublicDataUpdate[]>;
   requirePermission: (key: PermissionKey) => void;
   audit: (
     tx: any,
@@ -54,6 +55,7 @@ export type AppDeps = {
 /** Background worker has no request actor. OS supplies system-scoped audit. */
 export type LocationWorkerDeps = {
   db: any;
+  publicDataSnapshot?: (origin: [number, number], radius: number) => Promise<import("@richtfest/shared").PublicDataSnapshot | null>;
   audit: (tx: any, tenantId: string, action: string, projectId: string, metadata?: unknown) => Promise<void>;
   reportError: () => void;
 };

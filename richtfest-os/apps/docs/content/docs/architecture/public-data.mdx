@@ -1,0 +1,67 @@
+---
+title: Public data catalogue
+description: Curated official sources, scheduled retrieval and reproducible project context.
+---
+
+## Scope and ownership
+
+`richtfest-apps/public-data` owns the shared catalogue, import jobs, raw-evidence references and published records. The API mounts it at `/api/public-data` and supplies database and Railway Bucket access through its host contract. It is an opt-in service with a status panel in the project location editor, not a separate screen or a nationwide dataset.
+
+Only curated, approved public datasets enter this catalogue. There is no arbitrary URL importer or tenant upload endpoint. Public records may be shared between workspaces; project selections, private source files, scene edits and review decisions remain tenant-scoped in their owning apps. Catalogue reads require sign-in, OS access and `projects:read`, inherited from the location workflow. Changing project pins requires `projects:write`.
+
+## Data model
+
+| Record | Contract |
+| --- | --- |
+| Dataset | Stable ID, publisher, connector, licence, metadata URL, source dates and declared coverage limitations |
+| Partition | Explicit geographic scope and CRS, retrieval interval, next check, last success, failure count, lease and current release |
+| Import run | Durable execution history: running, published, unchanged, failed or interrupted |
+| Raw asset | Exact response bytes in private storage, request URL, SHA-256, byte length and retrieval time |
+| Feature revision | Dataset/partition-scoped upstream identity, content hash and validated building or tree attributes and geometry |
+| Release | Immutable complete partition manifest, source metadata snapshot, importer version, raw asset and publication time |
+| Release member | The exact feature revision included in that release |
+
+The ingestion envelope is reusable; domain payloads are typed and validated, not an unbounded bag of arbitrary properties. This first slice supports building footprints/heights and trees. Original response attributes remain available in raw evidence. A later connector needs its own licence review, completeness contract and domain schema.
+
+Upstream IDs are namespaced by dataset and partition. Addresses, matching shapes and similarly named records are not automatically merged. Providers do not guarantee IDs survive a source rebuild; cross-source reconciliation and parcel lineage are future work.
+
+Retrieval time, publication time and source dates mean different things. Dataset metadata was manually checked on 10 October 2026 and is retained as such; this worker does not refresh the metadata catalogue itself. Berlin's building source references a LoD2 model dated 7 April 2022. This is not a survey date. Tree measurement dates are unknown. A successful check today does not make those measurements current or reviewed.
+
+## Retrieval and publication
+
+The worker polls Postgres for due partitions, with one active import per process. Row locks with `SKIP LOCKED`, a three-minute lease and a unique lease token coordinate replicas. Each request has a two-minute budget. Expired work is reclaimed and late results cannot overwrite the recovering worker's publication.
+
+The first three partitions cover a 200 m square centred on Berlin's official address point for Giersstraße 20, in EPSG:25833. They query Berlin's `ua_gebaeudehoehen:gebaeudehoehen`, `baumbestand:strassenbaeume` and `baumbestand:anlagenbaeume` WFS layers once per day. They are licensed under [Datenlizenz Deutschland – Zero – Version 2.0](https://www.govdata.de/dl-de/zero-2-0). The catalogue retains the original authority metadata links. Park-tree coverage is incomplete even when a response contains all available records.
+
+Berlin's WFS pages are not transaction-safe and its responses do not provide usable HTTP validators. For these small partitions, retrieval uses a single explicitly bounded response: up to 10,000 features and 10 MB. Unknown counts, truncation, wrong CRS, duplicate identities, invalid geometry or unexpected schema prevent publication. This is an importer budget, not an application upload-size limit. Larger areas need a reviewed partitioning strategy rather than silently truncating or resuming unsafe pages.
+
+The worker preserves the response before normalization. It publishes new revisions, membership and the current pointer in one database transaction. Unchanged normalized content reuses the current release and existing revisions; the check and raw response still have their own run/evidence. A complete response without a previously present record removes it from the new manifest, never from historical releases. An empty, explicitly complete response is a valid empty manifest. Missing coverage is not proof of a feature's absence in reality.
+
+Network, storage or validation failures keep the last good release. Persistent retry backoff starts at one minute and grows to one day; a successful import returns to the daily schedule. Shutdown interruptions are eligible to retry immediately. Run records are the shared operational audit trail, without inventing a tenant for public imports. Project import and refresh actions continue to create tenant-scoped audit events.
+
+Raw evidence is retained without automatic deletion in this slice. Storage growth and retention policies need review before expanding coverage. A crash between object upload and inserting its asset row can leave an unreferenced object; its key contains the partition and run IDs for reconciliation. No evidence garbage collection runs automatically.
+
+## Project consumption and API
+
+When enabled, **Load site context** resolves the saved project address and reads published releases only when all three releases fully cover the requested site bounds. Other addresses retain the address-aware on-demand import; pilot data is never substituted for another site. All three covered layers must have a published release. Each imported feature carries its revision ID; the project stores the release IDs and its local-coordinate snapshot. Scheduled imports never rewrite that snapshot or the planning scene.
+
+- `GET /api/public-data/datasets` returns paginated dataset/partition metadata, check freshness, failure state and current release IDs. `after` is a partition UUID; `limit` is at most 100. Freshness describes checking, not survey age.
+- `GET /api/public-data/partitions/:id/runs` returns the latest 50 runs.
+- `GET /api/public-data/releases/:id` returns the immutable manifest metadata, evidence checksum and paginated features. `after` is the previous page's source-ID cursor; `limit` is at most 500. Storage keys and bucket credentials are not returned.
+- `GET /api/public-data/release-status?ids=<release-id>,<release-id>` checks up to 20 exact release IDs in one read. It returns pinned provenance and counts alongside current partition pointers, retrieval health and scheduling. Unknown IDs are omitted; the UI treats incomplete results as unavailable, not up to date. The response also reports whether the caller has project write access; the project mutation still enforces that permission and tenant scope.
+- `GET /api/projects/:id/location` includes `availableContextUpdates` for pinned partitions whose current release changed.
+- `POST /api/projects/:id/location/import` with `{"revision":<current-scene-revision>,"refresh":true}` explicitly queues replacement of the project's context with current published releases. Refresh requires a pinned context matching the saved project address and no active LiDAR import. Ordinary repeated imports remain idempotent. A failed refresh retains the old context. Refresh preserves the exact coordinate frame, scene objects and notes; it does not approve any evidence.
+
+In the project location inspector, **Public data status** shows each pinned release, record count and whether a newer release is available. **Source evidence** expands the pinned publisher, licence, dates, coverage limitations, release ID and SHA-256. The live source-query link is explicitly not an archive download. Retrieval status distinguishes recent checks, overdue checks, failures and paused partitions; it does not describe survey freshness or evidence approval.
+
+**Check import status** reads the catalogue, without triggering an authority download. The panel fetches only when opened, rechecks every 30 seconds while open and keeps no persisted browser copy of this operational status. It adds no request to ordinary navigation. Disabled, missing or inaccessible catalogue data does not silently appear current.
+
+Users with project write access can choose **Refresh project context**, then **Adopt latest releases**. Confirmation explains that the background job uses the latest published releases at execution time. Planning objects, notes, unsaved scene edits and LiDAR remain unchanged; the old context stays visible while queued or running and survives a failed refresh. Successful refresh audit events retain old and new release IDs. Read-only users can inspect status but cannot refresh. Legacy contexts without release pins keep their existing UI. Conversation agents do not yet have a dedicated catalogue tool.
+
+## Enable and operate
+
+Apply migration `0029_public_data` using the normal migration process, configure the private Railway Bucket, then set `PUBLIC_DATA_ENABLED=true` on the API service and restart it through the normal deployment process. This flag enables both the scheduled worker and catalogue-backed project imports. Startup idempotently seeds the three curated datasets and their partitions, preserving operational state. The production adapter uploads directly to the private Bucket; the local filesystem adapter is development-only.
+
+The flag defaults to false: existing project import behavior is unchanged and the catalogue API reports that it is disabled. Turning it off stops scheduled retrieval and shared-catalogue reads without deleting evidence or existing project snapshots. Do not disable it expecting pinned evidence to be erased.
+
+There are no PostGIS extensions, destructive backfills or changes to existing tables in this migration. Spatial search, parcels, planning documents, land values, noise, LoD2 meshes and LiDAR ingestion are not implemented by this service yet. The existing on-demand project LiDAR workflow remains separate.

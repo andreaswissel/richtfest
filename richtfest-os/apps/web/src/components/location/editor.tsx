@@ -42,6 +42,7 @@ import { Badge, Callout, Field, Segmented } from "../ui/primitives";
 import type { IfcGeometry } from "./ifc-loader";
 import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
+import { PublicDataStatus } from "./public-data";
 import "./location.css";
 
 const busy = (status?: string) => status === "queued" || status === "running";
@@ -1104,6 +1105,9 @@ export function LocationEditor({
                   )}
                   <Callout>{t("locationBuildingHint")}</Callout>
                 </>
+              )}
+              {!!state.data?.context?.publicReleases?.length && (
+                <PublicDataStatus projectId={projectId} state={state.data} address={address} />
               )}
               <details className="location-sources">
                 <summary>{t("locationSources")}</summary>

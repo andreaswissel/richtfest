@@ -23,6 +23,7 @@
     "@richtfest/crm": "workspace:*",
     "@richtfest/knowledge": "workspace:*",
     "@richtfest/projects": "workspace:*",
+    "@richtfest/public-data": "workspace:*",
     "@richtfest/shared": "workspace:*",
     "@richtfest/support": "workspace:*",
     "better-auth": "^1.7.7",

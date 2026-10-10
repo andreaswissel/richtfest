@@ -23,6 +23,7 @@ import { env } from "./env";
 import type { AppDeps as CrmDeps } from "@richtfest/crm/deps";
 import type { AppDeps as ProjectsDeps } from "@richtfest/projects/deps";
 import type { AppDeps as KnowledgeDeps } from "@richtfest/knowledge/deps";
+import { availableUpdates } from "@richtfest/public-data/queries";
 import {
   S3Client,
   DeleteObjectCommand,
@@ -332,8 +333,11 @@ const base = (db: Database, req: Request) => {
   };
 };
 export const crmDeps = (db: Database, req: Request) => base(db, req) as CrmDeps;
-export const projectsDeps = (db: Database, req: Request) =>
-  ({ ...base(db, req), geoapifyApiKey: env.GEOAPIFY_API_KEY }) as ProjectsDeps;
+export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
+  ...base(db, req),
+  geoapifyApiKey: env.GEOAPIFY_API_KEY,
+  ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),
+});
 export const knowledgeDeps = (
   db: Database,
   req: Request,

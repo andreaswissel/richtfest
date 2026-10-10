@@ -5,9 +5,10 @@ import * as crm from "@richtfest/crm/schema";
 import * as projects from "@richtfest/projects/schema";
 import * as knowledge from "@richtfest/knowledge/schema";
 import * as support from "@richtfest/support/schema";
+import * as publicData from "@richtfest/public-data/schema";
 import * as auth from "./auth-schema";
 
-export const schema = { ...os, ...crm, ...projects, ...knowledge, ...support, ...auth };
+export const schema = { ...os, ...crm, ...projects, ...knowledge, ...support, ...publicData, ...auth };
 export const createDatabase = (url: string) => {
   const pool = new Pool({ connectionString: url });
   return { db: drizzle(pool, { schema }), pool };

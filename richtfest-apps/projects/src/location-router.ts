@@ -41,7 +41,9 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
     try {
       const { d, where } = await scope(req, false);
       const [row] = await d.db.select(stateColumns).from(locations).where(where).limit(1);
-      res.json(ok(locationState(row)));
+      const state = locationState(row);
+      if (d.publicDataUpdates) state.availableContextUpdates = await d.publicDataUpdates(state.context?.publicReleases?.map(r => r.releaseId) ?? []);
+      res.json(ok(state));
     } catch (error) { next(error); }
   });
   router.put("/projects/:projectId/location", async (req, res, next) => {
@@ -72,8 +74,10 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       try {
         const { d, projectId, address, where } = await scope(req, true);
         const input = kind === "context"
-          ? z.object({ revision: z.number().int().nonnegative().max(2147483646) }).strict().parse(req.body)
+          ? z.object({ revision: z.number().int().nonnegative().max(2147483646), refresh: z.boolean().default(false) }).strict().parse(req.body)
           : z.object({}).strict().parse(req.body ?? {});
+        const refresh = "refresh" in input && input.refresh;
+        if (refresh && !d.publicDataUpdates) throw failure("Public data refresh is not enabled", 409, "public_data_disabled");
         if (kind === "context") {
           try { validateLocationAddress(address); }
           catch (error) { throw failure((error as Error).message, 422, "location_address_invalid"); }
@@ -84,18 +88,22 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
           if (kind === "lidar" && !current.context) throw failure("Import location context first", 409, "context_required");
           const status = kind === "context" ? current.contextStatus : current.lidarStatus;
           if (["queued", "running"].includes(status)) return current;
-          if (status === "ready" && (kind === "lidar" || (current.context && locationMatchesAddress(current.context, address)))) return current;
+          if (status === "ready" && !refresh && (kind === "lidar" || (current.context && locationMatchesAddress(current.context, address)))) return current;
           if (kind === "context") {
             if (current.revision !== (input as { revision: number }).revision) throw failure("Location revision changed; reload before importing", 409, "revision_conflict");
-            if (current.scene.objects.length) throw failure("Existing objects are anchored to the imported site. Remove objects and save before loading a different address", 409, "location_has_objects");
+            if (refresh) {
+              if (!current.context?.publicReleases?.length || !locationMatchesAddress(current.context, address)) throw failure("Refresh requires a pinned context matching the saved project address", 409, "location_address_changed");
+            } else if (current.scene.objects.length) throw failure("Existing objects are anchored to the imported site. Remove objects and save before loading a different address", 409, "location_has_objects");
             if (["queued", "running"].includes(current.lidarStatus)) throw failure("Wait for the LiDAR import before changing sites", 409, "location_import_busy");
           }
-          const [queued] = await tx.update(locations).set(kind === "context" ? {
+          const [queued] = await tx.update(locations).set(kind === "context" ? refresh ? {
+            requestedAddress: address, contextStatus: "queued", contextError: null, updatedAt: new Date(),
+          } : {
             requestedAddress: address, contextStatus: "queued", contextError: null,
             context: null, cloud: null, lidarStatus: "idle", lidarError: null,
             revision: sql`${locations.revision} + 1`, leaseToken: null, leaseUntil: null, updatedAt: new Date(),
           } : { lidarStatus: "queued", lidarError: null, updatedAt: new Date() }).where(where).returning(stateColumns);
-          await d.audit(tx, `projects.location.${kind}.queued`, "project", projectId, { revision: queued.revision });
+          await d.audit(tx, `projects.location.${kind}.queued`, "project", projectId, { revision: queued.revision, refresh });
           return queued;
         });
         res.status(202).json(ok(locationState(row)));

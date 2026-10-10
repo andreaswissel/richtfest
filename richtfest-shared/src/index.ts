@@ -11,3 +11,4 @@ export * from "./support";
 export * from "./location";
 export * from "./source-text";
 export * from "./source-model";
+export * from "./public-data";

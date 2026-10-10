@@ -1,4 +1,5 @@
-import { projectAddressInput, type ProjectAddress, type LocationContext, type LocationBuilding, type LocationTree } from "@richtfest/shared";
+import { projectAddressInput, type ProjectAddress, type LocationContext, type LocationBuilding, type LocationTree, type PublicDataSnapshot } from "@richtfest/shared";
+import type { LocationWorkerDeps } from "./deps";
 
 export function validateLocationAddress(input: ProjectAddress) {
   const address = projectAddressInput.parse(input);
@@ -91,13 +92,15 @@ export async function boundedBody(response: Response, max: number): Promise<Buff
   } finally { await reader.cancel().catch(() => {}); }
   return Buffer.concat(chunks);
 }
-export async function importLocationContext(address: ProjectAddress, signal: AbortSignal): Promise<LocationContext> {
+export async function importLocationContext(address: ProjectAddress, signal: AbortSignal, publicDataSnapshot?: LocationWorkerDeps["publicDataSnapshot"]): Promise<LocationContext> {
   const site = await resolveLocationAddress(address, signal);
   if ("crs" in site && site.crs === "EPSG:25832") {
     const { importRlpBuildings } = await import("./location-rlp");
     const { buildings, sources } = await importRlpBuildings(site.origin, site.radius, signal);
     return { ...site, buildings, trees: [], sources: [...site.sources, ...sources], importedAt: new Date().toISOString() };
   }
+  const snapshot = await publicDataSnapshot?.(site.origin, site.radius);
+  if (snapshot) return contextFromPublicData(snapshot, site);
   const { origin, radius: r } = site;
   const bbox = [origin[0] - r, origin[1] - r, origin[0] + r, origin[1] + r, "EPSG:25833"].join(",");
   const layers = [
@@ -115,4 +118,20 @@ export async function importLocationContext(address: ProjectAddress, signal: Abo
     return json.features as Feature[];
   }));
   return { ...site, origin, buildings: collections[0]!.map(f => buildingFeature(f, origin)).filter((f): f is LocationBuilding => !!f), trees: collections.slice(1).flat().map(f => treeFeature(f, origin)).filter((f): f is LocationTree => !!f), sources, importedAt: new Date().toISOString() };
+}
+
+export function contextFromPublicData(snapshot: PublicDataSnapshot, site: Pick<LocationContext, "siteId" | "projectAddress" | "address" | "origin" | "longitude" | "latitude" | "radius" | "sources">): LocationContext {
+  const buildings: LocationBuilding[] = [], trees: LocationTree[] = [];
+  for (const release of snapshot.releases) {
+    for (const { revisionId, feature } of release.features) {
+      const common = { id: `${release.datasetId}:${feature.sourceId}`, sourceId: feature.sourceId, publicRevisionId: revisionId, height: feature.height };
+      if (feature.kind === "building") buildings.push({ ...common, label: feature.label, roof: feature.roof, polygons: feature.geometry.coordinates.map(polygon => polygon.map(ring => ring.map(p => localXZ(p, site.origin)))) });
+      else trees.push({ ...common, position: localXZ(feature.geometry.coordinates, site.origin), crownDiameter: feature.crownDiameter, species: feature.species });
+    }
+  }
+  return { ...site, buildings, trees, importedAt: new Date().toISOString(),
+    sources: [...site.sources.filter(source => !snapshot.releases.some(r => r.sourceUrl === source.url)),
+      ...snapshot.releases.map(r => ({ label: `${r.label} (${r.metadata.licence}; unreviewed context)`, url: r.sourceUrl, surveyedAt: r.metadata.surveyedAt }))],
+    publicReleases: snapshot.releases.map(r => ({ releaseId: r.id, partitionId: r.partitionId, retrievedAt: r.retrievedAt, publishedAt: r.publishedAt })),
+  };
 }

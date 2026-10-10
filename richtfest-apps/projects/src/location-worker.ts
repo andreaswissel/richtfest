@@ -1,7 +1,8 @@
 import { and, eq, or, sql, getTableColumns } from "drizzle-orm";
+import type { LocationContext } from "@richtfest/shared";
 import { projectLocations as locations } from "./schema";
 import type { LocationWorkerDeps } from "./deps";
-import { importLocationContext } from "./location-context";
+import { contextFromPublicData, importLocationContext } from "./location-context";
 import { fetchLocationLidar } from "./location-lidar";
 const { cloud: _cloud, ...jobColumns } = getTableColumns(locations);
 
@@ -27,7 +28,15 @@ export async function runLocationJob(d: LocationWorkerDeps, signal: AbortSignal)
   try {
     if (kind === "context") {
       if (!row.requestedAddress) throw new Error("Site address missing; save an address in project details and retry import");
-      result = { context: await importLocationContext(row.requestedAddress, jobSignal), contextStatus: "ready", contextError: null };
+      let context: LocationContext;
+      if (row.context?.publicReleases?.length) {
+        if (!d.publicDataSnapshot) throw new Error("Location context public data refresh is disabled");
+        const snapshot = await d.publicDataSnapshot(row.context.origin, row.context.radius);
+        if (!snapshot) throw new Error("Location context public data no longer covers the pinned site");
+        // Refresh preserves the exact coordinate frame used by planning objects and LiDAR.
+        context = contextFromPublicData(snapshot, row.context);
+      } else context = await importLocationContext(row.requestedAddress, jobSignal, d.publicDataSnapshot);
+      result = { context, contextStatus: "ready", contextError: null };
     }
     else {
       if (!row.context) throw new Error("Location context missing; import first");
@@ -43,7 +52,9 @@ export async function runLocationJob(d: LocationWorkerDeps, signal: AbortSignal)
   }
   await d.db.transaction(async (tx: any) => {
     const [saved] = await tx.update(locations).set({ ...result, leaseToken: null, leaseUntil: null, updatedAt: new Date() }).where(and(eq(locations.projectId, row.projectId), eq(locations.tenantId, row.tenantId), eq(locations.leaseToken, token))).returning({ projectId: locations.projectId });
-    if (saved) await d.audit(tx, row.tenantId, `projects.location.${kind}.${kind === "context" ? result.contextStatus : result.lidarStatus}`, row.projectId);
+    const context = result.context as LocationContext | undefined;
+    if (saved) await d.audit(tx, row.tenantId, `projects.location.${kind}.${kind === "context" ? result.contextStatus : result.lidarStatus}`, row.projectId,
+      context?.publicReleases ? { publicReleaseIds: context.publicReleases.map(r => r.releaseId), previousPublicReleaseIds: (row.context as LocationContext | null)?.publicReleases?.map(r => r.releaseId) ?? [] } : undefined);
   });
   return true;
 }

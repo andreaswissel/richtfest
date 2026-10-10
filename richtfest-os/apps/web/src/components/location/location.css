@@ -253,6 +253,28 @@
   max-width: 38rem;
   color: var(--muted-foreground);
 }
+.public-data-status [data-slot="badge"] {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+}
+@media (max-width: 639px) {
+  .public-data-status table,
+  .public-data-status tbody,
+  .public-data-status tr,
+  .public-data-status td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .public-data-status thead {
+    display: none;
+  }
+  .public-data-status td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
 @media (min-width: 1900px) {
   .location-workbench {
     grid-template-columns: 240px minmax(0, 1fr) 320px;

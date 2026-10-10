@@ -45,6 +45,7 @@ export type LocationScene = {
 };
 export type LocationBuilding = {
   id: string;
+  publicRevisionId?: string;
   /** Polygons, each containing an outer ring and optional holes, in local X/Z metres. */
   polygons: [number, number][][][];
   height: number | null;
@@ -54,6 +55,7 @@ export type LocationBuilding = {
 };
 export type LocationTree = {
   id: string;
+  publicRevisionId?: string;
   position: [number, number];
   height: number | null;
   crownDiameter: number | null;
@@ -76,6 +78,8 @@ export type LocationContext = {
   trees: LocationTree[];
   sources: { label: string; url: string; surveyedAt: string | null }[];
   importedAt: string;
+  /** Immutable public catalogue releases used by this project; absent for legacy imports. */
+  publicReleases?: { releaseId: string; partitionId: string; retrievedAt: string; publishedAt: string }[];
 };
 export type LocationJob = {
   status: "idle" | "queued" | "running" | "ready" | "failed";
@@ -87,6 +91,7 @@ export type LocationState = {
   context: LocationContext | null;
   contextJob: LocationJob;
   lidarJob: LocationJob;
+  availableContextUpdates?: import("./public-data").PublicDataUpdate[];
 };
 export type LocationPointCloud = {
   /** Flat XYZ array in the same local coordinate frame as the scene. */
