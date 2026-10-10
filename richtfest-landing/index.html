@@ -140,7 +140,21 @@ p { margin: 0; }
 .demo { margin-top: 56px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); gap: 20px; align-items: start; }
 @media (max-width: 1000px) { .demo { grid-template-columns: 1fr; } }
 .viewer { position: relative; border-radius: var(--r-xl); overflow: hidden; background: #dfe6ea; height: 660px; border: 1px solid rgba(255,255,255,.7); box-shadow: 0 40px 100px -50px rgba(16,18,17,.6); }
-@media (max-width: 600px) { .viewer { height: 440px; } }
+.v-mob { display: none; }
+.viewer.orbit-off .v-hint { display: none; }
+@media (max-width: 1000px) {
+  .viewer { height: min(78svh, 680px); min-height: 460px; }
+  .v-mob { display: block; }
+  .v-mcost { position: absolute; left: 12px; top: 52px; z-index: 3; padding: 9px 12px; border-radius: 16px; background: rgba(10,11,11,.78); color: var(--white); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); display: flex; flex-direction: column; gap: 3px; pointer-events: none; }
+  .v-mcost .k { font: 400 9.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted-d); }
+  .v-mcost b { font: 400 22px/1 var(--display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .v-mcost i { font: 500 11px/1 var(--mono); font-style: normal; color: var(--amber); font-variant-numeric: tabular-nums; }
+  .v-mcost i:empty { display: none; }
+  .v-mact { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3; display: flex; gap: 8px; }
+  .v-mact .btn { box-shadow: 0 14px 40px -12px rgba(10,11,11,.55); }
+  .viewer.busy .v-mact, .viewer.exploring .v-mact, .viewer.done .v-mgo, .viewer:not(.done) .v-mreset { display: none; }
+  .viewer:not(.busy):not(.done) .v-hint { display: none; }
+}
 .viewer canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; cursor: grab; touch-action: pan-y; }
 .viewer canvas:active { cursor: grabbing; }
 .v-hud { position: absolute; left: 18px; top: 18px; right: 18px; display: flex; justify-content: space-between; gap: 12px; pointer-events: none; font: 400 11px/1.5 var(--mono); letter-spacing: .06em; color: var(--muted); text-transform: uppercase; z-index: 2; }
@@ -475,6 +489,13 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
           <div class="pin" id="pin2"><i>2</i><span id="pin2t">Parapet 8.10 m</span></div>
           <div class="pin" id="pin3"><i>3</i><span data-i18n="pin3">Two shafts instead of four</span></div>
           <span class="v-hint" data-i18n="v.hint">Drag to orbit · Scroll to zoom</span>
+          <div class="v-mob">
+            <div class="v-mcost"><span class="k" data-i18n="d.costk">Construction estimate</span><b id="vmCost">€1,980,000</b><i id="vmDelta"></i></div>
+            <div class="v-mact">
+              <button class="btn btn-solid v-mgo" id="vmGo" type="button"><span data-i18n="d.go">Optimize</span><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7.5 1 3 8h4l-1 5 5-7.5H7z"/></svg></button>
+              <button class="btn btn-solid v-mreset" id="vmReset" type="button" data-i18n="d.reset">Reset design</button>
+            </div>
+          </div>
           <div class="v-feed" id="vFeed" aria-hidden="true"></div>
           <div class="v-explore" id="vExplore" hidden role="region" aria-label="Findings"></div>
           <div class="v-cta" id="vCta" hidden>
@@ -1469,6 +1490,7 @@ window.RFLead = (() => {
   const pin2t = document.getElementById('pin2t');
   let parapet = 8.10;
   const setPin2 = () => { pin2t.textContent = `${T().parapet} ${RF.nf(parapet, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m${parapet <= 8 ? ' · ' + T().ok : ''}`; };
+  const vmCost = document.getElementById('vmCost'), vmDelta = document.getElementById('vmDelta');
   function intro() {
     setPin2();
     logEl.innerHTML = '';
@@ -1476,14 +1498,15 @@ window.RFLead = (() => {
     li.innerHTML = `<span class="who">${T().agent}</span><span>${T().intro}</span>`;
     logEl.appendChild(li);
     costEl.textContent = RF.eur(BASE); deltaEl.textContent = '';
+    vmCost.textContent = RF.eur(BASE); vmDelta.textContent = '';
     statusEl.textContent = T().first;
   }
   intro();
   RF.on(() => {
     if (phase === 'idle') intro();
-    else if (phase === 'done') { statusEl.textContent = T().done; costEl.textContent = RF.eur(cost); setDelta(); setPin2(); renderCta(); }
+    else if (phase === 'done') { statusEl.textContent = T().done; costEl.textContent = vmCost.textContent = RF.eur(cost); setDelta(); setPin2(); renderCta(); }
   });
-  function setDelta() { deltaEl.textContent = cost < BASE ? `−${RF.eur(BASE - cost)} · −${RF.nf((BASE - cost) / BASE * 100, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %` : ''; }
+  function setDelta() { vmDelta.textContent = cost < BASE ? `−${RF.eur(BASE - cost)}` : ''; deltaEl.textContent = cost < BASE ? `−${RF.eur(BASE - cost)} · −${RF.nf((BASE - cost) / BASE * 100, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %` : ''; }
 
   if (!window.THREE || !THREE.OrbitControls) { document.getElementById('vFallback').hidden = false; goBtn.disabled = true; return; }
 
@@ -1538,6 +1561,17 @@ window.RFLead = (() => {
   controls.enableDamping = true; controls.enablePan = false;
   controls.minDistance = 24; controls.maxDistance = 120; controls.maxPolarAngle = Math.PI * 0.46;
   controls.autoRotate = !reduce; controls.autoRotateSpeed = 0.45;
+  // On touch screens a finger on the model must scroll the page; orbiting is only enabled in explore mode
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  let orbitWanted = true;
+  function setOrbit(on) {
+    orbitWanted = on;
+    const allow = on && (!coarse || host.classList.contains('exploring'));
+    controls.enabled = allow;
+    renderer.domElement.style.touchAction = allow ? 'none' : 'pan-y';
+    host.classList.toggle('orbit-off', !allow);
+  }
+  setOrbit(true);
 
   scene.add(new THREE.HemisphereLight(0xdde8f3, 0x4d5246, 0.3));
   const sun = new THREE.DirectionalLight(0xfff0d8, 3.1);
@@ -2000,7 +2034,7 @@ window.RFLead = (() => {
   function loop(now) {
     for (let i = tweens.length - 1; i >= 0; i--) { const t = tweens[i]; const p = Math.min(1, (now - t.t0) / t.ms); t.fn(p); if (p >= 1) { tweens.splice(i, 1); t.res(); } }
     flashTruck(now); controls.update(); renderer.render(scene, camera); placePins();
-    raf = visible ? requestAnimationFrame(loop) : 0;
+    raf = (visible || phase === 'busy' || tweens.length) ? requestAnimationFrame(loop) : 0;
   }
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible && !raf) raf = requestAnimationFrame(loop); }).observe(host);
   raf = requestAnimationFrame(loop);
@@ -2008,7 +2042,7 @@ window.RFLead = (() => {
   /* Narrative */
   function tickCost(to) {
     const from = cost; cost = to; setDelta();
-    return tween(900, p => { costEl.textContent = RF.eur(from + (to - from) * ease(p)); });
+    return tween(900, p => { costEl.textContent = vmCost.textContent = RF.eur(from + (to - from) * ease(p)); });
   }
   // On stacked layouts the agent messages also stream into the bottom-right of the 3D view
   const feed = document.getElementById('vFeed');
@@ -2034,9 +2068,14 @@ window.RFLead = (() => {
   }
   const windowParts = ['frame', 'glass', 'mull', 'sill'];
 
+  document.getElementById('vmGo').addEventListener('click', () => goBtn.click());
+  document.getElementById('vmReset').addEventListener('click', () => resetBtn.click());
   goBtn.addEventListener('click', async () => {
     if (phase !== 'idle') return; phase = 'busy';
-    goBtn.disabled = true; controls.enabled = false; controls.autoRotate = false; follow = true; panelEl.classList.add('running');
+    host.classList.add('busy'); host.classList.remove('done');
+    if (!raf) raf = requestAnimationFrame(loop);
+    if (matchMedia('(max-width: 1000px)').matches) host.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+    goBtn.disabled = true; setOrbit(false); controls.autoRotate = false; follow = true; panelEl.classList.add('running');
     statusEl.textContent = T().busy;
     const li = document.createElement('li');
     li.innerHTML = `<span class="who">${T().scanWho}</span><span>${T().scan}</span><div class="prog"><i></i></div>`;
@@ -2101,8 +2140,8 @@ window.RFLead = (() => {
     sum.innerHTML = `<span class="who">${T().agent}</span><span>${T().sum(RF.eur(BASE - cost))}</span>`;
     logEl.appendChild(sum); logEl.scrollTop = logEl.scrollHeight; feedAdd(T().agent, T().sum(RF.eur(BASE - cost)));
     statusEl.textContent = T().done;
-    controls.enabled = true; controls.autoRotate = !reduce;
-    resetBtn.hidden = false; phase = 'done';
+    setOrbit(true); controls.autoRotate = !reduce;
+    resetBtn.hidden = false; phase = 'done'; host.classList.remove('busy'); host.classList.add('done');
     await wait(1400);
     if (phase === 'done') { renderCta(); vCta.hidden = false; }
   });
@@ -2147,10 +2186,10 @@ window.RFLead = (() => {
     fly(FOCUS[i][0], FOCUS[i][1], 1200);
   }
   enterExplore = (i = 1) => {
-    vCta.hidden = true; host.classList.add('exploring'); exploreEl.hidden = false; showFinding(i - 1 < 0 ? 0 : i - 1);
+    vCta.hidden = true; host.classList.add('exploring'); setOrbit(true); exploreEl.hidden = false; showFinding(i - 1 < 0 ? 0 : i - 1);
   };
   function exitExplore() {
-    exploreIdx = -1; host.classList.remove('exploring'); exploreEl.hidden = true; pins.forEach(p => p.el.classList.remove('active'));
+    exploreIdx = -1; host.classList.remove('exploring'); setOrbit(orbitWanted); exploreEl.hidden = true; pins.forEach(p => p.el.classList.remove('active'));
     xray(false); controls.autoRotate = !reduce; fly(HOME.pos, HOME.tgt, 1200);
   }
   pins.forEach((p, i) => p.el.addEventListener('click', () => { if (host.classList.contains('exploring')) showFinding(i); }));
@@ -2164,8 +2203,8 @@ window.RFLead = (() => {
     newShafts.forEach(m => { m.visible = false; m.scale.y = 0.001; }); oldShafts.forEach(m => { m.visible = false; });
     wall.opacity = 1; wall.depthWrite = true; core.visible = false;
     pins.forEach(p => p.el.classList.remove('on'));
-    cost = BASE; phase = 'idle'; intro(); resetBtn.hidden = true; goBtn.disabled = false; vCta.hidden = true; panelEl.classList.remove('running'); feedClear();
-    if (exploreIdx >= 0) { exploreIdx = -1; host.classList.remove('exploring'); exploreEl.hidden = true; xrayOn = false; windowParts.forEach(k => { inst[k].visible = true; }); }
+    cost = BASE; phase = 'idle'; host.classList.remove('busy', 'done'); intro(); resetBtn.hidden = true; goBtn.disabled = false; vCta.hidden = true; panelEl.classList.remove('running'); feedClear();
+    if (exploreIdx >= 0) { exploreIdx = -1; host.classList.remove('exploring'); setOrbit(true); exploreEl.hidden = true; xrayOn = false; windowParts.forEach(k => { inst[k].visible = true; }); }
     fly(HOME.pos, HOME.tgt, 1200);
   });
 })();
