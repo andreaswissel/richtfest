@@ -203,6 +203,7 @@ function Conversation({
   const query = useInfiniteQuery({
     queryKey: [path, "messages"],
     initialPageParam: "",
+    refetchOnMount: "always",
     queryFn: ({ pageParam }) =>
       api<MessagePage>(
         `${path}/messages?limit=50${pageParam ? `&before=${pageParam}` : ""}`,
