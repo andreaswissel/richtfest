@@ -192,8 +192,10 @@ p { margin: 0; }
 .d-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .d-note { font: 400 11px/1.5 var(--mono); color: var(--muted); }
 .d-panel.running .d-facts, .d-panel.running .d-note { display: none; }
-.v-feed { position: absolute; right: 12px; bottom: 12px; z-index: 3; width: min(68%, 380px); max-height: 33%; display: none; flex-direction: column; justify-content: flex-end; gap: 6px; overflow: hidden; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12%); mask-image: linear-gradient(to bottom, transparent 0, #000 12%); }
+.v-feed { position: absolute; right: 12px; bottom: 12px; z-index: 3; width: min(70%, 380px); height: 38%; display: none; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; scrollbar-width: none; padding-top: 48px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.25) 18%, #000 42%); mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.25) 18%, #000 42%); }
+.v-feed::-webkit-scrollbar { display: none; }
+.v-feed > :first-child { margin-top: auto; }
 .v-feed div { flex: none; padding: 8px 11px; border-radius: 14px; background: rgba(10,11,11,.4); color: var(--white); font-size: 12.5px; line-height: 1.42; backdrop-filter: blur(10px) saturate(1.2); -webkit-backdrop-filter: blur(10px) saturate(1.2); text-shadow: 0 1px 6px rgba(10,11,11,.5); animation: rise .35s ease both; }
 .v-feed b { display: block; margin-bottom: 3px; font: 500 9.5px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--amber); }
 @media (max-width: 1000px) { .viewer.feeding .v-feed { display: flex; } .viewer.feeding .v-hint { display: none; } }
@@ -2046,14 +2048,18 @@ window.RFLead = (() => {
   }
   // On stacked layouts the agent messages also stream into the bottom-right of the 3D view
   const feed = document.getElementById('vFeed');
+  let feedFollow = true;
+  const feedToBottom = () => { if (feedFollow) feed.scrollTop = feed.scrollHeight; };
+  feed.addEventListener('scroll', () => { feedFollow = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 24; }, { passive: true });
+  new MutationObserver(() => requestAnimationFrame(feedToBottom)).observe(feed, { childList: true, subtree: true, characterData: true });
   function feedAdd(who, text = '') {
     host.classList.add('feeding');
     const d = document.createElement('div'); d.innerHTML = '<b></b><span></span>';
     d.firstChild.textContent = who; d.lastChild.textContent = text; feed.appendChild(d);
-    while (feed.children.length > 4) feed.firstChild.remove();
+    feedToBottom();
     return d.lastChild;
   }
-  function feedClear() { feed.innerHTML = ''; host.classList.remove('feeding'); }
+  function feedClear() { feedFollow = true; feed.innerHTML = ''; host.classList.remove('feeding'); }
   async function typeInto(el, text, mirror) {
     if (reduce) { el.textContent = text; if (mirror) mirror.textContent = text; return; }
     for (let i = 1; i <= text.length; i += 2) { el.textContent = text.slice(0, i); if (mirror) mirror.textContent = el.textContent; await new Promise(r => setTimeout(r, 9)); }
