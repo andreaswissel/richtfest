@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Serve the public landing page on `richtfest.andreaswissel.com` while preserving the existing `richtfest.si` aliases; use `richtfest-app.andreaswissel.com` for the app.
+- Serve the public landing page on `richtfest.ai` while preserving existing domain aliases; use `app.richtfest.ai` for the app.
 
 - Project agent runs retry temporary provider failures and invalid responses with up to three attempts, and failed runs show a clear outcome with run details and a retry action. Completed reviews now include a downloadable PDF attachment in the conversation for the exact saved artifact revision.
 

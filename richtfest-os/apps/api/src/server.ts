@@ -85,7 +85,7 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
     // Keep a shareable Railway preview URL while the custom root domain is being configured.
     app.use("/landing", express.static(landingDirectory, { index: "index.html", redirect: true }));
     app.get("/", (req, res, next) => {
-      if (["richtfest.si", "www.richtfest.si", "richtfest.andreaswissel.com"].includes(req.hostname.toLowerCase())) {
+      if (["richtfest.ai", "richtfest.si", "www.richtfest.si", "richtfest.andreaswissel.com"].includes(req.hostname.toLowerCase())) {
         return res.sendFile(path.join(landingDirectory, "index.html"));
       }
       return next();
