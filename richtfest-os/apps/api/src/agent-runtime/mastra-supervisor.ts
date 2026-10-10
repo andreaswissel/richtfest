@@ -218,10 +218,16 @@ export async function callMastraSupervisor(
       };
     }
   }
+  const feedback = sanitizeProviderDiagnostics(
+    (input.context as { outputValidationFeedback?: unknown } | null)?.outputValidationFeedback,
+  );
+  const instructions = `${policy}\n${phaseInstructions[input.phase]}${feedback.errorId || feedback.issues?.length
+    ? `\nYour previous response was rejected by output validation: ${JSON.stringify(feedback)}. Correct these errors in this response; do not repeat the rejected output. If summary or rationale exceeded its character limit, rewrite it concisely and aim for at most half that limit to leave headroom. Preserve source citations, important findings, conflicts and limitations; remove repetition rather than cutting off text. Do not relax the output schema or evidence requirements.`
+    : ""}`;
   const agent = new Agent({
     id: `richtfest-${input.phase}`,
     name: `Richtfest ${input.phase}`,
-    instructions: `${policy}\n${phaseInstructions[input.phase]}`,
+    instructions,
     model: resolvedModel,
   });
   agent.__setLogger(noopLogger);
@@ -259,7 +265,7 @@ export async function callMastraSupervisor(
       requestedReasoningEffort: modelConfig?.reasoningEffort ?? null, reasoningEffort: reasoningEffort ?? null,
       maxOutputTokens: executionOptions.modelSettings.maxOutputTokens, maxSteps: executionOptions.maxSteps, maxRetries: 0,
       timeoutMs: 60000, stream: true, store: input.provider === "anthropic" ? null : false,
-      instructionsHash: metadataHash(`${policy}\n${phaseInstructions[input.phase]}`), promptHash: metadataHash(prompt),
+      instructionsHash: metadataHash(instructions), promptHash: metadataHash(prompt),
       outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(supervisorSchemas[input.phase])))) });
     let object: unknown;
     const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);

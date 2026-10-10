@@ -1,10 +1,76 @@
 import { expect, test } from "bun:test";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
-import { assertDocumentCitations, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
+import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
+import type { AppDeps } from "@richtfest/knowledge/deps";
+import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
+import { eq } from "drizzle-orm";
+import { createDatabase } from "../db/client";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test.skipIf(!process.env.DATABASE_URL)("supervisor repairs a rejected summary through Mastra without retrying a successful sibling", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const modelConfig = { modelId: "test-model", maxSteps: 1, maxOutputTokens: 32000 };
+  const policy = { provider: "openai" as const, effort: "medium" as const, source: "vendor" as const, version: 1,
+    supervisor: modelConfig, specialists: { source_reviewer: modelConfig, requirements_reviewer: modelConfig }, maxParallel: 2, maxTasks: 2, maxRevisions: 1 };
+  const d = {
+    db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {}, validateProject: async () => true,
+    listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async (input: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]) => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "requirements_reviewer", goal: "Check requirements", sourceVersionIds: [] },
+        { role: "source_reviewer", goal: "Check sources", sourceVersionIds: [] },
+      ] } };
+      const output = await callMastraSupervisor({ ...input, modelConfig }, "test-key", {
+        model: new MastraLanguageModelV2Mock({ doStream: async options => {
+          const instructions = options.prompt.filter(message => message.role === "system").map(message => message.content).join("\n");
+          const corrected = instructions.includes('"code":"too_big","path":["summary"],"maximum":10000')
+            && instructions.includes("rewrite it concisely");
+          const summary = input.goal === "Check sources" ? "Sources inspected; coverage gaps remain explicit."
+            : corrected ? "Requirements identified; missing dimensions still require confirmation."
+            : "Overlong requirements. ".repeat(600);
+          const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations: [] });
+          return { stream: new ReadableStream({ start(controller) {
+            controller.enqueue({ type: "text-start", id: "output" });
+            controller.enqueue({ type: "text-delta", id: "output", delta: text });
+            controller.enqueue({ type: "text-end", id: "output" });
+            controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 } });
+            controller.close();
+          } }) };
+        } }),
+      });
+      return { status: "completed", output };
+    },
+  } as unknown as AppDeps;
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Prepare concept", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
+    expect(children).toHaveLength(2);
+    expect(children.every(child => child.status === "needs_review")).toBe(true);
+    const requirements = children.find(child => child.specialistRole === "requirements_reviewer")!;
+    expect(requirements.outputSummary).toBe("Requirements identified; missing dimensions still require confirmation.");
+    const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, requirements.id)).orderBy(agentRunAttempts.attemptNumber);
+    expect(attempts.map(attempt => attempt.status)).toEqual(["failed", "completed"]);
+    const [first, second] = attempts.map(attempt => attempt.settings as any);
+    expect(first.promptHash).not.toBe(second.promptHash);
+    expect(first.instructionsHash).not.toBe(second.instructionsHash);
+    expect(first.outputSchemaHash).toBe(second.outputSchemaHash);
+    expect(second.maxOutputTokens).toBe(32000);
+    const source = children.find(child => child.specialistRole === "source_reviewer")!;
+    expect(await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, source.id))).toHaveLength(1);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    expect(state!.phase).toBe("review");
+  } finally {
+    for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
 test("review document survives real Mastra while only the handoff streams", async () => {
   const versionId = crypto.randomUUID();
   const review = { summary: "The concept is ready for human review.", rationale: "Evidence checked", citations: [versionId], decision: "accept", revisions: [],

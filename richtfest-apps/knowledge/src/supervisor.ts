@@ -331,6 +331,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxRevisions: state.modelPolicy?.maxRevisions,
         },
       };
+      let outputValidationFeedback: ReturnType<typeof sanitizeProviderDiagnostics> | undefined;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         await assertActive();
         if (phase === "review") {
@@ -347,7 +348,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             provider: run.provider,
             runId,
             goal,
-            context: providerContext,
+            context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
             onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
           }));
@@ -372,6 +373,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
             && failureCategory !== "permission" && !cooldownExceedsBudget && attempt < maxAttempts;
           if (shouldRetry) {
+            if (failureCategory === "validation")
+              outputValidationFeedback = sanitizeProviderDiagnostics(metadata.diagnostics);
             const fallbackMs = providerFailureStatus === 429 ? 5000 * attempt : attempt === 1 ? 350 : 800;
             const delayMs = typeof metadata.retryAfterMs === "number" && Number.isFinite(metadata.retryAfterMs)
               ? Math.min(300000, Math.max(fallbackMs, metadata.retryAfterMs)) : fallbackMs;
@@ -381,7 +384,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 tx,
                 run,
                 "provider_call_retrying",
-                `${phase}; attempt ${attempt} of ${maxAttempts}; retrying after transient provider failure`,
+                `${phase}; attempt ${attempt} of ${maxAttempts}; retrying after ${failureCategory === "validation" ? "output validation failure" : "transient provider failure"}`,
                 attemptMetadata,
               );
             });
