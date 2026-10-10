@@ -6,6 +6,7 @@ import {
   jsonb,
   integer,
   primaryKey,
+  index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 export const conversations = pgTable("knowledge_conversations", {
@@ -101,6 +102,7 @@ export const agentRunUsage = pgTable("knowledge_agent_run_usage", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   runId: uuid("run_id").notNull(),
+  attemptId: uuid("attempt_id"),
   callIndex: integer("call_index").notNull(),
   provider: text("provider").notNull(),
   modelId: text("model_id"),
@@ -115,6 +117,24 @@ export const agentRunUsage = pgTable("knowledge_agent_run_usage", {
   completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({ runCall: uniqueIndex("knowledge_agent_run_usage_run_call").on(table.runId, table.callIndex) }));
+export const agentRunAttempts = pgTable("knowledge_agent_run_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  runId: uuid("run_id").notNull(),
+  operationId: uuid("operation_id").notNull(),
+  phase: text("phase").notNull(),
+  generation: integer("generation"),
+  attemptNumber: integer("attempt_number").notNull(),
+  provider: text("provider").notNull(),
+  status: text("status").notNull().default("running"),
+  settings: jsonb("settings"),
+  response: jsonb("response"),
+  usageStatus: text("usage_status").notNull().default("pending"),
+  failureCategory: text("failure_category"),
+  providerStatus: integer("provider_status"),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => ({ tenantRun: index("knowledge_agent_run_attempts_tenant_run").on(table.tenantId, table.runId) }));
 export const agentRunEvents = pgTable("knowledge_agent_run_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
@@ -134,6 +154,8 @@ export const agentRunApprovals = pgTable("knowledge_agent_run_approvals", {
   runId: uuid("run_id").notNull(),
   decision: text("decision").notNull(),
   note: text("note"),
+  evaluation: jsonb("evaluation"),
+  evaluatedOutput: jsonb("evaluated_output"),
   decidedBy: uuid("decided_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()

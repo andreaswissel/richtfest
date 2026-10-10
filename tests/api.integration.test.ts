@@ -67,6 +67,9 @@ describe("accepted API workflow (PostgreSQL)", () => {
                   },
                 };
           return Response.json({
+            id: "fixture-response",
+            model: "gpt-4.1-mini-2025-04-14",
+            usage: { input_tokens: 123, output_tokens: 37, output_tokens_details: { reasoning_tokens: 11 } },
             output: [
               {
                 type: "message",
@@ -746,6 +749,13 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect(proposed.run.status).toBe("needs_review");
         expect(proposed.artifacts).toHaveLength(1);
         expect(proposed.artifacts[0].status).toBe("draft");
+        expect(proposed.attempts).toHaveLength(1);
+        expect(proposed.attempts[0]).toMatchObject({ phase: "direct", attemptNumber: 1, status: "completed", usageStatus: "reported" });
+        expect(proposed.attempts[0].settings).toMatchObject({ adapter: "direct", maxRetries: 0, timeoutMs: 60000 });
+        expect(proposed.attempts[0].settings.promptHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(proposed.attempts[0].response.modelId).toBe("gpt-4.1-mini-2025-04-14");
+        expect(proposed.usage.calls[0]).toMatchObject({ attemptId: proposed.attempts[0].id, inputTokens: 123, outputTokens: 37 });
+        expect([403, 404]).toContain((await request(`/api/knowledge/runs/${proposed.run.id}`, {}, outsiderCookie)).response.status);
         expect(JSON.stringify(providerRequests)).toContain("ISO-IFC-SOURCE");
         expect(JSON.stringify(providerRequests)).not.toContain("VERSION-TWO");
         providerMode = "discover";
@@ -790,6 +800,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
           "VERSION-TWO",
         );
         expect(discoveryResult.body.data.run.status).toBe("needs_review");
+        expect(discoveryResult.body.data.attempts.map((attempt: any) => attempt.phase)).toEqual(["direct", "tool_followup"]);
         const unread = await request(
           `/api/knowledge/workspaces/${projectId}`,
           {},
@@ -808,13 +819,38 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect((await completedRun("forbidden")).run.status).toBe("failed");
         const failed = await completedRun("failure");
         expect(failed.run.status).toBe("failed");
+        expect(failed.attempts).toHaveLength(1);
+        expect(failed.attempts[0]).toMatchObject({ status: "failed", usageStatus: "missing", providerStatus: 500 });
+        expect(failed.usage.calls).toHaveLength(0);
         expect(JSON.stringify(failed)).not.toContain("sk-do-not-store");
+        for (const evaluation of [{ correctness: 0 }, { correctness: 6 }, { usefulness: 1.5 }, {}, { rework: "unknown" }]) {
+          expect((await request(`/api/knowledge/runs/${proposed.run.id}/approve`, {
+            method: "POST", body: JSON.stringify({ decision: "approved", evaluation }),
+          }, cookie)).response.status).toBe(400);
+        }
+        expect([403, 404]).toContain((await request(`/api/knowledge/runs/${proposed.run.id}/approve`, {
+          method: "POST", body: JSON.stringify({ decision: "approved", evaluation: { correctness: 5 } }),
+        }, outsiderCookie)).response.status);
         const review = await request(
           `/api/knowledge/runs/${proposed.run.id}/approve`,
-          { method: "POST", body: JSON.stringify({ decision: "approved" }) },
+          { method: "POST", body: JSON.stringify({ decision: "approved", note: "Verified source", evaluation: { correctness: 5, completeness: 2, rework: "minor" } }) },
           cookie,
         );
         expect(review.body.data.run.status).toBe("approved");
+        const reviewed = (await request(`/api/knowledge/runs/${proposed.run.id}`, {}, cookie)).body.data;
+        expect(reviewed.approvals[0].evaluation).toEqual({ rubricVersion: 1, correctness: 5, completeness: 2, rework: "minor" });
+        expect(reviewed.approvals[0].evaluatedOutput.summary).toBe(proposed.run.outputSummary);
+        const originalRevision = (await pool.query("select id from knowledge_artifact_revisions where artifact_id=$1 and version=1", [proposed.artifacts[0].id])).rows[0].id;
+        expect(reviewed.approvals[0].evaluatedOutput.artifactRevisionIds).toEqual([originalRevision]);
+        const rejected = await request(`/api/knowledge/runs/${discoveryResult.body.data.run.id}/approve`, {
+          method: "POST", body: JSON.stringify({ decision: "rejected", note: "Needs a usable draft", evaluation: { usefulness: 1, rework: "major" } }),
+        }, cookie);
+        expect(rejected.body.data.approval).toMatchObject({ note: "Needs a usable draft", evaluation: { usefulness: 1, rework: "major", rubricVersion: 1 } });
+        const unscored = await completedRun("success");
+        const unscoredReview = await request(`/api/knowledge/runs/${unscored.run.id}/approve`, {
+          method: "POST", body: JSON.stringify({ decision: "approved" }),
+        }, cookie);
+        expect(unscoredReview.body.data.approval.evaluation).toBeNull();
         const audit = (
           await pool.query(
             "select actor_type, metadata from os_audit_events where run_id=$1",

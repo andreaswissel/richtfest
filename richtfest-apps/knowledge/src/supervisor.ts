@@ -13,7 +13,7 @@ import {
 } from "./schema";
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact } from "./workspace";
-import { recordProviderUsage } from "./usage";
+import { executeTrackedProvider } from "./usage";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -325,9 +325,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           lastCheckpoint = 0;
           await onSummaryDelta("");
         }
-        const providerStartedAt = new Date();
         try {
-          const response = await d.executeSupervisor!({
+          const response = await executeTrackedProvider(d, { ...run, id: runId }, {
+            phase, operationId: callId, attemptNumber: attempt, generation: state.generation,
+          }, telemetry => d.executeSupervisor!({
+            ...telemetry,
             phase,
             provider: run.provider,
             runId,
@@ -335,8 +337,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             context: providerContext,
             modelPolicy: state.modelPolicy,
             onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
-            onUsage: (usage) => recordProviderUsage(d, { ...run, id: runId }, usage, providerStartedAt).then(() => undefined),
-          });
+          }));
           if (response.status !== "completed") throw conflict("Provider unavailable");
           const completed = await commit(d, run, token, async (tx) => {
             await log(d, tx, run, "provider_call_completed", phase, callId);

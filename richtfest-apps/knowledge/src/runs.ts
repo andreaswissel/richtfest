@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { agentPresetSnapshotSchema, ok } from "@richtfest/shared";
+import { agentPresetSnapshotSchema, agentRunEvaluationSchema, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import {
   supervisorRuns,
@@ -14,6 +14,7 @@ import {
   tasks,
   annotations,
   agentRunUsage,
+  agentRunAttempts,
 } from "./schema";
 import {
   conversation,
@@ -24,7 +25,7 @@ import {
 } from "./workspace";
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
-import { recordProviderUsage, summarizeUsageRows } from "./usage";
+import { executeTrackedProvider, summarizeUsageRows } from "./usage";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -326,10 +327,10 @@ export async function executeRun(d: AppDeps, run: any) {
         );
       });
     };
-    const providerStartedAt = new Date();
     failurePhase = "provider";
     failureCategory = "provider";
-    let response = await d.executeProvider({
+    let response = await executeTrackedProvider(d, run, { phase: "direct" }, telemetry => d.executeProvider({
+      ...telemetry,
       runId: run.id,
       onSummaryDelta,
       provider: run.provider,
@@ -338,8 +339,7 @@ export async function executeRun(d: AppDeps, run: any) {
       maxOutputTokens: executionModel?.maxOutputTokens,
       goal: run.goal,
       context,
-      onUsage: (usage) => recordProviderUsage(d, run, usage, providerStartedAt).then(() => undefined),
-    });
+    }));
     failurePhase = "execution";
     failureCategory = "execution";
     if (response.status === "unconfigured") {
@@ -526,10 +526,10 @@ export async function executeRun(d: AppDeps, run: any) {
     }
     if (results.length) {
       partialOutput = "";
-      const followupStartedAt = new Date();
       failurePhase = "provider";
       failureCategory = "provider";
-      response = await d.executeProvider({
+      response = await executeTrackedProvider(d, run, { phase: "tool_followup" }, telemetry => d.executeProvider({
+        ...telemetry,
         runId: run.id,
         onSummaryDelta,
         provider: run.provider,
@@ -539,8 +539,7 @@ export async function executeRun(d: AppDeps, run: any) {
         goal: run.goal,
         context,
         toolResults: results,
-        onUsage: (usage) => recordProviderUsage(d, run, usage, followupStartedAt).then(() => undefined),
-      });
+      }));
       failurePhase = "execution";
       failureCategory = "execution";
       if (response.status !== "completed")
@@ -922,6 +921,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     const callRows = usageRows.map((row: any) => ({
       id: row.id,
       runId: row.runId,
+      attemptId: row.attemptId,
       callIndex: row.callIndex,
       provider: row.provider,
       modelId: row.modelId,
@@ -937,10 +937,15 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     }));
     const ownUsage = summarizeUsageRows(usageRows.filter((row: any) => row.runId === run.id));
     const aggregateUsage = summarizeUsageRows(usageRows);
+    const attempts = await d.db.select().from(agentRunAttempts).where(and(
+      eq(agentRunAttempts.tenantId, d.tenantId),
+      inArray(agentRunAttempts.runId, [run.id, ...children.map((child: any) => child.id)]),
+    )).orderBy(agentRunAttempts.startedAt);
     return {
       run,
       events,
       approvals,
+      attempts,
       artifacts: output,
       orchestration: orchestration
         ? { ...orchestration, leaseToken: undefined }
@@ -1204,6 +1209,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       .object({
         decision: z.enum(["approved", "rejected"]),
         note: z.string().max(2000).optional(),
+        evaluation: agentRunEvaluationSchema.optional(),
       })
       .parse(req.body);
     return d.db.transaction(async (tx: any) => {
@@ -1213,12 +1219,26 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         throw conflict(
           "Only a completed run with persisted output can be reviewed",
         );
+      // Evaluate the generated output, not later human edits to its artifacts.
+      const [supervisor] = input.evaluation ? await tx.select({ review: supervisorRuns.review })
+        .from(supervisorRuns).where(and(eq(supervisorRuns.runId, run.id), eq(supervisorRuns.tenantId, d.tenantId))) : [];
+      const finalRevision = z.object({ result: z.object({ revisionId: z.string().uuid() }) }).safeParse(supervisor?.review);
+      const revisions = input.evaluation ? await tx.select({ id: artifactRevisions.id })
+        .from(artifactRevisions).innerJoin(artifacts, eq(artifactRevisions.artifactId, artifacts.id))
+        .where(and(eq(artifacts.runId, run.id), eq(artifacts.tenantId, d.tenantId),
+          eq(artifactRevisions.tenantId, d.tenantId),
+          finalRevision.success ? eq(artifactRevisions.id, finalRevision.data.result.revisionId) : eq(artifactRevisions.version, 1))) : [];
       const [approval] = await tx
         .insert(agentRunApprovals)
         .values({
           tenantId: d.tenantId,
           runId: run.id,
           ...input,
+          evaluation: input.evaluation ? { ...input.evaluation, rubricVersion: 1 } : null,
+          evaluatedOutput: input.evaluation ? {
+            summary: run.outputSummary, rationale: run.rationale,
+            artifactRevisionIds: revisions.map((revision: any) => revision.id),
+          } : null,
           decidedBy: d.actorId,
         })
         .returning();
@@ -1239,6 +1259,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         {
           decision: input.decision,
           approvalId: approval.id,
+          evaluation: approval.evaluation,
           runId: run.id,
           correlationId: run.correlationId,
         },

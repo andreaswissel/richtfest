@@ -12,8 +12,8 @@ import { list, type RecordData } from "../../api";
 import { useApi, useWrite } from "../../query";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Badge, Callout, Field, Form, Modal } from "../ui/primitives";
+import { Badge, Callout } from "../ui/primitives";
+import { AgentRunReview, AgentRunReviews } from "../agent-run-review";
 import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { ChatMarkdown } from "../chat-markdown";
@@ -84,11 +84,9 @@ const genericLegacyRunReasons = new Set([
   "Supervisor stopped: provider, permission, or output validation failed. No output was approved.",
 ]);
 
-function formatPersistedRunReason(
-  reason: string,
-  t: ReturnType<typeof useT>,
-) {
-  if (genericLegacyRunReasons.has(reason)) return t("workspaceRunNoSpecificReason");
+function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
+  if (genericLegacyRunReasons.has(reason))
+    return t("workspaceRunNoSpecificReason");
   const match = /^phase=([^;]+);\s*category=([^;]+);\s*(.*)$/s.exec(reason);
   if (!match) return reason;
   const phaseKey = runReasonPhases[match[1] as keyof typeof runReasonPhases];
@@ -102,7 +100,9 @@ function formatPersistedRunReason(
     ? "workspaceRunChildCauseSupervisorFailed"
     : cause.startsWith("The supervisor was cancelled during")
       ? "workspaceRunChildCauseSupervisorCancelled"
-      : cause.startsWith("The supervisor was steered with new instructions during")
+      : cause.startsWith(
+            "The supervisor was steered with new instructions during",
+          )
         ? "workspaceRunChildCauseSupervisorSteered"
         : undefined;
   if (childCauseKey)
@@ -133,9 +133,11 @@ function formatPersistedRunReason(
 function terminalRunReason(run: RecordData, t: ReturnType<typeof useT>) {
   if (run.status !== "failed" && run.status !== "cancelled") return undefined;
   const persistedReason = [run.error, run.failureReason].find(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
   );
-  if (persistedReason) return formatPersistedRunReason(persistedReason.trim(), t);
+  if (persistedReason)
+    return formatPersistedRunReason(persistedReason.trim(), t);
   return run.status === "failed"
     ? t("workspaceRunFailedNoReason")
     : t("workspaceRunCancelledNoReason");
@@ -348,6 +350,8 @@ function activeProviderCalls(events: RecordData[]) {
 }
 
 const phaseTranslationKeys = {
+  direct: "workspaceRunPhaseProvider",
+  tool_followup: "workspaceRunPhaseToolExecution",
   plan: "agentRunPhasePlan",
   specialist: "agentRunPhaseSpecialists",
   specialists: "agentRunPhaseSpecialists",
@@ -393,10 +397,7 @@ function RunDiagnosis({
   }, [activeCallStartedAt, queuedAt]);
 
   const waitingForWorker = status === "queued" && events.length === 0;
-  const phaseLabel = supervisorPhaseLabel(
-    oldestActiveCall?.phase ?? phase,
-    t,
-  );
+  const phaseLabel = supervisorPhaseLabel(oldestActiveCall?.phase ?? phase, t);
   const queueWait = queuedAt === undefined ? undefined : now - queuedAt;
   const callElapsed =
     activeCallStartedAt === undefined ? undefined : now - activeCallStartedAt;
@@ -468,9 +469,6 @@ export function SubagentThread({
   const [review, setReview] = useState(false);
   const [liveEvents, setLiveEvents] = useState<RecordData[]>([]);
   const [streamStatus, setStreamStatus] = useState<string | undefined>();
-  const approve = useWrite(`/knowledge/runs/${runId}/approve`, () =>
-    setReview(false),
-  );
   const cancel = useWrite(`/knowledge/runs/${runId}/cancel`);
   const run = query.data?.run
     ? {
@@ -619,6 +617,84 @@ export function SubagentThread({
         <MessageScroller className="agent-thread-scroll">
           <MessageScrollerViewport>
             <MessageScrollerContent className="p-page gap-stack">
+              {list(query.data?.approvals).length > 0 && (
+                <MessageScrollerItem messageId={`${runId}-reviews`}>
+                  <AgentRunReviews approvals={list(query.data?.approvals)} />
+                </MessageScrollerItem>
+              )}
+              {list(query.data?.attempts).length > 0 && (
+                <MessageScrollerItem messageId={`${runId}-attempts`}>
+                  <details className="agent-thread-details">
+                    <summary>
+                      {t("runExecutionAttempts")} ·{" "}
+                      {list(query.data?.attempts).length}
+                    </summary>
+                    <div className="grid gap-stack text-ui-xs">
+                      {list(query.data?.attempts).map((attempt) => (
+                        <section key={attempt.id} className="grid gap-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>
+                              {supervisorPhaseLabel(attempt.phase, t)} ·{" "}
+                              {t("runExecutionAttempt")} {attempt.attemptNumber}
+                            </span>
+                            <Badge>
+                              {t(
+                                `runAttemptStatus_${attempt.status}` as Parameters<
+                                  typeof t
+                                >[0],
+                              ) || attempt.status}
+                            </Badge>
+                          </div>
+                          <p>
+                            {t("runExecutionModel")}:{" "}
+                            {attempt.response?.modelId ||
+                              attempt.settings?.modelId ||
+                              t("runExecutionUnknown")}{" "}
+                            · {t("runExecutionEffort")}:{" "}
+                            {attempt.settings
+                              ? attempt.settings.reasoningEffort ||
+                                t("runExecutionProviderDefault")
+                              : t("runExecutionUnknown")}
+                          </p>
+                          {attempt.runId !== runId && (
+                            <p className="text-muted-foreground">
+                              {t("runExecutionChild")}:{" "}
+                              {agentName(
+                                childRuns.find(
+                                  (child) => child.id === attempt.runId,
+                                ) || { id: attempt.runId },
+                                t,
+                              )}{" "}
+                              · {attempt.runId}
+                            </p>
+                          )}
+                          {attempt.usageStatus !== "reported" && (
+                            <p className="text-muted-foreground">
+                              {t(
+                                attempt.usageStatus === "pending"
+                                  ? "runExecutionUsagePending"
+                                  : "runExecutionUsageMissing",
+                              )}
+                            </p>
+                          )}
+                          {attempt.failureCategory && (
+                            <p>
+                              {t("workspaceRunReason")}:{" "}
+                              {t(
+                                attempt.failureCategory === "timeout"
+                                  ? "runExecutionTimeout"
+                                  : (runReasonCategories[
+                                      attempt.failureCategory as keyof typeof runReasonCategories
+                                    ] ?? "runExecutionUnknown"),
+                              )}
+                            </p>
+                          )}
+                        </section>
+                      ))}
+                    </div>
+                  </details>
+                </MessageScrollerItem>
+              )}
               <MessageScrollerItem
                 messageId={`${runId}-assignment`}
                 scrollAnchor
@@ -792,30 +868,11 @@ export function SubagentThread({
         {cancel.error && <Callout tone="error">{cancel.error.message}</Callout>}
       </footer>
       {review && !managed && (
-        <Modal title={t("reviewRun")} onClose={() => setReview(false)}>
-          <Form
-            label={t("approveRun")}
-            pending={approve.isPending}
-            error={approve.error}
-            onSubmit={(form) =>
-              approve.mutate({ decision: "approved", note: form.get("note") })
-            }
-          >
-            <Callout>{t("approvalBoundary")}</Callout>
-            <p>{run.outputSummary}</p>
-            <Field label={t("reviewNoteLabel")}>
-              <Input name="note" />
-            </Field>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={approve.isPending}
-              onClick={() => approve.mutate({ decision: "rejected" })}
-            >
-              {t("rejectRun")}
-            </Button>
-          </Form>
-        </Modal>
+        <AgentRunReview
+          key={runId}
+          run={run}
+          onClose={() => setReview(false)}
+        />
       )}
     </section>
   );

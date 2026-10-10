@@ -1,12 +1,16 @@
 import { Agent } from "@mastra/core/agent";
+import { resolveModelConfig } from "@mastra/core/llm";
 import type { MastraModelConfig, OpenAICompatibleConfig } from "@mastra/core/llm";
 import { noopLogger } from "@mastra/core/logger";
+import { toStandardSchema, standardSchemaToJSONSchema } from "@mastra/core/schema";
 import { z } from "zod";
 import type { AgentModelConfig, AgentPresetSnapshot } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
-import type { ProviderUsage } from "@richtfest/knowledge/deps";
+import type { ProviderUsage, ProviderTelemetry, ProviderResponseMetadata } from "@richtfest/knowledge/deps";
 import { estimateCostUsd } from "../model-pricing";
+import { appRevision, metadataHash } from "../provider-metadata";
+import { dependencies } from "../../package.json";
 
 export type SupervisorPhase = "plan" | "specialist" | "review" | "independent_review";
 export type SupervisorRequest = {
@@ -19,6 +23,8 @@ export type SupervisorRequest = {
   modelPolicy?: AgentPresetSnapshot;
   onSummaryDelta?: (delta: string) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
+  onRequest?: ProviderTelemetry["onRequest"];
+  onResponse?: ProviderTelemetry["onResponse"];
 };
 const evidence = {
   summary: z.string().min(1).max(10000),
@@ -168,11 +174,35 @@ export async function callMastraSupervisor(
       ? ({ providerId: "openai", modelId: modelConfig.modelId, url: env.VERCEL_GATEWAY_URL, apiKey, api: "responses" } satisfies OpenAICompatibleConfig)
       : { providerId: input.provider, modelId: modelConfig.modelId, apiKey }
     : undefined);
+  const resolvedModel = await resolveModelConfig(model!);
+  const responseMetadata: ProviderResponseMetadata = { modelId: null, responseId: null, finishReason: null };
+  // Mastra's step.response substitutes configured/generated model and response IDs.
+  // Observe the V2 model boundary (used by our configured providers) before that
+  // substitution. Preserve the stream, including cancellation and error chunks.
+  if (resolvedModel.specificationVersion === "v2") {
+    for (const method of ["doGenerate", "doStream"] as const) {
+      const original = resolvedModel[method].bind(resolvedModel);
+      resolvedModel[method] = async options => {
+        const result = await original(options);
+        result.stream = result.stream.pipeThrough(new TransformStream({
+          transform(chunk, controller) {
+            if (chunk.type === "response-metadata") {
+              responseMetadata.modelId = typeof chunk.modelId === "string" ? chunk.modelId : null;
+              responseMetadata.responseId = typeof chunk.id === "string" ? chunk.id : null;
+            }
+            if (chunk.type === "finish") responseMetadata.finishReason = chunk.finishReason;
+            controller.enqueue(chunk);
+          },
+        }));
+        return result;
+      };
+    }
+  }
   const agent = new Agent({
     id: `richtfest-${input.phase}`,
     name: `Richtfest ${input.phase}`,
     instructions: `${policy}\n${phaseInstructions[input.phase]}`,
-    model: model!,
+    model: resolvedModel,
   });
   agent.__setLogger(noopLogger);
   const abortSignal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000);
@@ -181,6 +211,14 @@ export async function callMastraSupervisor(
     .replace(/Bearer\s+[^\s"']+/gi, "Bearer [redacted]");
   let inferenceCompleted = false;
   let emitted = "";
+  let rawUsage: unknown;
+  let usageReported = false;
+  let failed = false;
+  const reportUsage = async () => {
+    if (!rawUsage || usageReported) return;
+    usageReported = true;
+    await input.onUsage?.(usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
+  };
   try {
     abortSignal.throwIfAborted();
     const reasoningEffort = modelConfig?.modelId ? reasoningEffortForModel(input.provider, modelConfig.modelId, modelConfig.reasoningEffort) : undefined;
@@ -190,10 +228,19 @@ export async function callMastraSupervisor(
       modelSettings: { maxOutputTokens: modelConfig?.maxOutputTokens ?? 5000, maxRetries: 0 },
       providerOptions: input.provider === "openai" || input.provider === "vercel" ? { openai: { store: false, ...(reasoningEffort ? { reasoningEffort } : {}) } } : undefined,
       abortSignal,
+      onStepFinish: async (step: { usage: unknown }) => {
+        rawUsage = step.usage;
+      },
     };
     const prompt = JSON.stringify({ goal: input.goal, context: input.context });
+    await input.onRequest?.({ version: 1, adapter: "mastra", adapterVersion: `1/@mastra/core@${dependencies["@mastra/core"]}`, appRevision: appRevision(),
+      modelId: modelConfig?.modelId ?? (typeof options.model === "object" && options.model && "modelId" in options.model ? String(options.model.modelId) : "unknown"),
+      requestedReasoningEffort: modelConfig?.reasoningEffort ?? null, reasoningEffort: reasoningEffort ?? null,
+      maxOutputTokens: executionOptions.modelSettings.maxOutputTokens, maxSteps: executionOptions.maxSteps, maxRetries: 0,
+      timeoutMs: 60000, stream: !!input.onSummaryDelta && input.phase !== "plan", store: input.provider === "anthropic" ? null : false,
+      instructionsHash: metadataHash(`${policy}\n${phaseInstructions[input.phase]}`), promptHash: metadataHash(prompt),
+      outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(supervisorSchemas[input.phase])))) });
     let object: unknown;
-    let rawUsage: unknown;
     if (input.onSummaryDelta && input.phase !== "plan") {
       const stream = await agent.stream<Record<string, unknown>>(prompt, executionOptions);
       for await (const partial of stream.objectStream) {
@@ -208,14 +255,14 @@ export async function callMastraSupervisor(
         }
       }
       rawUsage = await stream.usage;
-      if (rawUsage) await input.onUsage?.(usageFor(input, rawUsage, modelConfig?.modelId ?? null));
+      await reportUsage();
       abortSignal.throwIfAborted();
       if (stream.error) throw stream.error;
       object = await stream.object;
     } else {
       const result = await agent.generate<Record<string, unknown>>(prompt, executionOptions);
       rawUsage = await result.usage;
-      if (rawUsage) await input.onUsage?.(usageFor(input, rawUsage, modelConfig?.modelId ?? null));
+      await reportUsage();
       object = result.object;
     }
     inferenceCompleted = true;
@@ -227,15 +274,17 @@ export async function callMastraSupervisor(
       if (!output.summary.startsWith(emitted)) throw safeProviderError(true, undefined, "validation");
       if (output.summary.length > emitted.length) await input.onSummaryDelta(output.summary.slice(emitted.length));
     }
-    return attachUsage(output, usageFor(input, rawUsage, modelConfig?.modelId ?? null));
+    return attachUsage(output, usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
   } catch (error) {
+    failed = true;
+    await reportUsage().catch(() => undefined);
     // Provider and SDK exceptions can contain request bodies or auth headers.
     if (options.signal?.aborted) {
       const cancelled = new Error("Supervisor model execution failed. Execution was cancelled.") as Error & { code: string };
       cancelled.code = "cancelled";
       throw cancelled;
     }
-    if (abortSignal.aborted) throw safeProviderError(true);
+    if (abortSignal.aborted) throw Object.assign(safeProviderError(true), { code: "timeout", timedOut: true });
     const metadata = providerFailureMetadata(error);
     throw safeProviderError(
       inferenceCompleted ? metadata.category === "validation" : metadata.retryable,
@@ -243,5 +292,8 @@ export async function callMastraSupervisor(
       metadata.category,
       metadata.retryAfterMs,
     );
+  } finally {
+    if (failed) await input.onResponse?.(responseMetadata).catch(() => undefined);
+    else await input.onResponse?.(responseMetadata);
   }
 }

@@ -9,6 +9,7 @@ import type { Database } from "./db/client";
 import { withProviderCredential } from "./ai-connections";
 import { env } from "./env";
 import { estimateCostUsd } from "./model-pricing";
+import { appRevision, metadataHash } from "./provider-metadata";
 export type ProviderFetch = (
   url: string,
   init: RequestInit,
@@ -40,7 +41,7 @@ const controllers = new Map<string, AbortController>();
 const tokenCount = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
 function providerUsage(input: ProviderRequest, raw: any, modelId?: string | null): ProviderUsage {
-  const usage = raw?.usage ?? raw?.response?.usage ?? {};
+  const usage = raw?.usage ?? raw?.response?.usage ?? raw ?? {};
   const inputTokens = tokenCount(usage.input_tokens ?? usage.inputTokens);
   const outputTokens = tokenCount(usage.output_tokens ?? usage.outputTokens);
   const value: ProviderUsage = {
@@ -94,17 +95,30 @@ export async function callProvider(
   const isOpenAi = input.provider === "openai" || input.provider === "vercel";
   const isVercel = input.provider === "vercel";
   if (isVercel && !input.modelId?.trim()) throw new Error("Vercel Gateway model preset is unconfigured");
+  const modelId = input.modelId ?? (isOpenAi ? process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini" : process.env.ANTHROPIC_PROJECT_MODEL ?? "claude-sonnet-4-6");
+  const effectiveInstructions = (input.systemInstructions ?? instructions) +
+    "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" + openuiRegistryPrompt;
+  const effort = reasoningEffortForModel(input.provider, modelId, input.reasoningEffort);
   const controller = new AbortController();
   if (input.runId) controllers.set(input.runId, controller);
   let rawUsage: any;
-  let responseModel: string | null = input.modelId ?? null;
+  let responseModel: string | null = null;
+  let responseId: string | null = null;
+  let finishReason: string | null = null;
+  const reportResponse = () => input.onResponse?.({ modelId: responseModel, responseId, finishReason });
   let usageReported = false;
+  let failed = false;
   const reportUsage = async () => {
     if (usageReported || !rawUsage) return;
     usageReported = true;
-    await input.onUsage?.(providerUsage(input, rawUsage, responseModel));
+    await input.onUsage?.(providerUsage(input, rawUsage, responseModel ?? modelId));
   };
   try {
+    await input.onRequest?.({ version: 1, adapter: "direct", adapterVersion: "1", appRevision: appRevision(),
+      modelId, requestedReasoningEffort: input.reasoningEffort ?? null, reasoningEffort: effort ?? null,
+      maxOutputTokens: input.maxOutputTokens ?? 2500, maxSteps: 1, maxRetries: 0, timeoutMs: 60000,
+      stream: true, store: isOpenAi ? false : null, instructionsHash: metadataHash(effectiveInstructions),
+      promptHash: metadataHash(prompt), outputSchemaHash: null });
     const response = await fetcher(
       isOpenAi
         ? isVercel ? `${env.VERCEL_GATEWAY_URL.replace(/\/$/, "")}/responses` : "https://api.openai.com/v1/responses"
@@ -129,24 +143,20 @@ export async function callProvider(
           isOpenAi
             ? {
                 stream: true,
-                model: input.modelId ?? (isVercel ? "" : process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini"),
+                model: modelId,
                 store: false,
                 instructions:
-                  (input.systemInstructions ?? instructions) +
-                  "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" +
-                  openuiRegistryPrompt,
+                  effectiveInstructions,
                 input: prompt,
                 max_output_tokens: input.maxOutputTokens ?? 2500,
-                ...((input.provider === "openai" || isVercel) && input.modelId ? (() => { const effort = reasoningEffortForModel(input.provider, input.modelId, input.reasoningEffort); return effort ? { reasoning: { effort } } : {}; })() : {}),
+                ...(effort ? { reasoning: { effort } } : {}),
               }
             : {
                 stream: true,
-                model: input.modelId ?? process.env.ANTHROPIC_PROJECT_MODEL ?? "claude-sonnet-4-6",
+                model: modelId,
                 max_tokens: input.maxOutputTokens ?? 2500,
                 system:
-                  (input.systemInstructions ?? instructions) +
-                  "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" +
-                  openuiRegistryPrompt,
+                  effectiveInstructions,
                 messages: [{ role: "user", content: prompt }],
               },
         ),
@@ -154,7 +164,7 @@ export async function callProvider(
     );
     // Never copy upstream error bodies: they may echo headers, keys, or user content.
     if (!response.ok)
-      throw new Error(`Provider request failed (HTTP ${response.status})`);
+      throw Object.assign(new Error(`Provider request failed (HTTP ${response.status})`), { providerStatus: response.status, failureCategory: "provider", code: "provider_error" });
     let text = "";
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
       if (!response.body) throw new Error("Provider stream is missing");
@@ -170,14 +180,22 @@ export async function callProvider(
           const raw = line.slice(5).trim();
           if (raw === "[DONE]" || !raw) continue;
           const event = JSON.parse(raw);
+          if (isOpenAi && event.response) {
+            responseModel = event.response.model ?? responseModel;
+            responseId = event.response.id ?? responseId;
+            finishReason = event.response.incomplete_details?.reason ?? event.response.status ?? event.response.finish_reason ?? finishReason;
+          }
           if (isOpenAi && ["response.completed", "response.incomplete", "response.failed"].includes(event.type)) {
             rawUsage = event.response?.usage;
             responseModel = event.response?.model ?? responseModel;
           } else if (!isOpenAi && event.type === "message_start") {
             rawUsage = event.message?.usage ?? rawUsage;
             responseModel = event.message?.model ?? responseModel;
+            responseId = event.message?.id ?? responseId;
+            finishReason = event.message?.stop_reason ?? finishReason;
           } else if (!isOpenAi && event.type === "message_delta") {
             rawUsage = { ...(rawUsage ?? {}), ...(event.usage ?? {}) };
+            finishReason = event.delta?.stop_reason ?? finishReason;
           }
           if (event.type === "error" || event.type === "response.failed")
             throw new Error("Provider stream failed");
@@ -213,6 +231,8 @@ export async function callProvider(
       const data: any = await response.json();
       rawUsage = data.usage;
       responseModel = data.model ?? responseModel;
+      responseId = data.id ?? null;
+      finishReason = data.stop_reason ?? data.incomplete_details?.reason ?? data.status ?? data.finish_reason ?? null;
       text = isOpenAi
         ? (data.output ?? [])
             .filter((item: any) => item.type === "message")
@@ -240,16 +260,19 @@ export async function callProvider(
         openuiReferences: output.openui
           ? validateOpenUI(output.openui)
           : undefined,
-      }, providerUsage(input, rawUsage, responseModel));
+      }, providerUsage(input, rawUsage, responseModel ?? modelId));
     } catch {
-      throw new Error("Provider returned invalid structured output");
+      throw Object.assign(new Error("Provider returned invalid structured output"), { code: "invalid_provider_output", failureCategory: "validation" });
     }
   } catch (error) {
+    failed = true;
     await reportUsage().catch(() => undefined);
     throw error;
   } finally {
     if (input.runId && controllers.get(input.runId) === controller)
       controllers.delete(input.runId);
+    if (failed) await reportResponse()?.catch(() => undefined);
+    else await reportResponse();
   }
 }
 export async function executeProvider(
@@ -271,9 +294,12 @@ export async function executeProvider(
     return output === null
       ? { status: "unconfigured" }
       : { status: "completed", output, usage };
-  } catch {
-    throw new Error(
+  } catch (error) {
+    const value = error as { code?: string; name?: string; providerStatus?: number; failureCategory?: string };
+    throw Object.assign(new Error(
       "Provider execution failed. Check the selected connection and retry.",
-    );
+    ), { providerFailure: true, providerStatus: value.providerStatus,
+      code: value.name === "AbortError" ? "cancelled" : value.name === "TimeoutError" ? "timeout" : value.code === "invalid_provider_output" ? value.code : "provider_error",
+      failureCategory: value.failureCategory === "validation" ? "validation" : "provider" });
   }
 }

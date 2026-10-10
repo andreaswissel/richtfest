@@ -7,7 +7,8 @@ import { useT } from "../i18n";
 import { AgentEffortControl } from "./agent-effort-control";
 import { AgentRunMetrics, isAgentRunActive } from "./agent-run-metrics";
 import { Section } from "./layout";
-import { Input, Textarea } from "./ui/input";
+import { Textarea } from "./ui/input";
+import { AgentRunReview } from "./agent-run-review";
 import { NativeSelect } from "./ui/native-select";
 import { Button } from "./ui/button";
 import { Badge, Callout, Empty, Field, Form, Modal } from "./ui/primitives";
@@ -183,7 +184,9 @@ function RunSections({
               key={run.id}
               run={run}
               projectId={projectId}
-              childrenRuns={runs.filter((child) => child.parentRunId === run.id)}
+              childrenRuns={runs.filter(
+                (child) => child.parentRunId === run.id,
+              )}
             />
           ))}
         </div>
@@ -234,7 +237,9 @@ function RunGroup({
     (child) => child.status !== "cancelled",
   );
   const activeChildren = currentChildren.filter(isAgentRunActive);
-  const doneChildren = currentChildren.filter((child) => !isAgentRunActive(child));
+  const doneChildren = currentChildren.filter(
+    (child) => !isAgentRunActive(child),
+  );
   const previousChildren = childrenRuns.filter(
     (child) => child.status === "cancelled",
   );
@@ -259,7 +264,10 @@ function RunGroup({
           <h4>{title}</h4>
           <span>{children.length}</span>
         </header>
-        <div className="agent-run-children" aria-label={t("supervisorSpecialists")}>
+        <div
+          className="agent-run-children"
+          aria-label={t("supervisorSpecialists")}
+        >
           {children.map(childLink)}
         </div>
       </section>
@@ -312,9 +320,6 @@ function RunDetails({
 }) {
   const t = useT();
   const [review, setReview] = useState(false);
-  const approve = useWrite(`/knowledge/runs/${run.id}/approve`, () =>
-    setReview(false),
-  );
   const cancel = useWrite(`/knowledge/runs/${run.id}/cancel`);
   const retry = useWrite(`/knowledge/runs/${run.id}/retry`);
   return (
@@ -391,30 +396,7 @@ function RunDetails({
       {retry.error && <Callout tone="error">{retry.error.message}</Callout>}
       {cancel.error && <Callout tone="error">{cancel.error.message}</Callout>}
       {review && !run.parentRunId && (
-        <Modal title={t("reviewRun")} onClose={() => setReview(false)}>
-          <Form
-            label={t("approveRun")}
-            pending={approve.isPending}
-            error={approve.error}
-            onSubmit={(form) =>
-              approve.mutate({ decision: "approved", note: form.get("note") })
-            }
-          >
-            <Callout>{t("approvalBoundary")}</Callout>
-            <p>{run.outputSummary}</p>
-            <Field label={t("reviewNoteLabel")}>
-              <Input name="note" />
-            </Field>
-            <Button
-              type="button"
-              variant="link"
-              disabled={approve.isPending}
-              onClick={() => approve.mutate({ decision: "rejected" })}
-            >
-              {t("rejectRun")}
-            </Button>
-          </Form>
-        </Modal>
+        <AgentRunReview run={run} onClose={() => setReview(false)} />
       )}
     </div>
   );

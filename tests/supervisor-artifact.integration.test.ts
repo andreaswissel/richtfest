@@ -13,6 +13,8 @@ import {
   artifacts,
   artifactRevisions,
   agentRunEvents,
+  agentRunAttempts,
+  agentRunUsage,
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 integration(
@@ -35,6 +37,7 @@ integration(
       maxTasks: 4,
       maxRevisions: 2,
     };
+    let providerCalls = 0;
     const d: any = {
       db,
       tenantId,
@@ -43,7 +46,13 @@ integration(
       validateProject: async () => true,
       validateSourceVersion: async () => true,
       auditRun: async () => {},
-      executeSupervisor: async () => ({
+      executeSupervisor: async (input: any) => {
+        providerCalls++;
+        await input.onUsage?.({ provider: "openai", modelId: "test-model", inputTokens: 17, outputTokens: 3, totalTokens: 20, reasoningTokens: null, cachedInputTokens: null });
+        if (providerCalls === 1) throw Object.assign(new Error("sk-do-not-persist"), {
+          providerFailure: true, retryable: true, failureCategory: "validation",
+        });
+        return {
         status: "completed",
         output: {
           decision: "accept",
@@ -52,7 +61,8 @@ integration(
           citations: [sourceId],
           revisions: [],
         },
-      }),
+        };
+      },
     };
     try {
       const [thread] = await db
@@ -92,6 +102,17 @@ integration(
         .where(eq(supervisorRuns.runId, run!.id));
       await stepSupervisor(d, run!.id);
       await stepSupervisor(d, run!.id);
+      const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, run!.id)).orderBy(agentRunAttempts.startedAt);
+      expect(attempts.map(attempt => [attempt.status, attempt.attemptNumber, attempt.usageStatus])).toEqual([
+        ["failed", 1, "reported"], ["completed", 2, "reported"],
+      ]);
+      expect(attempts[0]!.operationId).toBe(attempts[1]!.operationId);
+      expect(attempts[0]!.generation).toBe(0);
+      expect(attempts[0]!.failureCategory).toBe("validation");
+      expect(JSON.stringify(attempts)).not.toContain("sk-do-not-persist");
+      const usage = await db.select().from(agentRunUsage).where(eq(agentRunUsage.runId, run!.id));
+      expect(usage).toHaveLength(2);
+      expect(usage.map(row => row.attemptId).sort()).toEqual(attempts.map(attempt => attempt.id).sort());
       const artifactRows = await db
         .select()
         .from(artifacts)
@@ -168,6 +189,8 @@ integration(
         .where(eq(supervisorRuns.runId, run!.id));
       expect((state!.review as any).result).toEqual(newest);
     } finally {
+      await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
+      await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
       await db
         .delete(artifactRevisions)
         .where(eq(artifactRevisions.tenantId, tenantId));

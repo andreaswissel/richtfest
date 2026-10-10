@@ -3,6 +3,16 @@ import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-ut
 import { callMastraSupervisor } from "./mastra-supervisor";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("Mastra telemetry reports filtered effort and no configured-model response fallback", async () => {
+  let settings: any;
+  let metadata: any;
+  await callMastraSupervisor({ ...base, phase: "specialist", modelConfig: { modelId: "o3", reasoningEffort: "xhigh", maxSteps: 1, maxOutputTokens: 900 },
+    onRequest: async value => { settings = value; }, onResponse: async value => { metadata = value; },
+  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { summary: "Done", rationale: "Evidence", citations: [] } }) });
+  expect(settings).toMatchObject({ requestedReasoningEffort: "xhigh", reasoningEffort: null, maxOutputTokens: 900, maxRetries: 0, stream: false });
+  expect(settings.outputSchemaHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(metadata.modelId).toBeNull();
+});
 test("real Mastra agent validates scoped specialist output and redacts transient secrets", async () => {
   const key = "sk-test-secret";
   const output = await callMastraSupervisor({ ...base, phase: "specialist" }, key, {
@@ -26,8 +36,9 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
       const model = new MastraLanguageModelV2Mock({
         provider: "openai",
         modelId: "gpt-4.1",
-        doGenerate: async () => ({ content: [{ type: "text", text }], finishReason, usage, warnings: [] }),
+        doGenerate: async () => ({ content: [{ type: "text", text }], finishReason, usage, warnings: [], response: { id: "provider-response", modelId: "gpt-4.1-mini-snapshot" } }),
         doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+          controller.enqueue({ type: "response-metadata", id: "provider-response", modelId: "gpt-4.1-mini-snapshot" });
           controller.enqueue({ type: "text-start", id: "output" });
           controller.enqueue({ type: "text-delta", id: "output", delta: text });
           controller.enqueue({ type: "text-end", id: "output" });
@@ -35,10 +46,17 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
           controller.close();
         } }) }),
       });
+      const reportedUsage: unknown[] = [];
+      let responseMetadata: any;
       const error = await callMastraSupervisor({
         ...base, phase: "specialist",
         onSummaryDelta: streaming ? async () => {} : undefined,
+        onUsage: async value => { reportedUsage.push(value); },
+        onResponse: async value => { responseMetadata = value; },
       }, secret, { model }).then(() => { throw new Error("Invalid output was accepted"); }, error => error);
+      expect(reportedUsage).toHaveLength(1);
+      expect(reportedUsage[0]).toMatchObject({ modelId: "gpt-4.1-mini-snapshot", inputTokens: 12, outputTokens: 50, totalTokens: 62 });
+      expect(responseMetadata).toEqual({ modelId: "gpt-4.1-mini-snapshot", responseId: "provider-response", finishReason });
       expect(error).toMatchObject({
         code: "invalid_provider_output", providerFailure: true, retryable: true, failureCategory: "validation",
       });

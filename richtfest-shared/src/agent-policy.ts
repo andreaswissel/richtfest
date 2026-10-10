@@ -34,3 +34,14 @@ export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
   source: z.enum(["vendor", "workspace"]),
 });
 export type AgentPresetSnapshot = z.infer<typeof agentPresetSnapshotSchema>;
+
+/** Optional human evaluation, independent of approval; omitted scores are unknown. */
+export const agentRunEvaluationSchema = z.object({
+  correctness: z.number().int().min(1).max(5).optional(),
+  completeness: z.number().int().min(1).max(5).optional(),
+  usefulness: z.number().int().min(1).max(5).optional(),
+  rework: z.enum(["none", "minor", "major", "unusable"]).optional(),
+}).strict().refine((value) => Object.values(value).some((score) => score !== undefined), {
+  message: "Choose at least one evaluation value",
+});
+export type AgentRunEvaluation = z.infer<typeof agentRunEvaluationSchema>;

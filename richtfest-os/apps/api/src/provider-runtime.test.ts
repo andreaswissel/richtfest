@@ -15,13 +15,38 @@ const output = {
     type: "draft" as const,
   },
 };
+test("direct telemetry hashes actual requests and preserves failure usage without invented response metadata", async () => {
+  let settings: any;
+  let metadata: any;
+  let usage: any;
+  await expect(callProvider({ provider: "openai", modelId: "o3", reasoningEffort: "xhigh", goal: "private goal", context: {},
+    onRequest: async value => { settings = value; }, onResponse: async value => { metadata = value; },
+    onUsage: async value => { usage = value; },
+  }, "secret", async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    expect(settings.reasoningEffort).toBeNull();
+    expect(settings.requestedReasoningEffort).toBe("xhigh");
+    expect(body.reasoning).toBeUndefined();
+    expect(settings.promptHash).toBe(new Bun.CryptoHasher("sha256").update(body.input).digest("hex"));
+    expect(settings.instructionsHash).toBe(new Bun.CryptoHasher("sha256").update(body.instructions).digest("hex"));
+    expect(settings.maxOutputTokens).toBe(2500);
+    return Response.json({ usage: { input_tokens: 10, output_tokens: 2 }, output: [{ type: "message", content: [{ type: "output_text", text: "invalid" }] }] });
+  })).rejects.toThrow("invalid structured output");
+  expect(metadata).toEqual({ modelId: null, responseId: null, finishReason: null });
+  expect(usage).toMatchObject({ modelId: "o3", inputTokens: 10, outputTokens: 2 });
+  expect(JSON.stringify(settings)).not.toContain("private goal");
+});
 describe("trusted provider adapter", () => {
   for (const provider of ["openai", "anthropic"] as const)
     test(`${provider} sends explicit provider request and reads only public text`, async () => {
       let observed: any;
+      let responseMetadata: any;
+      let reportedUsage: any;
       const result = await callProvider(
         {
           provider,
+          onResponse: async value => { responseMetadata = value; },
+          onUsage: async value => { reportedUsage = value; },
           modelId: provider === "openai" ? "o3-mini" : "custom-anthropic-model",
           maxOutputTokens: 777,
           reasoningEffort: provider === "openai" ? "high" : undefined,
@@ -34,6 +59,8 @@ describe("trusted provider adapter", () => {
           return Response.json(
             provider === "openai"
               ? {
+                  id: "response-123", model: "gpt-4.1-mini-snapshot", status: "completed",
+                  usage: { input_tokens: 19, output_tokens: 7 },
                   output: [
                     { type: "reasoning", summary: [{ text: "hidden" }] },
                     {
@@ -45,6 +72,8 @@ describe("trusted provider adapter", () => {
                   ],
                 }
               : {
+                  id: "response-123", model: "claude-sonnet-4-snapshot", stop_reason: "end_turn",
+                  usage: { input_tokens: 19, output_tokens: 7 },
                   content: [
                     { type: "thinking", thinking: "hidden" },
                     { type: "text", text: JSON.stringify(output) },
@@ -54,6 +83,8 @@ describe("trusted provider adapter", () => {
         },
       );
       expect(outputInput.parse(result)).toEqual(output);
+      expect(responseMetadata).toEqual({ modelId: provider === "openai" ? "gpt-4.1-mini-snapshot" : "claude-sonnet-4-snapshot", responseId: "response-123", finishReason: provider === "openai" ? "completed" : "end_turn" });
+      expect(reportedUsage).toMatchObject({ modelId: responseMetadata.modelId, inputTokens: 19, outputTokens: 7, totalTokens: 26 });
       expect(observed.url).toContain(
         provider === "openai" ? "api.openai.com" : "api.anthropic.com",
       );

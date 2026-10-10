@@ -15,6 +15,8 @@ export type AppDeps = {
     modelPolicy?: AgentPresetSnapshot;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
+    onRequest?: ProviderTelemetry["onRequest"];
+    onResponse?: ProviderTelemetry["onResponse"];
   }) => Promise<ProviderResult>;
   cancelExecution: (runId: string) => void;
   providerConfigured: (provider: AgentProvider) => Promise<boolean>;
@@ -71,6 +73,37 @@ export type ProviderRequest = {
   toolResults?: unknown[];
   runId?: string;
   onSummaryDelta?: (delta: string) => Promise<void>;
+  onUsage?: (usage: ProviderUsage) => Promise<void>;
+  onRequest?: ProviderTelemetry["onRequest"];
+  onResponse?: ProviderTelemetry["onResponse"];
+};
+/** Allowlisted metadata only: never headers, credentials, raw prompts or SDK errors. */
+export type ProviderExecutionSettings = {
+  version: 1;
+  adapter: "direct" | "mastra";
+  adapterVersion: string;
+  appRevision: string | null;
+  modelId: string;
+  requestedReasoningEffort: string | null;
+  reasoningEffort: string | null;
+  maxOutputTokens: number;
+  maxSteps: number;
+  maxRetries: number;
+  timeoutMs: number;
+  stream: boolean;
+  store: boolean | null;
+  instructionsHash: string;
+  promptHash: string;
+  outputSchemaHash: string | null;
+};
+export type ProviderResponseMetadata = {
+  modelId: string | null;
+  responseId: string | null;
+  finishReason: string | null;
+};
+export type ProviderTelemetry = {
+  onRequest?: (settings: ProviderExecutionSettings) => Promise<void>;
+  onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
 };
 export type ProviderUsage = {

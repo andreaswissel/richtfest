@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { AppDeps, ProviderUsage } from "./deps";
-import { agentRunUsage } from "./schema";
+import type { AppDeps, ProviderResult, ProviderTelemetry, ProviderUsage } from "./deps";
+import { agentRunAttempts, agentRuns, agentRunUsage } from "./schema";
 
 export function summarizeUsageRows(rows: any[]) {
   const sum = (key: string) => rows.length > 0 && rows.every((row) => row[key] !== null && row[key] !== undefined)
@@ -25,10 +25,14 @@ export async function recordProviderUsage(
   usage: ProviderUsage | undefined,
   startedAt: Date,
   completedAt = new Date(),
+  attemptId?: string,
 ) {
   if (!usage) return null;
   const estimatedCostMicros = usage.estimatedCostUsd == null ? null : Math.round(usage.estimatedCostUsd * 1_000_000);
   return d.db.transaction(async (tx: any) => {
+    // Serialize call indices when multiple review slices finish together.
+    await tx.select({ id: agentRuns.id }).from(agentRuns)
+      .where(and(eq(agentRuns.id, run.id), eq(agentRuns.tenantId, d.tenantId))).for("update");
     const prior = await tx
       .select({ id: agentRunUsage.id })
       .from(agentRunUsage)
@@ -36,6 +40,7 @@ export async function recordProviderUsage(
     const [row] = await tx.insert(agentRunUsage).values({
       tenantId: d.tenantId,
       runId: run.id,
+      attemptId,
       callIndex: prior.length,
       provider: usage.provider,
       modelId: usage.modelId,
@@ -51,6 +56,7 @@ export async function recordProviderUsage(
     }).returning();
     await d.auditRun(tx, "knowledge.agent_run.usage_recorded", "agent_run_usage", row.id, run.id, run.correlationId, {
       callIndex: row.callIndex,
+      attemptId,
       modelId: row.modelId,
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
@@ -62,6 +68,68 @@ export async function recordProviderUsage(
     });
     return row;
   });
+}
+
+/** One durable attempt per invocation, including failures without provider usage. */
+export async function executeTrackedProvider(
+  d: AppDeps,
+  run: { id: string; provider: string; correlationId: string },
+  invocation: { phase: string; operationId?: string; attemptNumber?: number; generation?: number },
+  execute: (telemetry: ProviderTelemetry) => Promise<ProviderResult>,
+): Promise<ProviderResult> {
+  const [attempt] = await d.db.transaction(async (tx: any) => {
+    const rows = await tx.insert(agentRunAttempts).values({
+      tenantId: d.tenantId, runId: run.id, provider: run.provider,
+      ...invocation,
+      operationId: invocation.operationId ?? crypto.randomUUID(),
+      attemptNumber: invocation.attemptNumber ?? 1,
+    }).returning();
+    await d.auditRun(tx, "knowledge.agent_run.attempt_started", "agent_run_attempt", rows[0].id, run.id, run.correlationId, {
+      phase: invocation.phase, attemptNumber: rows[0].attemptNumber,
+    });
+    return rows;
+  });
+  const where = and(eq(agentRunAttempts.id, attempt.id), eq(agentRunAttempts.tenantId, d.tenantId));
+  let usageRecorded = false;
+  let usageReported = false;
+  const onUsage: NonNullable<ProviderTelemetry["onUsage"]> = async (usage) => {
+    if (usageRecorded) return;
+    await recordProviderUsage(d, run, usage, attempt.startedAt, new Date(), attempt.id);
+    usageRecorded = true;
+    usageReported = [usage.inputTokens, usage.outputTokens, usage.totalTokens].some(value => value != null);
+    await d.db.update(agentRunAttempts).set({ usageStatus: usageReported ? "reported" : "missing" }).where(where);
+  };
+  const finish = (status: string, failureCategory: string | null = null, providerStatus: number | null = null) =>
+    d.db.transaction(async (tx: any) => {
+      await tx.update(agentRunAttempts).set({
+        status, failureCategory, providerStatus, completedAt: new Date(),
+        usageStatus: usageReported ? "reported" : "missing",
+      }).where(where);
+      await d.auditRun(tx, "knowledge.agent_run.attempt_finished", "agent_run_attempt", attempt.id, run.id, run.correlationId, {
+        status, failureCategory, providerStatus, usageStatus: usageReported ? "reported" : "missing",
+      });
+    });
+  try {
+    const result = await execute({
+      onRequest: async (settings) => { await d.db.update(agentRunAttempts).set({ settings }).where(where); },
+      onResponse: async (response) => { await d.db.update(agentRunAttempts).set({ response }).where(where); },
+      onUsage,
+    });
+    if (result.status === "completed" && result.usage && !usageRecorded) await onUsage(result.usage);
+    await finish(result.status);
+    return result;
+  } catch (error) {
+    // Never persist exception messages or objects, including nested SDK errors.
+    const metadata = error as { code?: unknown; failureCategory?: unknown; providerStatus?: unknown } | null;
+    const cancelled = metadata?.code === "cancelled";
+    const category = cancelled ? "cancellation" : metadata?.code === "timeout" ? "timeout" :
+      ["provider", "validation", "permission", "timeout"].includes(String(metadata?.failureCategory))
+        ? String(metadata?.failureCategory) : "execution";
+    const status = typeof metadata?.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
+      && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : null;
+    await finish(cancelled ? "cancelled" : "failed", category, status).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function attachUsageSummaries(d: AppDeps, runs: any[]) {
