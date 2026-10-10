@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the mobile app at 100% scale with page-zoom gestures disabled and touch scrolling preserved; fix sign-in content overflowing narrow screens.
+
 - Project agents read PDFs beyond page ten, with German/English OCR for scanned pages, original page references and explicit extraction limits. Failed provider attempts retain safe diagnostic details and reported token usage for troubleshooting.
 
 - Project agent runs record per-call settings, retries and reported usage, including failures without usage. Human reviews can optionally score the original generated outcome and rework needed, with notes retained for approval and rejection; scores do not approve artifacts or validate engineering results.

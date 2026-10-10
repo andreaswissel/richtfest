@@ -29,6 +29,12 @@ Dense and Normal modes share the same components. Use the documented density and
 
 Application UI strings belong in both English and German locale files. Reuse shared labels where their meaning is the same.
 
+## Mobile viewport
+
+The app requests a fixed 100% mobile viewport, including when focusing form fields. Its viewport metadata disables user scaling, and `touch-action: pan-x pan-y` disables page pinch/double-tap zoom while preserving horizontal and vertical scrolling. Keep desktop browser zoom shortcuts intact; do not add global gesture or keyboard event cancellation. The public landing page and documentation are separate documents and do not inherit this policy.
+
+This native-style interaction trades away page-zoom accessibility; browser and operating-system accessibility overrides may still allow magnification. Verify narrow layouts in both density modes rather than using zoom restrictions or hidden overflow to conceal content that does not fit.
+
 ## Agentic workspace components
 
 The project conversation uses shadcn's `MessageScroller`, `Message`, `Bubble`, `Attachment` and `Marker`. OpenUI renders the registered Richtfest components inside conversation turns and artifacts; it cannot generate arbitrary HTML, URLs or mutations. The registry snapshot is generated from the web library and checked against the server parser.

@@ -153,7 +153,9 @@
 @layer base {
   * { box-sizing: border-box;
     @apply border-border outline-ring/50; }
+  /* Keep touch scrolling, but not page pinch/double-tap zoom. */
   html { background: var(--background);
+    touch-action: pan-x pan-y;
     @apply font-sans; }
   body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); font-family: var(--font-sans); font-size: var(--ui-sm); font-synthesis: none; text-rendering: optimizeLegibility;
     @apply bg-background text-foreground; }
@@ -379,7 +381,7 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
   .conversation-layout { grid-template-columns: 1fr; }
   .conversation-list { border-right: 0; border-bottom: 1px solid var(--border); }
   .knowledge-bottom, .agent-action { align-items: flex-start; flex-direction: column; }
-  .login { grid-template-columns: 1fr; }
+  .login { grid-template-columns: minmax(0, 1fr); }
   .login-story { gap: 40px; padding: 24px; }
   .login-story h1 { font-size: 36px; }
   .blueprint, .login-story footer { display: none; }
