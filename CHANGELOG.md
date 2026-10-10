@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Removed the redundant outer circle around callout icons.
+
 - Added reusable orb setup with the pinned toolchain, cached dependencies, local test database, PDF/OCR tools and supervised development services.
 
 - Serve the public landing page on `richtfest.ai` while preserving existing domain aliases; use `app.richtfest.ai` for the app.

@@ -266,7 +266,7 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 .work-list a { display: flex; justify-content: space-between; padding: 15px 2px; border-bottom: 1px solid var(--border); }
 .callout { display: flex; gap: 11px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); font-size: var(--ui-xs); line-height: 1.5; }
 .callout p { margin-top: 6px; }
-.callout-mark { display: flex; width: 18px; height: 18px; flex-shrink: 0; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: 999px; color: var(--muted-foreground); font-size: var(--ui-2xs); font-weight: 600; }
+.callout-mark { display: flex; width: 18px; height: 18px; flex-shrink: 0; align-items: center; justify-content: center; color: var(--muted-foreground); font-size: var(--ui-2xs); font-weight: 600; }
 .callout.error { border-color: color-mix(in oklch, var(--destructive) 28%, var(--border)); background: color-mix(in oklch, var(--destructive) 8%, var(--background)); color: var(--destructive); }
 .callout.success { border-color: color-mix(in oklch, oklch(.7 .16 145) 30%, var(--border)); background: color-mix(in oklch, oklch(.7 .16 145) 8%, var(--background)); }
 .loading-line { padding: 20px 0; color: var(--muted-foreground); }
