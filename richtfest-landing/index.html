@@ -1,0 +1,1596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Richtfest</title>
+<meta name="description" content="AI-native construction planning. Our agent system pairs LLM reasoning with fast System 1 models to find cost savings in every plan.">
+<meta name="theme-color" content="#0a0b0b">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Richtfest">
+<meta property="og:title" content="Richtfest · A thousand minds on every plan.">
+<meta property="og:description" content="AI-native construction planning. Our agent system pairs LLM reasoning with fast System 1 models to find cost savings in every plan.">
+<meta property="og:image" content="/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Richtfest: A thousand minds on every plan.">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="de_DE">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Richtfest · A thousand minds on every plan.">
+<meta name="twitter:description" content="AI-native construction planning. Our agent system pairs LLM reasoning with fast System 1 models to find cost savings in every plan.">
+<meta name="twitter:image" content="/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@300;400;500;600&family=Funnel+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: TwelveLabs-style alternation of dark "night site" bands and pale washed daylight bands, huge-radius panels, thin vertical rules, pill controls. */
+:root {
+  --ink: #0a0b0b;
+  --ink-2: #151718;
+  --ink-3: #222527;
+  --paper: #f1f1ee;
+  --fg: #101211;
+  --muted: #5b5f5d;
+  --muted-d: #9ea3a0;
+  --line: rgba(16, 18, 17, .12);
+  --line-d: rgba(255, 255, 255, .14);
+  --amber: #f3cf4a;
+  --wash-a: #e3f4a6;
+  --wash-b: #f6d5e7;
+  --wash-c: #d3e5fa;
+  --white: #ffffff;
+  --display: "Funnel Display", "Helvetica Neue", Arial, sans-serif;
+  --body: "Funnel Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --r-xl: clamp(28px, 4vw, 64px);
+  --r-lg: 28px;
+  --wrap: 1280px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3 { font-family: var(--display); font-weight: 400; letter-spacing: -0.025em; line-height: 1.04; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.wrap { max-width: var(--wrap); margin: 0 auto; padding-inline: clamp(16px, 4vw, 48px); }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 999px; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 10px; height: 48px; padding: 0 22px; border-radius: 999px; font: 500 15px/1 var(--body); border: 1px solid transparent; cursor: pointer; transition: background .2s ease, border-color .2s ease, opacity .2s ease; white-space: nowrap; }
+.btn svg { width: 14px; height: 14px; transition: transform .2s ease; flex: none; }
+.btn:hover svg.arrow { transform: translate(2px, -2px); }
+.btn-solid { background: var(--white); color: var(--ink); }
+.btn-solid:hover { background: #e9e9e4; }
+.btn-ghost { color: var(--white); border-color: rgba(255,255,255,.55); background: transparent; }
+.btn-ghost:hover { border-color: var(--white); }
+.btn-dark { background: var(--ink); color: var(--white); }
+.btn-dark:hover { background: var(--ink-3); }
+.btn-line { color: var(--fg); border-color: rgba(16,18,17,.35); background: transparent; }
+.btn-line:hover { border-color: var(--fg); }
+.btn-sm { height: 40px; padding: 0 18px; font-size: 14px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+.tag { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid currentColor; font: 500 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+
+/* Nav */
+.nav { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; right: 0; z-index: 40; transition: background .3s ease; }
+.nav.scrolled { background: rgba(10,11,11,.74); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 72px; gap: 24px; color: var(--white); }
+.logo { display: inline-flex; align-items: center; gap: 10px; font: 500 21px/1 var(--display); letter-spacing: -0.02em; white-space: nowrap; }
+.logo svg { width: 30px; height: 30px; }
+.nav-links { display: flex; gap: 28px; font-size: 15px; color: rgba(255,255,255,.82); white-space: nowrap; }
+.nav-links a:hover { color: var(--white); }
+.nav-cta { display: flex; align-items: center; gap: 16px; font-size: 15px; white-space: nowrap; }
+.nav-cta .login:hover { color: var(--amber); }
+.lang { display: inline-flex; align-items: center; gap: 2px; color: rgba(255,255,255,.82); }
+.lang svg { width: 16px; height: 16px; margin-right: 4px; }
+.lang button { border: 0; background: none; color: inherit; font: 500 13px/1 var(--body); padding: 6px 6px; border-radius: 999px; cursor: pointer; opacity: .6; }
+.lang button[aria-pressed="true"] { opacity: 1; color: var(--white); }
+@media (max-width: 1120px) { .nav-links { display: none; } }
+@media (max-width: 720px) { .nav-cta .talk { display: none; } }
+@media (max-width: 460px) { .nav-cta .start { display: none; } }
+
+/* Hero */
+.hero { position: relative; background: var(--ink); color: var(--white); overflow: hidden; min-height: min(880px, 100svh); display: flex; align-items: center; }
+.hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,11,11,.8) 0%, rgba(10,11,11,.35) 40%, rgba(10,11,11,0) 62%), linear-gradient(0deg, rgba(10,11,11,.85) 0%, rgba(10,11,11,0) 26%); pointer-events: none; }
+.hero .wrap { position: relative; z-index: 2; width: 100%; padding-block: 140px 110px; }
+.hero h1 { font-size: clamp(42px, 5vw, 76px); max-width: 12ch; }
+.hero h1 em { font-style: normal; color: var(--amber); }
+.hero .lede { margin-top: 24px; max-width: 540px; font-size: clamp(16px, 1.25vw, 18px); color: rgba(255,255,255,.8); }
+.hero .ctas { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 12px; }
+.hero-meta { margin-top: 60px; display: flex; flex-wrap: wrap; gap: 10px 28px; font: 400 12px/1.4 var(--mono); color: var(--muted-d); letter-spacing: .04em; }
+.hero-meta b { color: var(--white); font-weight: 500; }
+.announce { position: absolute; right: clamp(16px, 4vw, 48px); bottom: 40px; z-index: 3; width: 320px; padding: 12px; border-radius: 22px; background: rgba(34,37,39,.72); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid var(--line-d); color: var(--white); transition: transform .25s ease; }
+.announce:hover { transform: translateY(-3px); }
+.announce .mini { height: 116px; border-radius: 14px; background: var(--ink-2); padding: 14px; display: flex; flex-direction: column; justify-content: space-between; }
+.announce .mini .q { font: 400 11px/1.4 var(--mono); color: var(--muted-d); }
+.announce .mini .bar { display: flex; align-items: center; gap: 8px; height: 30px; border-radius: 999px; background: var(--ink-3); padding: 0 6px 0 12px; font-size: 12px; color: rgba(255,255,255,.85); }
+.announce .mini .bar span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.announce .mini .bar i { width: 20px; height: 20px; border-radius: 50%; background: var(--amber); flex: none; }
+.announce .lab { display: inline-block; margin: 12px 4px 4px; font: 500 10px/1 var(--mono); letter-spacing: .1em; color: var(--amber); border: 1px solid var(--amber); border-radius: 4px; padding: 4px 6px; }
+.announce p { margin: 6px 4px 4px; font-size: 14px; line-height: 1.35; }
+@media (max-width: 1100px) { .announce { display: none; } }
+
+/* Section scaffolding */
+.band { position: relative; padding-block: clamp(80px, 11vw, 150px); }
+.band-dark { background: var(--ink); color: var(--white); }
+.band-wash { background:
+    radial-gradient(60% 50% at 0% 0%, var(--wash-a) 0%, transparent 70%),
+    radial-gradient(50% 60% at 100% 30%, var(--wash-b) 0%, transparent 70%),
+    radial-gradient(60% 50% at 40% 100%, var(--wash-c) 0%, transparent 70%),
+    var(--paper); }
+.split-head { display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px 64px; align-items: end; }
+.split-head > * { min-width: 0; }
+.split-head h2 { font-size: clamp(36px, 4.8vw, 68px); }
+.split-head p { max-width: 460px; font-size: 17px; color: var(--muted); padding-left: 24px; border-left: 1px solid var(--line); }
+.band-dark .split-head p { color: var(--muted-d); border-color: var(--line-d); }
+@media (max-width: 820px) { .split-head { grid-template-columns: 1fr; } }
+
+/* Optimize demo */
+.demo { margin-top: 56px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); gap: 20px; align-items: stretch; }
+@media (max-width: 1000px) { .demo { grid-template-columns: 1fr; } }
+.viewer { position: relative; border-radius: var(--r-xl); overflow: hidden; background: #dfe6ea; min-height: 620px; border: 1px solid rgba(255,255,255,.7); box-shadow: 0 40px 100px -50px rgba(16,18,17,.6); }
+@media (max-width: 600px) { .viewer { min-height: 440px; } }
+.viewer canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; cursor: grab; touch-action: pan-y; }
+.viewer canvas:active { cursor: grabbing; }
+.v-hud { position: absolute; left: 18px; top: 18px; right: 18px; display: flex; justify-content: space-between; gap: 12px; pointer-events: none; font: 400 11px/1.5 var(--mono); letter-spacing: .06em; color: var(--muted); text-transform: uppercase; z-index: 2; }
+.v-hud span { padding: 7px 11px; border-radius: 999px; background: rgba(255,255,255,.75); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.v-hud b { color: var(--fg); font-weight: 500; }
+.v-hint { position: absolute; left: 18px; bottom: 18px; z-index: 2; font: 400 11px/1 var(--mono); color: var(--muted); pointer-events: none; padding: 7px 11px; border-radius: 999px; background: rgba(255,255,255,.75); }
+.v-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font: 400 13px/1.5 var(--mono); text-align: center; padding: 24px; }
+.pin { position: absolute; left: 0; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; transition: opacity .4s ease; }
+.pin.on { opacity: 1; }
+.pin i { width: 28px; height: 28px; border-radius: 50%; background: var(--amber); color: var(--ink); display: grid; place-items: center; font: 600 13px/1 var(--display); font-style: normal; box-shadow: 0 0 0 6px rgba(243,207,74,.3); }
+.pin span { padding: 6px 10px; border-radius: 999px; background: rgba(10,11,11,.82); color: var(--white); font: 500 12px/1 var(--body); white-space: nowrap; }
+@media (max-width: 600px) { .pin span { display: none; } }
+.d-panel { border-radius: var(--r-xl); background: rgba(255,255,255,.78); border: 1px solid rgba(255,255,255,.9); padding: clamp(20px, 2.6vw, 30px); display: flex; flex-direction: column; gap: 20px; min-width: 0; box-shadow: 0 30px 80px -40px rgba(16,18,17,.25); }
+.d-panel .k { display: block; font: 400 11px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.d-panel h3 { margin-top: 6px; font-size: 26px; }
+.d-facts { margin: 14px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
+.d-facts div { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.d-facts dt { font: 400 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.d-facts dd { margin: 0; font: 500 15px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+.d-cost { padding: 18px 20px; border-radius: 22px; background: var(--ink); color: var(--white); display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.d-cost .k { color: var(--muted-d); width: 100%; }
+.d-cost .big { font: 300 clamp(30px, 3vw, 40px)/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.d-cost .delta { font: 500 14px/1 var(--mono); color: var(--amber); font-variant-numeric: tabular-nums; }
+.d-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 160px; max-height: 440px; overflow-y: auto; }
+.d-log li { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 18px; background: rgba(16,18,17,.045); font-size: 14px; line-height: 1.5; animation: rise .35s ease both; }
+.d-log li.found { background: var(--white); border: 1px solid var(--line); }
+.d-log .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.d-log .who { font: 400 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.d-log .num { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--amber); font: 600 11px/1 var(--display); flex: none; }
+.d-log .save { font: 500 13px/1 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.d-log .prog { height: 4px; border-radius: 4px; background: rgba(16,18,17,.08); overflow: hidden; }
+.d-log .prog i { display: block; height: 100%; width: 0; background: var(--fg); transition: width 1.4s ease; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.d-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.d-note { font: 400 11px/1.5 var(--mono); color: var(--muted); }
+
+/* Pipeline */
+.pipeline { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 48px; margin-top: 72px; align-items: stretch; }
+@media (max-width: 960px) { .pipeline { grid-template-columns: 1fr; } }
+.phases { display: flex; flex-direction: column; gap: 4px; border-left: 1px solid var(--line-d); padding-left: 24px; }
+.phase { text-align: left; background: none; border: 0; color: rgba(255,255,255,.62); font: 400 20px/1.2 var(--display); padding: 14px 18px; border-radius: 14px; cursor: pointer; display: flex; gap: 14px; align-items: baseline; transition: background .2s ease, color .2s ease; }
+.phase small { font: 400 12px/1 var(--mono); color: var(--muted-d); min-width: 40px; }
+.phase:hover { color: var(--white); }
+.phase[aria-selected="true"] { background: var(--ink-3); color: var(--white); }
+.phase-body { padding: 8px 18px 22px 72px; color: rgba(255,255,255,.75); font-size: 15px; display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
+.phase-body .de { font: 400 12px/1.4 var(--mono); color: var(--muted-d); }
+.engine { position: relative; border-radius: var(--r-xl); background: radial-gradient(80% 70% at 60% 40%, #1d2022 0%, var(--ink-2) 70%); border: 1px solid var(--line-d); overflow: hidden; min-height: 520px; display: flex; flex-direction: column; }
+.engine canvas { width: 100%; flex: 1; min-height: 340px; display: block; }
+.engine-stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); border-top: 1px solid var(--line-d); }
+.engine-stats > div { padding: 26px 22px 30px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; color: rgba(255,255,255,.85); font-size: 14px; line-height: 1.4; }
+.engine-stats > div + div { border-left: 1px solid var(--line-d); }
+.engine-stats .tag { color: var(--white); }
+@media (max-width: 560px) { .engine-stats { grid-template-columns: 1fr; } .engine-stats > div + div { border-left: 0; border-top: 1px solid var(--line-d); } }
+
+/* Placeholders */
+.ph { position: relative; overflow: hidden; background:
+    repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 1px, transparent 1px 14px),
+    linear-gradient(160deg, #2a2e30, #121415); color: rgba(255,255,255,.7); max-width: 100%; }
+.ph-label { position: absolute; left: 16px; top: 16px; font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 7px 10px; border-radius: 999px; background: rgba(0,0,0,.35); color: rgba(255,255,255,.85); }
+.r169 { aspect-ratio: 16 / 9; }
+
+/* Workflow card */
+.workflow { margin-top: 64px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(255,255,255,.6); border: 1px solid var(--line); }
+.seg button { height: 38px; padding: 0 18px; border-radius: 999px; border: 0; background: transparent; color: var(--muted); font: 500 14px/1 var(--body); cursor: pointer; transition: background .2s ease, color .2s ease; }
+.seg button[aria-selected="true"] { background: var(--ink); color: var(--white); }
+.seg button:hover:not([aria-selected="true"]) { color: var(--fg); }
+.wf-card { margin-top: 20px; background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.9); border-radius: var(--r-xl); padding: clamp(20px, 3vw, 40px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); gap: clamp(24px, 4vw, 56px); align-items: center; box-shadow: 0 30px 80px -40px rgba(16,18,17,.25); }
+@media (max-width: 900px) { .wf-card { grid-template-columns: 1fr; } }
+.wf-copy h3 { font-size: clamp(26px, 2.6vw, 36px); }
+.wf-copy p { margin-top: 16px; color: var(--muted); font-size: 16px; max-width: 46ch; }
+.wf-copy ul { margin: 22px 0 28px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.wf-copy li { display: flex; gap: 12px; align-items: baseline; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.wf-copy li span:first-child { font: 400 12px/1 var(--mono); color: var(--muted); min-width: 110px; }
+.wf-media { border-radius: var(--r-lg); }
+.chip { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 16px; background: rgba(10,11,11,.78); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: var(--white); font-size: 13px; border: 1px solid var(--line-d); }
+.chip .k { font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted-d); }
+.chip .v { font: 500 15px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+.chip .v b { color: var(--amber); font-weight: 500; }
+.chip.c1 { right: 16px; bottom: 16px; }
+.chip.c2 { right: 16px; top: 16px; }
+@media (max-width: 560px) { .chip.c2 { display: none; } }
+
+/* Numbers */
+.numbers { margin-top: clamp(80px, 10vw, 140px); text-align: center; }
+.numbers h2 { font-size: clamp(34px, 4.4vw, 60px); max-width: 17ch; margin: 0 auto; }
+.numbers > p { margin: 18px auto 0; max-width: 560px; color: var(--muted); }
+.num-row { margin-top: 56px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); text-align: left; }
+.num-row > div { padding: 8px 28px 0; display: flex; flex-direction: column; justify-content: space-between; gap: 48px; }
+.num-row > div + div { border-left: 1px solid var(--line); }
+.num-row .n { font: 300 clamp(52px, 6vw, 88px)/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.num-row .n i { font-style: normal; background: linear-gradient(90deg, #e7b93a, #e98ab8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.num-row .d { color: var(--fg); font-size: 16px; max-width: 28ch; }
+@media (max-width: 720px) { .num-row { grid-template-columns: 1fr; gap: 28px; } .num-row > div { gap: 14px; } .num-row > div + div { border-left: 0; border-top: 1px solid var(--line); padding-top: 28px; } }
+.footnote { margin-top: 28px; font: 400 11px/1.4 var(--mono); color: var(--muted); letter-spacing: .04em; }
+
+/* Audience carousel */
+.aud-tabs { margin-top: 48px; display: flex; justify-content: center; }
+.aud-tabs .seg { background: rgba(16,18,17,.04); }
+.carousel { margin-top: 28px; display: grid; grid-auto-flow: column; grid-auto-columns: min(84%, 1060px); gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; padding-inline: max(16px, calc((100vw - 1060px) / 2)); scrollbar-width: none; }
+.carousel::-webkit-scrollbar { display: none; }
+.aud-card { scroll-snap-align: center; position: relative; border-radius: var(--r-xl); overflow: hidden; min-height: 520px; color: var(--white); display: flex; align-items: flex-end; }
+.aud-card .ph { position: absolute; inset: 0; }
+.aud-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,11,11,.85) 0%, rgba(10,11,11,.2) 60%, transparent); }
+.aud-copy { position: relative; z-index: 2; padding: clamp(24px, 4vw, 48px); max-width: 480px; display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
+.aud-copy h3 { font-size: clamp(28px, 3vw, 40px); }
+.aud-copy p { color: rgba(255,255,255,.8); }
+.aud-card .ph-label { left: auto; right: 20px; top: 20px; }
+
+/* Review / trust */
+.trust { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 64px; align-items: center; }
+@media (max-width: 900px) { .trust { grid-template-columns: 1fr; } }
+.sheets { position: relative; height: 420px; max-width: 520px; width: 100%; margin: 0 auto; }
+.sheet { position: absolute; width: 62%; aspect-ratio: 1.414 / 1; border-radius: 20px; padding: 16px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 30px 60px -30px rgba(16,18,17,.4); border: 1px solid rgba(255,255,255,.8); transition: transform .4s cubic-bezier(.2,.8,.2,1); }
+.sheet canvas { width: 100%; flex: 1; min-height: 0; border-radius: 10px; display: block; }
+.sheet .st { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.sheet .st i { font-style: normal; color: var(--muted); text-align: right; }
+.sheet.s1 { left: 0; top: 0; background: linear-gradient(150deg, #f7fbe6, #e6f4b3); transform: rotate(-6deg); }
+.sheet.s2 { left: 19%; top: 22%; background: linear-gradient(150deg, #fbeff6, #f3d3e5); transform: rotate(2deg); }
+.sheet.s3 { right: 0; top: 44%; background: linear-gradient(150deg, #eef5fd, #cfe2f8); transform: rotate(-2deg); }
+.sheets:hover .s1 { transform: rotate(-9deg) translate(-12px, -10px); }
+.sheets:hover .s3 { transform: rotate(1deg) translate(12px, 10px); }
+.stamp { position: absolute; right: 6%; top: 34%; width: 100px; height: 100px; border-radius: 50%; border: 1.5px solid var(--fg); display: grid; place-items: center; text-align: center; font: 500 10px/1.25 var(--mono); letter-spacing: .08em; text-transform: uppercase; background: var(--white); z-index: 3; transform: rotate(10deg); padding: 8px; }
+.trust-copy h2 { font-size: clamp(36px, 4.4vw, 60px); }
+.trust-copy p { margin-top: 20px; color: var(--muted); font-size: 17px; max-width: 48ch; }
+.legend { margin: 28px 0 32px; display: flex; flex-direction: column; gap: 12px; }
+.legend div { display: grid; grid-template-columns: 110px 1fr; gap: 16px; font-size: 15px; align-items: baseline; }
+.legend b { font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 6px 0; }
+
+/* Method cards */
+.method { margin-top: 72px; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; }
+@media (max-width: 900px) { .method { grid-template-columns: 1fr; } }
+.m-card { border-radius: var(--r-xl); background: linear-gradient(180deg, #1a1d1f 0%, var(--ink-2) 100%); border: 1px solid var(--line-d); padding: clamp(24px, 3.4vw, 44px); display: flex; flex-direction: column; gap: 18px; }
+.m-head { display: flex; align-items: center; gap: 14px; font: 400 26px/1 var(--display); }
+.m-head svg { width: 40px; height: 40px; }
+.m-card p { color: rgba(255,255,255,.72); max-width: 52ch; }
+.m-card p b { color: var(--white); font-weight: 500; }
+.m-diagram { margin-top: 10px; border-radius: 24px; background: var(--ink); border: 1px solid var(--line-d); min-height: 260px; position: relative; overflow: hidden; }
+.m-diagram svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+.m-diagram text { font-family: var(--mono); font-size: 11px; fill: rgba(255,255,255,.7); }
+
+/* Cost optimisation */
+.cost { margin-top: 64px; display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 20px; align-items: stretch; }
+@media (max-width: 1000px) { .cost { grid-template-columns: 1fr; } }
+.cost-chart { background: var(--ink); color: var(--white); border-radius: var(--r-xl); padding: clamp(20px, 3vw, 40px); display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.cost-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
+.cost-top .k { display: block; font: 400 11px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted-d); }
+.cost-top .big { display: block; margin-top: 8px; font: 300 clamp(36px, 4vw, 56px)/1 var(--display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.cost-chart .seg { background: var(--ink-3); border-color: var(--line-d); }
+.cost-chart .seg button { color: var(--muted-d); }
+.cost-chart .seg button[aria-selected="true"] { background: var(--white); color: var(--ink); }
+.cost-chart .seg button:hover:not([aria-selected="true"]) { color: var(--white); }
+.wf-scroll { overflow-x: auto; }
+.wf-scroll svg { width: 100%; min-width: 560px; height: auto; display: block; }
+.wf-scroll text { font-family: var(--mono); font-size: 11px; fill: rgba(255,255,255,.65); font-variant-numeric: tabular-nums; }
+.wf-scroll .val { fill: var(--white); font-size: 12px; }
+.cost-list { list-style: none; margin: 0; padding: clamp(20px, 3vw, 32px); border-radius: var(--r-xl); background: rgba(255,255,255,.72); border: 1px solid rgba(255,255,255,.9); display: flex; flex-direction: column; }
+.cost-list li { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.cost-list li:last-child { border-bottom: 0; }
+.cost-list b { font: 500 16px/1.3 var(--display); }
+.cost-list .s { font: 500 14px/1.3 var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.cost-list .how { grid-column: 1 / -1; color: var(--muted); font-size: 14px; }
+.cost-list .who { font: 400 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+/* CTA */
+.cta-wrap { padding-block: clamp(40px, 6vw, 80px) clamp(60px, 8vw, 110px); }
+.cta { position: relative; border-radius: var(--r-xl); padding: 3px; background: linear-gradient(120deg, var(--wash-a), var(--wash-c) 45%, var(--wash-b)); box-shadow: 0 0 80px -10px rgba(227,244,166,.9), 0 0 120px -30px rgba(246,213,231,.9); }
+.cta-inner { position: relative; border-radius: calc(var(--r-xl) - 3px); overflow: hidden; min-height: 520px; display: grid; place-items: center; text-align: center; color: var(--white); }
+.cta-inner .ph { position: absolute; inset: 0; }
+.cta-inner::after { content: ""; position: absolute; inset: 0; background: radial-gradient(60% 60% at 50% 50%, rgba(10,11,11,.55), rgba(10,11,11,.25)); }
+.cta-copy { position: relative; z-index: 2; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.cta-copy h2 { font-size: clamp(34px, 4.6vw, 64px); max-width: 15ch; }
+.cta-copy p { color: rgba(255,255,255,.85); }
+.cta-copy .ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 8px; }
+
+/* Footer */
+footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
+.foot { display: grid; grid-template-columns: 1.4fr repeat(4, minmax(0,1fr)); gap: 32px; }
+@media (max-width: 900px) { .foot { grid-template-columns: repeat(2, minmax(0,1fr)); } .foot .brand { grid-column: 1 / -1; } }
+.foot h4 { margin: 0 0 14px; font: 500 14px/1 var(--body); }
+.foot ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; font-size: 14px; color: var(--muted); }
+.foot a:hover { color: var(--fg); }
+.foot .brand p { margin-top: 14px; color: var(--muted); font-size: 14px; max-width: 32ch; }
+.foot .logo { color: var(--fg); }
+.legal { margin-top: 56px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font: 400 12px/1.4 var(--mono); color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-arrow" viewBox="0 0 14 14"><path d="M3 11 11 3M5 3h6v6" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-logo" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 27V15L16 6l12 9v12"/><path d="M10 27v-8h12v8"/><path d="M16 6V2.5"/><path d="M2 27h28"/></g><path d="M13.2 4.6 16 1.4l2.8 3.2-2.8 1.4z" fill="currentColor"/></symbol>
+</svg>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a href="#top" class="logo" aria-label="Richtfest"><svg><use href="#i-logo"/></svg>Richtfest</a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#try" data-i18n="nav.try">Try it</a>
+      <a href="#pipeline" data-i18n="nav.platform">Platform</a>
+      <a href="#workflows" data-i18n="nav.workflows">Workflows</a>
+      <a href="#method" data-i18n="nav.method">Method</a>
+      <a href="#savings" data-i18n="nav.savings">Savings</a>
+    </nav>
+    <div class="nav-cta">
+      <div class="lang" role="group" aria-label="Language">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c2 2 2.6 4 2.6 6.5S10 12.5 8 14.5M8 1.5C6 3.5 5.4 5.5 5.4 8S6 12.5 8 14.5"/></svg>
+        <button type="button" data-lang="en" aria-pressed="true">EN</button>
+        <button type="button" data-lang="de" aria-pressed="false">DE</button>
+      </div>
+      <a class="login" id="signIn" href="#" data-i18n="nav.signin">Sign in</a>
+      <a class="btn btn-solid btn-sm start" href="#cta"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+      <a class="btn btn-ghost btn-sm talk" href="#cta"><span data-i18n="nav.talk">Talk to us</span></a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <canvas id="heroCanvas" aria-hidden="true"></canvas>
+    <div class="wrap">
+      <h1 data-i18n="hero.h1">A thousand minds on <em>every</em> plan.</h1>
+      <p class="lede" data-i18n="hero.lede">Richtfest rebuilds construction planning as an AI-native process. Our proprietary agent system pairs LLM reasoning with fast System 1 models to test thousands of options per site, and finds the cost savings a three-person team never has time to look for.</p>
+      <div class="ctas">
+        <a class="btn btn-solid" href="#try"><span data-i18n="hero.cta1">Optimize a house</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+        <a class="btn btn-ghost" href="#cta"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+      </div>
+      <div class="hero-meta">
+        <span data-i18n="hero.m1"><b>HOAI phases 1–5</b> in one pipeline</span>
+        <span data-i18n="hero.m2"><b>LLM agents + System 1 models</b></span>
+        <span data-i18n="hero.m3"><b>Cost</b> optimised on every revision</span>
+      </div>
+    </div>
+    <a class="announce" href="#method">
+      <div class="mini">
+        <span class="q" data-i18n="ann.q">Assessment · Facade south · Room 2.14</span>
+        <div class="bar"><span data-i18n="ann.bar">Check external sound insulation against DIN 4109</span><i></i></div>
+      </div>
+      <span class="lab" data-i18n="ann.lab">NEW WORKFLOW</span>
+      <p data-i18n="ann.p">External sound-insulation assessment, our first deterministic calculation workflow</p>
+    </a>
+  </section>
+
+  <section class="band band-wash" id="try">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="try.h2">Press optimize. Watch the savings appear.</h2>
+        <p data-i18n="try.p">A three-storey apartment house in Berlin, exactly as a first design might come in. Our agent system goes through it the way a thousand planners would, and shows you what it found.</p>
+      </div>
+      <div class="demo">
+        <div class="viewer" id="viewer">
+          <div class="v-fallback" id="vFallback" hidden data-i18n="v.fallback">The 3D model could not load in this browser.</div>
+          <div class="v-hud"><span data-i18n="v.hud">Berlin · 3 storeys · <b>Rev A</b></span><span id="vStatus">First design</span></div>
+          <div class="pin" id="pin1"><i>1</i><span data-i18n="pin1">Fire brigade parking</span></div>
+          <div class="pin" id="pin2"><i>2</i><span id="pin2t">Parapet 8.10 m</span></div>
+          <div class="pin" id="pin3"><i>3</i><span data-i18n="pin3">Two shafts instead of four</span></div>
+          <span class="v-hint" data-i18n="v.hint">Drag to orbit · Scroll to zoom</span>
+        </div>
+        <aside class="d-panel">
+          <div>
+            <span class="k" data-i18n="d.k">Example project</span>
+            <h3 data-i18n="d.h3">6 apartments, 3 storeys</h3>
+            <dl class="d-facts">
+              <div><dt data-i18n="d.f1">Floor area</dt><dd data-i18n="d.f1v">540 m²</dd></div>
+              <div><dt data-i18n="d.f2">Units</dt><dd>6 × 78 m²</dd></div>
+              <div><dt data-i18n="d.f3">Plot</dt><dd data-i18n="d.f3v">980 m²</dd></div>
+            </dl>
+          </div>
+          <div class="d-cost"><span class="k" data-i18n="d.costk">Construction estimate</span><span class="big" id="dCost">€1,980,000</span><span class="delta" id="dDelta"></span></div>
+          <ol class="d-log" id="dLog" aria-live="polite"></ol>
+          <div class="d-actions">
+            <button class="btn btn-dark" id="dGo" type="button"><span data-i18n="d.go">Optimize</span><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7.5 1 3 8h4l-1 5 5-7.5H7z"/></svg></button>
+            <button class="btn btn-line" id="dReset" type="button" hidden data-i18n="d.reset">Reset design</button>
+          </div>
+          <p class="d-note" data-i18n="d.note">Interactive example based on the Berlin building code (BauO Bln). Every change stays a proposal until a planner approves it.</p>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <section class="band band-dark" id="pipeline">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="pipe.h2">Permit-ready in weeks, not quarters.</h2>
+        <p data-i18n="pipe.p">One continuous pipeline from first site visit to execution drawings. People lead the project, agents do the legwork, and versioned tools do the maths.</p>
+      </div>
+      <div class="pipeline">
+        <div class="phases" role="tablist" aria-label="Planning phases" id="phases"></div>
+        <div class="engine">
+          <canvas id="engine" aria-hidden="true"></canvas>
+          <div class="engine-stats">
+            <div><span class="tag" data-i18n="tag.cost">Cost</span><span data-i18n="eng.c">Lower construction cost at the same standard</span></div>
+            <div><span class="tag" data-i18n="tag.scale">Scale</span><span data-i18n="eng.sc">1,000+ variants tested per site</span></div>
+            <div><span class="tag" data-i18n="tag.speed">Speed</span><span data-i18n="eng.sp">About 4× faster to permit-ready drawings</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band band-wash" id="workflows">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="wf.h2">Built for the whole planning process.</h2>
+        <p data-i18n="wf.p">Feasibility, massing, building physics and cost live in one shared project workspace, so a change on one sheet ripples through every other.</p>
+      </div>
+      <div class="workflow">
+        <div class="seg" role="tablist" aria-label="Workflows" id="wfTabs"></div>
+        <div class="wf-card">
+          <div class="wf-copy">
+            <h3 id="wfTitle"></h3>
+            <p id="wfText"></p>
+            <ul id="wfList"></ul>
+            <a class="btn btn-dark btn-sm" href="#cta"><span data-i18n="wf.btn">See the workflow</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+          </div>
+          <div class="ph r169 wf-media">
+            <span class="ph-label" id="wfPh"></span>
+            <div class="chip c2"><span class="k" id="wfK2"></span><span class="v" id="wfV2"></span></div>
+            <div class="chip c1"><span class="k" id="wfK1"></span><span class="v" id="wfV1"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="numbers">
+        <h2 data-i18n="num.h2">Same quality. Similar fee. A cheaper building.</h2>
+        <p data-i18n="num.p">Planning fees are a small share of a project. Construction cost is the big one, and that is where a thousand minds pay for themselves.</p>
+        <div class="num-row">
+          <div><span class="n" data-i18n="num.n1">1,28<i>0</i></span><span class="d" data-i18n="num.d1">massing variants explored on a typical mid-size residential site</span></div>
+          <div><span class="n" data-i18n="num.n2">−11<i>%</i></span><span class="d" data-i18n="num.d2">construction cost (cost groups 300 + 400) against the first conventional design</span></div>
+          <div><span class="n" data-i18n="num.n3">+6<i>%</i></span><span class="d" data-i18n="num.d3">more usable floor area found within the same zoning limits</span></div>
+        </div>
+        <p class="footnote" data-i18n="num.foot">Placeholder figures for layout. Replace with measured project data.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="audiences" style="padding-bottom: 40px;">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="aud.h2">For everyone at the planning table.</h2>
+        <p data-i18n="aud.p">Developers, architects, contractors and authorities work from the same records, each with the view and permissions their role needs.</p>
+      </div>
+      <div class="aud-tabs"><div class="seg" role="tablist" aria-label="Audiences" id="audTabs"></div></div>
+    </div>
+    <div class="carousel" id="carousel"></div>
+  </section>
+
+  <section class="band">
+    <div class="wrap trust">
+      <div class="sheets" aria-hidden="true">
+        <div class="sheet s1"><canvas data-plan="1"></canvas><div class="st"><span data-i18n="tr.l1b">Imported</span><i data-i18n="tr.s1">Stakeholder PDF · rev C</i></div></div>
+        <div class="sheet s2"><canvas data-plan="2"></canvas><div class="st"><span data-i18n="tr.l2b">Inferred</span><i data-i18n="tr.s2">Agent proposal</i></div></div>
+        <div class="sheet s3"><canvas data-plan="3"></canvas><div class="st"><span data-i18n="tr.l3b">Approved</span><i data-i18n="tr.s3">Signed by planner</i></div></div>
+        <div class="stamp" data-i18n="tr.stamp">Reviewed<br>&amp;<br>approved</div>
+      </div>
+      <div class="trust-copy">
+        <h2 data-i18n="tr.h2">Agents propose. People approve.</h2>
+        <p data-i18n="tr.p">Nothing consequential leaves Richtfest without a person signing it off. Source files and revisions are kept intact, and every value carries its origin.</p>
+        <div class="legend">
+          <div><b data-i18n="tr.l1b">Imported</b><span data-i18n="tr.l1">Taken as-is from a stakeholder file, PDF or IFC model</span></div>
+          <div><b data-i18n="tr.l2b">Inferred</b><span data-i18n="tr.l2">Proposed by an agent, with a link to the evidence it used</span></div>
+          <div><b data-i18n="tr.l3b">Approved</b><span data-i18n="tr.l3">Reviewed by a responsible planner and frozen as a revision</span></div>
+        </div>
+        <a class="btn btn-line" href="#method"><span data-i18n="tr.btn">How review works</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band band-dark" id="method">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="me.h2">Fast intuition. Slow reasoning. One agent system.</h2>
+        <p data-i18n="me.p">Our proprietary agent system combines two kinds of thinking. System 1 models judge thousands of options in milliseconds. LLM agents reason through the few that matter. Deterministic tools then check the result.</p>
+      </div>
+      <div class="method">
+        <article class="m-card">
+          <div class="m-head">
+            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M22 4 10 22h9l-2 14 13-19h-9z"/></svg>
+            <span data-i18n="me.1h">System 1 models</span>
+          </div>
+          <p data-i18n="me.1p"><b>Fast, trained intuition.</b> Purpose-built models trained on plans, quantities and cost data score a layout the way an experienced planner glances at it: instantly. They sweep through every grid, core position and facade ratio and keep only the promising ones.</p>
+          <div class="m-diagram" id="swarm"></div>
+        </article>
+        <article class="m-card">
+          <div class="m-head">
+            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="20" cy="20" r="3" fill="currentColor"/><circle cx="8" cy="10" r="2"/><circle cx="32" cy="9" r="2"/><circle cx="6" cy="28" r="2"/><circle cx="33" cy="30" r="2"/><circle cx="20" cy="35" r="2"/><path d="M10 11l8 7M30 10l-8 8M8 27l10-5M31 29l-9-7M20 33v-10"/></svg>
+            <span data-i18n="me.2h">LLM agents</span>
+          </div>
+          <p data-i18n="me.2p"><b>Slow, deliberate reasoning.</b> Specialised agents read briefs, zoning plans and stakeholder files, weigh trade-offs, explain their choices and coordinate the work. They decide which ideas the System 1 models should chase next.</p>
+          <div class="m-diagram">
+            <svg viewBox="0 0 520 260" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <g fill="none" stroke="rgba(255,255,255,.35)">
+                <rect x="20" y="44" width="124" height="34" rx="17"/>
+                <rect x="20" y="112" width="124" height="34" rx="17"/>
+                <rect x="20" y="180" width="124" height="34" rx="17"/>
+                <path d="M144 61c34 0 34 68 56 68M144 129h56M144 197c34 0 34-68 56-68M306 129h34"/>
+              </g>
+              <rect x="200" y="84" width="106" height="90" rx="18" fill="#222527" stroke="rgba(255,255,255,.5)"/>
+              <rect x="340" y="96" width="160" height="66" rx="18" fill="#f3cf4a"/>
+              <text x="82" y="65" text-anchor="middle" data-i18n="svg.a">Brief + zoning</text>
+              <text x="82" y="133" text-anchor="middle" data-i18n="svg.b">Stakeholder PDFs</text>
+              <text x="82" y="201" text-anchor="middle">Shortlist (S1)</text>
+              <text x="253" y="122" text-anchor="middle" style="fill:#fff" data-i18n="svg.c">Agents</text>
+              <text x="253" y="142" text-anchor="middle" data-i18n="svg.d">reason · explain</text>
+              <text x="420" y="124" text-anchor="middle" style="fill:#0a0b0b" data-i18n="svg.e">Verified by</text>
+              <text x="420" y="142" text-anchor="middle" style="fill:#0a0b0b" data-i18n="svg.f">deterministic tools</text>
+            </svg>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band band-wash" id="savings">
+    <div class="wrap">
+      <div class="split-head">
+        <h2 data-i18n="co.h2">Where the savings come from.</h2>
+        <p data-i18n="co.p">One example project, 42 apartments on an urban infill plot. Each step is an optimisation the agent system found, checked and handed to a planner for approval.</p>
+      </div>
+      <div class="cost">
+        <div class="cost-chart">
+          <div class="cost-top">
+            <div><span class="k" data-i18n="co.k">Construction cost, cost groups 300 + 400</span><span class="big" id="costNow"></span></div>
+            <div class="seg" role="tablist" aria-label="Cost view" id="costTabs"></div>
+          </div>
+          <div class="wf-scroll"><svg id="waterfall" viewBox="0 0 760 340" role="img" aria-label="Waterfall chart of construction cost"></svg></div>
+        </div>
+        <ol class="cost-list" id="costList"></ol>
+      </div>
+      <p class="footnote" data-i18n="co.foot">Example project with placeholder figures. Replace with measured project data.</p>
+    </div>
+  </section>
+
+  <section class="cta-wrap" id="cta">
+    <div class="wrap">
+      <div class="cta">
+        <div class="cta-inner">
+          <div class="ph"><span class="ph-label" data-i18n="cta.ph">16:9 · Background image · Topping-out on site</span></div>
+          <div class="cta-copy">
+            <h2 data-i18n="cta.h2">Ready to see what your plot can really hold?</h2>
+            <p data-i18n="cta.p">Send us a site and a brief. We will come back with your first variants.</p>
+            <div class="ctas">
+              <a class="btn btn-solid" href="#"><span data-i18n="nav.start">Start a project</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+              <a class="btn btn-ghost" href="#"><span data-i18n="hero.cta2">Talk to a planner</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="footer">
+  <div class="wrap">
+    <div class="foot">
+      <div class="brand">
+        <a href="#top" class="logo"><svg><use href="#i-logo"/></svg>Richtfest</a>
+        <p data-i18n="ft.p">AI-native construction planning. Named after the topping-out ceremony, the day a building first stands at full height.</p>
+      </div>
+      <div><h4 data-i18n="ft.h1">Platform</h4><ul><li><a href="#" data-i18n="ft.a1">Project workspace</a></li><li><a href="#" data-i18n="ft.a2">Agents</a></li><li><a href="#" data-i18n="ft.a3">Calculation tools</a></li><li><a href="#" data-i18n="ft.a4">Review &amp; approval</a></li></ul></div>
+      <div><h4>Workflows</h4><ul><li><a href="#" data-i18n="ft.b1">Feasibility</a></li><li><a href="#" data-i18n="ft.b2">Massing variants</a></li><li><a href="#" data-i18n="ft.b3">Building physics</a></li><li><a href="#" data-i18n="ft.b4">Cost &amp; tender</a></li></ul></div>
+      <div><h4 data-i18n="ft.h3">Company</h4><ul><li><a href="#" data-i18n="ft.c1">About</a></li><li><a href="#" data-i18n="ft.c2">Careers</a></li><li><a href="#" data-i18n="ft.c3">Press</a></li><li><a href="#" data-i18n="ft.c4">Contact</a></li></ul></div>
+      <div><h4 data-i18n="ft.h4">Legal</h4><ul><li><a href="#" data-i18n="ft.d1">Imprint</a></li><li><a href="#" data-i18n="ft.d2">Privacy</a></li><li><a href="#" data-i18n="ft.d3">Terms</a></li><li><a href="#" data-i18n="ft.d4">Security</a></li></ul></div>
+    </div>
+    <div class="legal"><span>© 2026 Richtfest</span><span data-i18n="ft.made">Made for the people who build</span></div>
+  </div>
+</footer>
+
+<script>
+/* ---------- i18n ---------- */
+window.RF = (() => {
+  const DE = {
+    'nav.try': 'Ausprobieren', 'nav.platform': 'Plattform', 'nav.workflows': 'Workflows', 'nav.method': 'Methode', 'nav.savings': 'Einsparungen',
+    'nav.signin': 'Anmelden', 'nav.start': 'Projekt starten', 'nav.talk': 'Kontakt',
+    'hero.h1': 'Tausend Köpfe für <em>jeden</em> Plan.',
+    'hero.lede': 'Richtfest denkt Bauplanung von Grund auf KI-nativ. Unser eigenes Agentensystem verbindet LLM-Reasoning mit schnellen System-1-Modellen, prüft Tausende Varianten pro Grundstück und findet Einsparungen, für die ein Team aus drei Planern nie die Zeit hat.',
+    'hero.cta1': 'Ein Haus optimieren', 'hero.cta2': 'Mit einem Planer sprechen',
+    'hero.m1': '<b>HOAI-Leistungsphasen 1–5</b> in einer Pipeline', 'hero.m2': '<b>LLM-Agenten + System-1-Modelle</b>', 'hero.m3': '<b>Kosten</b> optimiert bei jeder Revision',
+    'ann.q': 'Nachweis · Fassade Süd · Raum 2.14', 'ann.bar': 'Schallschutz gegen Außenlärm nach DIN 4109 prüfen', 'ann.lab': 'NEUER WORKFLOW',
+    'ann.p': 'Schallschutznachweis gegen Außenlärm, unser erster deterministischer Berechnungs-Workflow',
+    'try.h2': 'Auf Optimieren drücken. Einsparungen sehen.',
+    'try.p': 'Ein dreigeschossiges Mehrfamilienhaus in Berlin, so wie ein erster Entwurf hereinkommt. Unser Agentensystem prüft ihn, wie es tausend Planer tun würden, und zeigt Ihnen, was es gefunden hat.',
+    'v.fallback': 'Das 3D-Modell konnte in diesem Browser nicht geladen werden.', 'v.hud': 'Berlin · 3 Geschosse · <b>Rev. A</b>',
+    'pin1': 'Stellfläche Feuerwehr', 'pin3': 'Zwei Schächte statt vier',
+    'v.hint': 'Ziehen zum Drehen · Scrollen zum Zoomen',
+    'd.k': 'Beispielprojekt', 'd.h3': '6 Wohnungen, 3 Geschosse', 'd.f1': 'BGF', 'd.f1v': '540 m²', 'd.f2': 'Einheiten', 'd.f3': 'Grundstück', 'd.f3v': '980 m²',
+    'd.costk': 'Kostenschätzung Bau', 'd.go': 'Optimieren', 'd.reset': 'Entwurf zurücksetzen',
+    'd.note': 'Interaktives Beispiel auf Grundlage der Bauordnung für Berlin (BauO Bln). Jede Änderung bleibt ein Vorschlag, bis eine Planerin oder ein Planer sie freigibt.',
+    'pipe.h2': 'Genehmigungsreif in Wochen statt Quartalen.',
+    'pipe.p': 'Eine durchgehende Pipeline von der ersten Begehung bis zur Ausführungsplanung. Menschen führen das Projekt, Agenten erledigen die Fleißarbeit, versionierte Werkzeuge rechnen.',
+    'tag.cost': 'Kosten', 'tag.scale': 'Umfang', 'tag.speed': 'Tempo',
+    'eng.c': 'Geringere Baukosten bei gleichem Standard', 'eng.sc': '1.000+ geprüfte Varianten pro Grundstück', 'eng.sp': 'Rund 4× schneller zur genehmigungsreifen Planung',
+    'wf.h2': 'Gebaut für den gesamten Planungsprozess.',
+    'wf.p': 'Machbarkeit, Kubatur, Bauphysik und Kosten liegen in einem gemeinsamen Projektraum. Eine Änderung auf einem Plan wirkt sich auf alle anderen aus.',
+    'wf.btn': 'Workflow ansehen',
+    'num.h2': 'Gleiche Qualität. Ähnliches Honorar. Ein günstigeres Gebäude.',
+    'num.p': 'Das Planungshonorar ist ein kleiner Teil eines Projekts. Die Baukosten sind der große. Genau dort zahlen sich tausend Köpfe aus.',
+    'num.n1': '1.28<i>0</i>', 'num.n2': '−11<i> %</i>', 'num.n3': '+6<i> %</i>',
+    'num.d1': 'untersuchte Kubaturvarianten auf einem typischen mittelgroßen Wohnbaugrundstück',
+    'num.d2': 'Baukosten (KG 300 + 400) gegenüber dem ersten konventionellen Entwurf',
+    'num.d3': 'mehr nutzbare Fläche im selben baurechtlichen Rahmen',
+    'num.foot': 'Platzhalterwerte für das Layout. Durch gemessene Projektdaten ersetzen.',
+    'aud.h2': 'Für alle am Planungstisch.',
+    'aud.p': 'Projektentwickler, Architekten, Generalunternehmer und Behörden arbeiten mit denselben Daten, jeweils mit der Sicht und den Rechten ihrer Rolle.',
+    'tr.h2': 'Agenten schlagen vor. Menschen geben frei.',
+    'tr.p': 'Nichts mit Tragweite verlässt Richtfest ohne menschliche Freigabe. Quelldateien und Revisionen bleiben unverändert erhalten, und jeder Wert trägt seine Herkunft.',
+    'tr.l1b': 'Importiert', 'tr.l1': 'Unverändert aus einer Datei der Beteiligten, einem PDF oder IFC-Modell übernommen',
+    'tr.l2b': 'Abgeleitet', 'tr.l2': 'Von einem Agenten vorgeschlagen, mit Verweis auf die verwendeten Belege',
+    'tr.l3b': 'Freigegeben', 'tr.l3': 'Von einer verantwortlichen Planerin oder einem Planer geprüft und als Revision festgeschrieben',
+    'tr.s1': 'PDF Beteiligte · Rev. C', 'tr.s2': 'Agentenvorschlag', 'tr.s3': 'Vom Planer gezeichnet',
+    'tr.stamp': 'Geprüft<br>&amp;<br>freigegeben', 'tr.btn': 'So funktioniert die Prüfung',
+    'me.h2': 'Schnelle Intuition. Gründliches Denken. Ein Agentensystem.',
+    'me.p': 'Unser eigenes Agentensystem verbindet zwei Arten des Denkens. System-1-Modelle bewerten Tausende Optionen in Millisekunden. LLM-Agenten durchdenken die wenigen, die zählen. Deterministische Werkzeuge prüfen dann das Ergebnis.',
+    'me.1h': 'System-1-Modelle',
+    'me.1p': '<b>Schnelle, trainierte Intuition.</b> Eigens trainierte Modelle für Pläne, Mengen und Kostendaten bewerten einen Grundriss so, wie ein erfahrener Planer ihn überfliegt: sofort. Sie gehen jedes Raster, jede Kernlage und jedes Fassadenverhältnis durch und behalten nur die vielversprechenden.',
+    'me.2h': 'LLM-Agenten',
+    'me.2p': '<b>Gründliches, bewusstes Abwägen.</b> Spezialisierte Agenten lesen Anforderungen, Bebauungspläne und Unterlagen der Beteiligten, wägen Zielkonflikte ab, begründen ihre Entscheidungen und koordinieren die Arbeit. Sie entscheiden, welchen Ideen die System-1-Modelle als Nächstes nachgehen.',
+    'svg.a': 'Anforderungen + B-Plan', 'svg.b': 'PDFs Beteiligte', 'svg.c': 'Agenten', 'svg.d': 'abwägen · begründen', 'svg.e': 'Geprüft durch', 'svg.f': 'determ. Werkzeuge',
+    'co.h2': 'Woher die Einsparungen kommen.',
+    'co.p': 'Ein Beispielprojekt mit 42 Wohnungen in einer innerstädtischen Baulücke. Jeder Schritt ist eine Optimierung, die das Agentensystem gefunden, geprüft und einer Planerin oder einem Planer zur Freigabe übergeben hat.',
+    'co.k': 'Baukosten, KG 300 + 400', 'co.foot': 'Beispielprojekt mit Platzhalterwerten. Durch gemessene Projektdaten ersetzen.',
+    'cta.ph': '16:9 · Hintergrundbild · Richtfest auf der Baustelle',
+    'cta.h2': 'Bereit zu sehen, was Ihr Grundstück wirklich hergibt?',
+    'cta.p': 'Schicken Sie uns Grundstück und Anforderungen. Wir melden uns mit den ersten Varianten.',
+    'ft.p': 'KI-native Bauplanung. Benannt nach dem Fest, an dem ein Gebäude zum ersten Mal in voller Höhe steht.',
+    'ft.h1': 'Plattform', 'ft.a1': 'Projektraum', 'ft.a2': 'Agenten', 'ft.a3': 'Berechnungswerkzeuge', 'ft.a4': 'Prüfung &amp; Freigabe',
+    'ft.b1': 'Machbarkeit', 'ft.b2': 'Kubaturvarianten', 'ft.b3': 'Bauphysik', 'ft.b4': 'Kosten &amp; Ausschreibung',
+    'ft.h3': 'Unternehmen', 'ft.c1': 'Über uns', 'ft.c2': 'Karriere', 'ft.c3': 'Presse', 'ft.c4': 'Kontakt',
+    'ft.h4': 'Rechtliches', 'ft.d1': 'Impressum', 'ft.d2': 'Datenschutz', 'ft.d3': 'AGB', 'ft.d4': 'Sicherheit',
+    'ft.made': 'Für die Menschen, die bauen'
+  };
+  const nodes = [...document.querySelectorAll('[data-i18n]')];
+  const EN = {};
+  nodes.forEach(n => { EN[n.dataset.i18n] = n.innerHTML; });
+  const META = {
+    en: { title: 'Richtfest', desc: document.querySelector('meta[name="description"]').content },
+    de: { title: 'Richtfest', desc: 'KI-native Bauplanung. Unser Agentensystem verbindet LLM-Reasoning mit schnellen System-1-Modellen und findet Einsparungen in jedem Plan.' }
+  };
+  const subs = [];
+  let lang = 'en';
+  try { const saved = localStorage.getItem('rf-lang'); if (saved === 'de' || saved === 'en') lang = saved; else if ((navigator.language || '').toLowerCase().startsWith('de')) lang = 'de'; }
+  catch (e) { if ((navigator.language || '').toLowerCase().startsWith('de')) lang = 'de'; }
+  function apply() {
+    const dict = lang === 'de' ? DE : EN;
+    nodes.forEach(n => { const v = dict[n.dataset.i18n] ?? EN[n.dataset.i18n]; if (n.innerHTML !== v) n.innerHTML = v; });
+    document.documentElement.lang = lang;
+    document.querySelector('meta[name="description"]').content = META[lang].desc;
+    document.querySelectorAll('.lang button').forEach(b => b.setAttribute('aria-pressed', b.dataset.lang === lang));
+    subs.forEach(fn => fn(lang));
+  }
+  document.querySelectorAll('.lang button').forEach(b => b.addEventListener('click', () => {
+    lang = b.dataset.lang; try { localStorage.setItem('rf-lang', lang); } catch (e) {}
+    apply();
+  }));
+  // Sign in goes to the app subdomain of whatever domain serves this page.
+  const host = location.hostname.replace(/^www\./, '');
+  const signIn = document.getElementById('signIn');
+  if (host && host !== 'localhost' && !/^[\d.]+$/.test(host)) signIn.href = `${location.protocol}//app.${host}/`;
+  return {
+    get lang() { return lang; },
+    on(fn) { subs.push(fn); },
+    apply,
+    nf(v, opts) { return new Intl.NumberFormat(lang === 'de' ? 'de-DE' : 'en-US', opts).format(v); },
+    eur(v) { return new Intl.NumberFormat(lang === 'de' ? 'de-DE' : 'en-US', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Math.round(v)); }
+  };
+})();
+</script>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const AMBER = '#f3cf4a';
+  const L = () => RF.lang;
+  const arrow = '<svg class="arrow"><use href="#i-arrow"/></svg>';
+
+  const nav = document.getElementById('nav');
+  const onScroll = () => nav.classList.toggle('scrolled', scrollY > 40);
+  addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
+  function rng(seed) { return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }; }
+
+  function drawPlan(ctx, x0, y0, w, h, seed, stroke, fill, accent) {
+    const r = rng(seed * 997 + 13);
+    const pad = Math.max(4, Math.min(w, h) * 0.1);
+    const rooms = [];
+    (function split(x, y, cw, ch, d) {
+      if (d > 3 || (cw < w * 0.22 && ch < h * 0.22) || (d > 1 && r() < 0.25)) { rooms.push([x, y, cw, ch]); return; }
+      if (cw > ch) { const s = cw * (0.3 + r() * 0.4); split(x, y, s, ch, d + 1); split(x + s, y, cw - s, ch, d + 1); }
+      else { const s = ch * (0.3 + r() * 0.4); split(x, y, cw, s, d + 1); split(x, y + s, cw, ch - s, d + 1); }
+    })(x0 + pad, y0 + pad, w - pad * 2, h - pad * 2, 0);
+    ctx.lineWidth = Math.max(1, w / 110);
+    ctx.strokeStyle = stroke;
+    rooms.forEach((rm, i) => {
+      if (fill && r() < 0.35) { ctx.fillStyle = fill; ctx.fillRect(rm[0], rm[1], rm[2], rm[3]); }
+      if (accent && i === 0) { ctx.fillStyle = accent; ctx.fillRect(rm[0], rm[1], rm[2], rm[3]); }
+      ctx.strokeRect(rm[0], rm[1], rm[2], rm[3]);
+    });
+    ctx.lineWidth = Math.max(1.6, w / 70);
+    ctx.strokeRect(x0 + pad, y0 + pad, w - pad * 2, h - pad * 2);
+  }
+  window.__drawPlan = drawPlan;
+
+  /* ---------- Hero: streams of 16:9 planning tiles (TwelveLabs-style lanes) ---------- */
+  const hc = document.getElementById('heroCanvas');
+  const hx = hc.getContext('2d');
+  const SW = 256, SH = 144;
+  function rounded(c, w, h, r) { c.beginPath(); c.moveTo(r, 0); c.arcTo(w, 0, w, h, r); c.arcTo(w, h, 0, h, r); c.arcTo(0, h, 0, 0, r); c.arcTo(0, 0, w, 0, r); c.closePath(); }
+  function isoBlock(c, ox, oy, u, bw, bd, bh, top, left, right) {
+    const P = (x, y, z) => [ox + (x - y) * 0.866 * u, oy + (x + y) * 0.5 * u - z * u];
+    const poly = (pts, f) => { c.fillStyle = f; c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p)); c.closePath(); c.fill(); };
+    poly([P(0, bd, 0), P(bw, bd, 0), P(bw, bd, bh), P(0, bd, bh)], left);
+    poly([P(bw, 0, 0), P(bw, bd, 0), P(bw, bd, bh), P(bw, 0, bh)], right);
+    poly([P(0, 0, bh), P(bw, 0, bh), P(bw, bd, bh), P(0, bd, bh)], top);
+    c.fillStyle = 'rgba(30,40,50,.35)';
+    for (let z = 0.5; z < bh - 0.3; z += 0.9) for (let x = 0.4; x < bw - 0.2; x += 0.8) { const a = P(x, bd, z), b = P(x + 0.4, bd, z + 0.5); c.beginPath(); c.moveTo(...a); c.lineTo(...P(x + 0.4, bd, z)); c.lineTo(...b); c.lineTo(...P(x, bd, z + 0.5)); c.fill(); }
+  }
+  function makeSprite(i) {
+    const s = document.createElement('canvas'); s.width = SW; s.height = SH;
+    const c = s.getContext('2d');
+    const r = rng(i * 31 + 7);
+    rounded(c, SW, SH, 10); c.clip();
+    const kind = [0, 0, 3, 1, 0, 4, 0, 1, 5, 0, 2, 4][i % 12];
+    if (kind === 0 || kind === 3) {
+      c.fillStyle = '#1c1f21'; c.fillRect(0, 0, SW, SH);
+      drawPlan(c, 0, 0, SW, SH, i + 1, 'rgba(225,232,229,.7)', 'rgba(255,255,255,.05)', kind === 3 ? 'rgba(243,207,74,.35)' : null);
+    } else if (kind === 1) {
+      const g = c.createLinearGradient(0, 0, 0, SH);
+      const skies = [['#bccbd8', '#eef0ea'], ['#f1c6a6', '#ecdcef'], ['#9fb3c6', '#dfe7e9']];
+      const sk = skies[i % 3]; g.addColorStop(0, sk[0]); g.addColorStop(1, sk[1]);
+      c.fillStyle = g; c.fillRect(0, 0, SW, SH);
+      c.fillStyle = 'rgba(90,110,80,.35)'; c.fillRect(0, SH * 0.78, SW, SH);
+      isoBlock(c, SW * (0.38 + r() * 0.1), SH * 0.82, 13, 3 + r() * 2, 2 + r(), 3 + r() * 3, '#f4f3ee', '#d9d8d1', '#bdbcb4');
+      if (r() < 0.6) isoBlock(c, SW * 0.72, SH * 0.86, 13, 2, 2, 2 + r() * 2, '#eceae3', '#cfcdc5', '#b2b0a8');
+    } else if (kind === 2) {
+      const g = c.createLinearGradient(0, 0, SW, SH);
+      const pals = [['#e3f4a6', '#f6d5e7'], ['#f6d5e7', '#d3e5fa'], ['#fbe7a1', '#f3b9d6']];
+      const pl = pals[i % 3]; g.addColorStop(0, pl[0]); g.addColorStop(1, pl[1]);
+      c.fillStyle = g; c.fillRect(0, 0, SW, SH);
+      c.fillStyle = '#101211';
+      c.font = '300 40px "Funnel Display", Arial, sans-serif';
+      const vals = ['−24k €', '−100k €', '−18k €', '−92 €/m²', '−61 €/m²', '−5.4 %'];
+      c.fillText(vals[i % vals.length], 18, 62);
+      c.font = '400 12px "JetBrains Mono", monospace'; c.fillStyle = 'rgba(16,18,17,.6)';
+      c.fillText(['KG 300', 'KG 400', 'GFZ 1.8', 'R\'w 41 dB'][i % 4], 18, 88);
+      for (let k = 0; k < 9; k++) { const h = 10 + r() * 30; c.fillStyle = k === 6 ? '#101211' : 'rgba(16,18,17,.22)'; c.fillRect(SW - 120 + k * 11, SH - 18 - h, 7, h); }
+    } else if (kind === 4) {
+      c.fillStyle = '#20251f'; c.fillRect(0, 0, SW, SH);
+      c.fillStyle = '#2f3530'; c.fillRect(0, SH * 0.72, SW, SH * 0.12);
+      c.setLineDash([5, 4]); c.strokeStyle = 'rgba(255,255,255,.45)'; c.lineWidth = 1.2; c.strokeRect(30, 18, SW - 60, SH * 0.5); c.setLineDash([]);
+      c.fillStyle = '#e9e8e2'; c.fillRect(70 + r() * 30, 34, 70, 40);
+      c.fillStyle = 'rgba(243,207,74,.8)'; c.fillRect(SW - 80, 30, 18, 46);
+      c.fillStyle = 'rgba(140,170,120,.8)'; for (let k = 0; k < 5; k++) { c.beginPath(); c.arc(40 + k * 40, SH * 0.62, 6, 0, 7); c.fill(); }
+    } else {
+      const g = c.createRadialGradient(SW * 0.3, SH * 0.4, 5, SW * 0.4, SH * 0.5, SW * 0.7);
+      g.addColorStop(0, '#fbe58a'); g.addColorStop(0.45, '#f1a9c9'); g.addColorStop(1, '#8fb3e0');
+      c.fillStyle = g; c.fillRect(0, 0, SW, SH);
+      drawPlan(c, 0, 0, SW, SH, i + 50, 'rgba(16,18,17,.6)', null, null);
+    }
+    return s;
+  }
+  function blurred(src, px) {
+    if (!px) return src;
+    const s = document.createElement('canvas'); s.width = SW; s.height = SH;
+    const c = s.getContext('2d');
+    if ('filter' in c) { c.filter = `blur(${px}px)`; c.drawImage(src, 0, 0); return s; }
+    return src;
+  }
+  const sprites = [];
+  function buildSprites() {
+    sprites.length = 0;
+    for (let i = 0; i < 36; i++) { const b = makeSprite(i); sprites.push([b, blurred(b, 2), blurred(b, 5)]); }
+  }
+  buildSprites();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(buildSprites);
+
+  // Lanes run from far back-left toward the viewer on the right.
+  const DX = 0.6, DZ = -0.8;
+  const laneY = [-4.2, -3.0, -1.9, -0.85, 0.2, 1.25, 2.3, 3.4, 4.6];
+  const tiles = [];
+  const hr = rng(11);
+  const SMIN = -72, SMAX = 24;
+  laneY.forEach((y, k) => {
+    let s = SMIN + hr() * 3;
+    while (s < SMAX) {
+      tiles.push({ y: y + (hr() - 0.5) * 0.18, s, sp: (hr() * 36) | 0, k });
+      s += 2.4 + hr() * (k % 3 === 0 ? 7 : 4.2);
+    }
+  });
+  let HW = 0, HH = 0, mx = 0, my = 0;
+  function sizeHero() { const b = hc.getBoundingClientRect(); HW = b.width; HH = b.height; hc.width = HW * DPR; hc.height = HH * DPR; hx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+  sizeHero(); addEventListener('resize', sizeHero);
+  addEventListener('pointermove', e => { mx = e.clientX / innerWidth - 0.5; my = e.clientY / innerHeight - 0.5; }, { passive: true });
+  let heroVisible = true, hLast = performance.now(), hRaf = 0;
+  const order = tiles.slice();
+  function heroFrame(now) {
+    const dt = Math.min(0.05, (now - hLast) / 1000); hLast = now;
+    const narrow = HW < 760;
+    const f = HW * (narrow ? 1.3 : 0.92);
+    const cx = HW * (narrow ? 0.62 : 0.5) + mx * 24, cy = HH * 0.47 + my * 16;
+    hx.clearRect(0, 0, HW, HH);
+    for (const t of tiles) {
+      if (!reduce) t.s += dt * 0.85;
+      if (t.s > SMAX) t.s -= (SMAX - SMIN);
+      t.z = 20 + t.s * DZ;
+    }
+    order.sort((a, b) => b.z - a.z);
+    for (const t of order) {
+      const z = t.z; if (z < 1.5) continue;
+      const x = t.s * DX;
+      const sx = cx + f * x / z, sy = cy - f * t.y / z;
+      const w = f * 1.25 / z, h = w * 0.5625;
+      if (sx + w < 0 || sx - w > HW || sy + h < 0 || sy - h > HH) continue;
+      const fd = Math.abs(z - 19);
+      const lvl = fd < 6 ? 0 : fd < 14 ? 1 : 2;
+      const a = Math.min(1, Math.max(0, (78 - z) / 30)) * (z < 9 ? Math.max(0, (z - 3) / 6) : 1);
+      if (a <= 0.01) continue;
+      hx.globalAlpha = a * (lvl === 2 ? 0.4 : lvl === 1 ? 0.65 : 0.92);
+      hx.drawImage(sprites[t.sp][lvl], sx - w / 2, sy - h / 2, w, h);
+    }
+    hx.globalAlpha = 1;
+    hRaf = (!reduce && heroVisible) ? requestAnimationFrame(heroFrame) : 0;
+  }
+  new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; if (heroVisible && !hRaf) { hLast = performance.now(); hRaf = requestAnimationFrame(heroFrame); } }).observe(hc);
+  hRaf = requestAnimationFrame(heroFrame);
+
+  /* ---------- Phases ---------- */
+  const PH = {
+    en: [['1', 'Basic evaluation', 'Grundlagenermittlung', 'Upload the site survey, zoning plan and brief. Agents extract constraints, setbacks and permitted density into one reviewed project record in hours.'],
+      ['2', 'Preliminary design', 'Vorplanung', 'The agent system generates and ranks hundreds of massing and layout variants against your brief, zoning and budget. You pick the direction.'],
+      ['3', 'Design', 'Entwurfsplanung', 'The chosen variant is detailed with structure, building physics and cost. Deterministic tools check every value against the applicable standards.'],
+      ['4', 'Permit application', 'Genehmigungsplanung', 'Drawings, area schedules and verification documents are assembled into a complete submission, with a planner signing off each sheet.'],
+      ['5', 'Execution planning', 'Ausführungsplanung', 'Details and schedules for the site, kept in sync with every revision so contractors always build from the current drawing.']],
+    de: [['1', 'Grundlagenermittlung', 'HOAI Leistungsphase 1', 'Laden Sie Vermessung, Bebauungsplan und Anforderungen hoch. Agenten übernehmen Baugrenzen, Abstandsflächen und zulässige Dichte in wenigen Stunden in einen geprüften Projektdatensatz.'],
+      ['2', 'Vorplanung', 'HOAI Leistungsphase 2', 'Das Agentensystem erzeugt und bewertet Hunderte Kubatur- und Grundrissvarianten nach Ihren Anforderungen, dem Baurecht und dem Budget. Sie wählen die Richtung.'],
+      ['3', 'Entwurfsplanung', 'HOAI Leistungsphase 3', 'Die gewählte Variante wird mit Tragwerk, Bauphysik und Kosten ausgearbeitet. Deterministische Werkzeuge prüfen jeden Wert gegen die geltenden Normen.'],
+      ['4', 'Genehmigungsplanung', 'HOAI Leistungsphase 4', 'Pläne, Flächenaufstellungen und Nachweise werden zu einem vollständigen Bauantrag zusammengestellt. Jedes Blatt zeichnet eine Planerin oder ein Planer ab.'],
+      ['5', 'Ausführungsplanung', 'HOAI Leistungsphase 5', 'Details und Listen für die Baustelle, bei jeder Revision synchron gehalten, damit immer nach dem aktuellen Plan gebaut wird.']]
+  };
+  const phEl = document.getElementById('phases');
+  let phActive = 1;
+  function renderPhases() {
+    phEl.innerHTML = '';
+    PH[L()].forEach((p, i) => {
+      const b = document.createElement('button');
+      b.className = 'phase'; b.type = 'button'; b.setAttribute('role', 'tab'); b.id = 'phase-' + i;
+      b.setAttribute('aria-selected', i === phActive);
+      b.innerHTML = `<small>${L() === 'de' ? 'LPH' : 'LPH'} ${p[0]}</small>${p[1]}`;
+      b.onclick = () => { phActive = i; renderPhases(); };
+      phEl.appendChild(b);
+      if (i === phActive) {
+        const d = document.createElement('div'); d.className = 'phase-body';
+        d.innerHTML = `<span class="de">${p[2]}</span><span>${p[3]}</span><a class="btn btn-ghost btn-sm" href="#workflows">${L() === 'de' ? 'Mehr erfahren' : 'Learn more'} ${arrow}</a>`;
+        phEl.appendChild(d);
+      }
+    });
+  }
+
+  /* ---------- Engine: isometric building with variant cubes ---------- */
+  const ec = document.getElementById('engine');
+  const ectx = ec.getContext('2d');
+  const GX = 7, GY = 4, GZ = 6;
+  const cubes = [];
+  const er = rng(7);
+  for (let z = 0; z < GZ; z++) for (let y = 0; y < GY; y++) for (let x = 0; x < GX; x++) cubes.push({ x, y, z, v: 0, target: er() < 0.35 ? 1 : 0, next: er() * 3 });
+  cubes.sort((a, b) => (a.x + a.y) - (b.x + b.y) || a.z - b.z);
+  let ew, eh, engVisible = false, eRaf = 0;
+  function sizeEngine() { const b = ec.getBoundingClientRect(); ew = b.width; eh = b.height; ec.width = ew * DPR; ec.height = eh * DPR; ectx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+  sizeEngine(); addEventListener('resize', sizeEngine);
+  function frameEngine(now) {
+    const time = now / 1000;
+    ectx.clearRect(0, 0, ew, eh);
+    const u = Math.min(ew / 15, eh / 11.5);
+    const cx = ew / 2, cy = eh * 0.66;
+    const iso = (x, y, z) => [cx + (x - y) * 0.866 * u, cy + (x + y) * 0.5 * u - z * u - (GX + GY) * 0.25 * u + u * 1.2];
+    const line = (a, b) => { ectx.beginPath(); ectx.moveTo(...iso(...a)); ectx.lineTo(...iso(...b)); ectx.stroke(); };
+    const FH = 1.05;
+    ectx.strokeStyle = 'rgba(255,255,255,.06)'; ectx.lineWidth = 1;
+    for (let i = -3; i <= GX + 3; i++) line([i, -3, 0], [i, GY + 3, 0]);
+    for (let j = -3; j <= GY + 3; j++) line([-3, j, 0], [GX + 3, j, 0]);
+    ectx.strokeStyle = 'rgba(255,255,255,.28)';
+    for (let z = 0; z <= GZ; z++) { const h = z * FH; line([0, 0, h], [GX, 0, h]); line([GX, 0, h], [GX, GY, h]); line([GX, GY, h], [0, GY, h]); line([0, GY, h], [0, 0, h]); }
+    for (const [x, y] of [[0, 0], [GX, 0], [GX, GY], [0, GY]]) line([x, y, 0], [x, y, GZ * FH]);
+    ectx.strokeStyle = 'rgba(255,255,255,.4)';
+    const top = GZ * FH, ridge = top + 1.6;
+    line([0, 0, top], [0, GY / 2, ridge]); line([0, GY, top], [0, GY / 2, ridge]);
+    line([GX, 0, top], [GX, GY / 2, ridge]); line([GX, GY, top], [GX, GY / 2, ridge]);
+    line([0, GY / 2, ridge], [GX, GY / 2, ridge]);
+    const [bx, by] = iso(GX / 2, GY / 2, ridge);
+    ectx.strokeStyle = AMBER; ectx.beginPath(); ectx.moveTo(bx, by); ectx.lineTo(bx, by - u * 0.9); ectx.stroke();
+    ectx.fillStyle = AMBER; ectx.beginPath(); ectx.moveTo(bx, by - u * 1.6); ectx.lineTo(bx - u * 0.35, by - u * 0.8); ectx.lineTo(bx + u * 0.35, by - u * 0.8); ectx.closePath(); ectx.fill();
+    const s = 0.34;
+    for (const c of cubes) {
+      if (!reduce && time > c.next) { c.target = Math.random() < 0.38 ? 1 : 0; c.next = time + 1.2 + Math.random() * 3.5; }
+      c.v = reduce ? c.target : c.v + (c.target - c.v) * 0.08;
+      if (c.v < 0.02) continue;
+      const ox = c.x + 0.5, oy = c.y + 0.5, oz = c.z * FH + 0.3;
+      const k = s * (0.6 + 0.4 * c.v);
+      const p = (dx, dy, dz) => iso(ox + dx * k, oy + dy * k, oz + dz * k);
+      const face = (pts, col) => { ectx.fillStyle = col; ectx.beginPath(); pts.forEach((q, i) => i ? ectx.lineTo(...q) : ectx.moveTo(...q)); ectx.closePath(); ectx.fill(); };
+      ectx.globalAlpha = c.v;
+      face([p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)], '#fbe58a');
+      face([p(-1, 1, 1), p(1, 1, 1), p(1, 1, -1), p(-1, 1, -1)], '#d3ad2a');
+      face([p(1, -1, 1), p(1, 1, 1), p(1, 1, -1), p(1, -1, -1)], AMBER);
+    }
+    ectx.globalAlpha = 1;
+    ectx.font = '11px "JetBrains Mono", monospace'; ectx.fillStyle = 'rgba(255,255,255,.55)';
+    const de = L() === 'de';
+    const live = cubes.filter(c => c.target).length;
+    ectx.fillText(`${de ? 'VARIANTE' : 'VARIANT'} ${String(400 + Math.floor(time * 7) % 880).padStart(4, '0')} / 1280`, 24, 34);
+    ectx.fillText(`${de ? 'EINHEITEN GEPRÜFT' : 'UNITS TESTED'}  ${String(live).padStart(3, '0')}`, 24, 52);
+    ectx.textAlign = 'right';
+    ectx.fillText(de ? 'GFZ 1,8 · GRZ 0,4' : 'GFZ 1.8 · GRZ 0.4', ew - 24, 34);
+    ectx.fillStyle = AMBER;
+    ectx.fillText(`${de ? 'BESTWERT' : 'BEST'}  ${RF.eur(2410 - Math.min(265, Math.floor(time * 9) % 300))} / m²`, ew - 24, 52);
+    ectx.textAlign = 'left';
+    eRaf = (!reduce && engVisible) ? requestAnimationFrame(frameEngine) : 0;
+  }
+  new IntersectionObserver(([e]) => { engVisible = e.isIntersecting; if (engVisible && !eRaf) eRaf = requestAnimationFrame(frameEngine); }).observe(ec);
+  requestAnimationFrame(frameEngine);
+
+  /* ---------- Workflows ---------- */
+  const WF = {
+    en: [
+      { tab: 'Feasibility', title: 'Know what a site can hold before you buy it.', text: 'Drop in a land register extract and zoning plan. Richtfest reads the limits, checks the neighbours and returns buildable area, unit mix and a first cost range.', list: [['Inputs', 'Zoning plan, survey, brief'], ['Output', 'Buildable volume and yield'], ['Turnaround', 'Days, not weeks']], ph: '16:9 · Screenshot · Site analysis', k1: 'Usable floor area', v1: '<b>4,920</b> m² GFA', k2: 'Zoning', v2: 'GFZ 1.8 · GRZ 0.4' },
+      { tab: 'Massing variants', title: 'Every option on the table, ranked.', text: 'Agents generate massing and floor plan variants in parallel and score them against daylight, unit mix, cost and zoning, so you choose between the best options.', list: [['Explored', '1,280 variants'], ['Ranked by', 'Yield, daylight, cost'], ['You decide', 'Shortlist of five']], ph: '16:9 · Screenshot · Variant explorer', k1: 'Current pick', v1: 'Variant <b>412</b> of 1,280', k2: 'Daylight score', v2: '0.92 · south-facing' },
+      { tab: 'Building physics', title: 'Calculations you can audit line by line.', text: 'Sound insulation, thermal and fire checks run in versioned engines. Each result shows the inputs, the standard and the tool version it came from.', list: [['Standard', 'DIN 4109 sound insulation'], ['Engine', 'Versioned and validated'], ['Review', 'Signed by a planner']], ph: '16:9 · Screenshot · Sound insulation check', k1: 'Facade south · 2.14', v1: "R'w,ges <b>41</b> dB", k2: 'Requirement', v2: '≥ 38 dB · passed' },
+      { tab: 'Cost & tender', title: 'Quantities that follow the drawings.', text: 'Every revision updates quantities and cost groups automatically. Tender packages stay aligned with the latest approved plans.', list: [['Structure', 'DIN 276 cost groups'], ['Updates', 'On every revision'], ['Export', 'GAEB tender files']], ph: '16:9 · Screenshot · Cost model', k1: 'Cost group 300', v1: '<b>€2,140</b> / m²', k2: 'Change since rev B', v2: '−3.8 %' }
+    ],
+    de: [
+      { tab: 'Machbarkeit', title: 'Wissen, was ein Grundstück hergibt, bevor Sie kaufen.', text: 'Grundbuchauszug und Bebauungsplan hochladen. Richtfest liest die Vorgaben, prüft die Nachbarbebauung und liefert bebaubare Fläche, Wohnungsmix und eine erste Kostenspanne.', list: [['Eingaben', 'B-Plan, Vermessung, Anforderungen'], ['Ergebnis', 'Bebaubares Volumen und Ertrag'], ['Dauer', 'Tage statt Wochen']], ph: '16:9 · Screenshot · Grundstücksanalyse', k1: 'Nutzbare Fläche', v1: '<b>4.920</b> m² BGF', k2: 'Baurecht', v2: 'GFZ 1,8 · GRZ 0,4' },
+      { tab: 'Kubaturvarianten', title: 'Jede Option auf dem Tisch, bewertet.', text: 'Agenten erzeugen parallel Kubatur- und Grundrissvarianten und bewerten sie nach Tageslicht, Wohnungsmix, Kosten und Baurecht. Sie wählen nur noch zwischen den besten.', list: [['Untersucht', '1.280 Varianten'], ['Bewertet nach', 'Ertrag, Tageslicht, Kosten'], ['Ihre Wahl', 'Shortlist mit fünf']], ph: '16:9 · Screenshot · Variantenexplorer', k1: 'Aktuelle Wahl', v1: 'Variante <b>412</b> von 1.280', k2: 'Tageslicht', v2: '0,92 · Südausrichtung' },
+      { tab: 'Bauphysik', title: 'Berechnungen, die Sie Zeile für Zeile prüfen können.', text: 'Schallschutz-, Wärme- und Brandschutznachweise laufen in versionierten Rechenkernen. Jedes Ergebnis zeigt Eingaben, Norm und Werkzeugversion.', list: [['Norm', 'DIN 4109 Schallschutz'], ['Rechenkern', 'Versioniert und validiert'], ['Prüfung', 'Vom Planer gezeichnet']], ph: '16:9 · Screenshot · Schallschutznachweis', k1: 'Fassade Süd · 2.14', v1: "R'w,ges <b>41</b> dB", k2: 'Anforderung', v2: '≥ 38 dB · erfüllt' },
+      { tab: 'Kosten & Ausschreibung', title: 'Mengen, die den Plänen folgen.', text: 'Jede Revision aktualisiert Mengen und Kostengruppen automatisch. Leistungsverzeichnisse bleiben auf dem Stand der zuletzt freigegebenen Pläne.', list: [['Gliederung', 'Kostengruppen DIN 276'], ['Aktualisierung', 'Bei jeder Revision'], ['Export', 'GAEB-Dateien']], ph: '16:9 · Screenshot · Kostenmodell', k1: 'KG 300', v1: '<b>2.140 €</b> / m²', k2: 'Änderung seit Rev. B', v2: '−3,8 %' }
+    ]
+  };
+  const wfTabs = document.getElementById('wfTabs');
+  let wfA = 0;
+  function renderWf() {
+    const set = WF[L()];
+    wfTabs.innerHTML = '';
+    set.forEach((w, i) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = w.tab; b.setAttribute('role', 'tab'); b.id = 'wf-' + i; b.setAttribute('aria-selected', i === wfA); b.onclick = () => { wfA = i; renderWf(); }; wfTabs.appendChild(b); });
+    const w = set[wfA];
+    document.getElementById('wfTitle').textContent = w.title;
+    document.getElementById('wfText').textContent = w.text;
+    document.getElementById('wfList').innerHTML = w.list.map(l => `<li><span>${l[0]}</span><span>${l[1]}</span></li>`).join('');
+    document.getElementById('wfPh').textContent = w.ph;
+    document.getElementById('wfK1').textContent = w.k1; document.getElementById('wfV1').innerHTML = w.v1;
+    document.getElementById('wfK2').textContent = w.k2; document.getElementById('wfV2').innerHTML = w.v2;
+  }
+
+  /* ---------- Audiences ---------- */
+  const AUD = {
+    en: [['Developers', 'Decide on a plot with real numbers.', 'Feasibility, yield and cost ranges before the purchase, then a planning team that keeps pace with your financing schedule.'],
+      ['Architects', 'Keep the design. Lose the drudgery.', 'Your office sets the vision. Richtfest handles variant studies, area schedules and coordination, so your team spends its hours on architecture.'],
+      ['General contractors', 'Build from drawings that stay current.', 'Execution plans, quantities and tender packages stay in sync with every approved revision, down to the detail.'],
+      ['Authorities', 'Review submissions that explain themselves.', 'Every figure in a permit application links back to its source file and calculation, which makes checks faster on both sides.']],
+    de: [['Projektentwickler', 'Über ein Grundstück mit echten Zahlen entscheiden.', 'Machbarkeit, Ertrag und Kostenspannen vor dem Kauf, danach ein Planungsteam, das mit Ihrem Finanzierungsplan Schritt hält.'],
+      ['Architekten', 'Der Entwurf bleibt. Die Fleißarbeit geht.', 'Ihr Büro gibt die Vision vor. Richtfest übernimmt Variantenstudien, Flächenaufstellungen und Koordination, damit Ihr Team seine Zeit in Architektur steckt.'],
+      ['Generalunternehmer', 'Bauen nach Plänen, die aktuell bleiben.', 'Ausführungspläne, Mengen und Leistungsverzeichnisse bleiben bei jeder freigegebenen Revision synchron, bis ins Detail.'],
+      ['Behörden', 'Bauanträge, die sich selbst erklären.', 'Jede Zahl im Bauantrag verweist auf ihre Quelldatei und Berechnung. Das beschleunigt die Prüfung auf beiden Seiten.']]
+  };
+  const car = document.getElementById('carousel'), audTabs = document.getElementById('audTabs');
+  let audA = 0;
+  function renderAudCards() {
+    const de = L() === 'de';
+    car.innerHTML = AUD[L()].map((a, i) => `<article class="aud-card" id="aud-${i}"><div class="ph"><span class="ph-label">16:9 · ${de ? 'Bild' : 'Image'} · ${a[0]}</span></div><div class="aud-copy"><span class="tag">${a[0]}</span><h3>${a[1]}</h3><p>${a[2]}</p><a class="btn btn-ghost btn-sm" href="#cta">${de ? 'Mehr erfahren' : 'Learn more'} ${arrow}</a></div></article>`).join('');
+  }
+  function renderAud() {
+    audTabs.innerHTML = '';
+    AUD[L()].forEach((a, i) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = a[0]; b.setAttribute('role', 'tab'); b.id = 'audtab-' + i; b.setAttribute('aria-selected', i === audA); b.onclick = () => { audA = i; renderAud(); const c = document.getElementById('aud-' + i); car.scrollTo({ left: c.offsetLeft - (car.clientWidth - c.clientWidth) / 2, behavior: reduce ? 'auto' : 'smooth' }); }; audTabs.appendChild(b); });
+  }
+  let st;
+  car.addEventListener('scroll', () => { clearTimeout(st); st = setTimeout(() => {
+    const mid = car.scrollLeft + car.clientWidth / 2; let best = 0, bd = 1e9;
+    [...car.children].forEach((c, i) => { const d = Math.abs(c.offsetLeft + c.clientWidth / 2 - mid); if (d < bd) { bd = d; best = i; } });
+    if (best !== audA) { audA = best; renderAud(); }
+  }, 120); }, { passive: true });
+
+  /* ---------- Review sheets ---------- */
+  document.querySelectorAll('canvas[data-plan]').forEach(cv => {
+    const b = cv.getBoundingClientRect(); const w = Math.max(10, b.width), h = Math.max(10, b.height);
+    cv.width = w * DPR; cv.height = h * DPR; const c = cv.getContext('2d'); c.setTransform(DPR, 0, 0, DPR, 0, 0);
+    c.fillStyle = 'rgba(255,255,255,.75)'; c.fillRect(0, 0, w, h);
+    const n = +cv.dataset.plan;
+    drawPlan(c, 0, 0, w, h, 100 + n, n === 2 ? 'rgba(16,18,17,.55)' : 'rgba(16,18,17,.75)', 'rgba(16,18,17,.04)', n === 3 ? 'rgba(243,207,74,.45)' : null);
+    if (n === 2) { c.setLineDash([4, 4]); c.strokeStyle = '#b0457a'; c.lineWidth = 1.4; c.strokeRect(w * 0.18, h * 0.22, w * 0.4, h * 0.42); }
+  });
+
+  /* ---------- System 1 diagram ---------- */
+  const sw = document.getElementById('swarm');
+  function renderSwarm() {
+    const de = L() === 'de';
+    const sr = rng(9); let out = '';
+    const hub = [430, 130];
+    for (let i = 0; i < 90; i++) {
+      const x = 20 + sr() * 300, y = 18 + sr() * 214, hot = sr() < 0.08;
+      out += `<path d="M${x.toFixed(1)} ${y.toFixed(1)} C ${(x + 120).toFixed(1)} ${y.toFixed(1)}, ${hub[0] - 90} ${hub[1]}, ${hub[0] - 26} ${hub[1]}" fill="none" stroke="${hot ? 'rgba(243,207,74,.55)' : 'rgba(255,255,255,.07)'}"/>`;
+      out += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${hot ? 3.2 : 2}" fill="${hot ? AMBER : 'rgba(255,255,255,.45)'}"/>`;
+    }
+    out += `<rect x="${hub[0] - 26}" y="${hub[1] - 46}" width="84" height="92" rx="16" fill="#222527" stroke="rgba(255,255,255,.5)"/>`;
+    out += `<text x="${hub[0] + 16}" y="${hub[1] - 20}" text-anchor="middle" style="fill:#fff">Top 5</text>`;
+    for (let i = 0; i < 5; i++) out += `<rect x="${hub[0] - 12}" y="${hub[1] - 8 + i * 9}" width="${56 - i * 8}" height="4" rx="2" fill="${i === 0 ? AMBER : 'rgba(255,255,255,.4)'}"/>`;
+    out += `<text x="20" y="250">${de ? '1.280 Varianten in 0,4 s bewertet' : '1,280 variants scored in 0.4 s'}</text>`;
+    sw.innerHTML = `<svg viewBox="0 0 520 260" aria-hidden="true">${out}</svg>`;
+  }
+
+  /* ---------- Cost waterfall ---------- */
+  const STEPS = {
+    en: [['Structural grid aligned to parking', 'Moving from a 7.5 m to an 8.1 m grid removes transfer beams above the garage.', 'System 1 sweep'],
+      ['Shafts consolidated into two cores', 'Fewer risers, shorter runs and one less lift without losing any apartments.', 'LLM agent proposal'],
+      ['Facade-to-floor ratio reduced', 'A deeper floor plate cuts facade area by 9% while keeping daylight above target.', 'System 1 sweep'],
+      ['Basement depth reduced by one level', 'Mechanical parking stackers replace a second basement level.', 'LLM agent proposal'],
+      ['Window sizes standardised', 'Seven window types instead of nineteen, with sound insulation still above DIN 4109.', 'Deterministic check']],
+    de: [['Tragwerksraster auf Stellplätze abgestimmt', 'Ein Raster von 8,10 m statt 7,50 m macht Abfangträger über der Tiefgarage überflüssig.', 'System-1-Sweep'],
+      ['Schächte in zwei Kernen gebündelt', 'Weniger Steigstränge, kürzere Leitungen und ein Aufzug weniger, ohne eine Wohnung zu verlieren.', 'Vorschlag LLM-Agent'],
+      ['Fassadenanteil reduziert', 'Eine tiefere Geschossfläche spart 9 % Fassadenfläche, das Tageslicht bleibt über dem Zielwert.', 'System-1-Sweep'],
+      ['Ein Untergeschoss weniger', 'Parkpaletten ersetzen das zweite Untergeschoss.', 'Vorschlag LLM-Agent'],
+      ['Fenstergrößen vereinheitlicht', 'Sieben statt neunzehn Fenstertypen, Schallschutz weiterhin über DIN 4109.', 'Deterministische Prüfung']]
+  };
+  const SAVE = [92, 61, 48, 41, 23];
+  const BASE = 2410, GFA = 4920;
+  const costTabs = document.getElementById('costTabs'), wfSvg = document.getElementById('waterfall');
+  let unit = 'm2';
+  function renderCost() {
+    const de = L() === 'de';
+    const money = v => unit === 'm2' ? RF.eur(v) : (de ? `${RF.nf(v * GFA / 1e6, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Mio. €` : `€${(v * GFA / 1e6).toFixed(2)}M`);
+    const minus = v => unit === 'm2' ? '−' + RF.eur(v) : (de ? `−${RF.nf(Math.round(v * GFA / 1000))} T€` : `−€${Math.round(v * GFA / 1000)}k`);
+    costTabs.innerHTML = '';
+    [['m2', de ? 'Pro m² BGF' : 'Per m² GFA'], ['total', de ? 'Gesamt' : 'Total']].forEach(([k, l]) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = l; b.id = 'cost-' + k; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', unit === k); b.onclick = () => { unit = k; renderCost(); }; costTabs.appendChild(b); });
+    const total = SAVE.reduce((a, s) => a + s, 0), end = BASE - total;
+    document.getElementById('costNow').textContent = `${money(end)}${unit === 'm2' ? ' / m²' : ''}`;
+    const W = 760, H = 340, Lm = 64, R = 16, T = 28, B = 64, lo = 2000, hi = 2450;
+    const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+    const cols = SAVE.length + 2, cw = (W - Lm - R) / cols, bw = cw * 0.62;
+    let o = '';
+    for (let v = 2000; v <= 2400; v += 100) o += `<line x1="${Lm}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,.08)"/><text x="${Lm - 8}" y="${y(v) + 4}" text-anchor="end">${unit === 'm2' ? RF.nf(v) : RF.nf(v * GFA / 1e6, { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + (de ? ' Mio.' : 'M')}</text>`;
+    const bar = (i, top, bot, fill, label, val, sub) => {
+      const x = Lm + i * cw + (cw - bw) / 2;
+      o += `<rect x="${x}" y="${y(top)}" width="${bw}" height="${Math.max(1, y(bot) - y(top))}" rx="6" fill="${fill}"/>`;
+      o += `<text class="val" x="${x + bw / 2}" y="${y(top) - 8}" text-anchor="middle">${val}</text>`;
+      o += `<text x="${x + bw / 2}" y="${H - B + 20}" text-anchor="middle">${label}</text>`;
+      if (sub) o += `<text x="${x + bw / 2}" y="${H - B + 36}" text-anchor="middle">${sub}</text>`;
+      return x;
+    };
+    bar(0, BASE, lo, 'rgba(255,255,255,.28)', de ? 'Erster' : 'First', money(BASE), de ? 'Entwurf' : 'design');
+    let run = BASE;
+    SAVE.forEach((sv, i) => {
+      const x = bar(i + 1, run, run - sv, AMBER, `${de ? 'Schritt' : 'Step'} ${i + 1}`, minus(sv), null);
+      o += `<line x1="${x - (cw - bw)}" x2="${x}" y1="${y(run)}" y2="${y(run)}" stroke="rgba(255,255,255,.3)" stroke-dasharray="3 3"/>`;
+      run -= sv;
+    });
+    bar(SAVE.length + 1, run, lo, '#ffffff', de ? 'Optimiert' : 'Optimised', money(run), `−${RF.nf(total / BASE * 100, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %`);
+    wfSvg.innerHTML = o;
+    document.getElementById('costList').innerHTML = STEPS[L()].map((s, i) => `<li><b>${i + 1}. ${s[0]}</b><span class="s">${minus(SAVE[i])}${unit === 'm2' ? ' / m²' : ''}</span><span class="how">${s[1]}</span><span class="who">${s[2]}</span></li>`).join('');
+  }
+
+  function renderAll() { renderPhases(); renderWf(); renderAudCards(); renderAud(); renderSwarm(); renderCost(); }
+  RF.on(renderAll);
+  RF.apply();
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+/* ---------- Interactive 8-unit house ---------- */
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const host = document.getElementById('viewer');
+  const logEl = document.getElementById('dLog'), costEl = document.getElementById('dCost'), deltaEl = document.getElementById('dDelta');
+  const goBtn = document.getElementById('dGo'), resetBtn = document.getElementById('dReset'), statusEl = document.getElementById('vStatus');
+  const BASE = 1980000;
+  const wait = ms => new Promise(r => setTimeout(r, reduce ? 0 : ms));
+  const TXT = {
+    en: {
+      first: 'First design', busy: 'Optimizing…', done: 'Rev B · 3 proposals', agent: 'Richtfest agent',
+      intro: 'This is the first design from the brief: three storeys in Berlin, two flats per floor. The top-floor balconies sit just above the fire brigade ladder reach, so the design carries a second staircase. Press Optimize and I will look for savings.',
+      scanWho: 'System 1 models', scan: 'Scoring 3,412 site, structure and floor plan variants',
+      parapet: 'Parapet', ok: '≤ 8 m ladder reach',
+      f: [['System 1 · site layout sweep', 'Alright, we found a spot for the fire engine to park that was not obvious: the existing driveway on the east side. Widened by 40 cm, it puts the engine right next to the balconies, so no extra paved lane is needed.'],
+        ['LLM agent · Berlin building code', 'Here is the big one. In Berlin, the fire brigade can rescue people with portable ladders as long as the parapet is no higher than 8 m. Your top-floor balconies sit at 8.10 m. We dropped them three steps, 51 cm, so the parapet is now at 7.59 m. The ladder reaches, the balconies count as the second escape route, and the second staircase can go. That saves you about €100k.'],
+        ['System 1 · floor plan sweep', 'Last one: bathrooms and kitchens now stack directly above each other, so four service shafts become two with shorter pipe runs.']],
+      sum: s => `Done. Three changes, ${s} saved, same flats and the same standard. Each change is marked as a proposal until your planner approves it.`
+    },
+    de: {
+      first: 'Erster Entwurf', busy: 'Optimiere…', done: 'Rev. B · 3 Vorschläge', agent: 'Richtfest-Agent',
+      intro: 'Das ist der erste Entwurf nach den Anforderungen: drei Geschosse in Berlin, zwei Wohnungen pro Etage. Die Balkone im 2. OG liegen knapp über der Reichweite der Feuerwehrleiter, deshalb plant der Entwurf ein zweites Treppenhaus. Drücken Sie auf Optimieren, und ich suche nach Einsparungen.',
+      scanWho: 'System-1-Modelle', scan: 'Bewerte 3.412 Varianten für Grundstück, Tragwerk und Grundriss',
+      parapet: 'Brüstung', ok: '≤ 8 m Leiterreichweite',
+      f: [['System 1 · Lageplan-Sweep', 'Gut, wir haben einen Platz gefunden, an dem die Feuerwehr parken kann, und der war nicht offensichtlich: die bestehende Zufahrt auf der Ostseite. Um 40 cm verbreitert steht das Fahrzeug direkt an den Balkonen, eine zusätzliche befestigte Fläche ist nicht nötig.'],
+        ['LLM-Agent · Bauordnung Berlin', 'Jetzt das Wichtigste. In Berlin kann die Feuerwehr mit tragbaren Leitern retten, solange die Brüstung höchstens 8 m hoch liegt. Ihre Balkone im 2. OG liegen bei 8,10 m. Wir haben sie drei Stufen, also 51 cm, tiefer gesetzt. Die Brüstung liegt jetzt bei 7,59 m. Die Leiter reicht, die Balkone gelten als zweiter Rettungsweg, und das zweite Treppenhaus entfällt. Das spart Ihnen rund 100.000 €.'],
+        ['System 1 · Grundriss-Sweep', 'Zum Schluss: Bäder und Küchen liegen jetzt direkt übereinander. So werden aus vier Installationsschächten zwei mit kürzeren Leitungswegen.']],
+      sum: s => `Fertig. Drei Änderungen, ${s} gespart, gleiche Wohnungen, gleicher Standard. Jede Änderung bleibt als Vorschlag markiert, bis Ihre Planerin oder Ihr Planer sie freigibt.`
+    }
+  };
+  const T = () => TXT[RF.lang];
+  let phase = 'idle', cost = BASE;
+
+  const pin2t = document.getElementById('pin2t');
+  let parapet = 8.10;
+  const setPin2 = () => { pin2t.textContent = `${T().parapet} ${RF.nf(parapet, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m${parapet <= 8 ? ' · ' + T().ok : ''}`; };
+  function intro() {
+    setPin2();
+    logEl.innerHTML = '';
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="who">${T().agent}</span><span>${T().intro}</span>`;
+    logEl.appendChild(li);
+    costEl.textContent = RF.eur(BASE); deltaEl.textContent = '';
+    statusEl.textContent = T().first;
+  }
+  intro();
+  RF.on(() => {
+    if (phase === 'idle') intro();
+    else if (phase === 'done') { statusEl.textContent = T().done; costEl.textContent = RF.eur(cost); setDelta(); setPin2(); }
+  });
+  function setDelta() { deltaEl.textContent = cost < BASE ? `−${RF.eur(BASE - cost)} · −${RF.nf((BASE - cost) / BASE * 100, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} %` : ''; }
+
+  if (!window.THREE || !THREE.OrbitControls) { document.getElementById('vFallback').hidden = false; goBtn.disabled = true; return; }
+
+  /* Renderer + scene */
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  host.prepend(renderer.domElement);
+  const scene = new THREE.Scene();
+
+  function canvasTex(w, h, draw, rx = 1, ry = 1, srgb = true) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry);
+    if (srgb) t.encoding = THREE.sRGBEncoding;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  }
+  function speckle(ctx, w, h, base, amp, n) {
+    ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < n; i++) { const v = (Math.random() - 0.5) * amp; ctx.fillStyle = v > 0 ? `rgba(255,255,255,${v})` : `rgba(0,0,0,${-v})`; ctx.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2); }
+  }
+  const skyTex = canvasTex(4, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#9fb8cf'); g.addColorStop(0.55, '#d9e3ea'); g.addColorStop(1, '#eef0ec'); c.fillStyle = g; c.fillRect(0, 0, w, h); });
+  skyTex.wrapS = skyTex.wrapT = THREE.ClampToEdgeWrapping;
+  scene.background = skyTex;
+  scene.fog = new THREE.Fog(0xe4e9eb, 90, 190);
+
+  // Environment for reflections: a simple sky dome
+  const envScene = new THREE.Scene();
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide }));
+  envScene.add(dome);
+  const groundDisk = new THREE.Mesh(new THREE.CircleGeometry(49, 32), new THREE.MeshBasicMaterial({ color: 0x6f7568 }));
+  groundDisk.rotation.x = -Math.PI / 2; groundDisk.position.y = -1; envScene.add(groundDisk);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.5, 400);
+  const HOME = { pos: new THREE.Vector3(40, 24, 46), tgt: new THREE.Vector3(1, 4.5, 2) };
+  camera.position.copy(HOME.pos);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.copy(HOME.tgt);
+  controls.enableDamping = true; controls.enablePan = false;
+  controls.minDistance = 24; controls.maxDistance = 120; controls.maxPolarAngle = Math.PI * 0.46;
+  controls.autoRotate = !reduce; controls.autoRotateSpeed = 0.45;
+
+  scene.add(new THREE.HemisphereLight(0xdde8f3, 0x5f6553, 0.55));
+  const sun = new THREE.DirectionalLight(0xfff0d8, 2.4);
+  sun.position.set(30, 42, 22); sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+  Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 140 });
+  scene.add(sun);
+
+  /* Materials */
+  const M = (o) => new THREE.MeshStandardMaterial(o);
+  const plasterTex = canvasTex(256, 256, (c, w, h) => speckle(c, w, h, '#efede6', 0.08, 6000), 4, 3);
+  const plinthTex = canvasTex(256, 256, (c, w, h) => speckle(c, w, h, '#8e908c', 0.14, 6000), 6, 1);
+  const roofTex = canvasTex(256, 256, (c, w, h) => {
+    c.fillStyle = '#4c5156'; c.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y += 16) { c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(0, y, w, 2); const off = (y / 16) % 2 ? 0 : 12; for (let x = off; x < w; x += 24) { c.fillStyle = 'rgba(0,0,0,.18)'; c.fillRect(x, y, 1.5, 16); } c.fillStyle = 'rgba(255,255,255,.04)'; c.fillRect(0, y + 3, w, 4); }
+  }, 6, 3);
+  const grassTex = canvasTex(256, 256, (c, w, h) => { speckle(c, w, h, '#8a9a72', 0.18, 14000); }, 24, 24);
+  const asphaltTex = canvasTex(256, 256, (c, w, h) => speckle(c, w, h, '#5a5d5f', 0.16, 12000), 20, 2);
+  const pavingTex = canvasTex(128, 128, (c, w, h) => { speckle(c, w, h, '#b8b6ae', 0.1, 3000); c.strokeStyle = 'rgba(0,0,0,.14)'; c.lineWidth = 1; for (let i = 0; i <= w; i += 16) { c.beginPath(); c.moveTo(i, 0); c.lineTo(i, h); c.stroke(); c.beginPath(); c.moveTo(0, i); c.lineTo(w, i); c.stroke(); } }, 2, 12);
+  const neighborTex = canvasTex(128, 128, (c, w, h) => { c.fillStyle = '#e6e3dc'; c.fillRect(0, 0, w, h); c.fillStyle = '#7d8a93'; for (let y = 16; y < h; y += 42) for (let x = 14; x < w; x += 32) c.fillRect(x, y, 14, 20); }, 4, 4);
+
+  const plaster = M({ map: plasterTex, roughness: 0.95 });
+  const wall = M({ map: plasterTex, roughness: 0.95, transparent: true, opacity: 1 });
+  const plinth = M({ map: plinthTex, roughness: 0.9 });
+  const frameM = M({ color: 0x3a3e41, roughness: 0.45, metalness: 0.35 });
+  const glassM = M({ color: 0x6f8796, roughness: 0.04, metalness: 0.95, envMapIntensity: 1.3 });
+  const sillM = M({ color: 0xbab9b2, roughness: 0.6, metalness: 0.2 });
+  const concrete = M({ map: canvasTex(128, 128, (c, w, h) => speckle(c, w, h, '#c6c4bd', 0.1, 2500)), roughness: 0.85 });
+  const roofM = M({ map: roofTex, roughness: 0.75 });
+  const pvM = M({ color: 0x1b2638, roughness: 0.18, metalness: 0.6, envMapIntensity: 1.4 });
+  const steel = M({ color: 0x8f969a, roughness: 0.35, metalness: 0.8 });
+  const steelNew = M({ color: 0xa3abaf, roughness: 0.3, metalness: 0.85, emissive: 0x2a2000 });
+  const wood = M({ color: 0x8b6d52, roughness: 0.8 });
+  const grassM = M({ map: grassTex, roughness: 1 });
+  const asphaltM = M({ map: asphaltTex, roughness: 0.95 });
+  const pavingM = M({ map: pavingTex, roughness: 0.9 });
+  const hedgeM = M({ color: 0x4f6a3b, roughness: 1 });
+  const leafM = [0x6e8a52, 0x7f9a5c, 0x5d7a47].map(c => M({ color: c, roughness: 0.9, flatShading: true }));
+  const barkM = M({ color: 0x5b4a3c, roughness: 1 });
+  const red = M({ color: 0xb8231b, roughness: 0.35, metalness: 0.3 });
+  const tyre = M({ color: 0x1a1b1c, roughness: 0.9 });
+  const amberM = M({ color: 0xf3cf4a, roughness: 0.5, emissive: 0x3d2f00 });
+
+  function box(w, h, d, mat, x, y, z, parent = scene) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
+  }
+  function cyl(r1, r2, h, mat, x, y, z, parent = scene, seg = 16) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, h, seg), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
+  }
+  const batches = new Map();
+  function ibox(key, mat, parent, w, h, d, x, y, z, ry = 0) {
+    if (!batches.has(key)) batches.set(key, { mat, parent, items: [] });
+    batches.get(key).items.push([w, h, d, x, y, z, ry]);
+  }
+  const inst = {};
+  function flush() {
+    const g = new THREE.BoxGeometry(1, 1, 1), o = new THREE.Object3D();
+    for (const [k, b] of batches) {
+      const im = new THREE.InstancedMesh(g, b.mat, b.items.length);
+      b.items.forEach((it, i) => { o.position.set(it[3], it[4], it[5]); o.rotation.set(0, it[6], 0); o.scale.set(it[0], it[1], it[2]); o.updateMatrix(); im.setMatrixAt(i, o.matrix); });
+      im.castShadow = true; im.receiveShadow = true; b.parent.add(im); inst[k] = im;
+    }
+    batches.clear();
+  }
+  function outline(mesh) {
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: 0xf3cf4a }));
+    mesh.add(e); return e;
+  }
+
+  /* Site */
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), grassM);
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  box(240, 0.08, 9, asphaltM, 0, 0.04, 21.5);
+  box(240, 0.18, 2, pavingM, 0, 0.09, 16);
+  box(240, 0.18, 2, pavingM, 0, 0.09, 27);
+  for (let x = -110; x < 110; x += 6) box(3, 0.02, 0.18, M({ color: 0xe8e8e2, roughness: 0.6 }), x, 0.09, 21.5);
+  box(4.4, 0.1, 30, pavingM, 14, 0.05, 1.2);
+  box(18, 0.1, 6.5, asphaltM, 7, 0.05, -12.2);
+  box(12, 0.1, 1.4, pavingM, 6, 0.06, -7.1);
+  [-4, 4].forEach(x => box(4.6, 0.12, 2.6, pavingM, x, 0.06, 6.8));
+  [[-20.3, 0, 0.8, 32], [20.3, -9, 0.8, 14], [0, -16.3, 41.4, 0.8]].forEach(([x, z, w, d]) => box(w, 1.3, d, hedgeM, x, 0.65, z));
+  box(23, 1.0, 0.8, hedgeM, -8.6, 0.5, 14.6);
+  box(3.6, 1.0, 0.8, hedgeM, 18.4, 0.5, 14.6);
+  box(0.12, 1.8, 2.6, wood, 0, 0.9, 6.8);
+
+  function tree(x, z, s = 1) {
+    cyl(0.16 * s, 0.24 * s, 2.6 * s, barkM, x, 1.3 * s, z, scene, 8);
+    const r = Math.random;
+    for (let k = 0; k < 4; k++) {
+      const m = new THREE.Mesh(new THREE.IcosahedronGeometry((1.3 + r() * 0.6) * s, 1), leafM[k % 3]);
+      m.position.set(x + (r() - 0.5) * 1.6 * s, (3.4 + r() * 1.4) * s, z + (r() - 0.5) * 1.6 * s);
+      m.castShadow = true; m.receiveShadow = true; scene.add(m);
+    }
+  }
+  [[-15, 10, 1.1], [-12, -11, 1.2], [17, -14.5, 0.9], [-17, -4, 1], [-28, 16, 1.2], [-8, 16.4, 0.8], [26, 16.4, 0.8], [40, 16.4, 0.8], [-44, 16.4, 0.8], [8, 27.2, 0.9], [-20, 27.2, 0.9], [34, 27.2, 0.9]].forEach(t => tree(...t));
+
+  function car(x, z, ry, color) {
+    const g = new THREE.Group(); scene.add(g);
+    const paint = M({ color, roughness: 0.25, metalness: 0.6, envMapIntensity: 1.2 });
+    box(1.8, 0.62, 4.3, paint, 0, 0.62, 0, g);
+    box(1.6, 0.55, 2.2, glassM, 0, 1.18, -0.2, g);
+    box(1.62, 0.08, 2.0, paint, 0, 1.48, -0.2, g);
+    [[-0.85, -1.35], [0.85, -1.35], [-0.85, 1.35], [0.85, 1.35]].forEach(([wx, wz]) => { const w = cyl(0.34, 0.34, 0.24, tyre, wx, 0.34, wz, g); w.rotation.z = Math.PI / 2; });
+    g.position.set(x, 0, z); g.rotation.y = ry; return g;
+  }
+  car(1, -12.4, Math.PI / 2, 0x2f3f52); car(5.4, -12.4, Math.PI / 2, 0xc9cbc8); car(9.8, -12.4, Math.PI / 2, 0x6a1f1f);
+  car(-30, 20, Math.PI / 2, 0x9aa3a8); car(24, 23.2, -Math.PI / 2, 0x1e2124);
+
+  function neighbor(x, z, w, d, h, ry = 0) {
+    const g = new THREE.Group(); scene.add(g);
+    const t = neighborTex.clone(); t.needsUpdate = true; t.repeat.set(w / 4, h / 3);
+    box(w, h, d, M({ map: t, roughness: 0.95 }), 0, h / 2, 0, g);
+    const tri = new THREE.Shape(); tri.moveTo(-d / 2 - 0.3, 0); tri.lineTo(d / 2 + 0.3, 0); tri.lineTo(0, d * 0.32); tri.closePath();
+    const rg = new THREE.ExtrudeGeometry(tri, { depth: w + 0.6, bevelEnabled: false }); rg.rotateY(Math.PI / 2); rg.translate(-w / 2 - 0.3, 0, 0);
+    const roof = new THREE.Mesh(rg, M({ color: 0x8a5a48, roughness: 0.8 })); roof.position.y = h; roof.castShadow = true; g.add(roof);
+    g.position.set(x, 0, z); g.rotation.y = ry;
+  }
+  neighbor(-36, -2, 14, 11, 10); neighbor(37, -4, 13, 11, 9); neighbor(-6, -32, 26, 11, 12);
+  neighbor(-26, 40, 16, 11, 11); neighbor(4, 40, 14, 11, 9); neighbor(32, 40, 18, 11, 12);
+
+  /* House: 4 storeys, 2 units per floor */
+  const house = new THREE.Group(); scene.add(house);
+  const G0 = 0.9, FH = 3.1, NF = 3, EAVE = G0 + NF * FH;
+  box(16.06, G0, 11.06, plinth, 0, G0 / 2, 0, house);
+  const body = box(16, NF * FH, 11, wall, 0, G0 + NF * FH / 2, 0, house);
+  for (let i = 0; i <= NF; i++) box(15.8, 0.25, 10.8, concrete, 0, G0 + i * FH, 0, house);
+  const core = box(2.8, NF * FH, 2.8, M({ color: 0x9aa09d, roughness: 0.9 }), 0, G0 + NF * FH / 2, -3.7, house); core.visible = false;
+
+  function win(face, a, y, w, h, sill = true) {
+    const fw = w + 0.14, fh = h + 0.14;
+    if (face === 'S' || face === 'N') {
+      const z = face === 'S' ? 5.5 : -5.5, sg = face === 'S' ? 1 : -1;
+      ibox('frame', frameM, house, fw, fh, 0.1, a, y, z + sg * 0.03);
+      ibox('glass', glassM, house, w, h, 0.02, a, y, z + sg * 0.085);
+      ibox('mull', frameM, house, 0.05, h, 0.03, a, y, z + sg * 0.1);
+      if (sill) ibox('sill', sillM, house, w + 0.2, 0.05, 0.2, a, y - h / 2 - 0.08, z + sg * 0.1);
+    } else {
+      const x = face === 'E' ? 8 : -8, sg = face === 'E' ? 1 : -1;
+      ibox('frame', frameM, house, 0.1, fh, fw, x + sg * 0.03, y, a);
+      ibox('glass', glassM, house, 0.02, h, w, x + sg * 0.085, y, a);
+      ibox('mull', frameM, house, 0.03, h, 0.05, x + sg * 0.1, y, a);
+      if (sill) ibox('sill', sillM, house, 0.2, 0.05, w + 0.2, x + sg * 0.1, y - h / 2 - 0.08, a);
+    }
+  }
+  for (let i = 0; i < NF; i++) {
+    const lv = G0 + i * FH;
+    [-4, 4].forEach(ux => {
+      win('S', ux - 1.1, lv + 1.2, 1.1, 2.3, false);
+      win('S', ux + 1.0, lv + 1.55, 1.5, 1.45);
+      win('N', ux - 1.8 * Math.sign(ux), lv + 1.55, 1.2, 1.45);
+      win('N', ux + 1.4 * Math.sign(ux), lv + 1.8, 0.7, 0.9);
+    });
+    win('S', -7.1, lv + 1.55, 0.8, 1.45); win('S', 7.1, lv + 1.55, 0.8, 1.45);
+    [-3, 3].forEach(z => { win('E', z, lv + 1.55, 1.3, 1.45); win('W', z, lv + 1.55, 1.3, 1.45); });
+    if (i > 0) win('N', 0, lv + 0.2, 1.2, 1.9);
+  }
+  // Entrance
+  ibox('frame', frameM, house, 1.9, 2.5, 0.1, 0, G0 + 1.2, -5.53);
+  box(1.6, 2.3, 0.04, M({ color: 0x5b4636, roughness: 0.6 }), 0, G0 + 1.15, -5.6, house);
+  box(3.2, 0.14, 1.7, concrete, 0, G0 + 2.75, -6.35, house);
+  for (let k = 0; k < 5; k++) box(2.8, G0 - k * 0.18, 1.5 - k * 0.3, concrete, 0, (G0 - k * 0.18) / 2, -6.25 - k * 0.15, house);
+
+  // Roof with overhang, gable walls, gutters and solar panels
+  const HALF = 5.5 + 0.7, RISE = 4.2, ANG = Math.atan(RISE / HALF), SL = Math.hypot(HALF, RISE);
+  const roofS = box(17.4, 0.24, SL, roofM, 0, EAVE + RISE / 2, HALF / 2, house); roofS.rotation.x = ANG;
+  const roofN = box(17.4, 0.24, SL, roofM, 0, EAVE + RISE / 2, -HALF / 2, house); roofN.rotation.x = -ANG;
+  box(17.5, 0.2, 0.36, M({ color: 0x3b3f43, roughness: 0.6 }), 0, EAVE + RISE + 0.1, 0, house);
+  const gRise = RISE * 5.5 / HALF;
+  [-8, 8].forEach(x => {
+    const sh = new THREE.Shape(); sh.moveTo(-5.5, 0); sh.lineTo(5.5, 0); sh.lineTo(0, gRise); sh.closePath();
+    const gg = new THREE.ShapeGeometry(sh); gg.rotateY(Math.PI / 2);
+    const gm = new THREE.Mesh(gg, M({ map: plasterTex, roughness: 0.95, side: THREE.DoubleSide })); gm.position.set(x, EAVE, 0); gm.castShadow = true; house.add(gm);
+  });
+  [1, -1].forEach(sg => {
+    const gt = cyl(0.09, 0.09, 17.4, steel, 0, EAVE - 0.12, sg * (HALF + 0.05), house, 10); gt.rotation.z = Math.PI / 2;
+    [-8.5, 8.5].forEach(x => cyl(0.05, 0.05, EAVE, steel, x, EAVE / 2, sg * 5.62, house, 8));
+  });
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 7; c++) ibox('pv', pvM, roofS, 1.9, 0.05, 1.05, -6 + c * 2.0, 0.15, -2.2 + r * 1.15);
+  box(0.7, 1.4, 0.7, plinth, -5, EAVE + RISE * 0.6, -1.8, house);
+
+  // Balconies (1st and 2nd floor) with steel railings; the top ones can be lowered
+  const topBalc = new THREE.Group(); house.add(topBalc);
+  for (let i = 1; i < NF; i++) {
+    const lv = G0 + i * FH, top = i === NF - 1, par = top ? topBalc : house, sx = top ? 'T' : '';
+    [-4, 4].forEach(ux => {
+      box(4.6, 0.22, 1.8, concrete, ux, lv, 6.4, par);
+      ibox('rail' + sx, steel, par, 4.6, 0.05, 0.06, ux, lv + 1.0, 7.27);
+      [-1, 1].forEach(sg => ibox('rail' + sx, steel, par, 0.05, 0.05, 1.8, ux + sg * 2.27, lv + 1.0, 6.4));
+      for (let x = -2.25; x <= 2.25; x += 0.12) ibox('bar' + sx, steel, par, 0.025, 0.9, 0.025, ux + x, lv + 0.55, 7.27);
+      [-1, 1].forEach(sg => { for (let z = 5.6; z <= 7.25; z += 0.14) ibox('bar' + sx, steel, par, 0.025, 0.9, 0.025, ux + sg * 2.27, lv + 0.55, z); });
+    });
+  }
+  // Second staircase the first design needs for the second escape route
+  const stairM = M({ map: plasterTex, roughness: 0.95, transparent: true, opacity: 1 });
+  const stair2 = new THREE.Group(); house.add(stair2);
+  box(3.4, EAVE + 0.8, 4.4, stairM, -9.7, (EAVE + 0.8) / 2, -1.5, stair2);
+  box(3.6, 0.2, 4.6, M({ color: 0x3b3f43, roughness: 0.6, transparent: true }), -9.7, EAVE + 0.9, -1.5, stair2);
+  for (let i = 0; i < NF; i++) box(0.06, 1.8, 1.0, M({ color: 0x6f8796, roughness: 0.05, metalness: 0.9, transparent: true }), -11.43, G0 + i * FH + 1.6, -1.5, stair2);
+  box(0.06, 2.3, 1.2, M({ color: 0x5b4636, roughness: 0.6, transparent: true }), -11.43, 1.15, -0.2, stair2);
+  flush();
+
+  /* Finding 1: fire brigade parking on the widened driveway */
+  const hatch = canvasTex(128, 128, (c, w, h) => { c.clearRect(0, 0, w, h); c.strokeStyle = 'rgba(243,207,74,.95)'; c.lineWidth = 14; for (let k = -128; k < 256; k += 44) { c.beginPath(); c.moveTo(k, h); c.lineTo(k + h, 0); c.stroke(); } c.strokeStyle = '#f3cf4a'; c.lineWidth = 10; c.strokeRect(0, 0, w, h); }, 1, 3);
+  const fireArea = box(4.8, 0.03, 12, M({ map: hatch, transparent: true, roughness: 0.7, depthWrite: false }), 14.2, 0.13, 2);
+  fireArea.castShadow = false; fireArea.scale.z = 0.001; fireArea.visible = false;
+  const widen = box(0.4, 0.1, 12, pavingM, 16.4, 0.06, 2); widen.visible = false; outline(widen);
+  const signTex = canvasTex(128, 96, (c, w, h) => { c.fillStyle = '#fff'; c.fillRect(0, 0, w, h); c.strokeStyle = '#c62b20'; c.lineWidth = 8; c.strokeRect(4, 4, w - 8, h - 8); c.fillStyle = '#c62b20'; c.font = 'bold 18px Arial'; c.textAlign = 'center'; c.fillText('FEUERWEHR', w / 2, 42); c.font = '14px Arial'; c.fillText('Zufahrt', w / 2, 64); });
+  const sign = new THREE.Group(); scene.add(sign);
+  cyl(0.04, 0.04, 2.2, steel, 0, 1.1, 0, sign, 8);
+  box(0.9, 0.66, 0.03, M({ map: signTex, roughness: 0.5 }), 0, 2.0, 0.04, sign);
+  sign.position.set(16.9, 0, 14); sign.rotation.y = -Math.PI / 2 + 0.4; sign.visible = false;
+
+  const truck = new THREE.Group(); scene.add(truck);
+  box(2.5, 2.3, 6.2, red, 0, 1.75, -0.8, truck);
+  box(2.5, 2.2, 2.1, red, 0, 1.6, 3.35, truck);
+  box(2.3, 1.0, 0.05, glassM, 0, 2.15, 4.42, truck);
+  [-1, 1].forEach(sg => box(0.05, 0.9, 1.4, glassM, sg * 1.26, 2.15, 3.4, truck));
+  box(2.54, 0.2, 8.4, M({ color: 0xf2f2ee, roughness: 0.5 }), 0, 1.2, 0.15, truck);
+  [-1, 1].forEach(sg => box(0.04, 1.4, 4.6, steel, sg * 1.27, 2.0, -1.0, truck));
+  [-0.4, 0.4].forEach(x => box(0.1, 0.14, 7.2, steel, x, 3.05, -0.4, truck));
+  for (let k = -3.8; k <= 3.0; k += 0.45) box(0.7, 0.06, 0.06, steel, 0, 3.05, k, truck);
+  [-0.7, 0.7].forEach(x => box(0.36, 0.16, 0.3, M({ color: 0x2b6bff, emissive: 0x1a44cc, roughness: 0.3 }), x, 2.8, 3.6, truck));
+  box(2.5, 0.35, 0.2, M({ color: 0x222222, roughness: 0.6 }), 0, 0.7, 4.45, truck);
+  [[-1.15, -3], [1.15, -3], [-1.15, -1.7], [1.15, -1.7], [-1.15, 3.2], [1.15, 3.2]].forEach(([x, z]) => { const w = cyl(0.52, 0.52, 0.38, tyre, x, 0.52, z, truck); w.rotation.z = Math.PI / 2; });
+  truck.rotation.y = Math.PI; truck.visible = false;
+
+  /* Finding 2: lower the top balconies three steps so the parapet stays within ladder reach */
+  const DROP = 0.51, PAR0 = G0 + (NF - 1) * FH + 1.0;
+  const steps = [];
+  [-4, 4].forEach(ux => {
+    for (let k = 1; k <= 3; k++) {
+      const topY = G0 + (NF - 1) * FH + 0.11 - k * 0.17, baseY = G0 + (NF - 1) * FH + 0.11 - DROP;
+      const st = box(1.3, Math.max(0.05, topY - baseY), 0.28, concrete, ux - 1.1, (topY + baseY) / 2, 5.5 + 0.14 + (k - 1) * 0.28, house);
+      outline(st); st.visible = false; steps.push(st);
+    }
+  });
+  const dim = new THREE.Group(); scene.add(dim);
+  const dimLine = box(0.05, 1, 0.05, amberM, 0, 0.5, 0, dim);
+  const dimTick = box(0.6, 0.04, 0.04, amberM, 0, 1, 0, dim);
+  const refM = M({ color: 0xd8392b, roughness: 0.6, transparent: true, opacity: 0.85 });
+  box(6.2, 0.04, 0.04, refM, -2.4, 8.0, 0, dim);
+  dim.position.set(6.75, 0, 7.6); dim.visible = false;
+  const setDim = h => { dimLine.scale.y = h; dimLine.position.y = h / 2; dimTick.position.y = h; };
+  setDim(PAR0);
+  const ladder = new THREE.Group(); scene.add(ladder);
+  const RUN = 2.6, UP = PAR0 - DROP, LL = Math.hypot(RUN, UP) + 0.8;
+  [-0.25, 0.25].forEach(x => outline(box(0.07, LL, 0.1, steelNew, x, LL / 2, 0, ladder)));
+  for (let k = 0.3; k < LL; k += 0.3) box(0.5, 0.04, 0.04, steelNew, 0, k, 0, ladder);
+  ladder.position.set(5.2, 0, 7.27 + RUN);
+  const LEAN = -Math.atan2(RUN, UP);
+  ladder.visible = false;
+
+  /* Finding 3: four shafts become two */
+  const oldShaftM = M({ color: 0xb0457a, transparent: true, opacity: 0.9, roughness: 0.6 });
+  const oldShafts = [[-6, -1], [6, -1], [-3, 2.5], [3, 2.5]].map(([x, z]) => { const m = box(0.7, NF * FH, 0.7, oldShaftM, x, G0 + NF * FH / 2, z, house); m.visible = false; return m; });
+  const newShafts = [-0.9, 0.9].map(x => { const m = box(0.8, NF * FH, 0.8, amberM, x, G0 + NF * FH / 2, 1.6, house); m.visible = false; m.scale.y = 0.001; return m; });
+
+  /* Tweens */
+  const tweens = [];
+  const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const tween = (ms, fn) => new Promise(res => { if (reduce) { fn(1); res(); return; } tweens.push({ t0: performance.now(), ms, fn, res }); });
+  function fly(pos, tgt, ms = 1600) {
+    const p0 = camera.position.clone(), t0 = controls.target.clone();
+    return tween(ms, p => { const e = ease(p); camera.position.lerpVectors(p0, pos, e); controls.target.lerpVectors(t0, tgt, e); });
+  }
+
+  /* Pins */
+  const pins = [
+    { el: document.getElementById('pin1'), at: new THREE.Vector3(14.2, 4.6, 6) },
+    { el: document.getElementById('pin2'), at: new THREE.Vector3(6.75, PAR0 + 0.6, 7.6) },
+    { el: document.getElementById('pin3'), at: new THREE.Vector3(0, EAVE + RISE + 1.6, 1.6) }
+  ];
+  const v3 = new THREE.Vector3();
+  function placePins() {
+    const w = host.clientWidth, h = host.clientHeight;
+    pins.forEach(p => { v3.copy(p.at).project(camera); p.el.style.transform = `translate(${(v3.x * 0.5 + 0.5) * w - 14}px, ${(-v3.y * 0.5 + 0.5) * h - 14}px)`; p.el.style.visibility = v3.z < 1 ? 'visible' : 'hidden'; });
+  }
+
+  /* Loop, only while visible */
+  let visible = true, raf = 0;
+  function resize() { const w = host.clientWidth, h = host.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+  new ResizeObserver(resize).observe(host); resize();
+  function loop(now) {
+    for (let i = tweens.length - 1; i >= 0; i--) { const t = tweens[i]; const p = Math.min(1, (now - t.t0) / t.ms); t.fn(p); if (p >= 1) { tweens.splice(i, 1); t.res(); } }
+    controls.update(); renderer.render(scene, camera); placePins();
+    raf = visible ? requestAnimationFrame(loop) : 0;
+  }
+  new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible && !raf) raf = requestAnimationFrame(loop); }).observe(host);
+  raf = requestAnimationFrame(loop);
+
+  /* Narrative */
+  function tickCost(to) {
+    const from = cost; cost = to; setDelta();
+    return tween(900, p => { costEl.textContent = RF.eur(from + (to - from) * ease(p)); });
+  }
+  async function typeInto(el, text) {
+    if (reduce) { el.textContent = text; return; }
+    for (let i = 1; i <= text.length; i += 2) { el.textContent = text.slice(0, i); logEl.scrollTop = logEl.scrollHeight; await new Promise(r => setTimeout(r, 9)); }
+    el.textContent = text;
+  }
+  async function finding(n, save) {
+    const [who, text] = T().f[n - 1];
+    const li = document.createElement('li'); li.className = 'found';
+    li.innerHTML = `<div class="row"><span class="row" style="gap:8px"><span class="num">${n}</span><span class="who">${who}</span></span><span class="save">−${RF.eur(save)}</span></div><span class="t"></span>`;
+    logEl.appendChild(li); logEl.scrollTop = logEl.scrollHeight;
+    await typeInto(li.querySelector('.t'), text);
+  }
+  const windowParts = ['frame', 'glass', 'mull', 'sill'];
+
+  goBtn.addEventListener('click', async () => {
+    if (phase !== 'idle') return; phase = 'busy';
+    goBtn.disabled = true; controls.enabled = false; controls.autoRotate = false;
+    statusEl.textContent = T().busy;
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="who">${T().scanWho}</span><span>${T().scan}</span><div class="prog"><i></i></div>`;
+    logEl.appendChild(li);
+    requestAnimationFrame(() => requestAnimationFrame(() => { li.querySelector('.prog i').style.width = '100%'; }));
+    await fly(new THREE.Vector3(40, 34, 40), new THREE.Vector3(4, 3, 2), 1400);
+
+    await fly(new THREE.Vector3(40, 15, 34), new THREE.Vector3(12, 1.5, 3));
+    widen.visible = true; fireArea.visible = true; sign.visible = true;
+    await tween(700, p => { fireArea.scale.z = Math.max(0.001, ease(p)); });
+    truck.visible = true;
+    await tween(1800, p => { truck.position.set(14.2, 0, 30 - 27 * ease(p)); });
+    pins[0].el.classList.add('on');
+    await finding(1, 24000);
+    await tickCost(BASE - 24000);
+    await wait(500);
+
+    await fly(new THREE.Vector3(36, 8, 36), new THREE.Vector3(4, 4.2, 6.5));
+    parapet = 8.10; setPin2(); dim.visible = true; pins[1].el.classList.add('on');
+    await wait(1100);
+    await tween(1400, p => { const e = ease(p); topBalc.position.y = -DROP * e; setDim(PAR0 - DROP * e); parapet = 8.10 - DROP * e; setPin2(); pins[1].at.y = PAR0 + 0.6 - DROP * e; });
+    parapet = 7.59; setPin2();
+    for (const st of steps) { st.visible = true; await wait(90); }
+    ladder.visible = true;
+    await tween(1100, p => { ladder.rotation.x = LEAN * ease(p); });
+    await finding(2, 100000);
+    await fly(new THREE.Vector3(-34, 12, 30), new THREE.Vector3(-6, 5, 0), 1500);
+    const stairMats = []; stair2.traverse(o => { if (o.material) stairMats.push(o.material); });
+    await tween(1200, p => { const e = ease(p); stairMats.forEach(m => { m.opacity = 1 - e; }); stair2.scale.y = Math.max(0.001, 1 - 0.3 * e); });
+    stair2.visible = false;
+    await tickCost(BASE - 124000);
+    await wait(500);
+
+    await fly(new THREE.Vector3(-36, 40, 40), new THREE.Vector3(0, 7, 0));
+    windowParts.forEach(k => { inst[k].visible = false; });
+    wall.depthWrite = false;
+    await tween(600, p => { wall.opacity = 1 - 0.8 * ease(p); });
+    core.visible = true;
+    oldShafts.forEach(m => { m.visible = true; }); oldShaftM.opacity = 0.9;
+    await wait(600);
+    await tween(700, p => { oldShaftM.opacity = 0.9 * (1 - p); });
+    oldShafts.forEach(m => { m.visible = false; });
+    newShafts.forEach(m => { m.visible = true; });
+    await tween(900, p => newShafts.forEach(m => { const e = Math.max(0.001, ease(p)); m.scale.y = e; m.position.y = G0 + NF * FH / 2 * e; }));
+    pins[2].el.classList.add('on');
+    await finding(3, 18000);
+    await tickCost(BASE - 142000);
+    await wait(700);
+    await tween(600, p => { wall.opacity = 0.2 + 0.8 * ease(p); });
+    wall.depthWrite = true; core.visible = false;
+    windowParts.forEach(k => { inst[k].visible = true; });
+
+    await fly(HOME.pos, HOME.tgt, 1800);
+    const sum = document.createElement('li');
+    sum.innerHTML = `<span class="who">${T().agent}</span><span>${T().sum(RF.eur(BASE - cost))}</span>`;
+    logEl.appendChild(sum); logEl.scrollTop = logEl.scrollHeight;
+    statusEl.textContent = T().done;
+    controls.enabled = true; controls.autoRotate = !reduce;
+    resetBtn.hidden = false; phase = 'done';
+  });
+
+  resetBtn.addEventListener('click', () => {
+    if (phase !== 'done') return;
+    fireArea.visible = false; fireArea.scale.z = 0.001; widen.visible = false; sign.visible = false; truck.visible = false;
+    ladder.visible = false; ladder.rotation.x = 0; topBalc.position.y = 0; steps.forEach(m => { m.visible = false; }); dim.visible = false; setDim(PAR0); pins[1].at.y = PAR0 + 0.6; parapet = 8.10; setPin2();
+    stair2.visible = true; stair2.scale.y = 1; stair2.traverse(o => { if (o.material) o.material.opacity = 1; });
+    newShafts.forEach(m => { m.visible = false; m.scale.y = 0.001; }); oldShafts.forEach(m => { m.visible = false; });
+    wall.opacity = 1; wall.depthWrite = true; core.visible = false;
+    pins.forEach(p => p.el.classList.remove('on'));
+    cost = BASE; phase = 'idle'; intro(); resetBtn.hidden = true; goBtn.disabled = false;
+    fly(HOME.pos, HOME.tgt, 1200);
+  });
+})();
+</script>
+</body>
+</html>
