@@ -288,7 +288,8 @@ p { margin: 0; }
 .wf-copy ul { margin: 22px 0 28px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
 .wf-copy li { display: flex; gap: 12px; align-items: baseline; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .wf-copy li span:first-child { font: 400 12px/1 var(--mono); color: var(--muted); min-width: 110px; }
-.wf-media { border-radius: var(--r-lg); }
+.wf-media { position: relative; overflow: hidden; border-radius: var(--r-lg); background: #f4f4f2; border: 1px solid var(--line); box-shadow: 0 24px 60px -36px rgba(16,18,17,.4); }
+.wf-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .25s ease; }
 .chip { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 16px; background: rgba(10,11,11,.78); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: var(--white); font-size: 13px; border: 1px solid var(--line-d); }
 .chip .k { font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted-d); }
 .chip .v { font: 500 15px/1.2 var(--display); font-variant-numeric: tabular-nums; }
@@ -316,7 +317,8 @@ p { margin: 0; }
 .carousel { margin-top: 28px; display: grid; grid-auto-flow: column; grid-auto-columns: min(84%, 1060px); gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; padding-inline: max(16px, calc((100vw - 1060px) / 2)); scrollbar-width: none; }
 .carousel::-webkit-scrollbar { display: none; }
 .aud-card { scroll-snap-align: center; position: relative; border-radius: var(--r-xl); overflow: hidden; min-height: 520px; color: var(--white); display: flex; align-items: flex-end; }
-.aud-card .ph { position: absolute; inset: 0; }
+.aud-card .ph, .aud-card .aud-img { position: absolute; inset: 0; }
+.aud-card .aud-img { width: 100%; height: 100%; object-fit: cover; object-position: 70% center; }
 .aud-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,11,11,.85) 0%, rgba(10,11,11,.2) 60%, transparent); }
 .aud-copy { position: relative; z-index: 2; padding: clamp(24px, 4vw, 48px); max-width: 480px; display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
 .aud-copy h3 { font-size: clamp(28px, 3vw, 40px); }
@@ -382,8 +384,8 @@ p { margin: 0; }
 .cta-wrap { padding-block: clamp(40px, 6vw, 80px) clamp(60px, 8vw, 110px); }
 .cta { position: relative; border-radius: var(--r-xl); padding: 3px; background: linear-gradient(120deg, var(--wash-a), var(--wash-c) 45%, var(--wash-b)); box-shadow: 0 0 80px -10px rgba(227,244,166,.9), 0 0 120px -30px rgba(246,213,231,.9); }
 .cta-inner { position: relative; border-radius: calc(var(--r-xl) - 3px); overflow: hidden; min-height: 520px; display: grid; place-items: center; text-align: center; color: var(--white); }
-.cta-inner .ph { position: absolute; inset: 0; }
-.cta-inner::after { content: ""; position: absolute; inset: 0; background: radial-gradient(60% 60% at 50% 50%, rgba(10,11,11,.55), rgba(10,11,11,.25)); }
+.cta-inner .cta-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 8%; }
+.cta-inner::after { content: ""; position: absolute; inset: 0; background: radial-gradient(60% 60% at 50% 55%, rgba(10,11,11,.66), rgba(10,11,11,.3)); }
 .cta-copy { position: relative; z-index: 2; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
 .cta-copy h2 { font-size: clamp(34px, 4.6vw, 64px); max-width: 15ch; }
 .cta-copy p { color: rgba(255,255,255,.85); }
@@ -545,11 +547,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
             <ul id="wfList"></ul>
             <a class="btn btn-dark btn-sm" href="#cta"><span data-i18n="wf.btn">See the workflow</span><svg class="arrow"><use href="#i-arrow"/></svg></a>
           </div>
-          <div class="ph r169 wf-media">
-            <span class="ph-label" id="wfPh"></span>
-            <div class="chip c2"><span class="k" id="wfK2"></span><span class="v" id="wfV2"></span></div>
-            <div class="chip c1"><span class="k" id="wfK1"></span><span class="v" id="wfV1"></span></div>
-          </div>
+          <div class="r169 wf-media"><img id="wfImg" src="img/wf-feasibility.webp" width="1672" height="941" alt="" loading="lazy" decoding="async"></div>
         </div>
       </div>
 
@@ -667,7 +665,7 @@ footer { border-top: 1px solid var(--line); padding-block: 64px 40px; }
     <div class="wrap">
       <div class="cta">
         <div class="cta-inner">
-          <div class="ph"><span class="ph-label" data-i18n="cta.ph">16:9 · Background image · Topping-out on site</span></div>
+          <img class="cta-img" src="img/cta-richtfest.webp" width="1672" height="941" alt="" loading="lazy" decoding="async">
           <div class="cta-copy">
             <h2 data-i18n="cta.h2">Ready to see what your plot can really hold?</h2>
             <p data-i18n="cta.p">Send us a site and a brief. We will come back with your first variants.</p>
@@ -1228,6 +1226,8 @@ window.RF = (() => {
       { tab: 'Kosten & Ausschreibung', title: 'Mengen, die den Plänen folgen.', text: 'Jede Revision aktualisiert Mengen und Kostengruppen automatisch. Leistungsverzeichnisse bleiben auf dem Stand der zuletzt freigegebenen Pläne.', list: [['Gliederung', 'Kostengruppen DIN 276'], ['Aktualisierung', 'Bei jeder Revision'], ['Export', 'GAEB-Dateien']], ph: '16:9 · Screenshot · Kostenmodell', k1: 'KG 300', v1: '<b>2.140 €</b> / m²', k2: 'Änderung seit Rev. B', v2: '−3,8 %' }
     ]
   };
+  const WF_IMG = ['img/wf-feasibility.webp', 'img/wf-variants.webp', 'img/wf-physics.webp', 'img/wf-cost.webp'];
+  new IntersectionObserver(([e], o) => { if (e.isIntersecting) { WF_IMG.forEach(src => { const i = new Image(); i.src = src; }); o.disconnect(); } }, { rootMargin: '400px' }).observe(document.getElementById('workflows'));
   const wfTabs = document.getElementById('wfTabs');
   let wfA = 0;
   function renderWf() {
@@ -1238,9 +1238,8 @@ window.RF = (() => {
     document.getElementById('wfTitle').textContent = w.title;
     document.getElementById('wfText').textContent = w.text;
     document.getElementById('wfList').innerHTML = w.list.map(l => `<li><span>${l[0]}</span><span>${l[1]}</span></li>`).join('');
-    document.getElementById('wfPh').textContent = w.ph;
-    document.getElementById('wfK1').textContent = w.k1; document.getElementById('wfV1').innerHTML = w.v1;
-    document.getElementById('wfK2').textContent = w.k2; document.getElementById('wfV2').innerHTML = w.v2;
+    const img = document.getElementById('wfImg');
+    img.src = WF_IMG[wfA]; img.alt = w.ph.split('·').pop().trim();
   }
 
   /* ---------- Audiences ---------- */
@@ -1258,7 +1257,8 @@ window.RF = (() => {
   let audA = 0;
   function renderAudCards() {
     const de = L() === 'de';
-    car.innerHTML = AUD[L()].map((a, i) => `<article class="aud-card" id="aud-${i}"><div class="ph"><span class="ph-label">16:9 · ${de ? 'Bild' : 'Image'} · ${a[0]}</span></div><div class="aud-copy"><span class="tag">${a[0]}</span><h3>${a[1]}</h3><p>${a[2]}</p><a class="btn btn-ghost btn-sm" href="#cta">${de ? 'Mehr erfahren' : 'Learn more'} ${arrow}</a></div></article>`).join('');
+    const imgs = ['img/aud-developers.webp', 'img/aud-architects.webp', 'img/aud-contractors.webp', 'img/aud-authorities.webp'];
+    car.innerHTML = AUD[L()].map((a, i) => `<article class="aud-card" id="aud-${i}"><img class="aud-img" src="${imgs[i]}" width="1672" height="941" alt="${a[0]}" loading="lazy" decoding="async"><div class="aud-copy"><span class="tag">${a[0]}</span><h3>${a[1]}</h3><p>${a[2]}</p><a class="btn btn-ghost btn-sm" href="#cta">${de ? 'Mehr erfahren' : 'Learn more'} ${arrow}</a></div></article>`).join('');
   }
   function renderAud() {
     audTabs.innerHTML = '';
