@@ -82,7 +82,7 @@ function partialSummary(json: string): string {
   return "";
 }
 export async function callProvider(
-  input: ProviderRequest,
+  input: ProviderRequest & { systemInstructions?: string },
   key: string,
   fetcher: ProviderFetch = fetch,
 ): Promise<unknown> {
@@ -132,7 +132,7 @@ export async function callProvider(
                 model: input.modelId ?? (isVercel ? "" : process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini"),
                 store: false,
                 instructions:
-                  instructions +
+                  (input.systemInstructions ?? instructions) +
                   "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" +
                   openuiRegistryPrompt,
                 input: prompt,
@@ -144,7 +144,7 @@ export async function callProvider(
                 model: input.modelId ?? process.env.ANTHROPIC_PROJECT_MODEL ?? "claude-sonnet-4-6",
                 max_tokens: input.maxOutputTokens ?? 2500,
                 system:
-                  instructions +
+                  (input.systemInstructions ?? instructions) +
                   "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" +
                   openuiRegistryPrompt,
                 messages: [{ role: "user", content: prompt }],
@@ -256,7 +256,7 @@ export async function executeProvider(
   db: Database,
   tenantId: string,
   userId: string,
-  input: ProviderRequest,
+  input: ProviderRequest & { systemInstructions?: string },
   fetcher?: ProviderFetch,
 ): Promise<ProviderResult> {
   try {

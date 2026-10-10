@@ -9,6 +9,8 @@ import { fail, ok } from "@richtfest/shared";
 import { createRouter as createCrmRouter } from "@richtfest/crm";
 import { createRouter as createProjectsRouter } from "@richtfest/projects";
 import { createRouter as createKnowledgeRouter } from "@richtfest/knowledge";
+import { createRouter as createSupportRouter } from "@richtfest/support";
+import { supportDeps } from "./support-host";
 import { createDatabase, type Database } from "./db/client";
 import { env } from "./env";
 import { auditEvents, users } from "./db/schema";
@@ -57,6 +59,7 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
   app.use("/api/crm", createCrmRouter((req) => crmDeps(db, req)));
   app.use("/api", createProjectsRouter((req) => projectsDeps(db, req)));
   app.use("/api/knowledge", createKnowledgeRouter((req) => knowledgeDeps(db, req, options.providerFetch, options.supervisorRuntime)));
+  app.use("/api/support", createSupportRouter((req) => supportDeps(db, req, options.providerFetch)));
   app.get("/api/agent/readiness", async (req, res, next) => {
     try {
       const actor = (req as any).actor;

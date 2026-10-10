@@ -64,6 +64,13 @@ const router = createBrowserRouter([
         element: <Settings />,
         loader: prefetch("/settings/ai-connections"),
       },
+      {
+        path: "/help",
+        lazy: async () => ({
+          Component: (await import("./screens/help")).Help,
+        }),
+        loader: prefetch("/support"),
+      },
     ],
   },
 ]);

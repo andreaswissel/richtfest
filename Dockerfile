@@ -17,6 +17,7 @@ COPY richtfest-os/apps/web/package.json ./richtfest-os/apps/web/package.json
 COPY richtfest-apps/crm/package.json ./richtfest-apps/crm/package.json
 COPY richtfest-apps/knowledge/package.json ./richtfest-apps/knowledge/package.json
 COPY richtfest-apps/projects/package.json ./richtfest-apps/projects/package.json
+COPY richtfest-apps/support/package.json ./richtfest-apps/support/package.json
 
 FROM manifests AS dependencies
 
@@ -76,6 +77,7 @@ COPY --from=checked /app/richtfest-os/apps/api/drizzle ./richtfest-os/apps/api/d
 COPY --from=checked /app/richtfest-os/apps/api/drizzle.config.ts ./richtfest-os/apps/api/drizzle.config.ts
 COPY --from=web /app/richtfest-os/apps/web/dist ./richtfest-os/apps/web/dist
 COPY --from=docs /app/richtfest-os/apps/docs/out ./richtfest-os/apps/docs/out
+COPY --from=docs /app/richtfest-os/apps/docs/content/docs ./richtfest-os/apps/docs/content/docs
 COPY richtfest-landing ./richtfest-landing
 
 EXPOSE 3000

@@ -4,7 +4,7 @@ import {
   openuiAllowedComponents,
 } from "@richtfest/shared/openui-registry";
 const parser = createParser(openuiRegistrySchema as LibraryJSONSchema);
-export function validateOpenUI(value: unknown): {
+export function validateOpenUI(value: unknown, allowedComponents: readonly string[] = openuiAllowedComponents): {
   sourceVersionIds: string[];
   artifactIds: string[];
 } {
@@ -39,7 +39,7 @@ export function validateOpenUI(value: unknown): {
     }
     if (typeof node !== "object") return;
     if (node.type === "element") {
-      if (!openuiAllowedComponents.includes(node.typeName))
+      if (!allowedComponents.includes(node.typeName))
         throw new Error("Unregistered generated UI component");
       if (node.typeName === "SourceCitation")
         refs.sourceVersionIds.push(node.props.versionId);

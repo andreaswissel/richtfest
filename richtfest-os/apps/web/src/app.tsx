@@ -92,7 +92,9 @@ export function App({ initializing = false }: { initializing?: boolean }) {
                         ? "/access/team"
                         : r.path === "/settings"
                           ? "/settings/ai-connections"
-                          : r.path;
+                          : r.path === "/help"
+                            ? "/support"
+                            : r.path;
                 void queryClient.prefetchQuery({
                   queryKey: [path],
                   queryFn: () => api(path),

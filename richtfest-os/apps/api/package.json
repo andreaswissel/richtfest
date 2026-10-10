@@ -24,6 +24,7 @@
     "@richtfest/knowledge": "workspace:*",
     "@richtfest/projects": "workspace:*",
     "@richtfest/shared": "workspace:*",
+    "@richtfest/support": "workspace:*",
     "better-auth": "^1.7.7",
     "cookie-parser": "^1.4.7",
     "drizzle-kit": "^0.30.4",
