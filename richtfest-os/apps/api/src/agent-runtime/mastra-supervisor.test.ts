@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
 import { agentPresetSnapshotSchema, domainSpecialistRoles } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
+import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
 test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
@@ -41,6 +42,42 @@ test("sound-insulation synthesis requires the fixed template and renders rather 
     })).rejects.toMatchObject({ code: "invalid_provider_output" });
   }
 });
+
+for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const) {
+  for (const language of ["de", "en"] as const) test(`${id} ${language} survives provider validation with fixed structure, tables and draft limits`, async () => {
+    const versionId = crypto.randomUUID();
+    const template = acousticConceptFixture(id, language, versionId);
+    const review = { summary: "Draft ready", rationale: "Evidence gaps retained", citations: [versionId], decision: "accept", revisions: [],
+      document: { title: "Concept", content: "MODEL CONTENT MUST NOT WIN", template } };
+    const request = { ...base, phase: "review" as const, goal: `Create ${id}`, context: { documentTemplate: { id: "sound-insulation-review", version: 1 } } };
+    const result: any = await callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: review }),
+    });
+    expect(result.document.template).toEqual(template);
+    expect(result.document.content).not.toContain("MODEL CONTENT MUST NOT WIN");
+    expect(result.document.content).toContain(template.components);
+    expect(result.document.content).toContain(language === "de" ? "| Bauherr | Nicht angegeben |" : "| Client | Not supplied |");
+    expect(result.document.content).toContain(language === "de" ? "Es wurde keine Berechnung durchgeführt." : "No calculation was performed.");
+    expect(result.document.content).toContain(language === "de" ? "## Anlage · Berechnungsnachweise" : "## Appendix · Calculation evidence");
+    expect(result.document.content).toContain(language === "de" ? "Keine Freigabe, Unterschrift" : "Not approved, signed");
+    if (id === "interior-noise-concept") {
+      expect(result.document.content).toContain(language === "de" ? "## 3. Schallschutzpläne Innenlärm" : "## 3. Interior-noise plans");
+      expect(result.document.content).toContain(language === "de" ? "## 7. Luft-Wasser-Wärmepumpe" : "## 7. Air-to-water heat pump");
+      expect(result.document.content).not.toContain("Exterior-noise assessment");
+    } else {
+      expect(result.document.content).toContain(language === "de" ? "## 2. Bewertung des Außenlärms" : "## 2. Exterior-noise assessment");
+      expect(result.document.content).toContain(language === "de" ? "## 5. Schallschutzpläne Außenlärm" : "## 5. Exterior-noise plans");
+      expect(result.document.content).not.toContain("DEGA");
+    }
+    assertDocumentCitations(result.document, [versionId]);
+    expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
+    for (const invalid of [{ ...template, version: 2 }, { ...template, plans: "" }]) {
+      await expect(callMastraSupervisor(request, "test-key", {
+        model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...review, document: { ...review.document, template: invalid } } }),
+      })).rejects.toMatchObject({ code: "invalid_provider_output" });
+    }
+  });
+}
 
 test("domain specialists select their snapshotted models and cannot execute or be planned when disabled", async () => {
   const legacy = agentPresetSnapshotSchema.parse({ ...vendorPreset("openai", "medium"), effort: "medium", provider: "openai", version: 1, source: "workspace" });

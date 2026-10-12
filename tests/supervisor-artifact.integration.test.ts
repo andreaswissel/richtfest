@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
+import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
 import {
   stepSupervisor,
   createSupervisor,
@@ -19,13 +20,14 @@ import {
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 
+for (const templateId of ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const)
 for (const independentReviewEnabled of [false, true]) integration(
-  `configured acoustic delegation preserves revision-linked template data (independent review: ${independentReviewEnabled})`,
+  `${templateId} delegation preserves revision-linked template data (independent review: ${independentReviewEnabled})`,
   async () => {
     const { db, pool } = createDatabase(process.env.DATABASE_URL!);
     const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
     const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
-    const template = {
+    const template = templateId !== "sound-insulation-review" ? acousticConceptFixture(templateId, "en", versionId) : {
       id: "sound-insulation-review", version: 1, language: "en", scope: "Review one room.",
       sourcesAndRevisions: `Imported source declarations [${versionId}].`, requirements: "External noise level missing.",
       entities: [{ kind: "room", label: "Room 101", versionId, entityKey: "#42", page: null,
@@ -51,7 +53,7 @@ for (const independentReviewEnabled of [false, true]) integration(
           return { status: "completed", output: { summary: "Room 101, #42, GlobalId 1AbCdEfGhIjKlMnOpQrStu. Acoustic values absent from selected evidence.", rationale: "Unreviewed declaration", citations: [versionId] } };
         }
         if (input.phase === "independent_review") {
-          expect(input.context.firstPassReview.document.content).toContain("## 8. Review status");
+          expect(input.context.firstPassReview.document.content).toContain(templateId === "sound-insulation-review" ? "## 8. Review status" : "## Review status and acknowledgment");
           expect(input.context.firstPassReview.document.template).toEqual(template);
           return { status: "completed", output: { summary: "Draft checked", rationale: "Declarations remain unreviewed", decision: "accept", revisions: [], findings: [], citations: [versionId] } };
         }
@@ -73,8 +75,14 @@ for (const independentReviewEnabled of [false, true]) integration(
       expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
       expect(revisions[0]!.content).not.toContain("MODEL CONTENT MUST NOT WIN");
       expect(revisions[0]!.content).toContain("No calculation was performed.");
-      expect(revisions[0]!.content).toContain("1AbCdEfGhIjKlMnOpQrStu");
-      expect(revisions[0]!.content).toContain("## 4. Room and component references");
+      if (templateId === "sound-insulation-review") {
+        expect(revisions[0]!.content).toContain("1AbCdEfGhIjKlMnOpQrStu");
+        expect(revisions[0]!.content).toContain("## 4. Room and component references");
+      } else {
+        expect(revisions[0]!.content).toContain("## Appendix · Calculation evidence");
+        expect(revisions[0]!.content).toContain("No calculation evidence supplied. No appendix attached.");
+        expect(revisions[0]!.content).toContain("Separating wall W-17");
+      }
       const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
       expect(children.map(child => child.specialistRole)).toEqual(["sound_insulation"]);
     } finally {

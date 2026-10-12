@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sourceEntityInput } from "./source-model";
+import { acousticConceptTemplateSchema, renderAcousticConcept } from "./acoustic-concept";
 
 /** Proposed source links, not imported BIM objects or approved calculation inputs. */
 export const soundInsulationTemplateSchema = z.object({
@@ -24,11 +25,13 @@ export const soundInsulationTemplateSchema = z.object({
   openIssues: z.string().trim().min(1).max(6000),
 }).strict();
 
+export const acousticDocumentTemplateSchema = z.union([soundInsulationTemplateSchema, acousticConceptTemplateSchema]);
+
 /** A proposed deliverable, distinct from the short conversational handoff. */
 export const agentDocumentSchema = z.object({
   title: z.string().trim().min(1).max(300),
   content: z.string().trim().min(1).max(60000),
-  template: soundInsulationTemplateSchema.optional(),
+  template: acousticDocumentTemplateSchema.optional(),
 }).strict();
 
 /** Both preview and PDF consume this saved Markdown, never model-chosen headings. */
@@ -37,7 +40,10 @@ export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchem
     if (requireSoundInsulation) throw new Error("Sound insulation review requires its versioned document template");
     return document;
   }
-  const template = soundInsulationTemplateSchema.parse(document.template);
+  const template = acousticDocumentTemplateSchema.parse(document.template);
+  if (template.id !== "sound-insulation-review") {
+    return agentDocumentSchema.parse({ ...document, content: renderAcousticConcept(template), template });
+  }
   const de = template.language === "de";
   // Sections are plain text with source citations, not arbitrary Markdown structure.
   const prose = (value: string) => value.replace(/[\\`*_{}<>#!|]/g, "\\$&");
