@@ -10,7 +10,7 @@ description: Keep durable rules compact and explain current behavior in the righ
 | Durable agent rules and project constraints | Root `AGENTS.md` |
 | Detailed engineering conventions, design and performance budgets | Existing root convention documents |
 | Current workflows, architecture and setup | These Fumadocs pages |
-| Completed user-facing or operational changes | `CHANGELOG.md`, under Unreleased until release |
+| Completed user-facing or operational changes | `CHANGELOG.md`: temporary `Unreleased` queue before deployment, dated sections for releases |
 | Raw meeting notes and project evidence | Their source/context records, not agent instructions |
 
 ## Writing a change
@@ -19,7 +19,13 @@ Update the page that already owns the topic instead of appending a parallel acco
 
 Keep procedures concrete: who acts, what they do, what they should see and what remains to be configured. Do not include credentials, private customer files or copied transcripts in shipped docs.
 
-Record meaningful completed work in the root `CHANGELOG.md` as it happens, not only at deployment. Group rapid iterations into one concise item. The changelog records what changed; these docs explain how things work now.
+Record meaningful completed, verified work in the root `CHANGELOG.md` as it happens, not only at deployment. Use `Unreleased` only while that work is genuinely undeployed. Group rapid iterations into one concise item. The changelog records what changed; these docs explain how things work now.
+
+## Preparing a release
+
+Before the deployment commit and docs build, move every `Unreleased` entry included in that deployment into a `## YYYY-MM-DD` section using the deployment's Europe/Berlin calendar date. Reuse an existing section for the same day instead of creating a duplicate; keep dated sections newest first. Leave unrelated, undeployed work in `Unreleased` and never move shipped entries back there. This promotion is part of every deployment, not optional cleanup afterward: the deployed Docs bundle must already contain the dated notes.
+
+Confirm the Railway deployment succeeded before reporting the release as live. If deployment is abandoned, return only its still-undeployed entries to `Unreleased`. For a historical correction, check successful deployment records and the commits they contain; a commit date alone does not establish a release date. Do not relabel already shipped history with today's date.
 
 ## Before committing
 

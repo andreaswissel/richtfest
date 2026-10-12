@@ -29,17 +29,15 @@ Changes that regress the bench budgets do not ship.
 
 ## Caching and deploys
 
-- **HTTP:** hashed files under `/assets/` are cached forever (`immutable`); `index.html` and `version.json` are
-  revalidated on every load (`no-cache`). A reload always gets the latest build.
+- **HTTP:** app HTML and `version.json` use `no-store`. Hashed files under `/assets/` use Express static caching
+  defaults; removed assets return a non-HTML 404. A reload requests the current build.
 - **Build ID:** each web build gets an ID, a hash of its asset file names, so it only changes when the shipped frontend
-  changes. It is written into `index.html` (`<meta name="richtfest-build">`) and `dist/version.json`, and shown under
-  Settings → System.
-- **Open tabs:** the API sends the build ID it serves in the realtime `hello`. A deploy restarts the API, so open tabs
-  reconnect within seconds. If the build differs, the top bar shows **New version · Reload**, and the next screen change
-  becomes a full page load of the target URL. Filter or search changes on the same screen never reload.
-- **Persisted query cache:** the IndexedDB cache remembers which build wrote it. After a deploy, the first boot still
-  renders instantly from it, then revalidates every query in the background. Bump `PERSIST_BUSTER` only when cached
-  data shapes break; that discards the cache entirely.
+  changes. It is written into `index.html` (`<meta name="richtfest-build">`) and `dist/version.json`.
+- **Open tabs:** a nonblocking TanStack Query check fetches `/version.json` once a minute while visible and on tab
+  activation. A different build shows **New updates available** above the profile in the desktop navigation rail.
+  Only clicking the button reloads, keeping the current URL. Failed checks do not interrupt work or imply an update.
+- **Persisted query cache:** IndexedDB stores a short-lived, user/workspace-scoped rendering cache restored after
+  authentication. Build-version checks opt out of persistence so a previous boot cannot supply a stale update notice.
 
 ## Tools
 

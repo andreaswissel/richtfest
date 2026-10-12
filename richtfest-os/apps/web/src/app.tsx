@@ -1,6 +1,7 @@
 import { getAuthClient, authResult } from "./lib/auth";
 import { Login } from "./screens/auth";
 import { Button } from "./components/ui/button";
+import { AppUpdateButton } from "./components/app-update-button";
 import { Page, PageHeader } from "./components/layout";
 import { useEffect, useLayoutEffect } from "react";
 import { Outlet, Link, NavLink, useLocation } from "react-router-dom";
@@ -127,6 +128,7 @@ export function App({ initializing = false }: { initializing?: boolean }) {
           </a>
         </nav>
         <div className="sidebar-bottom">
+          {user?.id && <AppUpdateButton />}
           {user?.id && (
             <div className="user-row">
               <Link

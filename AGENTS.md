@@ -100,7 +100,7 @@ Preparing deployment files does not authorize provisioning services, sending liv
 Every deploy must:
 
 - inspect `git status`, staged diff, and the target branch
-- include a concise `CHANGELOG.md` entry for user-facing or operational changes
+- include concise `CHANGELOG.md` entries for user-facing or operational changes and move the entries included in this deployment from `Unreleased` into `## YYYY-MM-DD` using the deployment date in Europe/Berlin, before the deployment commit and docs build. Reuse an existing section for that date; leave only genuinely undeployed work under `Unreleased`
 - update Richtfest Docs (`richtfest-os/apps/docs/content/docs`) in the same commit when the change adds or alters something documented or worth documenting: a Richtfest App, screen, workflow, role/permission, Richtfest Agent domain, integration, architecture or convention. Docs describe how things work now (rewrite or remove outdated pages); the changelog records what changed. See the "Writing docs" page for where each kind of change goes, and run `bun run --filter '@richtfest/docs' build` to check it
 - stage only the files that belong to the requested change
 - commit on local `main`
@@ -153,7 +153,8 @@ Use existing common/status/nav keys where possible. Add feature-specific section
 - `CHANGELOG.md` is the source for daily team updates. Keep entries concise, non-technical where possible, and useful for humans.
 - Before committing a user-facing or operational change, include its release note and any affected workflow, architecture or setup docs in the same commit. Run `bun run --filter '@richtfest/docs' build` when changelog or docs content changes.
 - The Docs Changelog page is generated from root `CHANGELOG.md` when Docs starts or builds, including in Docker. Edit only the root changelog; never edit or stage the ignored generated `richtfest-os/apps/docs/content/docs/changelog.md`. Restart Docs development after changelog edits to regenerate it.
-- Update the Unreleased section as meaningful work is completed, not only at deployment. Describe verified behavior, keep incomplete work out of release claims, and consolidate related changes before release.
+- `Unreleased` is a temporary queue for completed, verified work that has not been deployed, not the default destination for shipped updates. On deployment, promote its included entries into the dated section as required above; never move existing released entries back to `Unreleased`.
+- Keep dated sections newest first and use one section per Europe/Berlin calendar date. Verify Railway success before reporting a release as live. If a deployment is abandoned, return only its still-undeployed entries to `Unreleased`; when correcting historical dates, use successful deployment evidence rather than guessing from commit dates.
 - Consolidate rapid fix iterations into one release-note item, for example several RichtfestBot voice mode fixes become "RichtfestBot Voice Mode".
 - Exclude staging-only work and hidden easter eggs unless the user explicitly wants them included.
 - For Slack release-note automations, post only when there are new changelog items since the stored checkpoint; otherwise skip and update automation memory.

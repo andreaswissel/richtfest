@@ -1,4 +1,6 @@
 {
+  "newUpdatesAvailable": "Updates verfügbar",
+  "reloadForUpdates": "App neu laden, um sie zu aktualisieren. Ungespeicherte Änderungen vorher speichern.",
   "locationEditor": "3D-Standort",
   "locationSetup": "Standortdaten laden",
   "locationSetupHint": "Amtliche Gebäudedaten in Berlin oder Rheinland-Pfalz über eine eindeutige Hausadresse laden. Bäume und LiDAR auf Anforderung sind nur innerhalb der Berliner Datenabdeckung verfügbar. Besprechungsnotizen erzeugen keine Geometrie.",

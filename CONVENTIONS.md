@@ -98,8 +98,12 @@ description: The rules every change follows, from API responses to audit events 
 ## Release notes
 
 `CHANGELOG.md` is the source for team updates. Keep entries short, human and non-technical where possible.
-Update Unreleased as meaningful work is completed; do not wait for deployment or describe unfinished work as released.
-Consolidate rapid fix iterations into one item.
+Use `Unreleased` only as a temporary queue for completed, verified work not yet deployed. Before each deployment commit
+and docs build, move the included entries into `## YYYY-MM-DD` using the deployment date in Europe/Berlin. Reuse that
+date's section and keep dated sections newest first; leave unrelated undeployed entries in `Unreleased`. Never put shipped
+work back in `Unreleased`. Confirm Railway success before reporting a release as live; if deployment is abandoned, return
+only its still-undeployed entries to the queue. Correct historical dates from successful deployment evidence, not guessed
+commit dates. Consolidate rapid fix iterations into one item and keep incomplete work out of release claims.
 
 Before committing user-facing or operational changes, include the release note and affected documentation in the same
 commit. Run `bun run --filter '@richtfest/docs' build` for changelog or docs changes. The Docs Changelog page is

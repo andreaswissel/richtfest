@@ -96,6 +96,7 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
     const webHtml = readFileSync(path.join(webDirectory, "index.html"), "utf8")
       .replaceAll("__PUBLIC_ORIGIN__", new URL(env.BETTER_AUTH_URL).origin);
     app.get("/index.html", (_req, res) => res.set("Cache-Control", "no-store").type("html").send(webHtml));
+    app.get("/version.json", (_req, res) => res.set("Cache-Control", "no-store").sendFile(path.join(webDirectory, "version.json")));
     app.use(express.static(webDirectory, { index: false }));
     // A removed deployment chunk is not an app route. Never return HTML as JS.
     app.use("/assets", (_req, res) => res.status(404).set("Cache-Control", "no-store").end());

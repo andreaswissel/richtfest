@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 2026-10-12
+
+- Open tabs now show “New updates available” above the profile in the navigation rail when a different app build is available. Click to reload when ready; deployments no longer need a manual refresh to discover updates.
+
+- Corrected release-note dates for shipped updates and made dated changelog sections a required deployment step.
+
 - Agent runs in different threads now start independently when capacity is available, rather than waiting for an entire batch to finish. The existing three-run limit per worker remains in place.
 
 - Projects now have an Analytics tab for exploring agent-run costs, including all subagents, with project-wide token and cost totals, usage by model, and average tokens per fully measured run. Partial or missing data is clearly marked, and older runs remain browsable.
@@ -18,6 +24,8 @@
 
 - Aligned agent model settings and optional specialist controls across screen sizes and density modes. Role settings now explain that blank instructions retain built-in behavior.
 
+- Agent model settings use one compact role table with inline controls, stable rows for optional specialists, grouped execution limits and a direct connection-settings link. Enabling a specialist no longer inserts a form or shifts the page.
+
 - Docs now builds its changelog directly from the shared release notes, avoiding a separate copy. Commit guidelines require release notes and affected documentation alongside each completed change.
 
 - Added opt-in sound-insulation, construction-law and cost-options specialists with separate models and role guidance. Sound-insulation reviews use a consistent German/English document template with revision-linked room/component references in preview and PDF. Existing presets stay unchanged; engineering calculations and compliance approval remain unavailable.
@@ -27,6 +35,8 @@
 - Project details now offer searchable address selection with Geoapify, retaining the selected coordinates and source attribution. Manual entry remains available for missing addresses or unconfigured search; manual edits clear old search metadata without moving existing 3D scenes.
 
 - Project specialists read large source sets in smaller, checkpointed batches without dropping extracted text. Evidence and synthesis calls have more time to finish; timeouts now stop unchanged retries and show specific guidance instead of suggesting a token increase or connection repair.
+
+## 2026-10-10
 
 - Added a full-width project 3D location editor using addresses saved in project details: official Berlin building/tree context, on-demand 2021 LiDAR where covered, versioned IFC overlays, editable vehicle envelopes, massing and planning notes. Address changes never move existing scenes. Architectural lighting, shadows and clearer materials improve depth. Switch trees between schematic markers and illustrative foliage; measurements use schematic trees. Survey, alignment and illustrative-geometry limits stay explicit; this is not fire-access certification. Conversation and other app pages now use the full available width.
 
@@ -80,7 +90,6 @@
 - Copy your own project chat messages with a compact button.
 - Project details now edit inline on the page, with Save and Cancel actions.
 - Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.
-- Agent model settings use one compact role table with inline controls, stable rows for optional specialists, grouped execution limits and a direct connection-settings link. Enabling a specialist no longer inserts a form or shifts the page.
 - Agent model settings accept output caps up to GPT-6's 128,000-token output limit.
 - Project agent work groups active and done runs, shows live runtime and per-agent token usage, and estimates cost where model pricing is known.
 - Project thread hover highlights now span the row behind rename and archive actions.
@@ -88,8 +97,6 @@
 - Agent model presets can opt into a separate independent source review before a draft is saved; it remains off by default.
 
 - Project agents now assign source reviews for file-based work and distinguish readable unreviewed sources from findings awaiting human review.
-
-## 2026-10-10
 
 - Added a Docs changelog page with the current release history in the Docs sidebar.
 

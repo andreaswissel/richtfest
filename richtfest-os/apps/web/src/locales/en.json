@@ -1,4 +1,6 @@
 {
+  "newUpdatesAvailable": "New updates available",
+  "reloadForUpdates": "Reload the app to update. Save any unsaved changes first.",
   "locationEditor": "3D location",
   "locationSetup": "Load site context",
   "locationSetupHint": "Load official building context in Berlin or Rheinland-Pfalz from an exact house address. Trees and on-demand LiDAR are available only within Berlin source coverage. No geometry is inferred from meeting notes.",

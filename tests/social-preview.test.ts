@@ -26,6 +26,11 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
       "user-agent": "facebookexternalhit/1.1",
       host: "untrusted.example.test",
     };
+    const versionResponse = await fetch(base + "/version.json", { headers });
+    expect(versionResponse.status).toBe(200);
+    expect(versionResponse.headers.get("cache-control")).toBe("no-store");
+    const { version } = await versionResponse.json();
+    expect(version).toMatch(/^[a-f0-9]{64}$/);
     for (const path of [
       "/",
       "/login",
@@ -37,6 +42,7 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(response.headers.get("cache-control")).toBe("no-store");
       const html = (await response.text()).replace(/\s+/g, " ");
+      expect(html).toContain(`name="richtfest-build" content="${version}"`);
       expect(html).toContain(
         'property="og:title" content="Richtfest — Construction planning. Connected."',
       );
