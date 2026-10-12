@@ -19,6 +19,7 @@ import {
 } from "./schema";
 import { attachUsageSummaries } from "./usage";
 import { artifactPdf } from "./artifact-pdf";
+import { projectAgentAnalytics } from "./analytics";
 
 export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
@@ -252,6 +253,12 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
       return d.resolveSource(projectId, { versionId, ...range });
     },
   );
+  route("get", "/workspaces/:projectId/analytics", "knowledge:read", async (d, req) => {
+    const id = z.string().uuid().parse(req.params.projectId);
+    const { page } = z.object({ page: z.coerce.number().int().min(0).max(100000).default(0) }).parse(req.query);
+    if (!(await d.validateProject(id))) throw missing("Project not found");
+    return projectAgentAnalytics(d, id, page);
+  });
   route("get", "/workspaces/:projectId", "knowledge:read", async (d, req) => {
     const id = z.string().uuid().parse(req.params.projectId);
     if (!(await d.validateProject(id))) throw missing("Project not found");

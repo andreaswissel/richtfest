@@ -51,7 +51,12 @@ const router = createBrowserRouter([
           Component: (await import("./screens/project-workspace"))
             .ProjectWorkspace,
         }),
-        loader: ({ params }) => prefetch(`/projects/${params.id}`)(),
+        loader: ({ params, request }) => {
+          prefetch(`/projects/${params.id}`)();
+          if (new URL(request.url).searchParams.get("view") === "analytics")
+            prefetch(`/knowledge/workspaces/${params.id}/analytics?page=0`)();
+          return null;
+        },
       },
       {
         path: "/customers",

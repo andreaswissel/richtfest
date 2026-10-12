@@ -244,9 +244,71 @@ integration("specialist costs belong to each child while the supervisor retains 
       expect(detail.data.usage.calls).toHaveLength(1);
       expect(detail.data.usage.calls[0].runId).toBe(child.id);
     }
+    const analytics = async (page = 0) => {
+      const response = await fetch(`${baseUrl}/workspaces/${projectId}/analytics?page=${page}`);
+      expect(response.status).toBe(200);
+      return (await response.json() as any).data;
+    };
+    const initial = await analytics();
+    expect(initial.runs[0].aggregate.estimatedCostUsd).toBe(0.06);
+    expect(initial.runs[0].usage.estimatedCostUsd).toBe(0.01);
+    expect(initial.runs[0].isSupervisor).toBe(true);
+    expect(initial.runs[0].aggregate.missingUsageAttempts).toBe(0);
+
+    // An old grandchild must survive both the workspace's 50-row window and root pagination.
+    const [grandchild] = await db.insert(agentRuns).values({
+      tenantId, projectId, requestedBy: actorId, parentRunId: workspace.data.runs.find((run: any) => run.goal === "Review A").id,
+      goal: "Nested review", provider: "openai", correlationId: crypto.randomUUID(), createdAt: new Date("2020-01-01"),
+    }).returning();
+    await db.insert(agentRunUsage).values({ tenantId, runId: grandchild!.id, provider: "openai", modelId: "nested-model",
+      callIndex: 0, inputTokens: 77, outputTokens: 13, estimatedCostUsd: 40000, startedAt: new Date(), completedAt: new Date() });
+    await db.insert(agentRuns).values(Array.from({ length: 51 }, (_, i) => ({
+      tenantId, projectId, requestedBy: actorId, goal: `Older run ${i}`, provider: "openai", correlationId: crypto.randomUUID(), createdAt: new Date("2021-01-01"),
+    })));
+    const foreignTenant = crypto.randomUUID(), foreignProject = crypto.randomUUID();
+    const foreignIds = [crypto.randomUUID(), crypto.randomUUID()];
+    try {
+      await db.insert(agentRuns).values(foreignIds.map((id, i) => ({
+        id, tenantId: i ? tenantId : foreignTenant, projectId: i ? foreignProject : projectId,
+        requestedBy: actorId, parentRunId: parent!.id, goal: "Must not leak", provider: "openai", correlationId: crypto.randomUUID(),
+      })));
+      const first = await analytics();
+      expect(first.runs).toHaveLength(20);
+      expect(first.hasMore).toBe(true);
+      expect(first.runs[0].members).toHaveLength(4);
+      expect(first.runs[0].aggregate.estimatedCostUsd).toBe(0.10);
+      expect(first.runs[0].aggregate.inputTokens).toBe(3077);
+      expect(first.runs[0].aggregate.outputTokens).toBe(313);
+      expect(first.runs[0].aggregate.callCount).toBe(4);
+      const second = await analytics(1), third = await analytics(2);
+      expect(second.runs).toHaveLength(20);
+      expect(third.runs).toHaveLength(12);
+      expect(third.hasMore).toBe(false);
+      expect(new Set([...first.runs, ...second.runs, ...third.runs].map((run: any) => run.id)).size).toBe(52);
+      expect(second.runs[0].aggregate.estimatedCostUsd).toBeNull();
+      expect(second.runs[0].aggregate.recordedCostUsd).toBeNull();
+
+      await db.insert(agentRunAttempts).values({ tenantId, runId: grandchild!.id, operationId: crypto.randomUUID(), phase: "specialist", attemptNumber: 2, provider: "openai", status: "failed", usageStatus: "missing" });
+      await db.insert(agentRunUsage).values({ tenantId, runId: grandchild!.id, provider: "openai", modelId: "unpriced-model",
+        callIndex: 1, inputTokens: 11, outputTokens: 3, startedAt: new Date(), completedAt: new Date() });
+      const partial = (await analytics()).runs[0];
+      expect(partial.aggregate.estimatedCostUsd).toBeNull();
+      expect(partial.aggregate.recordedCostUsd).toBe(0.10);
+      expect(partial.aggregate.missingUsageAttempts).toBe(1);
+      expect(partial.aggregate.unpricedCalls).toBe(1);
+      expect(partial.members.find((run: any) => run.id === grandchild!.id).usage.recordedCostUsd).toBe(0.04);
+      expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics?page=-1`)).status).not.toBe(200);
+      d.validateProject = async () => false;
+      expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics`)).status).toBe(404);
+      d.requirePermission = () => { throw Object.assign(new Error("Forbidden"), { status: 403 }); };
+      expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics`)).status).toBe(403);
+    } finally {
+      for (const id of foreignIds) await db.delete(agentRuns).where(eq(agentRuns.id, id));
+    }
   } finally {
     if (server) await new Promise<void>((resolve) => server.close(resolve));
     await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
+    await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
     await db.delete(agentRunEvents).where(eq(agentRunEvents.tenantId, tenantId));
     await db.delete(supervisorRuns).where(eq(supervisorRuns.tenantId, tenantId));
     await db.delete(agentRuns).where(eq(agentRuns.tenantId, tenantId));

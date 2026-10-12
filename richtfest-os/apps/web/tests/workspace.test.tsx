@@ -15,6 +15,7 @@ import { Transcript } from "../src/components/project-workspace/transcript";
 import { isPositiveFeedback } from "../src/components/project-workspace/richtfest-celebration";
 import MarkdownContent from "../src/components/chat-markdown-content";
 import { ArtifactSourceRegister } from "../src/components/project-workspace/artifact-export";
+import { ProjectAnalytics } from "../src/components/project-workspace/analytics";
 import { formatSourceCitations } from "@richtfest/shared";
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 const conversationId = "550e8400-e29b-41d4-a716-446655440001";
@@ -193,6 +194,72 @@ describe("workspace records and navigation", () => {
       "Please check the roof dimensions",
       "great ".repeat(40),
     ]) expect(isPositiveFeedback(message)).toBe(false);
+  });
+  test("analytics distinguishes total, partial, unavailable and genuine zero costs", () => {
+    const usage = {
+      inputTokens: 1234,
+      outputTokens: 567,
+      estimatedCostUsd: 0.75,
+      recordedCostUsd: 0.75,
+    };
+    const node = <ProjectAnalytics projectId={projectId} />;
+    const path = `/knowledge/workspaces/${projectId}/analytics?page=0`;
+    const html = render(node, "/", {
+      [path]: {
+        hasMore: false,
+        runs: [
+          {
+            id: "complete",
+            goal: "Complete run",
+            status: "needs_review",
+            createdAt: "2026-10-12",
+            members: [{}, {}, {}],
+            aggregate: usage,
+          },
+          {
+            id: "partial",
+            goal: "Partial run",
+            status: "failed",
+            createdAt: "2026-10-12",
+            members: [{}],
+            aggregate: {
+              ...usage,
+              estimatedCostUsd: null,
+              recordedCostUsd: 0.23,
+            },
+          },
+          {
+            id: "unknown",
+            goal: "Unknown run",
+            status: "cancelled",
+            createdAt: "2026-10-12",
+            members: [{}],
+            aggregate: {
+              ...usage,
+              estimatedCostUsd: null,
+              recordedCostUsd: null,
+            },
+          },
+          {
+            id: "free",
+            goal: "Zero run",
+            status: "completed",
+            createdAt: "2026-10-12",
+            members: [{}],
+            aggregate: { ...usage, estimatedCostUsd: 0, recordedCostUsd: 0 },
+          },
+        ],
+      },
+    });
+    expect(html).toContain("$0.75");
+    expect(html).toContain("$0.23");
+    expect(html.match(/Partial · recorded only/g)).toHaveLength(1);
+    expect(html.match(/Unavailable/g)).toHaveLength(1);
+    expect(html.match(/\$0\.00/g)).toHaveLength(1);
+    expect(html).toContain('aria-expanded="false"');
+    const empty = render(node, "/", { [path]: { hasMore: false, runs: [] } });
+    expect(empty).toContain("No agent runs in this project yet.");
+    expect(empty).not.toContain("$0.00");
   });
   test("history prepend merges stable IDs in chronological order without duplicate messages", () => {
     const make = (id: string, createdAt: string) => ({

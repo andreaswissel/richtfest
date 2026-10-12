@@ -16,6 +16,7 @@ import { Transcript } from "../components/project-workspace/transcript";
 import { ArtifactPanel } from "../components/project-workspace/artifacts";
 import { LiveRun } from "../components/project-workspace/live-run";
 import { SubagentThread } from "../components/project-workspace/subagent-thread";
+import { ProjectAnalytics } from "../components/project-workspace/analytics";
 import { LocationMode } from "../components/location/mode";
 import { AddressSelect } from "../components/address-select";
 import { ArrowUp } from "lucide-react";
@@ -97,7 +98,10 @@ export function ProjectWorkspace() {
   const [initialMessage, setInitialMessage] = useState<string>();
   const [initialMessageDraft, setInitialMessageDraft] = useState("");
   const project = useApi(`/projects/${id}`),
-    workspace = useApi(`/knowledge/workspaces/${id}`, view !== "location"),
+    workspace = useApi(
+      `/knowledge/workspaces/${id}`,
+      view !== "location" && view !== "analytics",
+    ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
   const selected =
@@ -166,6 +170,7 @@ export function ProjectWorkspace() {
           "sources",
           "sharedWork",
           "knowledge",
+          "analytics",
         ].map((key) => (
           <Link
             key={key}
@@ -185,6 +190,9 @@ export function ProjectWorkspace() {
       <LoadState query={project} />
       {view === "location" && project.isSuccess && (
         <LocationMode projectId={id!} address={details} />
+      )}
+      {view === "analytics" && project.isSuccess && (
+        <ProjectAnalytics key={id} projectId={id!} />
       )}
       {view === "workspace" && (
         <>
