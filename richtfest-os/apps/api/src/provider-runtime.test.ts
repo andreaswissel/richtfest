@@ -3,6 +3,7 @@ import { callProvider, reasoningEffortForModel, redactProviderText, supportsReas
 import {
   validateTool,
   outputInput,
+  directOutputSchema,
 } from "../../../../richtfest-apps/knowledge/src/runs";
 const output = {
   summary: "Review the IFC excerpt",
@@ -15,6 +16,21 @@ const output = {
     type: "draft" as const,
   },
 };
+test("configured direct response limits preserve large drafts and enforce the selected caps", async () => {
+  const executionLimits = { summaryMaxCharacters: 15000, rationaleMaxCharacters: 3000, documentMaxCharacters: 150000, timeoutSeconds: 180 };
+  const large = { ...output, summary: "s".repeat(15000), rationale: "r".repeat(3000), artifact: { ...output.artifact, content: '"'.repeat(150000) } };
+  let timeoutMs: number | undefined;
+  const result = await callProvider({ provider: "openai", goal: "Draft", context: {}, executionLimits,
+    onRequest: async settings => { timeoutMs = settings.timeoutMs; },
+  }, "test-key", async () => new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: JSON.stringify(large) })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } }));
+  expect(timeoutMs).toBe(180000);
+  expect(directOutputSchema(executionLimits).parse(result)).toEqual(large);
+  expect(outputInput.safeParse(result).success).toBe(false);
+  expect(directOutputSchema(executionLimits).safeParse({ ...large, summary: large.summary + "s" }).success).toBe(false);
+  expect(validateTool("create_draft", { title: "Draft", content: large.artifact.content }, executionLimits)).toMatchObject({ content: large.artifact.content });
+  expect(() => validateTool("create_draft", { title: "Draft", content: large.artifact.content + "x" }, executionLimits)).toThrow();
+});
+
 test("direct telemetry hashes actual requests and preserves failure usage without invented response metadata", async () => {
   let settings: any;
   let metadata: any;

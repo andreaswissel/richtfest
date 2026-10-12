@@ -178,7 +178,8 @@ describe("workspace records and navigation", () => {
       "Super, das hat geklappt!",
       "Perfekt, vielen Dank.",
       "Gut gemacht!",
-    ]) expect(isPositiveFeedback(message)).toBe(true);
+    ])
+      expect(isPositiveFeedback(message)).toBe(true);
   });
   test("celebration does not mistake complaints, questions or quoted instructions for praise", () => {
     for (const message of [
@@ -193,7 +194,8 @@ describe("workspace records and navigation", () => {
       "Danke, das funktioniert nicht.",
       "Please check the roof dimensions",
       "great ".repeat(40),
-    ]) expect(isPositiveFeedback(message)).toBe(false);
+    ])
+      expect(isPositiveFeedback(message)).toBe(false);
   });
   test("analytics distinguishes total, partial, unavailable and genuine zero costs", () => {
     const usage = {
@@ -431,6 +433,16 @@ describe("workspace records and navigation", () => {
             createdAt: "2026-10-10T10:00:00.000Z",
             finishedAt: "2026-10-10T10:02:00.000Z",
           },
+          {
+            id: "550e8400-e29b-41d4-a716-446655440007",
+            projectId,
+            conversationId,
+            status: "failed",
+            failureReason:
+              "phase=review; category=timeout; The model call exceeded its configured time limit.",
+            createdAt: "2026-10-10T10:03:00.000Z",
+            finishedAt: "2026-10-10T10:04:00.000Z",
+          },
         ]}
       />,
       `/projects/${projectId}`,
@@ -451,6 +463,9 @@ describe("workspace records and navigation", () => {
     expect(html).toContain("The provider call exceeded its time limit");
     expect(html).not.toContain("Check the provider connection");
     expect(html).not.toContain("Token limit exceeded");
+    expect(html).toContain(
+      "Increase the call timeout in Agent model settings and start a new run",
+    );
     expect(html).toContain(`agentRun=${runId}`);
     expect(html).not.toContain("No messages yet.");
   });

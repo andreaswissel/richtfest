@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, notInArray, or, isNull, lt } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -26,23 +26,9 @@ import {
   type RunFailurePhase,
 } from "./run-reasons";
 
-export const specialistOutput = z.object({
-  summary: z.string().min(1).max(10000),
-  rationale: z.string().max(2000),
-  citations: z.array(z.string().uuid()).max(100),
-});
-export const supervisorPlan = z.object({
-  tasks: z
-    .array(
-      z.object({
-        role: specialistRoleSchema,
-        goal: z.string().min(1).max(2000),
-        sourceVersionIds: z.array(z.string().uuid()).max(10),
-      }),
-    )
-    .min(1)
-    .max(4),
-});
+const defaultSchemas = agentOutputSchemas();
+export const specialistOutput = defaultSchemas.specialist;
+export const supervisorPlan = defaultSchemas.plan;
 export function assertConfiguredAssignments(plan: z.infer<typeof supervisorPlan>, policy: AgentPresetSnapshot) {
   for (const task of plan.tasks)
     if (!policy.specialists[task.role]) throw conflict("Assignment specialist is disabled in the snapshotted preset");
@@ -56,34 +42,11 @@ export function plannerRoles(policy: AgentPresetSnapshot, profiles: ProfileSnaps
       .map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })),
   };
 }
-export const supervisorReview = specialistOutput.extend({
+export const supervisorReview = defaultSchemas.review.extend({
   // Older persisted runs and host fixtures contain only the conversational summary.
-  document: agentDocumentSchema.nullish(),
-  decision: z.enum(["accept", "revise"]),
-  revisions: z
-    .array(
-      z.object({
-        taskId: z.string().uuid(),
-        goal: z.string().min(1).max(2000),
-      }),
-    )
-    .max(4),
+  document: defaultSchemas.review.shape.document.nullish(),
 });
-export const independentReview = specialistOutput.extend({
-  decision: z.enum(["accept", "revise"]),
-  findings: z.array(z.object({
-    severity: z.enum(["blocking", "note"]),
-    issue: z.string().min(1).max(2000),
-    recommendation: z.string().min(1).max(2000),
-    citations: z.array(z.string().uuid()).max(20),
-  }).strict()).max(20),
-  revisions: z.array(
-    z.object({
-      taskId: z.string().uuid(),
-      goal: z.string().min(1).max(2000),
-    }).strict(),
-  ).max(4),
-}).strict();
+export const independentReview = defaultSchemas.independent_review;
 export type Assignment = {
   taskId: string;
   runId: string;
@@ -137,6 +100,7 @@ export function chunkSourceVersionIds(versionIds: string[], size = INDEPENDENT_R
 }
 export function aggregateIndependentReviews(
   results: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[],
+  limits: AgentExecutionLimits = agentExecutionLimitsSchema.parse({}),
 ) {
   const findings = new Map<string, z.infer<typeof independentReview>["findings"][number]>();
   const revisions = new Map<string, { taskId: string; goal: string }>();
@@ -163,9 +127,9 @@ export function aggregateIndependentReviews(
     if (omittedFindings) value += `\n\n${omittedFindings} additional findings were omitted from the bounded result.`;
     return value.slice(0, maxLength);
   };
-  return independentReview.parse({
-    summary: summarize("summary", 10000) || "No readable assigned sources were available for independent review.",
-    rationale: summarize("rationale", 2000) || "No review call could be made without readable source excerpts.",
+  return agentOutputSchemas(limits).independent_review.parse({
+    summary: summarize("summary", limits.summaryMaxCharacters) || "No readable assigned sources were available for independent review.",
+    rationale: summarize("rationale", limits.rationaleMaxCharacters) || "No review call could be made without readable source excerpts.",
     citations: [...new Set(results.flatMap(({ output }) => output.citations))],
     decision: results.some(({ output }) => output.decision === "revise") ? "revise" : "accept",
     findings: includedFindings,
@@ -296,6 +260,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     if (!(await d.validateProject(run.projectId)))
       throw conflict("Project unavailable");
     if (!d.executeSupervisor) throw conflict("Supervisor unavailable");
+    const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
+    const limits = policy.executionLimits;
+    const schemas = agentOutputSchemas(limits);
+    const reviewSchema = schemas.review.extend({ document: schemas.review.shape.document.nullish() });
     const assertActive = async () => {
       if (!(await commit(d, run, token, async () => {})))
         throw conflict("Supervisor no longer active");
@@ -303,7 +271,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     let partialOutput = "";
     let lastCheckpoint = 0;
     const onSummaryDelta = async (delta: string) => {
-      partialOutput = (partialOutput + delta).slice(0, 10000);
+      partialOutput = (partialOutput + delta).slice(0, limits.summaryMaxCharacters);
       if (Date.now() - lastCheckpoint < 150) return;
       lastCheckpoint = Date.now();
       const saved = await commit(d, run, token, async (tx) => {
@@ -438,7 +406,6 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       }
       throw new Error("Provider retry loop ended unexpectedly");
     };
-    const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
@@ -636,7 +603,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const batch = batches[index]!;
                 const batchIds = [...new Set(batch.map(source => source.versionId))];
                 const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
-                const result = specialistOutput.parse(await call("specialist", assignment.goal, {
+                const result = schemas.specialist.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
                   sourceVersionIds: batchIds,
                   sources: batch,
@@ -711,14 +678,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       });
     } else if (state.phase === "review") {
       const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
-      const review = supervisorReview.parse(
+      const review = reviewSchema.parse(
         await call("review", goal, {
           assignments: state.assignments,
           revision: state.revision,
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }),
       );
-      review.document = prepareAgentDocument(review.document, requireSoundInsulation);
+      review.document = prepareAgentDocument(review.document, requireSoundInsulation, limits.documentMaxCharacters);
       await sources(d, run.projectId, review.citations);
       const allowedCitations = (state.assignments as Assignment[]).flatMap(
         (a) => a.output?.citations ?? [],
@@ -910,7 +877,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         const sliceReview = firstPassReview && typeof firstPassReview === "object"
           ? { ...firstPassReview, citations: Array.isArray((firstPassReview as any).citations) ? (firstPassReview as any).citations.filter((versionId: string) => sliceIdSet.has(versionId)) : [] }
           : firstPassReview;
-        const output = independentReview.parse(await call("independent_review", goal, {
+        const output = schemas.independent_review.parse(await call("independent_review", goal, {
           role: "independent_reviewer",
           originalGoal: run.goal,
           assignments: sliceAssignments.map((assignment) => ({
@@ -948,8 +915,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         assertIndependentReviewCitations(output, sliceIdSet);
         sliceResults.push({ sourceVersionIds: sliceIds, output });
       }
-      const aggregated = aggregateIndependentReviews(sliceResults);
-      const output = independentReview.parse({
+      const aggregated = aggregateIndependentReviews(sliceResults, limits);
+      const output = schemas.independent_review.parse({
         ...aggregated,
         decision: coverageIncomplete ? "revise" : aggregated.decision,
         findings: coverageIncomplete
@@ -1009,7 +976,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             firstPassReview?.summary,
             `Independent review: ${output.summary}`,
             unresolved ? "Revision limit reached. Unresolved independent-review issues require human review." : "",
-          ].filter(Boolean).join("\n\n").slice(0, 10000);
+          ].filter(Boolean).join("\n\n").slice(0, limits.summaryMaxCharacters);
           const rationale = [
             firstPassReview?.rationale,
             `Independent review rationale\n\n${output.rationale}`,

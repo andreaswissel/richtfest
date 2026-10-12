@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
+import express from "../richtfest-os/apps/api/node_modules/express";
+import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import {
   stepSupervisor,
   createSupervisor,
@@ -113,9 +115,12 @@ integration(
       maxParallel: 2,
       maxTasks: 4,
       maxRevisions: 2,
+      executionLimits: { summaryMaxCharacters: 20000, rationaleMaxCharacters: 5000, documentMaxCharacters: 100000, timeoutSeconds: 10 },
     };
     let providerCalls = 0;
-    const document = { title: "Source-based project concept", content: `# Requested concept\n\nProposed measures [${sourceId}]\n\n${"Full review-ready detail. ".repeat(500)}`.trim() };
+    const summary = "Actual reviewed result. ".repeat(600);
+    const rationale = "Checked source evidence. ".repeat(150);
+    const document = { title: "Source-based project concept", content: `# Requested concept\n\nProposed measures [${sourceId}]\n\n${"Full review-ready detail. ".repeat(3000)}`.trim() };
     const d: any = {
       db,
       tenantId,
@@ -124,6 +129,7 @@ integration(
       validateProject: async () => true,
       validateSourceVersion: async () => true,
       auditRun: async () => {},
+      audit: async () => {},
       resolveSource: async () => ({ status: "resolved", source: { versionId: sourceId, name: "Evidence" }, content: { status: "available", text: "Source requirements" } }),
       executeSupervisor: async (input: any) => {
         providerCalls++;
@@ -140,9 +146,9 @@ integration(
         status: "completed",
         output: {
           decision: "accept",
-          summary: "Actual reviewed result",
+          summary,
           document,
-          rationale: "Checked source evidence",
+          rationale,
           citations: [sourceId],
           revisions: [],
         },
@@ -167,6 +173,8 @@ integration(
         })
         .returning();
       await createSupervisor(d, db, run, "medium", policy);
+      const [snapshot] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      expect((snapshot.modelPolicy as any).executionLimits).toEqual(policy.executionLimits);
       const assignments = [
         {
           runId: crypto.randomUUID(),
@@ -211,14 +219,14 @@ integration(
         .where(eq(artifactRevisions.artifactId, artifactRows[0]!.id));
       expect(revisions).toHaveLength(1);
       expect(revisions[0]!.content).toContain(document.content);
-      expect(revisions[0]!.content).toContain("Checked source evidence");
+      expect(revisions[0]!.content).toContain(rationale);
       expect(revisions[0]!.sourceVersionIds).toEqual([sourceId]);
       const outputs = await db
         .select()
         .from(messages)
         .where(eq(messages.runId, run!.id));
       expect(outputs).toHaveLength(1);
-      expect(outputs[0]!.body).toBe("Actual reviewed result");
+      expect(outputs[0]!.body).toBe(summary);
       const reference = {
         kind: "supervisor_result",
         artifactId: artifactRows[0]!.id,
@@ -234,7 +242,7 @@ integration(
         .from(agentRuns)
         .where(eq(agentRuns.id, run!.id));
       expect(parent!.status).toBe("needs_review");
-      expect(parent!.outputSummary).toBe("Actual reviewed result");
+      expect(parent!.outputSummary).toBe(summary);
       // A later human-steered generation must have its own immutable proposal and exact reference.
       await db
         .update(supervisorRuns)
@@ -283,6 +291,28 @@ integration(
         .from(supervisorRuns)
         .where(eq(supervisorRuns.runId, run!.id));
       expect((state!.review as any).result).toEqual(newest);
+      // Exercise the public revision API with an escaped JSON body above the old parser ceiling.
+      const app = express();
+      app.use(express.json({ limit: "4mb" }));
+      app.use(workspaceRouter(() => d));
+      const server = app.listen(0, "127.0.0.1");
+      await new Promise<void>(resolve => server.once("listening", resolve));
+      try {
+        const edited = `${document.content}\n${"\u0001".repeat(220000)}`;
+        expect(JSON.stringify(edited).length).toBeGreaterThan(1024 * 1024);
+        const response = await fetch(`http://127.0.0.1:${(server.address() as { port: number }).port}/artifacts/${reference.artifactId}/revisions`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: document.title, content: edited, sourceVersionIds: [sourceId] }),
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).data.content).toBe(edited);
+        const editedRows = await db.select().from(artifactRevisions).where(eq(artifactRevisions.artifactId, reference.artifactId));
+        expect(editedRows).toHaveLength(2);
+        expect(editedRows.find(row => row.version === 2)!.content).toBe(edited);
+        expect(editedRows.find(row => row.id === reference.revisionId)).toEqual(revisions[0]);
+      } finally {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
     } finally {
       await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
       await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));

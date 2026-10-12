@@ -59,7 +59,7 @@ export function providerFailureExplanation(
         typeof maximum === "number" &&
         Number.isInteger(maximum) &&
         maximum > 0 &&
-        maximum <= 10000
+        maximum <= 100000
           ? ` (${maximum} ${t("workspaceFailureCharacters")})`
           : "";
       return `${t("workspaceFailureSummaryLimit")}${limit}. ${t("workspaceFailureSummaryAction")}`;

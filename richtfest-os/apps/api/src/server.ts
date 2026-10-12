@@ -36,6 +36,8 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
   app.get("/api/auth/delivery-readiness", (_req, res) => res.json(ok({ configured: Boolean(env.RESEND_API_KEY && env.RESEND_FROM), mode: env.RESEND_API_KEY && env.RESEND_FROM ? "resend" : env.NODE_ENV === "production" ? "unconfigured" : "development_outbox" })));
   app.get("/api/auth/me", async (req, res, next) => { try { const current = await actorFor(db, auth, req); if (!current) return res.status(401).json(fail("unauthorized", "Sign in is required")); return res.json(ok({ id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme, user: { id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme } })); } catch (e) { next(e); } });
   app.use("/api/auth", (req, res, next) => { void toNodeHandler(auth)(req, res).catch(next); });
+  // Larger generated documents must remain editable, including JSON escaping.
+  app.use("/api/knowledge/artifacts", express.json({ limit: "4mb" }));
   app.use(express.json({ limit: "1mb" }));
   const docsDirectory = path.resolve(import.meta.dir, "../../docs/out");
   app.use(

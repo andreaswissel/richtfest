@@ -485,7 +485,7 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .project-transcript [data-slot="message"]:hover [data-slot="message-footer"],
 .project-transcript [data-slot="message"]:focus-within [data-slot="message-footer"] { opacity:1; }
 @media(pointer:coarse) { .project-transcript [data-slot="message-footer"] { opacity:1; } }
-.supervisor-preset-content { display:grid; width:min(100%, 80rem); gap:var(--stack); }
+.supervisor-preset-content { display:grid; grid-template-columns:minmax(0, 1fr); width:min(100%, 80rem); gap:var(--stack); }
 .supervisor-preset-content > .muted { max-width:74rem; line-height:1.5; }
 .supervisor-preset-content .field { min-width:0; gap:calc(var(--stack) / 2); }
 .supervisor-preset-controls { display:flex; flex-wrap:wrap; gap:var(--section); align-items:start; }

@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, ok } from "@richtfest/shared";
+import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import {
   supervisorRuns,
@@ -46,9 +46,9 @@ const runInput = z.object({
   goal: z.string().trim().min(1).max(5000),
   sourceVersionIds: z.array(z.string().uuid()).max(10).default([]),
 });
-export const outputInput = z.object({
-  summary: z.string().trim().min(1).max(10000),
-  rationale: z.string().max(2000),
+export const directOutputSchema = (limits?: AgentExecutionLimits) => z.object({
+  summary: z.string().trim().min(1).max(limits?.summaryMaxCharacters ?? 10000),
+  rationale: z.string().max(limits?.rationaleMaxCharacters ?? 2000),
   citations: z.array(z.string().uuid()).max(100).default([]),
   tools: z
     .array(z.object({ name: z.string().max(100), input: z.unknown() }))
@@ -64,12 +64,13 @@ export const outputInput = z.object({
   artifact: z
     .object({
       title: z.string().min(1).max(300),
-      content: z.string().min(1).max(50000),
+      content: z.string().min(1).max(limits?.documentMaxCharacters ?? 50000),
       type: z.literal("draft").default("draft"),
     })
     .nullable()
     .optional(),
 });
+export const outputInput = directOutputSchema();
 // Membership in the project is necessary but not enough: citations must name
 // evidence supplied to this execution, never merely referenced by old history.
 export function assertEvidenceCitations(
@@ -133,9 +134,11 @@ export const toolInputs = {
     .object({ request: z.string().min(1).max(5000) })
     .strict(),
 };
-export function validateTool(name: string, input: unknown) {
+export function validateTool(name: string, input: unknown, limits?: AgentExecutionLimits) {
   if (!Object.hasOwn(toolInputs, name))
     throw conflict("Tool is not allowlisted");
+  if (name === "create_draft" && limits)
+    return toolInputs.create_draft.extend({ content: z.string().min(1).max(limits.documentMaxCharacters) }).parse(input);
   return toolInputs[name as keyof typeof toolInputs].parse(input);
 }
 async function getRun(d: AppDeps, id: string, tx = d.db, lock = false) {
@@ -311,10 +314,13 @@ export async function executeRun(d: AppDeps, run: any) {
       ? modelPolicy?.specialists[specialistRole]
       : modelPolicy?.supervisor;
     if (specialistRole && !executionModel) throw conflict("Specialist is disabled in the snapshotted preset");
+    // Historical direct runs retain their original 50k draft cap.
+    const limits = run.modelPolicy?.executionLimits ? modelPolicy?.executionLimits : undefined;
+    const outputSchema = directOutputSchema(limits);
     let partialOutput = "";
     let lastCheckpoint = 0;
     const onSummaryDelta = async (delta: string) => {
-      partialOutput = (partialOutput + delta).slice(0, 10000);
+      partialOutput = (partialOutput + delta).slice(0, limits?.summaryMaxCharacters ?? 10000);
       if (Date.now() - lastCheckpoint < 150) return;
       lastCheckpoint = Date.now();
       await active(d, run, async (tx) => {
@@ -342,6 +348,7 @@ export async function executeRun(d: AppDeps, run: any) {
       modelId: executionModel?.modelId,
       reasoningEffort: executionModel?.reasoningEffort,
       maxOutputTokens: executionModel?.maxOutputTokens,
+      executionLimits: limits,
       goal: run.goal,
       context,
     }));
@@ -362,7 +369,7 @@ export async function executeRun(d: AppDeps, run: any) {
       });
       return;
     }
-    let output = outputInput.parse(response.output);
+    let output = outputSchema.parse(response.output);
     assertEvidenceCitations(output, evidence);
     await sources(d, run.projectId, output.citations);
     const results: unknown[] = [];
@@ -381,7 +388,7 @@ export async function executeRun(d: AppDeps, run: any) {
     failurePhase = "tool_execution";
     failureCategory = "execution";
     for (const tool of output.tools) {
-      const input = validateTool(tool.name, tool.input) as any;
+      const input = validateTool(tool.name, tool.input, limits) as any;
       if (tool.name === "delegate_source_review") {
         if (run.parentRunId)
           throw conflict("Specialist runs cannot delegate recursively");
@@ -544,6 +551,7 @@ export async function executeRun(d: AppDeps, run: any) {
         modelId: executionModel?.modelId,
         reasoningEffort: executionModel?.reasoningEffort,
         maxOutputTokens: executionModel?.maxOutputTokens,
+        executionLimits: limits,
         goal: run.goal,
         context: { ...context, sources: context.sources.filter(source => !results.some((entry: any) =>
           entry.tool === "resolve_project_source" && JSON.stringify(entry.result) === JSON.stringify(source))) },
@@ -553,7 +561,7 @@ export async function executeRun(d: AppDeps, run: any) {
       failureCategory = "execution";
       if (response.status !== "completed")
         throw conflict("Provider connection is no longer configured");
-      output = outputInput.parse(response.output);
+      output = outputSchema.parse(response.output);
       assertEvidenceCitations(output, evidence);
       if (output.tools.length)
         throw conflict("Provider exceeded the permitted tool round");
@@ -641,9 +649,10 @@ export async function executeRun(d: AppDeps, run: any) {
       );
     });
   } catch (error) {
+    const classified = classifyRunFailure(error, failurePhase);
     const category =
-      failureCategory === "execution"
-        ? classifyRunFailure(error, failurePhase)
+      failureCategory === "execution" || classified === "timeout"
+        ? classified
         : failureCategory;
     const failureReason = formatRunFailureReason(failurePhase, category);
     // Never persist provider exceptions or raw tool arguments; errors may contain credentials.

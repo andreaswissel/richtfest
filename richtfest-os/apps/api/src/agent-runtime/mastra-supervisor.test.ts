@@ -36,6 +36,20 @@ test("sound-insulation synthesis requires the fixed template and renders rather 
   expect(result.document.template).toEqual(template);
   expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
   assertDocumentCitations(result.document, [versionId]);
+  const largeTemplate = { ...template, entities: Array.from({ length: 65 }, () => ({ ...template.entities[0], observations: "x".repeat(1000) })) };
+  const largeReview = { ...review, document: { ...review.document, template: largeTemplate } };
+  for (const documentMaxCharacters of [1000, 120000]) {
+    const modelPolicy = { ...responsePolicy, executionLimits: { ...responsePolicy.executionLimits, documentMaxCharacters } };
+    const response = callMastraSupervisor({ ...request, modelPolicy }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: largeReview }),
+    });
+    if (documentMaxCharacters === 1000) await expect(response).rejects.toMatchObject({ code: "invalid_provider_output" });
+    else {
+      const output = await response as typeof result;
+      expect(output.document.content.length).toBeGreaterThan(60000);
+      expect(output.document.content).toContain("## 8. Prüfstatus");
+    }
+  }
   for (const invalid of [undefined, { ...template, version: 2 }, { ...template, requirements: "" }]) {
     await expect(callMastraSupervisor(request, "test-key", {
       model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...review, document: { ...review.document, template: invalid } } }),
@@ -71,6 +85,11 @@ for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const) 
     }
     assertDocumentCitations(result.document, [versionId]);
     expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
+    await expect(callMastraSupervisor({ ...request, modelPolicy: {
+      ...responsePolicy, executionLimits: { ...responsePolicy.executionLimits, documentMaxCharacters: 1000 },
+    } }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: review }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output" });
     for (const invalid of [{ ...template, version: 2 }, { ...template, plans: "" }]) {
       await expect(callMastraSupervisor(request, "test-key", {
         model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...review, document: { ...review.document, template: invalid } } }),
@@ -160,6 +179,44 @@ test("phase deadlines abort real Mastra streams without accepting partial output
     }
   }
 });
+
+const responsePolicy = {
+  ...vendorPreset("openai", "medium"), provider: "openai" as const, effort: "medium" as const, source: "workspace" as const, version: 2,
+  executionLimits: { summaryMaxCharacters: 12000, rationaleMaxCharacters: 3000, documentMaxCharacters: 70000, timeoutSeconds: 10 },
+};
+test("real Mastra accepts enlarged responses and rejects each configured cap", async () => {
+  const review = { summary: "s".repeat(12000), rationale: "r".repeat(3000), citations: [], decision: "accept", revisions: [],
+    document: { title: "Concept", content: "d".repeat(70000) } };
+  const invoke = (output: typeof review) => callMastraSupervisor({ ...base, phase: "review", modelPolicy: responsePolicy }, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
+  });
+  expect(await invoke(review)).toEqual(review);
+  for (const output of [
+    { ...review, summary: review.summary + "s" }, { ...review, rationale: review.rationale + "r" },
+    { ...review, document: { ...review.document, content: review.document.content + "d" } },
+  ]) {
+    const error = await invoke(output).then(() => null, error => error);
+    expect(error).toMatchObject({ code: "invalid_provider_output", failureCategory: "validation", retryable: true });
+  }
+});
+
+test("configured ten-second timeout aborts real Mastra and retains timeout classification", async () => {
+  let aborted = false;
+  const start = performance.now();
+  const model = new MastraLanguageModelV2Mock({ doStream: async ({ abortSignal }) => ({
+    stream: new ReadableStream({ start(controller) {
+      const abort = () => { aborted = true; controller.error(new DOMException("Timed out", "AbortError")); };
+      if (abortSignal?.aborted) abort();
+      else abortSignal?.addEventListener("abort", abort, { once: true });
+    } }),
+  }) });
+  const error = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer" }, modelPolicy: responsePolicy }, "test-key", { model }).then(() => null, error => error);
+  expect(aborted).toBe(true);
+  expect(performance.now() - start).toBeGreaterThanOrEqual(9500);
+  expect(performance.now() - start).toBeLessThan(15000);
+  expect(error).toMatchObject({ code: "timeout", failureCategory: "timeout", timedOut: true, retryable: false });
+}, 20000);
+
 test.skipIf(!process.env.DATABASE_URL)("supervisor repairs a rejected summary through Mastra without retrying a successful sibling", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
@@ -444,8 +501,10 @@ test("real partial-object stream emits before provider finishes and hides split 
 test("cancelling during structured streaming stops summary publication", async () => {
   const controller = new AbortController();
   let count = 0;
-  await expect(callMastraSupervisor({ ...base, phase: "specialist", onSummaryDelta: async () => {
+  const error = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer" }, modelPolicy: responsePolicy, onSummaryDelta: async () => {
     count++; controller.abort();
-  } }, "test-key", { signal: controller.signal, model: chunkedModel(JSON.stringify({ summary: "A sufficiently long evidence summary has begun streaming and will be interrupted before further details can be published.", rationale: "Evidence", citations: [] })) })).rejects.toThrow("Supervisor model execution failed");
+  } }, "test-key", { signal: controller.signal, model: chunkedModel(JSON.stringify({ summary: "A sufficiently long evidence summary has begun streaming and will be interrupted before further details can be published.", rationale: "Evidence", citations: [] })) }).then(() => null, error => error);
+  expect(error).toMatchObject({ code: "cancelled" });
+  expect(error.failureCategory).not.toBe("timeout");
   expect(count).toBe(1);
 });

@@ -7,6 +7,14 @@ export type AgentProvider = z.infer<typeof agentProviderSchema>;
 // GPT-6 models support up to 128K generated tokens. This is an output ceiling,
 // distinct from their 1.05M-token context window.
 export const AGENT_MAX_OUTPUT_TOKENS = 128_000;
+// Application response limits are separate from provider output-token budgets.
+export const agentExecutionLimitsSchema = z.object({
+  summaryMaxCharacters: z.number().int().min(1000).max(100000).default(10000),
+  rationaleMaxCharacters: z.number().int().min(500).max(20000).default(2000),
+  documentMaxCharacters: z.number().int().min(1000).max(200000).default(60000),
+  timeoutSeconds: z.number().int().min(10).max(600).default(180),
+}).strict();
+export type AgentExecutionLimits = z.infer<typeof agentExecutionLimitsSchema>;
 export const agentModelConfigSchema = z.object({
   modelId: z.string().trim().min(1).max(150).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:\/-]*$/),
   reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
@@ -28,6 +36,7 @@ export const agentPresetConfigSchema = z.object({
   }).strict(),
   // Opt-in to a fresh reviewer pass after the supervisor's own evidence review.
   independentReviewEnabled: z.boolean().default(false),
+  executionLimits: agentExecutionLimitsSchema.default({}),
   maxParallel: z.number().int().min(1).max(3),
   maxTasks: z.number().int().min(1).max(4),
   maxRevisions: z.number().int().min(0).max(2),

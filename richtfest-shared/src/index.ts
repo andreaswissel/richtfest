@@ -3,6 +3,7 @@ export * from "./response";
 export * from "./agent-policy";
 export * from "./agent-document";
 export * from "./agent-analytics";
+export * from "./agent-output";
 export * from "./customer";
 export * from "./support";
 export * from "./location";

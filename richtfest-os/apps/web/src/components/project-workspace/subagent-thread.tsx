@@ -129,6 +129,10 @@ function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
     return t("workspaceRunNoSpecificReason");
   if (
     match[2] !== "cancellation" &&
+    !(
+      match[2] === "timeout" &&
+      cause.startsWith("The model call exceeded its configured time limit.")
+    ) &&
     !cause.startsWith(
       canonicalCategoryReasonPrefixes[
         match[2] as keyof typeof canonicalCategoryReasonPrefixes

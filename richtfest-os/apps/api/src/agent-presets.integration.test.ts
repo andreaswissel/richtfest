@@ -63,6 +63,33 @@ for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integ
     expect(vendorSaved.config).toEqual({ ...vendor, supervisor: { ...vendor.supervisor, maxOutputTokens: vendor.supervisor.maxOutputTokens * 2 } });
     const runs = await db.execute(sql`select id from knowledge_agent_runs where tenant_id = ${tenantId}`);
     expect(runs.rows).toHaveLength(0);
+    const limits = { summaryMaxCharacters: 30000, rationaleMaxCharacters: 8000, documentMaxCharacters: 150000, timeoutSeconds: 10 };
+    const request = (method: string, manage = true, config?: unknown) => fetch(`http://127.0.0.1:${port}/agent/presets/openai/medium`, {
+      method, headers: { "Content-Type": "application/json", "x-manage": manage ? "yes" : "no" },
+      body: config === undefined ? undefined : JSON.stringify(config),
+    });
+    const load = async () => {
+      const response = await fetch(`http://127.0.0.1:${port}/agent/presets?provider=openai`);
+      expect(response.status).toBe(200);
+      return (await response.json()).data.presets;
+    };
+    const beforeAudits = (await db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantId))).length;
+    expect((await request("PUT", false, { ...vendor, executionLimits: limits })).status).toBe(403);
+    expect((await request("DELETE", false)).status).toBe(403);
+    expect((await load()).find((p: any) => p.effort === "medium").executionLimits).toEqual(vendor.executionLimits);
+    const saved = await request("PUT", true, { ...vendor, executionLimits: limits });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).data.executionLimits).toEqual(limits);
+    const loaded = await load();
+    expect(loaded.find((p: any) => p.effort === "medium")).toMatchObject({ executionLimits: limits, source: "workspace" });
+    expect(loaded.filter((p: any) => p.effort !== "medium").every((p: any) => p.executionLimits.timeoutSeconds === 180)).toBe(true);
+    expect((await request("DELETE")).status).toBe(200);
+    expect((await load()).find((p: any) => p.effort === "medium")).toMatchObject({ executionLimits: vendor.executionLimits, source: "vendor" });
+    const [reset] = await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId));
+    expect(reset.config).toBeNull();
+    const allAudits = await db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantId));
+    expect(allAudits).toHaveLength(beforeAudits + 2);
+    expect(allAudits.filter(a => a.action === "agent.preset.reset")).toHaveLength(1);
   } finally {
     await db.delete(auditEvents).where(eq(auditEvents.tenantId, tenantId));
     await db.delete(agentPresets).where(eq(agentPresets.tenantId, tenantId));

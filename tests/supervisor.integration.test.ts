@@ -169,7 +169,8 @@ integration("specialist timeouts stop unchanged retries and preserve completed s
     await stepSupervisor(d, run!.id);
     const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
     expect(parent!.status).toBe("failed");
-    expect(parent!.error).toBe("phase=specialist; category=timeout; The provider call exceeded its time limit. Retry with a narrower assignment or a faster model.");
+    expect(parent!.error).toContain("phase=specialist; category=timeout;");
+    expect(parent!.error).toContain("Increase the call timeout in Agent model settings and start a new run");
     const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
     expect(children.find(child => child.goal === "Completes")).toMatchObject({ status: "needs_review", outputSummary: "Saved evidence" });
     const failed = children.find(child => child.goal === "Times out")!;

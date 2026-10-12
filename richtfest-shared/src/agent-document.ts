@@ -35,14 +35,15 @@ export const agentDocumentSchema = z.object({
 }).strict();
 
 /** Both preview and PDF consume this saved Markdown, never model-chosen headings. */
-export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation = false) {
+export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation = false, maxCharacters = 60000) {
   if (!document?.template) {
     if (requireSoundInsulation) throw new Error("Sound insulation review requires its versioned document template");
     return document;
   }
   const template = acousticDocumentTemplateSchema.parse(document.template);
+  const schema = agentDocumentSchema.extend({ content: z.string().trim().min(1).max(maxCharacters) });
   if (template.id !== "sound-insulation-review") {
-    return agentDocumentSchema.parse({ ...document, content: renderAcousticConcept(template), template });
+    return schema.parse({ ...document, content: renderAcousticConcept(template), template });
   }
   const de = template.language === "de";
   // Sections are plain text with source citations, not arbitrary Markdown structure.
@@ -70,7 +71,7 @@ export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchem
     section(de ? "7. Offene Punkte und nächste Schritte" : "7. Open issues and next steps", prose(template.openIssues)),
     section(de ? "8. Prüfstatus" : "8. Review status", de ? "Entwurf zur fachlichen Prüfung. Keine Freigabe und kein Nachweis der Normkonformität." : "Draft for specialist review. Not approved and not a statement of compliance."),
   ].join("\n\n");
-  return agentDocumentSchema.parse({ ...document, content, template });
+  return schema.parse({ ...document, content, template });
 }
 
 export type SourceReference = { versionId: string; fileName: string; version: number };

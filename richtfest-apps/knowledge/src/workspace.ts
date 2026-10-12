@@ -52,7 +52,8 @@ export async function sources(
 }
 const revisionInput = z.object({
   title: z.string().trim().min(1).max(300),
-  content: z.string().max(100000),
+  // Editable headroom for a 200k-character generated document plus review notes.
+  content: z.string().max(500000),
   payload: z
     .object({
       kind: z.enum(["table", "checklist", "summary"]),

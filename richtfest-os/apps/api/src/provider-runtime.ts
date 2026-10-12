@@ -1,5 +1,5 @@
 import { openuiRegistryPrompt } from "@richtfest/shared/openui-registry";
-import { sourceModelEvidencePolicy } from "@richtfest/shared";
+import { sourceModelEvidencePolicy, agentExecutionLimitsSchema } from "@richtfest/shared";
 import { validateOpenUI } from "./openui-validation";
 import type {
   ProviderRequest,
@@ -95,12 +95,18 @@ export async function callProvider(
   });
   const isOpenAi = input.provider === "openai" || input.provider === "vercel";
   const isVercel = input.provider === "vercel";
+  const limits = input.executionLimits ? agentExecutionLimitsSchema.parse(input.executionLimits) : undefined;
+  const timeoutMs = (limits?.timeoutSeconds ?? 60) * 1000;
+  // Allow JSON escaping plus up to five draft tool inputs and one artifact.
+  const maxResponseCharacters = limits ? Math.max(200000, 6 * (limits.documentMaxCharacters * 6 + limits.summaryMaxCharacters + limits.rationaleMaxCharacters + 30000)) : 200000;
   if (isVercel && !input.modelId?.trim()) throw new Error("Vercel Gateway model preset is unconfigured");
   const modelId = input.modelId ?? (isOpenAi ? process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini" : process.env.ANTHROPIC_PROJECT_MODEL ?? "claude-sonnet-4-6");
   const effectiveInstructions = (input.systemInstructions ?? `${instructions}\n${sourceModelEvidencePolicy} resolve_project_source also accepts entityKey and modelOffset to retrieve more saved facts; textQuery ranks fact predicates/values before falling back to saved document text.`) +
+    (limits ? `\nResponse limits: summary at most ${limits.summaryMaxCharacters} characters; rationale at most ${limits.rationaleMaxCharacters} characters; artifact.content and create_draft content at most ${limits.documentMaxCharacters} characters. These are not token limits.` : "") +
     (input.includeOpenUI === false ? "" : "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" + openuiRegistryPrompt);
   const effort = reasoningEffortForModel(input.provider, modelId, input.reasoningEffort);
   const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);
   if (input.runId) controllers.set(input.runId, controller);
   let rawUsage: any;
   let responseModel: string | null = null;
@@ -117,7 +123,7 @@ export async function callProvider(
   try {
     await input.onRequest?.({ version: 1, adapter: "direct", adapterVersion: "1", appRevision: appRevision(),
       modelId, requestedReasoningEffort: input.reasoningEffort ?? null, reasoningEffort: effort ?? null,
-      maxOutputTokens: input.maxOutputTokens ?? 2500, maxSteps: 1, maxRetries: 0, timeoutMs: 60000,
+      maxOutputTokens: input.maxOutputTokens ?? 2500, maxSteps: 1, maxRetries: 0, timeoutMs,
       stream: true, store: isOpenAi ? false : null, instructionsHash: metadataHash(effectiveInstructions),
       promptHash: metadataHash(prompt), outputSchemaHash: null });
     const response = await fetcher(
@@ -126,10 +132,7 @@ export async function callProvider(
         : "https://api.anthropic.com/v1/messages",
       {
         method: "POST",
-        signal: AbortSignal.any([
-          controller.signal,
-          AbortSignal.timeout(60000),
-        ]),
+        signal,
         headers: isOpenAi
           ? {
               "content-type": "application/json",
@@ -210,7 +213,7 @@ export async function callProvider(
               : "";
           if (typeof delta !== "string") continue;
           text += delta;
-          if (text.length > 200000)
+          if (text.length > maxResponseCharacters)
             throw new Error("Provider output limit exceeded");
           const snapshot = redactProviderText(
             partialSummary(text),
@@ -268,6 +271,8 @@ export async function callProvider(
   } catch (error) {
     failed = true;
     await reportUsage().catch(() => undefined);
+    if (signal.aborted && !controller.signal.aborted)
+      throw Object.assign(new Error("Provider call exceeded its configured timeout."), { code: "timeout", failureCategory: "timeout" });
     throw error;
   } finally {
     if (input.runId && controllers.get(input.runId) === controller)
@@ -300,7 +305,7 @@ export async function executeProvider(
     throw Object.assign(new Error(
       "Provider execution failed. Check the selected connection and retry.",
     ), { providerFailure: true, providerStatus: value.providerStatus,
-      code: value.name === "AbortError" ? "cancelled" : value.name === "TimeoutError" ? "timeout" : value.code === "invalid_provider_output" ? value.code : "provider_error",
-      failureCategory: value.failureCategory === "validation" ? "validation" : "provider" });
+      code: value.code === "timeout" || value.name === "TimeoutError" ? "timeout" : value.name === "AbortError" ? "cancelled" : value.code === "invalid_provider_output" ? value.code : "provider_error",
+      failureCategory: value.code === "timeout" || value.name === "TimeoutError" ? "timeout" : value.failureCategory === "validation" ? "validation" : "provider" });
   }
 }

@@ -17,6 +17,20 @@ describe("agent provider presets", () => {
     expect(agentPresetConfigSchema.safeParse({ ...legacy, specialists: { ...legacy.specialists, unknown_role: legacy.supervisor } }).success).toBe(false);
   });
 
+  test("legacy presets receive response defaults and enforce inclusive execution bounds", () => {
+    const { executionLimits: _, ...legacy } = vendorPreset("openai", "medium");
+    expect(agentPresetConfigSchema.parse(legacy).executionLimits).toEqual({
+      summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: 60000, timeoutSeconds: 180,
+    });
+    for (const [field, min, max] of [
+      ["summaryMaxCharacters", 1000, 100000], ["rationaleMaxCharacters", 500, 20000],
+      ["documentMaxCharacters", 1000, 200000], ["timeoutSeconds", 10, 600],
+    ] as const) {
+      for (const value of [min, max]) expect(agentPresetConfigSchema.safeParse({ ...legacy, executionLimits: { [field]: value } }).success).toBe(true);
+      for (const value of [min - 1, max + 1, min + 0.5]) expect(agentPresetConfigSchema.safeParse({ ...legacy, executionLimits: { [field]: value } }).success).toBe(false);
+    }
+  });
+
   test("requires provider/model IDs for the Vercel Gateway", () => {
     expect(isGatewayModelId("openai/gpt-4.1-mini")).toBe(true);
     expect(isGatewayModelId("gpt-4.1-mini")).toBe(false);

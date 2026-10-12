@@ -8,6 +8,8 @@
 
 - Added Innenlärm and Außenlärm concept draft formats based on the completed reference reports, with distinct sections, project details, tables and source-linked plan/calculation inventories. Existing acoustic reviews keep their default format. These are draft structures, not new calculations or replicas of the original page design; template uploads in agent settings remain planned.
 
+- Agent model settings now expose summary, rationale and document character limits plus a per-call timeout for each effort preset. New runs use saved limits; existing runs keep their original settings. Timeout failures point to the setting instead of a generic connection error.
+
 - The 3D location editor now supports Rheinland-Pfalz addresses, including Alzey, using official building footprints and heights. Scenes from a different address are preserved but hidden by default. Unavailable trees, terrain and LiDAR are clearly identified.
 
 - Account settings offers a single recovery message with Reload app for unavailable sign-in code or Try again for failed security details. Failed passkey loads no longer appear as an empty list, and unavailable security actions stay disabled.

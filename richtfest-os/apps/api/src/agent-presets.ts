@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import {
   AGENT_MAX_OUTPUT_TOKENS,
-  agentEffortSchema, agentProviderSchema, agentPresetConfigSchema, specialistRoleSchema,
+  agentEffortSchema, agentProviderSchema, agentPresetConfigSchema, specialistRoleSchema, agentExecutionLimitsSchema,
   type AgentEffort, type AgentProvider, type AgentPresetConfig, type AgentPresetSnapshot, ok,
 } from "@richtfest/shared";
 import { agentPresets } from "./db/schema";
@@ -37,6 +37,7 @@ export function vendorPreset(provider: Provider, effort: AgentEffort): AgentPres
     supervisor: model(supervisorModel ?? ""),
     specialists: { source_reviewer: model(specialistModel ?? ""), requirements_reviewer: model(specialistModel ?? "") },
     independentReviewEnabled: false,
+    executionLimits: agentExecutionLimitsSchema.parse({}),
     maxParallel: limits.maxParallel, maxTasks: limits.maxTasks, maxRevisions: limits.maxRevisions,
   };
 }

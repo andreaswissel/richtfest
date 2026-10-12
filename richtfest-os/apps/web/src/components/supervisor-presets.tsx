@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { AGENT_MAX_OUTPUT_TOKENS } from "@richtfest/shared";
+import {
+  AGENT_MAX_OUTPUT_TOKENS,
+  agentExecutionLimitsSchema,
+} from "@richtfest/shared";
 import { api, list, type RecordData } from "../api";
 import { queryClient, useApi } from "../query";
 import { useT } from "../i18n";
@@ -84,6 +87,9 @@ export function SupervisorPresets({
         configured,
         ...body
       } = JSON.parse(JSON.stringify(activeDraft)) as RecordData;
+      body.executionLimits = agentExecutionLimitsSchema.parse(
+        body.executionLimits || {},
+      );
       body.specialists = Object.fromEntries(
         Object.entries(body.specialists || {}).filter(
           ([, config]) => config != null,
@@ -118,7 +124,11 @@ export function SupervisorPresets({
       const next = JSON.parse(JSON.stringify(base)) as RecordData;
       let target = next;
       path.slice(0, -1).forEach((key) => {
-        target[key] = target[key] || {};
+        target[key] =
+          target[key] ||
+          (key === "executionLimits"
+            ? agentExecutionLimitsSchema.parse({})
+            : {});
         target = target[key];
       });
       if (value === undefined) delete target[path.at(-1)!];
@@ -141,6 +151,10 @@ export function SupervisorPresets({
     );
   const supervisor = activeDraft.supervisor || {};
   const specialists = activeDraft.specialists || {};
+  const executionLimits =
+    activeDraft.executionLimits || agentExecutionLimitsSchema.parse({});
+  const validLimits =
+    agentExecutionLimitsSchema.safeParse(executionLimits).success;
   const modelCatalog = modelsQuery.data as
     { models?: ProviderModel[] } | undefined;
   const readOnly = data.canManage !== true || save.isPending || reset.isPending;
@@ -353,6 +367,56 @@ export function SupervisorPresets({
           </Field>
         </div>
       </fieldset>
+      <fieldset className="flex min-w-0 flex-col gap-stack" disabled={readOnly}>
+        <legend className="text-ui font-medium mb-stack">
+          {t("supervisorResponseLimits")}
+        </legend>
+        <p className="text-ui-sm text-muted-foreground">
+          {t("supervisorResponseLimitsDescription")}
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-stack">
+          {(
+            [
+              ["summaryMaxCharacters", "supervisorSummaryCharacters"],
+              ["rationaleMaxCharacters", "supervisorRationaleCharacters"],
+              ["documentMaxCharacters", "supervisorDocumentCharacters"],
+              ["timeoutSeconds", "supervisorTimeoutSeconds"],
+            ] as const
+          ).map(([key, label]) => {
+            const field = agentExecutionLimitsSchema.shape[key].removeDefault();
+            return (
+              <Field
+                key={key}
+                label={t(label)}
+                hint={`${field.minValue}–${field.maxValue}`}
+              >
+                <Input
+                  type="number"
+                  min={field.minValue!}
+                  max={field.maxValue!}
+                  step="1"
+                  value={executionLimits[key]}
+                  aria-invalid={!field.safeParse(executionLimits[key]).success}
+                  onChange={(event) =>
+                    updateConfig(
+                      ["executionLimits", key],
+                      event.target.value === ""
+                        ? ""
+                        : Number(event.target.value),
+                    )
+                  }
+                />
+              </Field>
+            );
+          })}
+        </div>
+        <p className="text-ui-sm text-muted-foreground">
+          {t("supervisorLimitsNewRuns")}
+        </p>
+        {!validLimits && (
+          <Callout tone="error">{t("supervisorLimitsInvalid")}</Callout>
+        )}
+      </fieldset>
       {(save.error || reset.error) && (
         <Callout tone="error">{(save.error || reset.error)?.message}</Callout>
       )}
@@ -370,7 +434,10 @@ export function SupervisorPresets({
         >
           {t("resetSupervisorPreset")}
         </Button>
-        <Button disabled={readOnly} onClick={() => save.mutate()}>
+        <Button
+          disabled={readOnly || !validLimits}
+          onClick={() => save.mutate()}
+        >
           {t("saveSupervisorPreset")}
         </Button>
       </div>
