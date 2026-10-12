@@ -332,7 +332,7 @@ const base = (db: Database, req: Request) => {
 };
 export const crmDeps = (db: Database, req: Request) => base(db, req) as CrmDeps;
 export const projectsDeps = (db: Database, req: Request) =>
-  base(db, req) as ProjectsDeps;
+  ({ ...base(db, req), geoapifyApiKey: env.GEOAPIFY_API_KEY }) as ProjectsDeps;
 export const knowledgeDeps = (
   db: Database,
   req: Request,

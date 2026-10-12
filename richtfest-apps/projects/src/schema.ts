@@ -8,7 +8,7 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
-import type { LocationContext, LocationPointCloud, LocationScene, ProjectAddress } from "@richtfest/shared";
+import type { AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress } from "@richtfest/shared";
 
 export const projectLocations = pgTable("projects_locations", {
   projectId: uuid("project_id").primaryKey(),
@@ -35,6 +35,7 @@ export const projects = pgTable("projects_projects", {
   postalCode: text("postal_code"),
   city: text("city"),
   country: text("country"),
+  addressReference: jsonb("address_reference").$type<AddressReference>(),
   status: text("status").notNull().default("planning"),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })

@@ -176,6 +176,13 @@
       "when": 1791592000000,
       "tag": "0024_project_address",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791593000000,
+      "tag": "0025_project_address_reference",
+      "breakpoints": true
     }
   ]
 }

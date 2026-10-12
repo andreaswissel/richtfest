@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project details now offer searchable address selection with Geoapify, retaining the selected coordinates and source attribution. Manual entry remains available for missing addresses or unconfigured search; manual edits clear old search metadata without moving existing 3D scenes.
+
 - Project specialists read large source sets in smaller, checkpointed batches without dropping extracted text. Evidence and synthesis calls have more time to finish; timeouts now stop unchanged retries and show specific guidance instead of suggesting a token increase or connection repair.
 
 - Added a full-width project 3D location editor using addresses saved in project details: official Berlin building/tree context, on-demand 2021 LiDAR where covered, versioned IFC overlays, editable vehicle envelopes, massing and planning notes. Address changes never move existing scenes. Architectural lighting, shadows and clearer materials improve depth. Switch trees between schematic markers and illustrative foliage; measurements use schematic trees. Survey, alignment and illustrative-geometry limits stay explicit; this is not fire-access certification. Conversation and other app pages now use the full available width.

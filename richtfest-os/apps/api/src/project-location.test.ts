@@ -33,6 +33,7 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
       CREATE TABLE test_audit (action text, project_id uuid)`);
     await pool.query(await Bun.file(new URL("../drizzle/0023_project_locations.sql", import.meta.url)).text());
     await pool.query(await Bun.file(new URL("../drizzle/0024_project_address.sql", import.meta.url)).text());
+    await pool.query(await Bun.file(new URL("../drizzle/0025_project_address_reference.sql", import.meta.url)).text());
     await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Location test',$3)", [project,tenant,actor]);
     expect((await request()).body.data).toMatchObject({ revision:0, scene:{objects:[],planningNotes:""}, context:null, contextJob:{status:"idle"}, lidarJob:{status:"idle"} });
     for (const [suffix,method,body] of [["","GET",undefined],["","PUT",{revision:0,scene:{objects:[],planningNotes:"x"}}],["/import","POST",{revision:0}],["/lidar","POST",{}],["/lidar","GET",undefined]] as const) {
@@ -56,6 +57,16 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect((await patchProject(address,{"x-test-access":"read"})).status).toBe(403);
     expect((await patchProject({ ...address, street:"  Giersstraße 20  " })).body.data).toMatchObject(address);
     expect((await patchProject({ name:"Renamed" })).body.data).toMatchObject(address);
+    const addressReference = { provider:"geoapify", placeId:"address-20", longitude:13.4826, latitude:52.5575, attribution:"Powered by Geoapify · © OpenStreetMap contributors" };
+    expect((await patchProject({ ...address, addressReference })).body.data.addressReference).toEqual(addressReference);
+    expect((await patchProject({ name:"Selected address retained" })).body.data.addressReference).toEqual(addressReference);
+    expect((await patchProject({ addressReference })).status).toBe(400);
+    expect((await patchProject({ ...address, addressReference:{...addressReference, latitude:91} })).status).toBe(400);
+    expect((await patchProject({ postalCode:"13088" })).body.data.addressReference).toBeNull();
+    const suggestionsUrl = base.replace(`/${project}/location`, "/address-suggestions");
+    expect(await (await fetch(suggestionsUrl)).json()).toMatchObject({ data:{configured:false,suggestions:[]} });
+    expect((await fetch(suggestionsUrl+"?q=ab")).status).toBe(400);
+    expect((await fetch(suggestionsUrl,{headers:{"x-test-access":"read"}})).status).toBe(403);
     expect((await request("/import","POST",{revision:0})).status).toBe(409);
     const before = auditCount, queued = await request("/import","POST",{revision:1});
     expect(queued.status).toBe(202); expect(queued.body.data.contextJob.status).toBe("queued"); expect(queued.body.data.revision).toBe(2);

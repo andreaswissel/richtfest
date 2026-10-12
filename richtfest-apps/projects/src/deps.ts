@@ -48,6 +48,7 @@ export type AppDeps = {
   validateCustomer: (customerId: string) => Promise<boolean>;
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;
+  geoapifyApiKey?: string;
 };
 
 /** Background worker has no request actor. OS supplies system-scoped audit. */

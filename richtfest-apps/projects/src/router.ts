@@ -2,15 +2,17 @@ import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { ok, projectAddressInput } from "@richtfest/shared";
+import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/shared";
 import { files, fileVersions, projectMembers, projects } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
 import { createLocationRouter } from "./location-router";
+import { searchAddresses } from "./address-search";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
   ...projectAddressInput.shape,
+  addressReference: addressReferenceInput.nullable().optional(),
   name: z.string().trim().min(1).max(200),
   customerId: z.string().uuid().optional(),
   status: z.string().max(40).optional(),
@@ -18,6 +20,7 @@ const projectInput = z.object({
 const projectUpdateInput = z
   .object({
     ...projectAddressInput.shape,
+    addressReference: addressReferenceInput.nullable().optional(),
     name: z.string().trim().min(1).max(200).optional(),
     customerId: z.string().uuid().nullable().optional(),
     status: z.string().trim().min(1).max(40).optional(),
@@ -65,6 +68,15 @@ const projectFile = async (
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
+  router.get("/projects/address-suggestions", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("projects:write");
+      const { q, language } = z.object({ q: z.string().trim().min(3).max(200).optional(), language: z.enum(["en", "de"]).default("de") }).parse(req.query);
+      res.set("Cache-Control", "no-store");
+      return res.json(ok({ configured: Boolean(d.geoapifyApiKey), suggestions: d.geoapifyApiKey && q ? await searchAddresses(d.geoapifyApiKey, q, language) : [] }));
+    } catch (e) { return next(e); }
+  });
   router.get("/projects", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -98,6 +110,8 @@ export function createRouter(getDeps: GetDeps) {
       const d = getDeps(req);
       d.requirePermission("projects:write");
       const input = projectInput.parse(req.body);
+      if (input.addressReference && (!input.street || !input.city || !input.country || input.postalCode === undefined))
+        return send(res, 400, { data: null, error: { code: "invalid_input" }, message: "A selected address requires all address fields" });
       if (input.customerId && !(await d.validateCustomer(input.customerId)))
         throw Object.assign(new Error("Customer not found"), {
           status: 404,
@@ -130,6 +144,11 @@ export function createRouter(getDeps: GetDeps) {
       d.requirePermission("projects:write");
       const projectId = z.string().uuid().parse(req.params.projectId);
       const input = projectUpdateInput.parse(req.body);
+      // A manual/partial address update must never retain another address's coordinates.
+      if (Object.keys(projectAddressInput.shape).some(key => key in input) && input.addressReference === undefined)
+        input.addressReference = null;
+      if (input.addressReference && (!input.street || !input.city || !input.country || input.postalCode === undefined))
+        return send(res, 400, { data: null, error: { code: "invalid_input" }, message: "A selected address requires all address fields" });
       if (!Object.keys(input).length)
         return send(res, 400, {
           data: null,

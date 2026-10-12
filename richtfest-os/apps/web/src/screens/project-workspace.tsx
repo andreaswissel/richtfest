@@ -17,6 +17,7 @@ import { ArtifactPanel } from "../components/project-workspace/artifacts";
 import { LiveRun } from "../components/project-workspace/live-run";
 import { SubagentThread } from "../components/project-workspace/subagent-thread";
 import { LocationMode } from "../components/location/mode";
+import { AddressSelect } from "../components/address-select";
 import { ArrowUp } from "lucide-react";
 
 const MIN_ARTIFACT_WIDTH = 25;
@@ -368,6 +369,9 @@ export function ProjectWorkspace() {
                 postalCode: values.postalCode,
                 city: values.city,
                 country: values.country,
+                addressReference: JSON.parse(
+                  String(values.addressReference || "null"),
+                ),
               };
               if (typeof values.customerId === "string")
                 body.customerId = values.customerId || null;
@@ -383,25 +387,10 @@ export function ProjectWorkspace() {
                 defaultValue={details.name || ""}
               />
             </Field>
-            <fieldset className="grid gap-stack">
-              <legend className="text-ui-sm">{t("address")}</legend>
-              {(
-                [
-                  ["street", "projectStreet", 300],
-                  ["postalCode", "customerPostalCode", 32],
-                  ["city", "customerCity", 200],
-                  ["country", "customerCountry", 100],
-                ] as const
-              ).map(([name, label, maxLength]) => (
-                <Field key={name} label={t(label)}>
-                  <Input
-                    name={name}
-                    maxLength={maxLength}
-                    defaultValue={details[name] || ""}
-                  />
-                </Field>
-              ))}
-            </fieldset>
+            <AddressSelect
+              defaultValue={details}
+              disabled={updateProject.isPending}
+            />
             <Field label={t("customer")}>
               <NativeSelect
                 name="customerId"
@@ -465,7 +454,20 @@ export function ProjectWorkspace() {
             <dt>{t("name")}</dt>
             <dd>{title}</dd>
             <dt>{t("address")}</dt>
-            <dd>{formatProjectAddress(details) || "—"}</dd>
+            <dd>
+              {formatProjectAddress(details) || "—"}
+              {details.addressReference && (
+                <p className="text-ui-xs text-muted-foreground">
+                  <a
+                    href="https://www.geoapify.com/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {details.addressReference.attribution}
+                  </a>
+                </p>
+              )}
+            </dd>
             <dt>{t("customer")}</dt>
             <dd>{project.data?.customerName || t("noCustomer")}</dd>
             <dt>{t("status")}</dt>

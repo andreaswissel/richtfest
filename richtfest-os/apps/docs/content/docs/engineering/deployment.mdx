@@ -55,6 +55,12 @@ Configure the database connection, canonical HTTPS origin, authentication secret
 
 Choose the canonical origin before enrolling production passkeys. Keep local/test identities and preview mail delivery out of production. Missing delivery or provider configuration must remain explicit.
 
+### Project address search
+
+Set `GEOAPIFY_API_KEY` on the API service to enable project address autocomplete. Keep it server-side, never in a `VITE_` variable or source control. The Railway declaration preserves the secret; preparing the declaration does not configure an account, apply infrastructure or deploy. Without a key, the selector reports that search is unconfigured and still accepts manual addresses.
+
+Authenticated users with project write permission can search through `/api/projects/address-suggestions`. Queries start after three characters and a short typing pause. Search text is sent to Geoapify, with Germany as a ranking bias and the user's English/German language; project IDs, names and customer records are not sent. Set usage limits appropriate to the account. The server bounds request time and response size, and hides upstream error bodies and credentials. Selected coordinates, provider IDs and data-source attribution are stored in Postgres; they are unreviewed search metadata, not survey evidence. The editor continues to resolve exact Berlin addresses through the official register rather than substituting search coordinates.
+
 ## Social link previews
 
 The web HTML includes Open Graph and large-image Twitter card metadata, so crawlers do not need JavaScript or a session. In production, the API resolves preview URLs against the origin in `BETTER_AUTH_URL` at startup; set it to the public HTTPS origin, not a private Railway hostname. The image is the public, bundled 1200 × 630 JPEG at `/social-preview-v1.jpg`, not a private Bucket upload.

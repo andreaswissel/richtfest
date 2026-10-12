@@ -8,6 +8,17 @@ export const projectAddressInput = z.object({
   country: addressText(100),
 });
 export type ProjectAddress = z.infer<typeof projectAddressInput>;
+/** Search provenance, not surveyed coordinates or proof of address validity. */
+export const addressReferenceInput = z.object({
+  provider: z.literal("geoapify"),
+  placeId: z.string().min(1).max(2000),
+  longitude: z.number().finite().min(-180).max(180),
+  latitude: z.number().finite().min(-90).max(90),
+  attribution: z.string().min(1).max(2000),
+});
+export type AddressReference = z.infer<typeof addressReferenceInput>;
+export type AddressSuggestion = ProjectAddress & { addressReference: AddressReference };
+export type AddressSuggestions = { configured: boolean; suggestions: AddressSuggestion[] };
 export const formatProjectAddress = (address: ProjectAddress) => [address.street, [address.postalCode, address.city].filter(Boolean).join(" "), address.country].filter(Boolean).join(", ");
 const normalAddress = (text: string) => text.trim().toLocaleLowerCase("de").replaceAll("ß", "ss").replace(/[\s,]+/g, " ");
 const germanAddress = (address: ProjectAddress) => !address.country || ["de", "deutschland", "germany"].includes(normalAddress(address.country));

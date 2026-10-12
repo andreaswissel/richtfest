@@ -36,6 +36,7 @@ export default defineRailway(() => {
       AI_CONNECTION_ENCRYPTION_KEY: preserve(),
       RESEND_API_KEY: preserve(),
       RESEND_FROM: preserve(),
+      GEOAPIFY_API_KEY: preserve(),
     },
   });
 
