@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, list, uploadFile, type RecordData } from "../../api";
@@ -15,7 +15,7 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field } from "../ui/primitives";
-const ProjectOpenUI = lazy(() => import("./openui"));
+import { LazyOpenUI } from "./lazy-openui";
 const IMAGE_PREVIEW_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -374,22 +374,20 @@ export function ArtifactPanel({
                     </Badge>
                     {revision.format === "openui" ||
                     artifact.data?.artifact?.type === "openui" ? (
-                      <Suspense fallback={<span>{t("loading")}</span>}>
-                        <ProjectOpenUI
-                          projectId={projectId}
-                          conversationId={conversationId}
-                          onReply={
-                            conversationId
-                              ? (body) => reply.mutate({ body })
-                              : undefined
-                          }
-                          response={
-                            typeof revision.content === "string"
-                              ? revision.content
-                              : ""
-                          }
-                        />
-                      </Suspense>
+                      <LazyOpenUI
+                        projectId={projectId}
+                        conversationId={conversationId}
+                        onReply={
+                          conversationId
+                            ? (body) => reply.mutate({ body })
+                            : undefined
+                        }
+                        response={
+                          typeof revision.content === "string"
+                            ? revision.content
+                            : ""
+                        }
+                      />
                     ) : (
                       <div className="artifact-content">
                         <ArtifactContent

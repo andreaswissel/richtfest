@@ -101,6 +101,16 @@ The web build writes the same asset-filename fingerprint to an HTML meta tag and
 
 An existing tab must have loaded a build containing this feature to detect subsequent updates. Redeploying the same web assets does not trigger the button; no extra Railway variable or database migration is required.
 
+### Recovering an older open tab
+
+An open tab can still refer to a hashed JavaScript or CSS file from a previous deployment. Missing `/assets/` files return 404 rather than the application's HTML. A network interruption can produce the same browser module-loading error; the recovery notice does not claim that an update was definitely responsible.
+
+OpenUI and Markdown loads have local error boundaries. A missing renderer shows a translated reload prompt in place of that content, without unmounting the surrounding conversation or composer. Markdown falls back to its original plain text. Copy unsent text or unsaved changes before choosing **Reload app**; confirmation is required, and cancellation leaves the page untouched. There is no automatic reload or retry loop. A confirmed reload keeps the current URL and fetches the current app; it cannot repair an ongoing outage.
+
+Lazy project and Help routes have eagerly available error and initial-loading elements so failed imports remain visible inside the shell, including on a direct page load. Ordinary rendering errors use a separate generic error message rather than being misidentified as a stale deployment. Recovery cannot run if the initial application bundle itself fails to load, and tabs opened before this behavior was deployed need a manual refresh once.
+
+To verify locally, build the web app and block its hashed OpenUI or Help module in browser network interception. Check that the conversation/composer or navigation shell remains, cancel the reload confirmation, then unblock the module and confirm reload. The browser regression checks can also be run on Vite with `import('/tests/module-recovery.browser.tsx').then(m => m.testModuleRecovery())`.
+
 ## Docs build
 
 Run `bun run --filter '@richtfest/docs' build`. The generated `out` directory belongs to the deploy artifact. The production API must apply its session/access guard before serving the entire docs directory.

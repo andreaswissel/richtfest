@@ -1,6 +1,13 @@
 {
   "newUpdatesAvailable": "Updates verfügbar",
   "reloadForUpdates": "App neu laden, um sie zu aktualisieren. Ungespeicherte Änderungen vorher speichern.",
+  "moduleLoadFailed": "Ein Teil dieser Seite konnte nicht geladen werden. Möglicherweise wurde die App aktualisiert oder die Verbindung unterbrochen.",
+  "pageRenderFailed": "Auf dieser Seite ist ein unerwarteter Fehler aufgetreten. Versuche, sie neu zu laden. Wende dich bei erneutem Auftreten an deine Teamadministration.",
+  "reloadCopyDraft": "Kopiere vor dem Neuladen ungesendete Texte oder ungespeicherte Änderungen. Die Seite wird nicht automatisch neu geladen.",
+  "reloadConfirm": "Richtfest jetzt neu laden? Ungesendete Texte und ungespeicherte Änderungen können verloren gehen. Zum vorherigen Kopieren abbrechen.",
+  "pageUnavailable": "Seite nicht verfügbar",
+  "pageNotFound": "Seite nicht gefunden",
+  "pageNotFoundHint": "Prüfe die Adresse oder kehre zu einer bekannten Richtfest-Seite zurück.",
   "locationEditor": "3D-Standort",
   "locationSetup": "Standortdaten laden",
   "locationSetupHint": "Amtliche Gebäudedaten in Berlin oder Rheinland-Pfalz über eine eindeutige Hausadresse laden. Bäume und LiDAR auf Anforderung sind nur innerhalb der Berliner Datenabdeckung verfügbar. Besprechungsnotizen erzeugen keine Geometrie.",

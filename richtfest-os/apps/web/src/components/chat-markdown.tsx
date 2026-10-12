@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense } from "react";
+import { ModuleLoadBoundary } from "./module-recovery";
 
 const MarkdownContent = lazy(() => import("./chat-markdown-content"));
 
@@ -8,9 +9,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 }: {
   children: string;
 }) {
+  const plainText = <div className="preserve-lines">{children}</div>;
   return (
-    <Suspense fallback={<div className="preserve-lines">{children}</div>}>
-      <MarkdownContent>{children}</MarkdownContent>
-    </Suspense>
+    <ModuleLoadBoundary fallback={plainText}>
+      <Suspense fallback={plainText}>
+        <MarkdownContent>{children}</MarkdownContent>
+      </Suspense>
+    </ModuleLoadBoundary>
   );
 });

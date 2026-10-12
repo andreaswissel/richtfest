@@ -1,6 +1,13 @@
 {
   "newUpdatesAvailable": "New updates available",
   "reloadForUpdates": "Reload the app to update. Save any unsaved changes first.",
+  "moduleLoadFailed": "Part of this page could not load. The app may have been updated, or the connection was interrupted.",
+  "pageRenderFailed": "This page encountered an unexpected error. Try reloading. If it happens again, contact your team administrator.",
+  "reloadCopyDraft": "Copy any unsent text or unsaved changes before reloading. Nothing will reload automatically.",
+  "reloadConfirm": "Reload Richtfest now? Unsent text and unsaved changes may be lost. Cancel to copy them first.",
+  "pageUnavailable": "Page unavailable",
+  "pageNotFound": "Page not found",
+  "pageNotFoundHint": "Check the address or return to a known Richtfest page.",
   "locationEditor": "3D location",
   "locationSetup": "Load site context",
   "locationSetupHint": "Load official building context in Berlin or Rheinland-Pfalz from an exact house address. Trees and on-demand LiDAR are available only within Berlin source coverage. No geometry is inferred from meeting notes.",

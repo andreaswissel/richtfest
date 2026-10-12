@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useInfiniteQuery,
@@ -46,7 +46,7 @@ import {
   MessageScrollerButton,
 } from "../components/ui/message-scroller";
 
-const OpenUI = lazy(() => import("../components/project-workspace/openui"));
+import { LazyOpenUI } from "../components/project-workspace/lazy-openui";
 type Kind = "bug" | "feature";
 type Status = "open" | "in_progress" | "resolved";
 const supportQuery = {
@@ -348,15 +348,11 @@ function SupportChat({
                           </Marker>
                         )}
                         {message.openui && (
-                          <Suspense
-                            fallback={<Callout>{t("loading")}</Callout>}
-                          >
-                            <OpenUI
-                              projectId=""
-                              response={message.openui}
-                              onReply={canRun && !request ? submit : undefined}
-                            />
-                          </Suspense>
+                          <LazyOpenUI
+                            projectId=""
+                            response={message.openui}
+                            onReply={canRun && !request ? submit : undefined}
+                          />
                         )}
                         {!!message.sources?.length && (
                           <div className="flex flex-wrap gap-stack text-ui-xs text-muted-foreground">

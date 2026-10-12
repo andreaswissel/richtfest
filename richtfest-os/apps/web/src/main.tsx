@@ -12,6 +12,7 @@ import { SettingsModels } from "./screens/settings-models";
 import { SettingsAgents } from "./screens/settings-agents";
 import { queryClient } from "./query";
 import { api } from "./api";
+import { RouteError, RouteLoading } from "./components/module-recovery";
 import "./index.css";
 
 const prefetch = (path: string) => () => {
@@ -23,9 +24,10 @@ const prefetch = (path: string) => () => {
   return null;
 };
 const router = createBrowserRouter([
-  { path: "/login", element: <Login /> },
+  { path: "/login", element: <Login />, errorElement: <RouteError /> },
   {
     element: <App />,
+    errorElement: <RouteError />,
     hydrateFallbackElement: <App initializing />,
     children: [
       { path: "/settings/security", element: <Security /> },
@@ -47,6 +49,9 @@ const router = createBrowserRouter([
       },
       {
         path: "/projects/:id",
+        errorElement: <RouteError />,
+        // Keep the failed lazy match (and its error UI) in the initial render branch.
+        hydrateFallbackElement: <RouteLoading />,
         lazy: async () => ({
           Component: (await import("./screens/project-workspace"))
             .ProjectWorkspace,
@@ -71,6 +76,8 @@ const router = createBrowserRouter([
       },
       {
         path: "/help",
+        errorElement: <RouteError />,
+        hydrateFallbackElement: <RouteLoading />,
         lazy: async () => ({
           Component: (await import("./screens/help")).Help,
         }),

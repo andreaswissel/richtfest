@@ -1,7 +1,5 @@
 import {
-  lazy,
   memo,
-  Suspense,
   useEffect,
   useCallback,
   useLayoutEffect,
@@ -65,7 +63,7 @@ import {
   type WorkspaceMessage,
   type ReadState,
 } from "./types";
-const ProjectOpenUI = lazy(() => import("./openui"));
+import { LazyOpenUI } from "./lazy-openui";
 
 const runFailureCategoryLabels: Record<string, string> = {
   provider: "workspaceRunCategoryProvider",
@@ -1249,14 +1247,12 @@ const MessageRow = memo(function MessageRow({
           </BubbleContent>
         </Bubble>
         {(message.openui || message.metadata?.openui) && (
-          <Suspense fallback={<span>{t("loading")}</span>}>
-            <ProjectOpenUI
-              projectId={projectId}
-              conversationId={conversationId}
-              response={message.openui || message.metadata?.openui || ""}
-              onReply={onInput}
-            />
-          </Suspense>
+          <LazyOpenUI
+            projectId={projectId}
+            conversationId={conversationId}
+            response={message.openui || message.metadata?.openui || ""}
+            onReply={onInput}
+          />
         )}
         {message.annotation && (
           <blockquote className="message-annotation">

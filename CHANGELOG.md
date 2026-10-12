@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Missing app files after an update now show a reload prompt instead of crashing the conversation. Unsent text stays accessible, Markdown remains readable as plain text, and reloading requires confirmation. Failed page loads also offer recovery within the app.
+
 - Rate-limited project agents now wait for provider cooldowns across worker restarts, distinguish reported quota failures from throttling, and resume saved drafts, specialist work and independent-review progress when retried. Unclassified older 429 errors remain explicitly uncertain.
 
 - Agent progress now names the sources and revisions being reviewed, shows batch progress and saved findings marked as unreviewed, and updates in place as specialists work. The full timestamped history and retry details stay available on expansion.
