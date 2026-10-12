@@ -8,6 +8,16 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { Badge, Callout, Field, Segmented } from "./ui/primitives";
+import { Switch } from "./ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
+import { Section } from "./layout";
 
 const efforts = ["low", "medium", "high", "ultra"];
 const reasoningEfforts = ["low", "medium", "high", "xhigh"];
@@ -133,134 +143,125 @@ export function SupervisorPresets({
   const specialists = activeDraft.specialists || {};
   const modelCatalog = modelsQuery.data as
     { models?: ProviderModel[] } | undefined;
+  const readOnly = data.canManage !== true || save.isPending || reset.isPending;
   return (
-    <SectionShell title={t("supervisorPresets")}>
-      <p className="muted">{t("supervisorPresetsDescription")}</p>
+    <SectionShell title={t("supervisorRoleModels")}>
       {data.enabled !== true && (
         <Callout>{t("supervisorPresetsDisabled")}</Callout>
       )}
       <div className="supervisor-preset-controls">
-        <Field label={t("supervisorEffort")}>
-          <Segmented
-            value={activeDraft.effort || effort}
-            onChange={(value) => {
-              setEffort(value);
-              const next = presets.find((preset) => preset.effort === value);
-              setDraft(
-                next
-                  ? (JSON.parse(JSON.stringify(next)) as RecordData)
-                  : undefined,
-              );
-            }}
-            items={efforts.map((value) => ({
-              value,
-              label: t(`effort_${value}` as never),
-            }))}
-          />
-        </Field>
-        <Field
-          label={t("supervisorIndependentReview")}
-          hint={t("supervisorIndependentReviewDescription")}
-        >
-          <Segmented
-            value={
-              activeDraft.independentReviewEnabled === true
-                ? "enabled"
-                : "disabled"
-            }
-            onChange={(value) =>
-              updateConfig(["independentReviewEnabled"], value === "enabled")
-            }
-            items={[
-              { value: "disabled", label: t("disabled") },
-              { value: "enabled", label: t("enabled") },
-            ]}
-          />
-        </Field>
-      </div>
-      <div className="supervisor-preset-meta">
-        <Badge>
-          {activeDraft.source === "workspace"
-            ? t("workspaceScope")
-            : t("vendorDefault")}
-        </Badge>
-        <Badge tone={activeDraft.configured ? "success" : "neutral"}>
-          {activeDraft.configured ? t("configured") : t("unconfigured")}
-        </Badge>
-        {activeDraft.version && (
-          <span className="muted">
-            {t("presetVersion")} {activeDraft.version}
-          </span>
-        )}
+        <fieldset disabled={save.isPending || reset.isPending}>
+          <Field label={t("supervisorEffort")}>
+            <Segmented
+              value={activeDraft.effort || effort}
+              onChange={(value) => {
+                setEffort(value);
+                const next = presets.find((preset) => preset.effort === value);
+                setDraft(
+                  next
+                    ? (JSON.parse(JSON.stringify(next)) as RecordData)
+                    : undefined,
+                );
+              }}
+              items={efforts.map((value) => ({
+                value,
+                label: t(`effort_${value}` as never),
+              }))}
+            />
+          </Field>
+        </fieldset>
+        <fieldset disabled={readOnly}>
+          <Field
+            label={t("supervisorIndependentReview")}
+            hint={t("supervisorIndependentReviewDescription")}
+          >
+            <Switch
+              disabled={readOnly}
+              checked={activeDraft.independentReviewEnabled === true}
+              onCheckedChange={(value) =>
+                updateConfig(["independentReviewEnabled"], value)
+              }
+            />
+          </Field>
+        </fieldset>
+        <div className="supervisor-preset-meta">
+          <Badge>
+            {activeDraft.source === "workspace"
+              ? t("workspaceScope")
+              : t("vendorDefault")}
+          </Badge>
+          <Badge tone={activeDraft.configured ? "success" : "neutral"}>
+            {activeDraft.configured ? t("configured") : t("unconfigured")}
+          </Badge>
+          {activeDraft.version && (
+            <span className="muted">
+              {t("presetVersion")} {activeDraft.version}
+            </span>
+          )}
+        </div>
       </div>
       {provider !== "vercel" && modelsQuery.error && (
         <Callout>{modelsQuery.error.message}</Callout>
       )}
-      <div className="supervisor-preset-grid">
-        <PresetConfig
-          title={t("supervisorRole")}
-          config={supervisor}
-          provider={provider}
-          models={modelCatalog?.models || []}
-          modelsLoading={modelsQuery.isLoading}
-          onChange={(key, value) => updateConfig(["supervisor", key], value)}
-          t={t}
-        />
-        {Object.entries(specialists)
-          .filter(
-            ([role, config]) =>
-              !(role in optionalSpecialists) && config != null,
-          )
-          .map(([role, config]) => (
-            <PresetConfig
-              key={role}
-              title={
-                t((roleLabels[role] || "supervisorSpecialist") as never) || role
-              }
-              config={config as RecordData}
+      <fieldset className="min-w-0" disabled={readOnly}>
+        <Table
+          className="supervisor-preset-table"
+          aria-label={t("supervisorRoleModels")}
+        >
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">{t("role")}</TableHead>
+              <TableHead scope="col">{t("enabled")}</TableHead>
+              <TableHead scope="col">{t("supervisorModel")}</TableHead>
+              {provider !== "anthropic" && (
+                <TableHead scope="col">
+                  {t("supervisorReasoningEffort")}
+                </TableHead>
+              )}
+              <TableHead scope="col">
+                {t("supervisorMaxOutputTokens")}
+              </TableHead>
+              <TableHead scope="col">{t("supervisorMaxSteps")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <PresetRow
+              title={t("supervisorRole")}
+              config={supervisor}
+              enablement={<Badge>{t("supervisorRequiredRole")}</Badge>}
+              disabled={readOnly}
               provider={provider}
               models={modelCatalog?.models || []}
               modelsLoading={modelsQuery.isLoading}
               onChange={(key, value) =>
-                updateConfig(["specialists", role, key], value)
+                updateConfig(["supervisor", key], value)
               }
               t={t}
             />
-          ))}
-      </div>
-      <fieldset
-        className="grid min-w-0 gap-stack"
-        disabled={data.canManage !== true || save.isPending}
-      >
-        <h3 className="text-ui font-medium">
-          {t("supervisorOptionalSpecialists")}
-        </h3>
-        <p className="muted">{t("supervisorOptionalSpecialistsDescription")}</p>
-        <div className="supervisor-preset-grid">
-          {Object.entries(optionalSpecialists).map(([role, templateRole]) => (
-            <div key={role} className="grid min-w-0 gap-stack">
-              <Field label={t(roleLabels[role] as never)}>
-                <Segmented
-                  value={specialists[role] ? "enabled" : "disabled"}
-                  onChange={(value) => {
-                    if (data.canManage !== true || save.isPending) return;
-                    if (value === "disabled")
-                      updateConfig(["specialists", role], undefined);
-                    else if (specialists[templateRole])
-                      updateConfig(["specialists", role], {
-                        ...specialists[templateRole],
-                      });
-                  }}
-                  items={[
-                    { value: "disabled", label: t("disabled") },
-                    { value: "enabled", label: t("enabled") },
-                  ]}
-                />
-              </Field>
-              {specialists[role] && (
-                <PresetConfig
-                  title={t(roleLabels[role] as never)}
-                  config={specialists[role]}
+            {Object.entries(specialists)
+              .filter(
+                ([role, config]) =>
+                  !(role in optionalSpecialists) && config != null,
+              )
+              .map(([role, config]) => (
+                <PresetRow
+                  key={role}
+                  title={
+                    t((roleLabels[role] || "supervisorSpecialist") as never) ||
+                    role
+                  }
+                  config={config as RecordData}
+                  enablement={
+                    <Badge>
+                      {t(
+                        role === "source_reviewer" ||
+                          role === "requirements_reviewer"
+                          ? "supervisorRequiredRole"
+                          : "enabled",
+                      )}
+                    </Badge>
+                  }
+                  disabled={readOnly}
                   provider={provider}
                   models={modelCatalog?.models || []}
                   modelsLoading={modelsQuery.isLoading}
@@ -269,81 +270,119 @@ export function SupervisorPresets({
                   }
                   t={t}
                 />
-              )}
-            </div>
-          ))}
+              ))}
+            {Object.entries(optionalSpecialists).map(([role, templateRole]) => (
+              <PresetRow
+                key={role}
+                title={t(roleLabels[role] as never)}
+                config={specialists[role]}
+                disabled={readOnly || !specialists[role]}
+                enablement={
+                  <Switch
+                    aria-label={`${t(roleLabels[role] as never)}: ${t("enabled")}`}
+                    disabled={readOnly || !specialists[templateRole]}
+                    checked={!!specialists[role]}
+                    onCheckedChange={(enabled) => {
+                      if (!enabled)
+                        updateConfig(["specialists", role], undefined);
+                      else if (specialists[templateRole])
+                        updateConfig(["specialists", role], {
+                          ...specialists[templateRole],
+                        });
+                    }}
+                  />
+                }
+                provider={provider}
+                models={modelCatalog?.models || []}
+                modelsLoading={modelsQuery.isLoading}
+                onChange={(key, value) =>
+                  updateConfig(["specialists", role, key], value)
+                }
+                t={t}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      </fieldset>
+      <p className="muted text-ui-xs">
+        {t("supervisorOptionalSpecialistsDescription")}
+      </p>
+      <fieldset className="min-w-0" disabled={readOnly}>
+        <legend className="mb-3 text-ui font-medium">
+          {t("supervisorExecutionLimits")}
+        </legend>
+        <div className="supervisor-preset-limits">
+          <Field label={t("supervisorMaxParallel")}>
+            <Input
+              type="number"
+              min="1"
+              max="3"
+              value={activeDraft.maxParallel ?? 2}
+              onChange={(event) =>
+                updateConfig(
+                  ["maxParallel"],
+                  numberValue(event.target.value, 2),
+                )
+              }
+            />
+          </Field>
+          <Field label={t("supervisorMaxTasks")}>
+            <Input
+              type="number"
+              min="1"
+              max="4"
+              value={activeDraft.maxTasks ?? 4}
+              onChange={(event) =>
+                updateConfig(["maxTasks"], numberValue(event.target.value, 4))
+              }
+            />
+          </Field>
+          <Field label={t("supervisorMaxRevisions")}>
+            <Input
+              type="number"
+              min="0"
+              max="2"
+              value={activeDraft.maxRevisions ?? 2}
+              onChange={(event) =>
+                updateConfig(
+                  ["maxRevisions"],
+                  numberValue(event.target.value, 2),
+                )
+              }
+            />
+          </Field>
         </div>
       </fieldset>
-      <div className="supervisor-preset-limits">
-        <Field label={t("supervisorMaxParallel")}>
-          <Input
-            type="number"
-            min="1"
-            max="3"
-            value={activeDraft.maxParallel ?? 2}
-            onChange={(event) =>
-              updateConfig(["maxParallel"], numberValue(event.target.value, 2))
-            }
-          />
-        </Field>
-        <Field label={t("supervisorMaxTasks")}>
-          <Input
-            type="number"
-            min="1"
-            max="4"
-            value={activeDraft.maxTasks ?? 4}
-            onChange={(event) =>
-              updateConfig(["maxTasks"], numberValue(event.target.value, 4))
-            }
-          />
-        </Field>
-        <Field label={t("supervisorMaxRevisions")}>
-          <Input
-            type="number"
-            min="0"
-            max="2"
-            value={activeDraft.maxRevisions ?? 2}
-            onChange={(event) =>
-              updateConfig(["maxRevisions"], numberValue(event.target.value, 2))
-            }
-          />
-        </Field>
-      </div>
       {(save.error || reset.error) && (
         <Callout tone="error">{(save.error || reset.error)?.message}</Callout>
       )}
       {data.canManage !== true && <Callout>{t("supervisorAdminOnly")}</Callout>}
-      <div className="inline-actions">
-        <Button
-          disabled={data.canManage !== true || save.isPending}
-          onClick={() => save.mutate()}
-        >
-          {t("saveSupervisorPreset")}
-        </Button>
-        <Button
-          variant="outline"
-          disabled={
-            data.canManage !== true ||
-            reset.isPending ||
-            activeDraft.source === "vendor"
-          }
-          onClick={() => reset.mutate()}
-        >
-          {t("resetSupervisorPreset")}
-        </Button>
+      <div className="inline-actions supervisor-preset-actions">
         {save.isSuccess && (
           <Badge tone="success" role="status">
             {t("supervisorPresetSaved")}
           </Badge>
         )}
+        <Button
+          variant="outline"
+          disabled={readOnly || activeDraft.source === "vendor"}
+          onClick={() => reset.mutate()}
+        >
+          {t("resetSupervisorPreset")}
+        </Button>
+        <Button disabled={readOnly} onClick={() => save.mutate()}>
+          {t("saveSupervisorPreset")}
+        </Button>
       </div>
     </SectionShell>
   );
 }
 
-function PresetConfig({
+function PresetRow({
   title,
   config,
+  enablement,
+  disabled,
   provider,
   models,
   modelsLoading,
@@ -351,7 +390,9 @@ function PresetConfig({
   t,
 }: {
   title: string;
-  config: RecordData;
+  config?: RecordData;
+  enablement: ReactNode;
+  disabled: boolean;
   provider: string;
   models: ProviderModel[];
   modelsLoading: boolean;
@@ -359,28 +400,37 @@ function PresetConfig({
   t: ReturnType<typeof useT>;
 }) {
   return (
-    <div className="supervisor-preset-config">
-      <h3>{title}</h3>
-      <Field label={t("supervisorModel")}>
+    <TableRow>
+      <TableHead scope="row">{title}</TableHead>
+      <TableCell>{enablement}</TableCell>
+      <TableCell>
         {provider === "vercel" ? (
           <Input
-            value={config.modelId || ""}
+            aria-label={`${title}: ${t("supervisorModel")}`}
+            disabled={disabled}
+            placeholder={config ? undefined : "—"}
+            value={config?.modelId || ""}
             onChange={(event) => onChange("modelId", event.target.value)}
           />
         ) : (
           <NativeSelect
-            value={config.modelId || ""}
-            disabled={modelsLoading}
+            aria-label={`${title}: ${t("supervisorModel")}`}
+            value={config?.modelId || ""}
+            disabled={disabled || modelsLoading}
             onChange={(event) => onChange("modelId", event.target.value)}
           >
-            {config.modelId &&
+            {config?.modelId &&
               !models.some((model) => model.id === config.modelId) && (
                 <option value={config.modelId}>
                   {config.modelId} ({t("modelNotInCatalog")})
                 </option>
               )}
             <option value="" disabled>
-              {modelsLoading ? t("loadingModels") : t("selectModel")}
+              {!config
+                ? "—"
+                : modelsLoading
+                  ? t("loadingModels")
+                  : t("selectModel")}
             </option>
             {models.filter((model) => isRecommendedModel(provider, model.id))
               .length > 0 && (
@@ -405,48 +455,56 @@ function PresetConfig({
             </optgroup>
           </NativeSelect>
         )}
-      </Field>
+      </TableCell>
       {provider !== "anthropic" && (
-        <Field label={t("supervisorReasoningEffort")}>
+        <TableCell>
           <NativeSelect
-            value={config.reasoningEffort || ""}
+            aria-label={`${title}: ${t("supervisorReasoningEffort")}`}
+            disabled={disabled}
+            value={config?.reasoningEffort || ""}
             onChange={(event) =>
               onChange("reasoningEffort", event.target.value || undefined)
             }
           >
-            <option value="">{t("supervisorReasoningDefault")}</option>
+            <option value="">
+              {config ? t("supervisorReasoningDefault") : "—"}
+            </option>
             {reasoningEfforts.map((value) => (
               <option key={value} value={value}>
                 {t(`effort_${value}` as never)}
               </option>
             ))}
           </NativeSelect>
-        </Field>
+        </TableCell>
       )}
-      <div className="supervisor-preset-numbers">
-        <Field label={t("supervisorMaxOutputTokens")}>
-          <Input
-            type="number"
-            min="256"
-            max={AGENT_MAX_OUTPUT_TOKENS}
-            value={config.maxOutputTokens ?? 4096}
-            onChange={(event) =>
-              onChange("maxOutputTokens", numberValue(event.target.value, 4096))
-            }
-          />
-        </Field>
-        <Field label={t("supervisorMaxSteps")}>
-          <Input
-            type="number"
-            min="1"
-            value={config.maxSteps ?? 8}
-            onChange={(event) =>
-              onChange("maxSteps", numberValue(event.target.value, 8))
-            }
-          />
-        </Field>
-      </div>
-    </div>
+      <TableCell>
+        <Input
+          aria-label={`${title}: ${t("supervisorMaxOutputTokens")}`}
+          disabled={disabled}
+          placeholder="—"
+          type="number"
+          min="256"
+          max={AGENT_MAX_OUTPUT_TOKENS}
+          value={config ? (config.maxOutputTokens ?? 4096) : ""}
+          onChange={(event) =>
+            onChange("maxOutputTokens", numberValue(event.target.value, 4096))
+          }
+        />
+      </TableCell>
+      <TableCell>
+        <Input
+          aria-label={`${title}: ${t("supervisorMaxSteps")}`}
+          disabled={disabled}
+          placeholder="—"
+          type="number"
+          min="1"
+          value={config ? (config.maxSteps ?? 8) : ""}
+          onChange={(event) =>
+            onChange("maxSteps", numberValue(event.target.value, 8))
+          }
+        />
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -458,11 +516,8 @@ function SectionShell({
   children: ReactNode;
 }) {
   return (
-    <section className="section">
-      <div className="section-heading">
-        <h2>{title}</h2>
-      </div>
+    <Section title={title}>
       <div className="supervisor-preset-content">{children}</div>
-    </section>
+    </Section>
   );
 }

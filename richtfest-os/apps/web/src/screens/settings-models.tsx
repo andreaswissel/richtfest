@@ -1,4 +1,5 @@
 import { Page, PageHeader } from "../components/layout";
+import { Link } from "react-router-dom";
 import { SettingsNavigation } from "../components/settings-navigation";
 import { SupervisorPresets } from "../components/supervisor-presets";
 import { Badge } from "../components/ui/primitives";
@@ -22,6 +23,14 @@ export function SettingsModels() {
         eyebrow={t("settings")}
         title={t("supervisorPresets")}
         titleAside={provider && <Badge>{providerLabel(provider)}</Badge>}
+        actions={
+          <Link
+            className="text-ui-sm underline underline-offset-4"
+            to="/settings"
+          >
+            {t("manageConnection")}
+          </Link>
+        }
       />
       <SettingsNavigation />
       <LoadState query={query} />

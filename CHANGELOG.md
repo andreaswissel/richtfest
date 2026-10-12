@@ -68,7 +68,7 @@
 - Copy your own project chat messages with a compact button.
 - Project details now edit inline on the page, with Save and Cancel actions.
 - Split Settings into navigable sections for AI connections, agent model settings, agents and account settings.
-- Agent model settings now keep preset controls and shared limits aligned across screen sizes.
+- Agent model settings use one compact role table with inline controls, stable rows for optional specialists, grouped execution limits and a direct connection-settings link. Enabling a specialist no longer inserts a form or shifts the page.
 - Agent model settings accept output caps up to GPT-6's 128,000-token output limit.
 - Project agent work groups active and done runs, shows live runtime and per-agent token usage, and estimates cost where model pricing is known.
 - Project thread hover highlights now span the row behind rename and archive actions.
