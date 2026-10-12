@@ -58,6 +58,7 @@ RUN apt-get update \
   && apt-get install --no-install-recommends --yes nodejs \
   && rm -rf /var/lib/apt/lists/*
 
+COPY CHANGELOG.md ./
 COPY richtfest-os/apps/docs ./richtfest-os/apps/docs
 RUN cd richtfest-os/apps/docs && node_modules/.bin/next build --webpack
 

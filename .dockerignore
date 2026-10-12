@@ -25,5 +25,8 @@ out
 coverage
 **/coverage
 
+# Recreated from CHANGELOG.md by the Docs build.
+richtfest-os/apps/docs/content/docs/changelog.md
+
 *.log
 .DS_Store

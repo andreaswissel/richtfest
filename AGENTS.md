@@ -151,6 +151,8 @@ Use existing common/status/nav keys where possible. Add feature-specific section
 ## Release Notes
 
 - `CHANGELOG.md` is the source for daily team updates. Keep entries concise, non-technical where possible, and useful for humans.
+- Before committing a user-facing or operational change, include its release note and any affected workflow, architecture or setup docs in the same commit. Run `bun run --filter '@richtfest/docs' build` when changelog or docs content changes.
+- The Docs Changelog page is generated from root `CHANGELOG.md` when Docs starts or builds, including in Docker. Edit only the root changelog; never edit or stage the ignored generated `richtfest-os/apps/docs/content/docs/changelog.md`. Restart Docs development after changelog edits to regenerate it.
 - Update the Unreleased section as meaningful work is completed, not only at deployment. Describe verified behavior, keep incomplete work out of release claims, and consolidate related changes before release.
 - Consolidate rapid fix iterations into one release-note item, for example several RichtfestBot voice mode fixes become "RichtfestBot Voice Mode".
 - Exclude staging-only work and hidden easter eggs unless the user explicitly wants them included.

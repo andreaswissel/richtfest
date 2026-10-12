@@ -19,7 +19,13 @@ Update the page that already owns the topic instead of appending a parallel acco
 
 Keep procedures concrete: who acts, what they do, what they should see and what remains to be configured. Do not include credentials, private customer files or copied transcripts in shipped docs.
 
-Record meaningful completed work in the root `CHANGELOG.md` as it happens, not only at deployment. The Docs Changelog page mirrors that file, so update both together. Group rapid iterations into one concise item. The changelog records what changed; these docs explain how things work now.
+Record meaningful completed work in the root `CHANGELOG.md` as it happens, not only at deployment. Group rapid iterations into one concise item. The changelog records what changed; these docs explain how things work now.
+
+## Before committing
+
+Include the release note for a user-facing or operational change and any affected workflow, architecture or setup docs in the same commit as the change. Run `bun run --filter '@richtfest/docs' build` whenever changelog or docs content changes, and inspect the diff before staging only the files that belong to the change.
+
+The Docs Changelog page is generated automatically from root `CHANGELOG.md` when Docs starts or builds, including the production Docker build. There is no second changelog to maintain or Git hook to install. The generated `content/docs/changelog.md` is ignored by Git; never edit or stage it. Restart the Docs development server after changelog edits to regenerate the page. The root heading is replaced by page metadata; release sections and entries are preserved.
 
 ## Verification
 

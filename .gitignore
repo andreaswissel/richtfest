@@ -17,6 +17,9 @@ coverage/
 *.log
 .DS_Store
 
+# Generated from the root CHANGELOG.md when Docs starts or builds.
+richtfest-os/apps/docs/content/docs/changelog.md
+
 # Python tooling
 __pycache__/
 **/__pycache__/

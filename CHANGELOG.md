@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs now builds its changelog directly from the shared release notes, avoiding a separate copy. Commit guidelines require release notes and affected documentation alongside each completed change.
+
 - Added opt-in sound-insulation, construction-law and cost-options specialists with separate models and role guidance. Sound-insulation reviews use a consistent German/English document template with revision-linked room/component references in preview and PDF. Existing presets stay unchanged; engineering calculations and compliance approval remain unavailable.
 
 - Project sources are processed once per revision and reused from saved text and structured, source-linked facts. IFC properties and declared quantities import without AI; documents use one bounded structuring pass when configured. Conflicting claims and human reviews remain separate, and agents reuse saved evidence instead of repeatedly investigating originals.

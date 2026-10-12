@@ -100,3 +100,8 @@ description: The rules every change follows, from API responses to audit events 
 `CHANGELOG.md` is the source for team updates. Keep entries short, human and non-technical where possible.
 Update Unreleased as meaningful work is completed; do not wait for deployment or describe unfinished work as released.
 Consolidate rapid fix iterations into one item.
+
+Before committing user-facing or operational changes, include the release note and affected documentation in the same
+commit. Run `bun run --filter '@richtfest/docs' build` for changelog or docs changes. The Docs Changelog page is
+generated from root `CHANGELOG.md` at Docs startup/build (including Docker); do not edit or stage the generated copy.
+Restart Docs development after editing the root changelog.
