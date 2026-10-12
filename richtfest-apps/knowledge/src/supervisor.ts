@@ -1,8 +1,10 @@
 import { and, desc, eq, inArray, or, isNull, lt } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { agentDocumentSchema, agentPresetSnapshotSchema } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
+import { batchSpecialistSources } from "./source-batches";
 import {
   agentRuns,
   agentRunEvents,
@@ -75,6 +77,11 @@ export type Assignment = {
   goal: string;
   sourceVersionIds: string[];
   output?: z.infer<typeof specialistOutput>;
+  sourceProgress?: {
+    inputHash: string;
+    completedBatches: number;
+    output: z.infer<typeof specialistOutput>;
+  };
 };
 export function assertDocumentCitations(
   document: z.infer<typeof agentDocumentSchema> | null | undefined,
@@ -360,18 +367,18 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           return response.output;
         } catch (error) {
           const metadata = typeof error === "object" && error !== null
-            ? error as { retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown; diagnostics?: unknown }
+            ? error as { code?: unknown; retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown; diagnostics?: unknown }
             : {};
           const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics: sanitizeProviderDiagnostics(metadata.diagnostics) });
           const providerFailureStatus = typeof metadata.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
             && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : undefined;
-          const failureCategory: RunFailureCategory = metadata.providerFailure === true
+          const failureCategory: RunFailureCategory = metadata.code === "timeout" || metadata.failureCategory === "timeout" ? "timeout" : metadata.providerFailure === true
             ? providerFailureStatus === 401 || providerFailureStatus === 403 ? "permission"
               : metadata.failureCategory === "validation" ? "validation" : "provider"
             : classifyRunFailure(error, phase);
           const cooldownExceedsBudget = typeof metadata.retryAfterMs === "number" && metadata.retryAfterMs > 300000;
           const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
-            && failureCategory !== "permission" && !cooldownExceedsBudget && attempt < maxAttempts;
+            && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
           if (shouldRetry) {
             if (failureCategory === "validation")
               outputValidationFeedback = sanitizeProviderDiagnostics(metadata.diagnostics);
@@ -594,34 +601,58 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   name: excerpt.source.name,
                   version: excerpt.source.version,
                   mimeType: excerpt.source.mimeType,
-                  text: excerpt.content.text,
+                  text: excerpt.content.text as string,
                   truncated: excerpt.content.truncated,
                   coverage: excerpt.content.coverage,
                   extractionNotes: excerpt.content.reason,
                 }),
               );
-              const output = specialistOutput.parse(
-                await call(
-                  "specialist",
-                  assignment.goal,
-                  {
-                    role: assignment.role,
-                    sourceVersionIds: [...readableSourceIds],
-                    sources: specialistSources,
-                    unreadableSources,
+              const batches = batchSpecialistSources(specialistSources);
+              // Checkpoints can only be reused for the same goal and extracted
+              // evidence. A changed extraction or revision must be read again.
+              const inputHash = createHash("sha256").update(JSON.stringify({
+                goal: assignment.goal, batches, unreadableSources,
+              })).digest("hex");
+              const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
+              let accumulated = progress?.output;
+              for (let index = progress?.completedBatches ?? 0; index < batches.length; index++) {
+                const batch = batches[index]!;
+                const batchIds = [...new Set(batch.map(source => source.versionId))];
+                const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
+                const result = specialistOutput.parse(await call("specialist", assignment.goal, {
+                  role: assignment.role,
+                  sourceVersionIds: batchIds,
+                  sources: batch,
+                  unreadableSources,
+                  previousFindings: accumulated,
+                  sourceCoverage: {
+                    batch: index + 1,
+                    batchCount: batches.length,
+                    assignedVersionCount: assignment.sourceVersionIds.length,
+                    readableVersionCount: readableSourceIds.size,
                   },
-                  assignment.runId,
-                ),
-              );
-              if (
-                output.citations.some(
-                  (v) => !readableSourceIds.has(v),
-                )
-              )
-                throw conflict("Citation has no readable source text");
+                }, assignment.runId));
+                if (result.citations.some(versionId => !allowedCitations.has(versionId)))
+                  throw conflict("Citation has no readable source text in this batch or prior findings");
+                const output = { ...result, citations: [...new Set([...(accumulated?.citations ?? []), ...result.citations])] };
+                const saved = await commit(d, run, token, async (tx, current) => {
+                  await tx.update(supervisorRuns).set({
+                    assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
+                      ? { ...a, sourceProgress: { inputHash, completedBatches: index + 1, output } } : a),
+                    history: [...current.history, {
+                      phase: "specialist_batch", runId: assignment.runId, revision: current.revision,
+                      batch: index + 1, batchCount: batches.length, sourceVersionIds: batchIds, output,
+                    }],
+                  }).where(eq(supervisorRuns.runId, id));
+                  await log(d, tx, run, "specialist_batch_completed", `${index + 1}/${batches.length}`, assignment.runId);
+                });
+                if (!saved) throw conflict("Supervisor no longer active");
+                accumulated = output;
+              }
+              const output = specialistOutput.parse(accumulated);
               await commit(d, run, token, async (tx, current) => {
                 const assignments = (current.assignments as Assignment[]).map(
-                  (a) => (a.runId === assignment.runId ? { ...a, output } : a),
+                  (a) => (a.runId === assignment.runId ? { ...a, output, sourceProgress: undefined } : a),
                 );
                 await tx
                   .update(supervisorRuns)
@@ -686,7 +717,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               (r) => r.taskId === a.taskId,
             );
             return revision
-              ? { ...a, goal: revision.goal, output: undefined }
+              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined }
               : a;
           });
           for (const a of assignments.filter((a) => !a.output)) {
@@ -918,7 +949,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await commit(d, run, token, async (tx) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
-            return revision ? { ...assignment, goal: revision.goal, output: undefined } : assignment;
+            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined } : assignment;
           });
           for (const assignment of revisedAssignments.filter((item) => !item.output)) {
             await tx.update(agentRuns).set({

@@ -105,9 +105,11 @@ export function terminalProviderFailure(
   t: ReturnType<typeof useT>,
 ) {
   if (run.status !== "failed") return undefined;
-  const phase = /(?:^|;)\s*phase=([a-z_]+)/.exec(
-    String(run.error || run.failureReason || ""),
-  )?.[1];
+  // A persisted timeout is authoritative over diagnostics from earlier attempts.
+  // In particular, a prior truncation must not suggest increasing output tokens.
+  const reason = String(run.error || run.failureReason || "");
+  if (/(?:^|;)\s*category=timeout(?:;|$)/.test(reason)) return undefined;
+  const phase = /(?:^|;)\s*phase=([a-z_]+)/.exec(reason)?.[1];
   const candidates = events.filter((event) => {
     if (event.eventType !== "provider_call_failed") return false;
     const metadata = providerActivityMetadata(event);
@@ -167,11 +169,18 @@ const toolLabels = {
 
 type ActivityTranslationKey =
   | (typeof activityLabels)[keyof typeof activityLabels]
-  | (typeof toolLabels)[keyof typeof toolLabels];
+  | (typeof toolLabels)[keyof typeof toolLabels]
+  | "workspaceActivityTimedOut";
 
 export function runActivityLabel(
   event: RecordData,
 ): ActivityTranslationKey | undefined {
+  if (
+    ["failed", "supervisor_failed"].includes(event.eventType) &&
+    typeof event.paramsSummary === "string" &&
+    /(?:^|;)\s*category=timeout(?:;|$)/.test(event.paramsSummary)
+  )
+    return "workspaceActivityTimedOut";
   if (event.eventType === "tool_executed")
     return (
       toolLabels[event.toolName as keyof typeof toolLabels] ??

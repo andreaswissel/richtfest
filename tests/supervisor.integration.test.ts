@@ -35,6 +35,157 @@ const policy = {
   maxTasks: 4,
   maxRevisions: 2,
 };
+integration("large specialist assignments preserve every UTF-8 source slice and resume checkpointed findings", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  // Oversized multi-byte text, a nearly full batch, several tiny files and an
+  // unreadable file exercise byte and file-count boundaries independently.
+  const evidence = ["A".repeat(49151) + "🧱ß", "ä🧱\n".repeat(9000),
+    "First requirement", "Second requirement", "Third requirement", "Fourth requirement",
+    "Fifth requirement", "Last requirement", null].map((text, index) => ({
+      versionId: crypto.randomUUID(), name: `Source ${index + 1}`, text,
+    }));
+  let runId = "", interrupted = false;
+  const accepted: any[] = [];
+  const d = {
+    db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: evidence, truncated: false }),
+    resolveSource: async (_project: string, input: { versionId: string }) => {
+      const source = evidence.find(item => item.versionId === input.versionId)!;
+      return { status: "resolved", source, content: source.text === null
+        ? { status: "unsupported", reason: "Export required" }
+        : { status: "available", text: source.text, truncated: source.versionId === evidence[1]!.versionId } };
+    },
+    executeSupervisor: async (input: any) => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "requirements_reviewer", goal: "Read every source", sourceVersionIds: evidence.map(source => source.versionId) },
+      ] } };
+      const context = input.context;
+      if (context.sourceCoverage.batch === 2 && !interrupted) {
+        interrupted = true;
+        // Simulate a worker losing its lease after one saved batch. Its late
+        // response must not be checkpointed, and the next worker must resume.
+        await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+        return { status: "completed", output: { summary: "Discard this late response", rationale: "", citations: [] } };
+      }
+      accepted.push(context);
+      return { status: "completed", output: {
+        summary: `Accumulated through batch ${context.sourceCoverage.batch}`,
+        rationale: "Source 9 is unreadable; export required.",
+        // Deliberately omit earlier citations: the checkpoint must retain them.
+        citations: context.sourceVersionIds,
+      } };
+    },
+  } as unknown as AppDeps;
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Batched evidence", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    runId = run!.id;
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, runId);
+    await stepSupervisor(d, runId);
+    const [checkpoint] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+    expect(checkpoint!.phase).toBe("specialists");
+    expect((checkpoint!.assignments as any[])[0].sourceProgress.completedBatches).toBe(1);
+    await stepSupervisor(d, runId);
+    const [completed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+    expect(completed!.phase).toBe("review");
+    expect(accepted.length).toBeGreaterThan(3);
+    expect(accepted.map(item => item.sourceCoverage.batch)).toEqual(accepted.map((_, index) => index + 1));
+    for (const [index, context] of accepted.entries()) {
+      expect(context.sources.length).toBeLessThanOrEqual(3);
+      expect(context.sources.reduce((sum: number, source: any) => sum + Buffer.byteLength(source.text), 0)).toBeLessThanOrEqual(49152);
+      expect(context.unreadableSources).toEqual([{ name: "Source 9", reason: "Export required" }]);
+      expect(context.sourceVersionIds).not.toContain(evidence[8]!.versionId);
+      if (index) expect(context.previousFindings.summary).toBe(`Accumulated through batch ${index}`);
+      else expect(context.previousFindings).toBeUndefined();
+    }
+    for (const source of evidence.filter(item => item.text !== null)) {
+      const slices = accepted.flatMap(context => context.sources).filter(item => item.versionId === source.versionId);
+      expect(slices.map(item => item.text).join("")).toBe(source.text!);
+      let offset = 0;
+      for (const slice of slices) {
+        expect(slice.textRange).toEqual({ startByte: offset, endByte: offset + Buffer.byteLength(slice.text), totalBytes: Buffer.byteLength(source.text!) });
+        expect(slice.extractionTruncated).toBe(source.versionId === evidence[1]!.versionId);
+        offset = slice.textRange.endByte;
+        if (slices.length > 1) expect(slice.truncated).toBe(true);
+      }
+    }
+    const assignment = (completed!.assignments as any[])[0];
+    expect(assignment.output.summary).toBe(`Accumulated through batch ${accepted.length}`);
+    expect(assignment.output.citations).toEqual(evidence.slice(0, 8).map(source => source.versionId));
+    expect(assignment.sourceProgress).toBeUndefined();
+    expect(JSON.stringify(completed)).not.toContain("Discard this late response");
+    // A new extraction of the immutable file cannot inherit an older text
+    // checkpoint, even when the version IDs are unchanged.
+    evidence[0]!.text += "\nNewly recovered OCR line.";
+    await db.update(supervisorRuns).set({ phase: "specialists", assignments: checkpoint!.assignments }).where(eq(supervisorRuns.runId, runId));
+    const beforeChangedExtraction = accepted.length;
+    await stepSupervisor(d, runId);
+    expect(accepted[beforeChangedExtraction].sourceCoverage.batch).toBe(1);
+    expect(accepted[beforeChangedExtraction].previousFindings).toBeUndefined();
+    expect(accepted.slice(beforeChangedExtraction).flatMap(context => context.sources)
+      .filter(source => source.versionId === evidence[0]!.versionId).map(source => source.text).join("")).toBe(evidence[0]!.text!);
+    // Being assigned a version is not permission to cite it before its batch
+    // was read. The last readable source is absent from the first batch.
+    const invalidDeps: AppDeps = { ...d, executeSupervisor: async input => input.phase === "plan"
+      ? d.executeSupervisor!(input)
+      : { status: "completed", output: { summary: "Unsupported future citation", rationale: "", citations: [evidence[7]!.versionId] } } };
+    const [invalid] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Reject unread evidence", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(invalidDeps, db, invalid, "medium", policy);
+    await stepSupervisor(invalidDeps, invalid!.id);
+    await stepSupervisor(invalidDeps, invalid!.id);
+    const [rejected] = await db.select().from(agentRuns).where(eq(agentRuns.id, invalid!.id));
+    expect(rejected!.status).toBe("failed");
+    const [rejectedState] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, invalid!.id));
+    expect((rejectedState!.assignments as any[])[0].sourceProgress).toBeUndefined();
+    expect((rejectedState!.assignments as any[])[0].output).toBeUndefined();
+  } finally {
+    for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+integration("specialist timeouts stop unchanged retries and preserve completed siblings", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const d = {
+    db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async (input: any) => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Completes", sourceVersionIds: [] },
+        { role: "requirements_reviewer", goal: "Times out", sourceVersionIds: [] },
+      ] } };
+      if (input.goal === "Completes") return { status: "completed", output: { summary: "Saved evidence", rationale: "", citations: [] } };
+      // Even a retryable wrapper must not restart a deadline-limited request.
+      throw Object.assign(new Error("sk-secret timeout body"), { code: "timeout", providerFailure: true, retryable: true });
+    },
+  } as unknown as AppDeps;
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Timeout regression", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { ...policy, maxParallel: 1 });
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(parent!.status).toBe("failed");
+    expect(parent!.error).toBe("phase=specialist; category=timeout; The provider call exceeded its time limit. Retry with a narrower assignment or a faster model.");
+    const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
+    expect(children.find(child => child.goal === "Completes")).toMatchObject({ status: "needs_review", outputSummary: "Saved evidence" });
+    const failed = children.find(child => child.goal === "Times out")!;
+    expect(failed.error).toContain("category=timeout");
+    const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, failed.id));
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ status: "failed", failureCategory: "timeout", usageStatus: "missing" });
+    const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, run!.id));
+    expect(events.some(event => event.eventType === "provider_call_retrying")).toBe(false);
+    expect(JSON.stringify([parent, children, attempts, events])).not.toContain("sk-secret");
+  } finally {
+    for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
 integration("specialist costs belong to each child while the supervisor retains the total", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();

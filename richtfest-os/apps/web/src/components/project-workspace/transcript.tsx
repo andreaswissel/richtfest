@@ -69,6 +69,7 @@ const ProjectOpenUI = lazy(() => import("./openui"));
 
 const runFailureCategoryLabels: Record<string, string> = {
   provider: "workspaceRunCategoryProvider",
+  timeout: "workspaceRunCategoryTimeout",
   permission: "workspaceRunCategoryPermission",
   validation: "workspaceRunCategoryValidation",
   source: "workspaceRunCategorySource",
@@ -142,7 +143,10 @@ function FailedRunOutcome({
     enabled: false,
   });
   const failure =
-    (run.failureEvent
+    (run.failureEvent &&
+    !/(?:^|;)\s*category=timeout(?:;|$)/.test(
+      String(run.error || run.failureReason || ""),
+    )
       ? providerActivityExplanation(run.failureEvent, t)
       : undefined) ??
     terminalProviderFailure(

@@ -13,6 +13,7 @@ export type RunFailurePhase =
 
 export type RunFailureCategory =
   | "provider"
+  | "timeout"
   | "permission"
   | "validation"
   | "source"
@@ -43,6 +44,7 @@ export function classifyRunFailure(
   const status = typeof value.status === "number" ? value.status : undefined;
 
   if (code === "cancelled" || name === "AbortError") return "cancellation";
+  if (code === "timeout" || name === "TimeoutError") return "timeout";
   if (status === 401 || status === 403 || ["forbidden", "unauthorized", "permission_denied"].includes(code))
     return "permission";
   if (phase === "source_resolution") return "source";
@@ -54,6 +56,7 @@ export function classifyRunFailure(
 
 const actionableMessage: Record<RunFailureCategory, string> = {
   provider: "The provider call could not complete. Check the provider connection and retry.",
+  timeout: "The provider call exceeded its time limit. Retry with a narrower assignment or a faster model.",
   permission: "A required permission is unavailable. Ask an administrator for access and retry.",
   validation: "The run returned unsupported or invalid output. Review the inputs and retry.",
   source: "Required project source content is unavailable. Restore or select readable sources and retry.",

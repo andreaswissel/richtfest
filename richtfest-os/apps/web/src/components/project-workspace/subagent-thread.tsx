@@ -66,6 +66,7 @@ const runReasonPhases = {
 
 const runReasonCategories = {
   provider: "workspaceRunCategoryProvider",
+  timeout: "workspaceRunCategoryTimeout",
   permission: "workspaceRunCategoryPermission",
   validation: "workspaceRunCategoryValidation",
   source: "workspaceRunCategorySource",
@@ -76,6 +77,7 @@ const runReasonCategories = {
 
 const canonicalCategoryReasonPrefixes = {
   provider: "The provider call could not complete.",
+  timeout: "The provider call exceeded its time limit.",
   permission: "A required permission is unavailable.",
   validation: "The run returned unsupported or invalid output.",
   source: "Required project source content is unavailable.",

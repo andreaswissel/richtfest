@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
@@ -9,6 +9,58 @@ import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("phase deadlines abort real Mastra streams without accepting partial output or leaking contents", async () => {
+  for (const phase of ["plan", "specialist", "review", "independent_review"] as const) {
+    for (const cancelled of [false, true]) {
+      const deadline = new AbortController();
+      const cancellation = new AbortController();
+      const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal);
+      const secret = "sk-timeout-secret";
+      const privateGoal = "Private project prompt";
+      let settings: any;
+      let upstreamAborted = false;
+      let accepted = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deltas: string[] = [];
+      try {
+        const model = new MastraLanguageModelV2Mock({ doStream: async ({ abortSignal }) => ({
+          stream: new ReadableStream({ start(controller) {
+            controller.enqueue({ type: "text-start", id: "output" });
+            controller.enqueue({ type: "text-delta", id: "output", delta: phase === "plan"
+              ? '{"tasks":[{"role":"source_reviewer","goal":"unfinished'
+              : JSON.stringify({ summary: `Evidence ${secret} remains incomplete`, rationale: privateGoal, citations: [] }).slice(0, -1) });
+            abortSignal!.addEventListener("abort", () => {
+              upstreamAborted = true;
+              controller.error(new Error(`Bearer ${secret} ${privateGoal}`));
+            }, { once: true });
+            timer = setTimeout(() => (cancelled ? cancellation : deadline).abort(
+              new DOMException(`${secret} ${privateGoal}`, cancelled ? "AbortError" : "TimeoutError"),
+            ), 25);
+          } }),
+        }) });
+        const error = await callMastraSupervisor({ ...base, phase, goal: privateGoal,
+          onRequest: async value => { settings = value; },
+          onSummaryDelta: async delta => { deltas.push(delta); },
+        }, secret, { model, signal: cancellation.signal }).then(() => { accepted = true; }, error => error);
+        const timeoutMs = phase === "plan" ? 60000 : 180000;
+        expect(timeout).toHaveBeenCalledWith(timeoutMs);
+        expect(settings.timeoutMs).toBe(timeoutMs);
+        expect(upstreamAborted).toBe(true);
+        expect(accepted).toBe(false);
+        expect(error).toMatchObject(cancelled ? { code: "cancelled" } : {
+          code: "timeout", failureCategory: "timeout", providerFailure: true, retryable: false, timedOut: true,
+        });
+        if (cancelled) expect(error.failureCategory).not.toBe("timeout");
+        expect(error.cause).toBeUndefined();
+        expect(`${error.message}${JSON.stringify(error)}${JSON.stringify(settings)}${deltas.join("")}`).not.toContain(secret);
+        expect(`${error.message}${JSON.stringify(error)}${JSON.stringify(settings)}`).not.toContain(privateGoal);
+      } finally {
+        if (timer) clearTimeout(timer);
+        timeout.mockRestore();
+      }
+    }
+  }
+});
 test.skipIf(!process.env.DATABASE_URL)("supervisor repairs a rejected summary through Mastra without retrying a successful sibling", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();

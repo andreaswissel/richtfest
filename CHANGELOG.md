@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project specialists read large source sets in smaller, checkpointed batches without dropping extracted text. Evidence and synthesis calls have more time to finish; timeouts now stop unchanged retries and show specific guidance instead of suggesting a token increase or connection repair.
+
 - Added a full-width project 3D location editor using addresses saved in project details: official Berlin building/tree context, on-demand 2021 LiDAR where covered, versioned IFC overlays, editable vehicle envelopes, massing and planning notes. Address changes never move existing scenes. Architectural lighting, shadows and clearer materials improve depth. Switch trees between schematic markers and illustrative foliage; measurements use schematic trees. Survey, alignment and illustrative-geometry limits stay explicit; this is not fire-access certification. Conversation and other app pages now use the full available width.
 
 - Project threads use a first-message title if AI naming is unavailable, and older numbered threads recover their titles when reopened. Manual names are preserved.

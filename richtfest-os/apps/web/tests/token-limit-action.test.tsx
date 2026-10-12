@@ -65,6 +65,13 @@ test("only confirmed output-token truncation has a direct action, with no initia
       },
     };
     expect(render(schemaFailure)).toBe("");
+    expect(
+      render({
+        ...run,
+        error:
+          "phase=specialist; category=timeout; The provider call exceeded its time limit.",
+      }),
+    ).toBe("");
     expect(render({ ...run, failureRole: undefined })).toBe("");
     expect(render({ ...run, status: "running" })).toBe("");
     expect(

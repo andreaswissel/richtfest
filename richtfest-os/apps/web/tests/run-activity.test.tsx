@@ -88,3 +88,43 @@ test("terminal diagnostics cannot attribute a sibling or another phase failure",
     ),
   ).toBeUndefined();
 });
+
+test("persisted timeout takes precedence over earlier own-run validation or truncation diagnostics", () => {
+  const html = renderToStaticMarkup(
+    <RunActivityFeed
+      active={false}
+      events={[
+        {
+          id: "timeout",
+          eventType: "supervisor_failed",
+          paramsSummary:
+            "phase=specialist; category=timeout; The provider call exceeded its time limit.",
+        },
+      ]}
+    />,
+  );
+  expect(html).toContain("Provider call timed out");
+  expect(html).not.toContain("check the provider connection");
+  for (const field of ["error", "failureReason"]) {
+    const run = {
+      id: "own",
+      status: "failed",
+      [field]:
+        "phase=review; category=timeout; The provider call exceeded its time limit. Retry with a narrower assignment or a faster model.",
+    };
+    const truncated = {
+      ...event(),
+      paramsSummary: JSON.stringify({
+        callId: "call",
+        runId: "own",
+        attempt: 3,
+        diagnostics: {
+          errorId: "STRUCTURED_OUTPUT_TRUNCATED",
+          finishReason: "length",
+        },
+      }),
+    };
+    expect(terminalProviderFailure(run, [event()], [], t)).toBeUndefined();
+    expect(terminalProviderFailure(run, [truncated], [], t)).toBeUndefined();
+  }
+});

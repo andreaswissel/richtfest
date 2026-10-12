@@ -310,7 +310,7 @@ describe("workspace records and navigation", () => {
     expect(html).not.toContain("Richtfest mode");
     expect(html).not.toContain('class="richtfest-celebration"');
   });
-  test("failed runs remain visible in an otherwise empty conversation", () => {
+  test("timed-out runs remain visible in an empty conversation without token-limit advice", () => {
     const runId = "550e8400-e29b-41d4-a716-446655440006";
     const html = render(
       <Transcript
@@ -323,7 +323,15 @@ describe("workspace records and navigation", () => {
             conversationId,
             status: "failed",
             failureReason:
-              "phase=review; category=provider; The provider call could not complete.",
+              "phase=review; category=timeout; The provider call exceeded its time limit.",
+            failureEvent: {
+              paramsSummary: JSON.stringify({
+                diagnostics: {
+                  errorId: "STRUCTURED_OUTPUT_TRUNCATED",
+                  finishReason: "length",
+                },
+              }),
+            },
             createdAt: "2026-10-10T10:00:00.000Z",
             finishedAt: "2026-10-10T10:02:00.000Z",
           },
@@ -344,6 +352,9 @@ describe("workspace records and navigation", () => {
     );
     expect(html).toContain("The agent could not finish");
     expect(html).toContain("Failed during review");
+    expect(html).toContain("The provider call exceeded its time limit");
+    expect(html).not.toContain("Check the provider connection");
+    expect(html).not.toContain("Token limit exceeded");
     expect(html).toContain(`agentRun=${runId}`);
     expect(html).not.toContain("No messages yet.");
   });

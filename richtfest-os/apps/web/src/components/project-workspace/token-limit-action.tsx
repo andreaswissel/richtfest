@@ -13,6 +13,12 @@ import { providerActivityMetadata } from "./run-activity";
 
 export function tokenLimitCandidate(run: RecordData) {
   if (run.status !== "failed" || !run.failureEvent) return;
+  if (
+    /(?:^|;)\s*category=timeout(?:;|$)/.test(
+      String(run.error || run.failureReason || ""),
+    )
+  )
+    return;
   const diagnostics = providerActivityMetadata(run.failureEvent).diagnostics;
   if (
     diagnostics?.errorId !== "STRUCTURED_OUTPUT_TRUNCATED" ||

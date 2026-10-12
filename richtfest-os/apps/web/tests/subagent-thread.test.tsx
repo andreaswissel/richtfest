@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { RecordData } from "../src/api";
+import en from "../src/locales/en.json";
+import de from "../src/locales/de.json";
 import {
   SubagentList,
   SubagentThread,
@@ -18,11 +21,11 @@ const run = {
   outputSummary: "Source result",
   sourceVersionIds: [],
 };
-function render(node: React.ReactNode) {
+function render(node: React.ReactNode, data: RecordData = { run, events: [] }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  client.setQueryData([`/knowledge/runs/${run.id}`], { run, events: [] });
+  client.setQueryData([`/knowledge/runs/${run.id}`], data);
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <MemoryRouter
@@ -82,4 +85,81 @@ test("specialist threads show work but never independent lifecycle controls or c
   );
   expect(wrong).not.toContain("Source result");
   expect(wrong).toContain("not available");
+});
+
+test("persisted timeout reasons show phase and safe retry guidance in run rows and threads", () => {
+  const phases = [
+    ["plan", en.workspaceRunPhasePlan],
+    ["specialist", en.workspaceRunPhaseSpecialist],
+    ["review", en.workspaceRunPhaseReview],
+    ["independent_review", en.workspaceRunPhaseIndependentReview],
+    ["provider", en.workspaceRunPhaseProvider],
+  ];
+  for (const [phase, label] of phases) {
+    const failed = {
+      ...run,
+      status: "failed",
+      error: `phase=${phase}; category=timeout; ${en.workspaceRunCategoryTimeout}`,
+    };
+    const rows = render(<SubagentList projectId={projectId} runs={[failed]} />);
+    const thread = render(
+      <SubagentThread projectId={projectId} runId={run.id} />,
+      { run: failed, events: [] },
+    );
+    for (const html of [rows, thread]) {
+      expect(html).toContain(`${en.workspaceRunFailedDuring} ${label}:`);
+      expect(html).toContain(en.workspaceRunCategoryTimeout);
+      expect(html).not.toContain(en.workspaceRunNoSpecificReason);
+      expect(html).not.toMatch(
+        /output tokens|credentials|provider connection/i,
+      );
+      expect(html).not.toContain("phase=");
+    }
+  }
+  expect(de.workspaceRunCategoryTimeout).toContain("Zeitlimit überschritten");
+  expect(de.workspaceRunCategoryTimeout).toContain("enger gefassten Auftrag");
+  expect(de.workspaceRunCategoryTimeout).toContain("schnelleren Modell");
+  expect(de.workspaceRunCategoryTimeout).not.toMatch(
+    /Token|Verbindung|Zugangsdaten/i,
+  );
+});
+
+test("cancelled child timeout reasons retain supervisor cause in history and child links", () => {
+  const child = {
+    ...run,
+    id: "550e8400-e29b-41d4-a716-446655440001",
+    status: "cancelled",
+    failureReason:
+      "phase=specialist; category=timeout; The supervisor failed during specialist. No output was approved.",
+  };
+  const rows = render(<SubagentList projectId={projectId} runs={[child]} />);
+  const thread = render(
+    <SubagentThread projectId={projectId} runId={run.id} />,
+    { run, events: [], children: [child] },
+  );
+  for (const html of [rows, thread]) {
+    expect(html).toContain(en.workspaceRunChildCancelledDuring);
+    expect(html).toContain(en.workspaceRunCategoryTimeout);
+    expect(html).toContain(en.workspaceRunChildCauseSupervisorFailed);
+    expect(html).not.toContain(en.workspaceRunNoSpecificReason);
+    expect(html).not.toMatch(/output tokens|credentials|provider connection/i);
+  }
+});
+
+test("noncanonical timeout reasons keep the safe unknown-reason fallback", () => {
+  const html = render(
+    <SubagentList
+      projectId={projectId}
+      runs={[
+        {
+          ...run,
+          status: "failed",
+          error: "phase=specialist; category=timeout; SECRET diagnostic",
+        },
+      ]}
+    />,
+  );
+  expect(html).toContain(en.workspaceRunNoSpecificReason);
+  expect(html).not.toContain("SECRET");
+  expect(html).not.toContain(en.workspaceRunCategoryTimeout);
 });
