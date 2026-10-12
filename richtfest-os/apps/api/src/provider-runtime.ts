@@ -117,8 +117,9 @@ export async function callProvider(
   let failed = false;
   const reportUsage = async () => {
     if (usageReported || !rawUsage) return;
-    usageReported = true;
     await input.onUsage?.(providerUsage(input, rawUsage, responseModel ?? modelId));
+    // Failed persistence must remain eligible for the error-recovery path.
+    usageReported = true;
   };
   try {
     await input.onRequest?.({ version: 1, adapter: "direct", adapterVersion: "1", appRevision: appRevision(),

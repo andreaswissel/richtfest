@@ -25,7 +25,30 @@ export type AgentAnalyticsMember = {
   usage: AgentUsageAnalytics;
 };
 
+export type ModelUsageAnalytics = {
+  provider: string;
+  modelId: string | null;
+  callCount: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  reasoningTokens: number | null;
+  cachedInputTokens: number | null;
+  recordedCostUsd: number | null;
+  unpricedCalls: number;
+  incompleteTokenCalls: number;
+};
+
 export type ProjectAgentAnalytics = {
+  summary: {
+    runCount: number;
+    averageTokensPerRun: number | null;
+    averagedRunCount: number;
+    missingUsageAttempts: number;
+    unreportedRuns: number;
+    usage: Omit<ModelUsageAnalytics, "provider" | "modelId">;
+    models: ModelUsageAnalytics[];
+  };
   runs: (AgentAnalyticsMember & {
     isSupervisor: boolean;
     aggregate: AgentUsageAnalytics;

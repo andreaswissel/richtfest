@@ -52,6 +52,21 @@ test("direct telemetry hashes actual requests and preserves failure usage withou
   expect(usage).toMatchObject({ modelId: "o3", inputTokens: 10, outputTokens: 2 });
   expect(JSON.stringify(settings)).not.toContain("private goal");
 });
+test("direct adapter retains received usage after a transient telemetry write failure", async () => {
+  const saved: unknown[] = [];
+  let writeFailed = false;
+  await expect(callProvider({ provider: "openai", modelId: "gpt-4.1-mini", goal: "Review", context: {},
+    onUsage: async usage => {
+      if (!writeFailed) { writeFailed = true; throw new Error("Telemetry write failed"); }
+      saved.push(usage);
+    },
+  }, "test-key", async () => Response.json({
+    usage: { input_tokens: 37, output_tokens: 11 },
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }],
+  }))).rejects.toThrow("Telemetry write failed");
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({ inputTokens: 37, outputTokens: 11, totalTokens: 48 });
+});
 describe("trusted provider adapter", () => {
   for (const provider of ["openai", "anthropic"] as const)
     test(`${provider} sends explicit provider request and reads only public text`, async () => {

@@ -255,17 +255,25 @@ integration("specialist costs belong to each child while the supervisor retains 
     expect(initial.runs[0].usage.estimatedCostUsd).toBe(0.01);
     expect(initial.runs[0].isSupervisor).toBe(true);
     expect(initial.runs[0].aggregate.missingUsageAttempts).toBe(0);
+    expect(initial.summary.usage.totalTokens).toBe(3300);
+    expect(initial.summary.averagedRunCount).toBe(0);
+    expect(initial.summary.averageTokensPerRun).toBeNull();
+    await db.update(agentRuns).set({ status: "needs_review" }).where(eq(agentRuns.id, parent!.id));
+    expect((await analytics()).summary.averageTokensPerRun).toBe(3300);
 
     // An old grandchild must survive both the workspace's 50-row window and root pagination.
     const [grandchild] = await db.insert(agentRuns).values({
       tenantId, projectId, requestedBy: actorId, parentRunId: workspace.data.runs.find((run: any) => run.goal === "Review A").id,
-      goal: "Nested review", provider: "openai", correlationId: crypto.randomUUID(), createdAt: new Date("2020-01-01"),
+      goal: "Nested review", status: "completed", provider: "openai", correlationId: crypto.randomUUID(), createdAt: new Date("2020-01-01"),
     }).returning();
     await db.insert(agentRunUsage).values({ tenantId, runId: grandchild!.id, provider: "openai", modelId: "nested-model",
-      callIndex: 0, inputTokens: 77, outputTokens: 13, estimatedCostUsd: 40000, startedAt: new Date(), completedAt: new Date() });
-    await db.insert(agentRuns).values(Array.from({ length: 51 }, (_, i) => ({
+      callIndex: 0, inputTokens: 77, outputTokens: 13, reasoningTokens: 5, cachedInputTokens: 23, estimatedCostUsd: 40000, startedAt: new Date(), completedAt: new Date() });
+    const older = await db.insert(agentRuns).values(Array.from({ length: 51 }, (_, i) => ({
       tenantId, projectId, requestedBy: actorId, goal: `Older run ${i}`, provider: "openai", correlationId: crypto.randomUUID(), createdAt: new Date("2021-01-01"),
-    })));
+    }))).returning();
+    await db.update(agentRuns).set({ status: "completed" }).where(eq(agentRuns.id, older[0]!.id));
+    await db.insert(agentRunUsage).values({ tenantId, runId: older[0]!.id, provider: "anthropic", modelId: "test-model",
+      callIndex: 0, inputTokens: 100, outputTokens: 20, estimatedCostUsd: 10000, startedAt: new Date(), completedAt: new Date() });
     const foreignTenant = crypto.randomUUID(), foreignProject = crypto.randomUUID();
     const foreignIds = [crypto.randomUUID(), crypto.randomUUID()];
     try {
@@ -281,23 +289,49 @@ integration("specialist costs belong to each child while the supervisor retains 
       expect(first.runs[0].aggregate.inputTokens).toBe(3077);
       expect(first.runs[0].aggregate.outputTokens).toBe(313);
       expect(first.runs[0].aggregate.callCount).toBe(4);
+      expect(first.summary).toMatchObject({ runCount: 52, averagedRunCount: 2, averageTokensPerRun: 1755,
+        unreportedRuns: 50, missingUsageAttempts: 0,
+        usage: { inputTokens: 3177, outputTokens: 333, totalTokens: 3510, recordedCostUsd: 0.11, reasoningTokens: 5, cachedInputTokens: 23 } });
+      expect(first.summary.models).toHaveLength(3);
+      expect(first.summary.models.find((model: any) => model.provider === "anthropic")).toMatchObject({ modelId: "test-model", totalTokens: 120, recordedCostUsd: 0.01 });
       const second = await analytics(1), third = await analytics(2);
       expect(second.runs).toHaveLength(20);
       expect(third.runs).toHaveLength(12);
       expect(third.hasMore).toBe(false);
       expect(new Set([...first.runs, ...second.runs, ...third.runs].map((run: any) => run.id)).size).toBe(52);
-      expect(second.runs[0].aggregate.estimatedCostUsd).toBeNull();
-      expect(second.runs[0].aggregate.recordedCostUsd).toBeNull();
+      expect(second.summary).toEqual(first.summary);
+      expect(third.summary).toEqual(first.summary);
+      expect((await analytics(3)).summary).toEqual(first.summary);
+      const emptyRun = second.runs.find((run: any) => run.id !== older[0]!.id);
+      expect(emptyRun.aggregate.estimatedCostUsd).toBeNull();
+      expect(emptyRun.aggregate.recordedCostUsd).toBeNull();
 
       await db.insert(agentRunAttempts).values({ tenantId, runId: grandchild!.id, operationId: crypto.randomUUID(), phase: "specialist", attemptNumber: 2, provider: "openai", status: "failed", usageStatus: "missing" });
       await db.insert(agentRunUsage).values({ tenantId, runId: grandchild!.id, provider: "openai", modelId: "unpriced-model",
         callIndex: 1, inputTokens: 11, outputTokens: 3, startedAt: new Date(), completedAt: new Date() });
-      const partial = (await analytics()).runs[0];
+      const partialData = await analytics();
+      expect(partialData.summary).toMatchObject({ averagedRunCount: 1, averageTokensPerRun: 120, missingUsageAttempts: 1,
+        usage: { totalTokens: 3524, recordedCostUsd: 0.11, unpricedCalls: 1 } });
+      const partial = partialData.runs[0];
       expect(partial.aggregate.estimatedCostUsd).toBeNull();
       expect(partial.aggregate.recordedCostUsd).toBe(0.10);
       expect(partial.aggregate.missingUsageAttempts).toBe(1);
       expect(partial.aggregate.unpricedCalls).toBe(1);
       expect(partial.members.find((run: any) => run.id === grandchild!.id).usage.recordedCostUsd).toBe(0.04);
+      // Unknown model and partially reported tokens remain visible, not zeroed or invented.
+      await db.insert(agentRunUsage).values({ tenantId, runId: older[1]!.id, provider: "openai", modelId: null,
+        callIndex: 0, inputTokens: 7, outputTokens: null, startedAt: new Date(), completedAt: new Date() });
+      const unknown = (await analytics()).summary;
+      expect(unknown.usage.totalTokens).toBe(3531);
+      expect(unknown.usage.incompleteTokenCalls).toBe(1);
+      expect(unknown.models.find((model: any) => model.modelId === null)).toMatchObject({ inputTokens: 7, outputTokens: null, totalTokens: 7, recordedCostUsd: null });
+      await db.update(agentRunUsage).set({ inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }).where(eq(agentRunUsage.runId, older[0]!.id));
+      const zero = (await analytics()).summary;
+      expect(zero).toMatchObject({ averagedRunCount: 1, averageTokensPerRun: 0 });
+      expect(zero.models.find((model: any) => model.provider === "anthropic")).toMatchObject({ totalTokens: 0, recordedCostUsd: 0 });
+      const empty = await (await fetch(`${baseUrl}/workspaces/${crypto.randomUUID()}/analytics`)).json() as any;
+      expect(empty.data.summary).toMatchObject({ runCount: 0, averagedRunCount: 0, averageTokensPerRun: null, models: [],
+        usage: { totalTokens: null, recordedCostUsd: null, callCount: 0 } });
       expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics?page=-1`)).status).not.toBe(200);
       d.validateProject = async () => false;
       expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics`)).status).toBe(404);

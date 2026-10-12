@@ -209,6 +209,34 @@ describe("workspace records and navigation", () => {
     const html = render(node, "/", {
       [path]: {
         hasMore: false,
+        summary: {
+          runCount: 4,
+          averagedRunCount: 2,
+          averageTokensPerRun: 900.5,
+          missingUsageAttempts: 1,
+          unreportedRuns: 1,
+          usage: {
+            totalTokens: 3602,
+            recordedCostUsd: 0.98,
+            unpricedCalls: 0,
+            incompleteTokenCalls: 0,
+          },
+          models: [
+            {
+              provider: "openai",
+              modelId: "test-model",
+              callCount: 2,
+              inputTokens: 2468,
+              outputTokens: 1134,
+              totalTokens: 3602,
+              reasoningTokens: 200,
+              cachedInputTokens: 400,
+              recordedCostUsd: 0.98,
+              unpricedCalls: 0,
+              incompleteTokenCalls: 0,
+            },
+          ],
+        },
         runs: [
           {
             id: "complete",
@@ -255,7 +283,14 @@ describe("workspace records and navigation", () => {
     });
     expect(html).toContain("$0.75");
     expect(html).toContain("$0.23");
-    expect(html.match(/Partial · recorded only/g)).toHaveLength(1);
+    expect(html).toContain("Project totals · all runs");
+    expect(html).toContain("3,602");
+    expect(html).toContain("$0.98");
+    expect(html).toContain("901");
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Measured runs: 2 / 4");
+    expect(html).toContain("Usage by model");
+    expect(html).toContain("test-model");
+    expect(html.match(/Partial · recorded only/g)).toHaveLength(3);
     expect(html.match(/Unavailable/g)).toHaveLength(1);
     expect(html.match(/\$0\.00/g)).toHaveLength(1);
     expect(html).toContain('aria-expanded="false"');

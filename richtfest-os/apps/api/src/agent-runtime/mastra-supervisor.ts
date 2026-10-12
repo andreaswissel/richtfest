@@ -235,8 +235,9 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
   let failed = false;
   const reportUsage = async () => {
     if (!rawUsage || usageReported) return;
-    usageReported = true;
     await input.onUsage?.(usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
+    // Failed persistence must remain eligible for the error-recovery path.
+    usageReported = true;
   };
   try {
     abortSignal.throwIfAborted();

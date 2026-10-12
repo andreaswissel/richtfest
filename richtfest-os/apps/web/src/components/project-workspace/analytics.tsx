@@ -20,12 +20,18 @@ import {
   TableCell,
 } from "../ui/table";
 
-function Cost({ usage }: { usage: AgentUsageAnalytics }) {
+function Cost({
+  usage,
+  className = "items-end",
+}: {
+  usage: Pick<AgentUsageAnalytics, "estimatedCostUsd" | "recordedCostUsd">;
+  className?: string;
+}) {
   const t = useT();
   const language = usePreferences((s) => s.language);
   const value = usage.estimatedCostUsd ?? usage.recordedCostUsd;
   return (
-    <div className="flex flex-col items-end gap-1 tabular-nums">
+    <div className={`flex flex-col gap-1 tabular-nums ${className}`}>
       <span>
         {value === null
           ? "—"
@@ -56,8 +62,16 @@ export function ProjectAnalytics({ projectId }: { projectId: string }) {
     queryFn: () => api<ProjectAgentAnalytics>(path),
     staleTime: 30_000,
   });
+  const summary = query.data?.summary;
+  const missingUsage =
+    !!summary &&
+    (summary.missingUsageAttempts > 0 || summary.unreportedRuns > 0);
   const number = (value: number | null) =>
-    value === null ? "—" : new Intl.NumberFormat(language).format(value);
+    value === null
+      ? "—"
+      : new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(
+          value,
+        );
   const date = (value: string) => {
     const parsed = new Date(value);
     return Number.isFinite(parsed.getTime())
@@ -96,7 +110,7 @@ export function ProjectAnalytics({ projectId }: { projectId: string }) {
   };
   return (
     <Section
-      title={t("analyticsRunCosts")}
+      title={t("analytics")}
       meta={
         <Button
           variant="outline"
@@ -118,6 +132,150 @@ export function ProjectAnalytics({ projectId }: { projectId: string }) {
           <div className="loading-line" role="status">
             {t("loading")}
           </div>
+        )}
+        {summary && (
+          <>
+            <h3 className="text-ui font-medium">
+              {t("analyticsProjectTotals")}
+            </h3>
+            <dl className="grid grid-cols-2 gap-stack border-y py-cell md:grid-cols-4">
+              <div>
+                <dt className="text-ui-sm text-muted-foreground">
+                  {t("analyticsRunCount")}
+                </dt>
+                <dd className="text-ui-lg font-semibold tabular-nums">
+                  {number(summary.runCount)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-ui-sm text-muted-foreground">
+                  {t("analyticsRecordedTokens")}
+                </dt>
+                <dd className="text-ui-lg font-semibold tabular-nums">
+                  {number(summary.usage.totalTokens)}
+                </dd>
+                {(missingUsage || summary.usage.incompleteTokenCalls > 0) && (
+                  <Badge>{t("analyticsPartial")}</Badge>
+                )}
+              </div>
+              <div>
+                <dt className="text-ui-sm text-muted-foreground">
+                  {t("analyticsRecordedCost")}
+                </dt>
+                <dd className="text-ui-lg font-semibold">
+                  <Cost
+                    className="items-start"
+                    usage={{
+                      recordedCostUsd: summary.usage.recordedCostUsd,
+                      estimatedCostUsd:
+                        missingUsage || summary.usage.unpricedCalls
+                          ? null
+                          : summary.usage.recordedCostUsd,
+                    }}
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt className="text-ui-sm text-muted-foreground">
+                  {t("analyticsAverageTokens")}
+                </dt>
+                <dd className="text-ui-lg font-semibold tabular-nums">
+                  {number(summary.averageTokensPerRun)}
+                </dd>
+                <dd className="text-ui-xs text-muted-foreground">
+                  {t("analyticsMeasuredRuns")}:{" "}
+                  {number(summary.averagedRunCount)} /{" "}
+                  {number(summary.runCount)}
+                </dd>
+              </div>
+            </dl>
+            <p className="text-ui-xs text-muted-foreground">
+              {t("analyticsAverageScope")}
+            </p>
+            {(missingUsage ||
+              summary.usage.unpricedCalls > 0 ||
+              summary.usage.incompleteTokenCalls > 0) && (
+              <Callout>
+                {t("analyticsMissingAttempts")}:{" "}
+                {number(summary.missingUsageAttempts)} ·{" "}
+                {t("analyticsUnreportedRuns")}: {number(summary.unreportedRuns)}{" "}
+                · {t("analyticsUnpricedCalls")}:{" "}
+                {number(summary.usage.unpricedCalls)} ·{" "}
+                {t("analyticsIncompleteTokens")}:{" "}
+                {number(summary.usage.incompleteTokenCalls)}
+              </Callout>
+            )}
+            {!!summary.models.length && (
+              <>
+                <h3 className="text-ui font-medium">
+                  {t("analyticsModelUsage")}
+                </h3>
+                <Table className="data-table text-ui-sm">
+                  <TableHeader>
+                    <TableRow>
+                      {(
+                        [
+                          "analyticsModels",
+                          "analyticsCalls",
+                          "agentRunInputTokens",
+                          "agentRunOutputTokens",
+                          "analyticsTotalTokens",
+                          "agentRunReasoningTokens",
+                          "analyticsCached",
+                          "analyticsRecordedCost",
+                        ] as const
+                      ).map((key) => (
+                        <TableHead key={key}>{t(key)}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {summary.models.map((model) => (
+                      <TableRow
+                        key={JSON.stringify([model.provider, model.modelId])}
+                      >
+                        <TableCell className="!whitespace-normal min-w-48">
+                          <span className="block font-medium">
+                            {model.modelId ?? t("analyticsUnknownModel")}
+                          </span>
+                          <span className="text-ui-xs text-muted-foreground">
+                            {model.provider}
+                          </span>
+                        </TableCell>
+                        <TableCell>{number(model.callCount)}</TableCell>
+                        <TableCell>{number(model.inputTokens)}</TableCell>
+                        <TableCell>{number(model.outputTokens)}</TableCell>
+                        <TableCell>
+                          <span className="block">
+                            {number(model.totalTokens)}
+                          </span>
+                          {model.incompleteTokenCalls > 0 && (
+                            <Badge>{t("analyticsPartial")}</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>{number(model.reasoningTokens)}</TableCell>
+                        <TableCell>{number(model.cachedInputTokens)}</TableCell>
+                        <TableCell>
+                          <Cost
+                            usage={{
+                              recordedCostUsd: model.recordedCostUsd,
+                              estimatedCostUsd: model.unpricedCalls
+                                ? null
+                                : model.recordedCostUsd,
+                            }}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <p className="text-ui-xs text-muted-foreground">
+                  {t("analyticsModelScope")}
+                </p>
+              </>
+            )}
+            <h3 className="text-ui font-medium">{t("analyticsRunCosts")}</h3>
+          </>
         )}
         {query.data && !query.data.runs.length && (
           <Empty>{t("analyticsEmpty")}</Empty>
@@ -180,7 +338,9 @@ export function ProjectAnalytics({ projectId }: { projectId: string }) {
                       </Button>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge className="!h-auto max-w-full !whitespace-normal">{status(run.status)}</Badge>
+                      <Badge className="!h-auto max-w-full !whitespace-normal">
+                        {status(run.status)}
+                      </Badge>
                     </TableCell>
                     <TableCell className="hidden tabular-nums md:table-cell">
                       {number(run.members.length)}

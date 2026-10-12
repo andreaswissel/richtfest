@@ -326,6 +326,28 @@ test("real Mastra agent rejects plans outside bounded schema", async () => {
     model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: ({ tasks: [{ role: "admin", goal: "Write data", sourceVersionIds: [] }] }) }),
   })).rejects.toThrow("Supervisor model execution failed");
 });
+test("Mastra retains received usage after a transient telemetry write failure", async () => {
+  const model = new MastraLanguageModelV2Mock({
+    provider: "openai", modelId: "gpt-4.1-mini",
+    doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "text-start", id: "output" });
+      controller.enqueue({ type: "text-delta", id: "output", delta: JSON.stringify({ summary: "Reviewed", rationale: "Evidence", citations: [] }) });
+      controller.enqueue({ type: "text-end", id: "output" });
+      controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 37, outputTokens: 11, totalTokens: 48 } });
+      controller.close();
+    } }) }),
+  });
+  const saved: unknown[] = [];
+  let writeFailed = false;
+  await expect(callMastraSupervisor({ ...base, phase: "specialist",
+    onUsage: async usage => {
+      if (!writeFailed) { writeFailed = true; throw new Error("Telemetry write failed"); }
+      saved.push(usage);
+    },
+  }, "test-key", { model })).rejects.toThrow("Supervisor model execution failed");
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({ inputTokens: 37, outputTokens: 11, totalTokens: 48 });
+});
 test("Mastra truncation and OpenAI schema failures remain retryable without exposing output", async () => {
   for (const failure of ["truncated", "schema", "summary_limit"] as const) {
     for (const streaming of [false, true]) {
