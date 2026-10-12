@@ -762,9 +762,5 @@
   "agentProfileAdminOnly": "Nur Workspace-Administratoren können Agenteneinstellungen bearbeiten.",
   "agentProfilesDisabled": "Der Supervisor-Workflow ist deaktiviert. Gespeicherte Einstellungen werden wirksam, sobald er aktiviert ist.",
   "workspaceRichtfestTitle": "Richtfest!",
-  "workspaceRichtfestResult": "Dein Ergebnis ist da.",
-  "workspaceRichtfestPreview": "Der Richtfest-Modus ist an.",
-  "workspaceRichtfestEnabled": "Richtfest-Modus · bis du diesen Chat verlässt",
-  "workspaceRichtfestDisable": "Richtfest-Modus ausschalten",
   "workspaceRichtfestDismiss": "Feier schließen"
 }

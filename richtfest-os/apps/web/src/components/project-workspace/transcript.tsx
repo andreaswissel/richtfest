@@ -265,6 +265,7 @@ function Conversation({
   const t = useT(),
     [params, setParams] = useSearchParams();
   const path = `/knowledge/conversations/${conversationId}`;
+  const richtfest = useRichtfestCelebration();
   const [effort, setEffort] = useState("medium");
   const [attachments, setAttachments] = useState<string[]>([]);
   const readiness = useApi("/agent/readiness");
@@ -511,6 +512,7 @@ function Conversation({
       sourceVersionIds: string[];
     }) => api<WorkspaceMessage>(`${path}/messages`, body),
     onSuccess: async (message, submitted) => {
+      richtfest.onMessageSent(message);
       if (readiness.data?.executionAvailable) {
         const nextRun = {
           goal: submitted.body,
@@ -618,7 +620,6 @@ function Conversation({
         : messages,
     [direct.data, messages],
   );
-  const richtfest = useRichtfestCelebration(conversationId, runs, persistedMessages);
   const canonicalRunMessageIds = new Map<string, string>();
   for (const run of runs) {
     if (!run.outputSummary) continue;
@@ -731,14 +732,6 @@ function Conversation({
     <div className="project-conversation">
       {richtfest.celebration}
       <div className="workspace-conversation-tools">
-        {richtfest.enabled && (
-          <div className="mr-auto flex items-center gap-stack text-ui-xs text-muted-foreground">
-            <span role="status">{t("workspaceRichtfestEnabled")}</span>
-            <Button variant="ghost" size="icon-sm" onClick={richtfest.disable} aria-label={t("workspaceRichtfestDisable")}>
-              <X aria-hidden="true" />
-            </Button>
-          </div>
-        )}
         <Button
           type="button"
           variant="ghost"
@@ -850,7 +843,6 @@ function Conversation({
           onTouchMove={() => setFollowing(false)}
           onKeyDown={() => setFollowing(false)}
           onClick={(e) => {
-            richtfest.onChatClick(e);
             if ((e.target as HTMLElement).closest("a")) setFollowing(false);
           }}
         >

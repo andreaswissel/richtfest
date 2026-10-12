@@ -1,60 +1,23 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import type { RecordData } from "../../api";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
-import type { WorkspaceMessage } from "./types";
 import "./richtfest-celebration.css";
 
-// Deliberately ephemeral: leaving this conversation resets the easter egg.
-export function useRichtfestCelebration(
-  conversationId: string,
-  runs: RecordData[],
-  messages: WorkspaceMessage[],
-) {
-  const [enabled, setEnabled] = useState(false);
-  const [celebrating, setCelebrating] = useState<{
-    id: string;
-    preview: boolean;
-  }>();
-  const taps = useRef({ count: 0, startedAt: 0 });
-  const pending = useRef(new Set<string>());
-  const seen = useRef(new Set<string>());
+export function isPositiveFeedback(body: string) {
+  const text = body.normalize("NFKC").toLowerCase().replaceAll("’", "'").trim();
+  // Match the whole short acknowledgement, not a positive fragment in a
+  // complaint, question, quoted example, or longer instruction. No model call.
+  return (
+    text.length <= 200 &&
+    /^(?:(?:nice|great(?: job| work)?|awesome|perfect|excellent|well done|good job|looks good|(?:that|it) (?:worked|works)|that's (?:great|perfect)|thanks|thank you|super|perfekt|toll|klasse|danke|vielen dank|(?:das )?hat geklappt|(?:das )?funktioniert|gut gemacht|sieht gut aus|genau so)(?:[\s,.!…]+|$))+$/u.test(
+      text,
+    )
+  );
+}
 
-  useEffect(() => {
-    if (!enabled) {
-      pending.current.clear();
-      setCelebrating(undefined);
-      return;
-    }
-    for (const run of runs) {
-      if (run.parentRunId || run.conversationId !== conversationId) continue;
-      if (["queued", "running"].includes(run.status)) {
-        if (!seen.current.has(run.id)) pending.current.add(run.id);
-        continue;
-      }
-      if (!pending.current.has(run.id)) continue;
-      if (!["needs_review", "approved"].includes(run.status)) {
-        pending.current.delete(run.id);
-        continue;
-      }
-      // Status and message caches may arrive in either order. Wait for the
-      // persisted final answer, not a streaming placeholder or specialist result.
-      if (
-        !run.outputSummary?.trim() ||
-        !messages.some(
-          (message) =>
-            message.runId === run.id &&
-            message.actorKind === "agent" &&
-            message.body === run.outputSummary,
-        )
-      )
-        continue;
-      pending.current.delete(run.id);
-      seen.current.add(run.id);
-      setCelebrating({ id: run.id, preview: false });
-    }
-  }, [enabled, conversationId, runs, messages]);
+export function useRichtfestCelebration() {
+  const [celebrating, setCelebrating] = useState<string>();
 
   useEffect(() => {
     if (!celebrating) return;
@@ -69,48 +32,20 @@ export function useRichtfestCelebration(
     };
   }, [celebrating]);
 
-  function onChatClick(event: MouseEvent<HTMLElement>) {
-    const target = event.target as HTMLElement;
-    // Count only bare scroller surfaces, never messages, selections or controls.
-    if (
-      !target.matches(
-        '[data-slot="message-scroller-viewport"], [data-slot="message-scroller-content"]',
-      ) ||
-      window.getSelection()?.toString() ||
-      event.button !== 0
-    )
-      return;
-    const now = Date.now();
-    if (now - taps.current.startedAt > 5000)
-      taps.current = { count: 0, startedAt: now };
-    if (++taps.current.count === 10) {
-      taps.current = { count: 0, startedAt: 0 };
-      setEnabled(true);
-      setCelebrating({ id: crypto.randomUUID(), preview: true });
-    }
-  }
-
   return {
-    enabled,
-    disable: () => setEnabled(false),
-    onChatClick,
+    onMessageSent: (message: { id: string; body: string }) => {
+      if (isPositiveFeedback(message.body)) setCelebrating(message.id);
+    },
     celebration: celebrating ? (
       <RichtfestCelebration
-        key={celebrating.id}
-        preview={celebrating.preview}
+        key={celebrating}
         onDismiss={() => setCelebrating(undefined)}
       />
     ) : null,
   };
 }
 
-function RichtfestCelebration({
-  onDismiss,
-  preview,
-}: {
-  onDismiss: () => void;
-  preview: boolean;
-}) {
+function RichtfestCelebration({ onDismiss }: { onDismiss: () => void }) {
   const t = useT();
   return (
     <div className="richtfest-celebration">
@@ -160,9 +95,6 @@ function RichtfestCelebration({
       <div role="status" className="min-w-0">
         <p className="text-ui-lg font-semibold">
           {t("workspaceRichtfestTitle")}
-        </p>
-        <p className="text-ui-sm text-muted-foreground">
-          {t(preview ? "workspaceRichtfestPreview" : "workspaceRichtfestResult")}
         </p>
       </div>
       <Button

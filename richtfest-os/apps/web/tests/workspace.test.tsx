@@ -12,6 +12,7 @@ import {
 } from "../src/components/project-workspace/types";
 import { ArtifactPanel } from "../src/components/project-workspace/artifacts";
 import { Transcript } from "../src/components/project-workspace/transcript";
+import { isPositiveFeedback } from "../src/components/project-workspace/richtfest-celebration";
 import MarkdownContent from "../src/components/chat-markdown-content";
 import { ArtifactSourceRegister } from "../src/components/project-workspace/artifact-export";
 import { formatSourceCitations } from "@richtfest/shared";
@@ -165,6 +166,34 @@ describe("registered OpenUI boundary", () => {
   });
 });
 describe("workspace records and navigation", () => {
+  test("celebration recognizes short positive feedback in English and German", () => {
+    for (const message of [
+      "nice, that worked",
+      "  NICE, that worked!!!  ",
+      "Great work, thank you!",
+      "Perfect!",
+      "That’s great!",
+      "looks good",
+      "Super, das hat geklappt!",
+      "Perfekt, vielen Dank.",
+      "Gut gemacht!",
+    ]) expect(isPositiveFeedback(message)).toBe(true);
+  });
+  test("celebration does not mistake complaints, questions or quoted instructions for praise", () => {
+    for (const message of [
+      "",
+      "nice, that did not work",
+      "thanks, but it still doesn't work",
+      "That worked?",
+      "not perfect",
+      "Say 'nice, that worked' when finished",
+      '"nice, that worked"',
+      "Perfekt wäre es, wenn es funktioniert.",
+      "Danke, das funktioniert nicht.",
+      "Please check the roof dimensions",
+      "great ".repeat(40),
+    ]) expect(isPositiveFeedback(message)).toBe(false);
+  });
   test("history prepend merges stable IDs in chronological order without duplicate messages", () => {
     const make = (id: string, createdAt: string) => ({
       id,
