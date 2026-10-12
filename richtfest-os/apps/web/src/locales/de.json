@@ -745,6 +745,7 @@
   "agentProfilesDescription": "Rollenanweisungen und freigegebenes Unternehmenswissen für Supervisor-Durchläufe festlegen. Diese Hinweise aktivieren keinen Fachagenten: Optionale Fachagenten werden separat je Modellvoreinstellung aktiviert.",
   "agentProfileRole": "Rolle",
   "agentProfileInstructions": "Rollenanweisungen",
+  "agentProfileInstructionsHint": "Optionale Ergänzungen zu den integrierten Rollenanweisungen. Leer lassen, um das integrierte Verhalten zu verwenden.",
   "agentProfileRoutingHints": "Routing-Phrasen (Hinweise)",
   "agentProfileRoutingHintDescription": "Eine Phrase pro Zeile. Hinweise helfen bei der Zuordnung, garantieren aber keine Delegation.",
   "agentProfileKnowledge": "Freigegebenes Unternehmenswissen",

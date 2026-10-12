@@ -745,6 +745,7 @@
   "agentProfilesDescription": "Configure role guidance and approved company knowledge for supervisor runs. Guidance does not enable a specialist: enable optional domain specialists separately in each model preset.",
   "agentProfileRole": "Role",
   "agentProfileInstructions": "Role instructions",
+  "agentProfileInstructionsHint": "Optional guidance added to built-in role instructions. Leave blank to use built-in behavior.",
   "agentProfileRoutingHints": "Routing phrases (hints)",
   "agentProfileRoutingHintDescription": "One phrase per line. Hints help route work; they do not guarantee delegation.",
   "agentProfileKnowledge": "Approved company knowledge",

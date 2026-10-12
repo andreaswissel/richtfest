@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Aligned agent model settings and optional specialist controls across screen sizes and density modes. Role settings now explain that blank instructions retain built-in behavior.
+
 - Docs now builds its changelog directly from the shared release notes, avoiding a separate copy. Commit guidelines require release notes and affected documentation alongside each completed change.
 
 - Added opt-in sound-insulation, construction-law and cost-options specialists with separate models and role guidance. Sound-insulation reviews use a consistent German/English document template with revision-linked room/component references in preview and PDF. Existing presets stay unchanged; engineering calculations and compliance approval remain unavailable.

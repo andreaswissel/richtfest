@@ -236,41 +236,43 @@ export function SupervisorPresets({
           {t("supervisorOptionalSpecialists")}
         </h3>
         <p className="muted">{t("supervisorOptionalSpecialistsDescription")}</p>
-        {Object.entries(optionalSpecialists).map(([role, templateRole]) => (
-          <div key={role} className="grid min-w-0 gap-stack">
-            <Field label={t(roleLabels[role] as never)}>
-              <Segmented
-                value={specialists[role] ? "enabled" : "disabled"}
-                onChange={(value) => {
-                  if (data.canManage !== true || save.isPending) return;
-                  if (value === "disabled")
-                    updateConfig(["specialists", role], undefined);
-                  else if (specialists[templateRole])
-                    updateConfig(["specialists", role], {
-                      ...specialists[templateRole],
-                    });
-                }}
-                items={[
-                  { value: "disabled", label: t("disabled") },
-                  { value: "enabled", label: t("enabled") },
-                ]}
-              />
-            </Field>
-            {specialists[role] && (
-              <PresetConfig
-                title={t(roleLabels[role] as never)}
-                config={specialists[role]}
-                provider={provider}
-                models={modelCatalog?.models || []}
-                modelsLoading={modelsQuery.isLoading}
-                onChange={(key, value) =>
-                  updateConfig(["specialists", role, key], value)
-                }
-                t={t}
-              />
-            )}
-          </div>
-        ))}
+        <div className="supervisor-preset-grid">
+          {Object.entries(optionalSpecialists).map(([role, templateRole]) => (
+            <div key={role} className="grid min-w-0 gap-stack">
+              <Field label={t(roleLabels[role] as never)}>
+                <Segmented
+                  value={specialists[role] ? "enabled" : "disabled"}
+                  onChange={(value) => {
+                    if (data.canManage !== true || save.isPending) return;
+                    if (value === "disabled")
+                      updateConfig(["specialists", role], undefined);
+                    else if (specialists[templateRole])
+                      updateConfig(["specialists", role], {
+                        ...specialists[templateRole],
+                      });
+                  }}
+                  items={[
+                    { value: "disabled", label: t("disabled") },
+                    { value: "enabled", label: t("enabled") },
+                  ]}
+                />
+              </Field>
+              {specialists[role] && (
+                <PresetConfig
+                  title={t(roleLabels[role] as never)}
+                  config={specialists[role]}
+                  provider={provider}
+                  models={modelCatalog?.models || []}
+                  modelsLoading={modelsQuery.isLoading}
+                  onChange={(key, value) =>
+                    updateConfig(["specialists", role, key], value)
+                  }
+                  t={t}
+                />
+              )}
+            </div>
+          ))}
+        </div>
       </fieldset>
       <div className="supervisor-preset-limits">
         <Field label={t("supervisorMaxParallel")}>

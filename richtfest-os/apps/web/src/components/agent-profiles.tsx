@@ -46,42 +46,44 @@ export function AgentProfiles() {
     : profiles[0]?.key;
   return (
     <Section title={t("agentProfilesTitle")}>
-      <p className="muted">{t("agentProfilesDescription")}</p>
-      {query.isLoading && <p role="status">{t("loading")}</p>}
-      {query.error && <Callout tone="error">{query.error.message}</Callout>}
-      {data && (
-        <div className="grid gap-stack">
-          {data.enabled === false && (
-            <Callout>{t("agentProfilesDisabled")}</Callout>
-          )}
-          {!data.canManage && <Callout>{t("agentProfileAdminOnly")}</Callout>}
-          <Field label={t("agentProfileRole")}>
-            <div className="flex min-w-0 flex-wrap gap-2" role="group">
-              {profiles.map((profile) => (
-                <Button
-                  key={profile.key}
-                  type="button"
-                  variant="outline"
-                  aria-pressed={active === profile.key}
-                  className="h-auto max-w-full whitespace-normal py-cell aria-pressed:bg-muted aria-pressed:border-foreground"
-                  onClick={() => setSelected(profile.key)}
-                >
-                  {t(roleLabels[profile.key])}
-                </Button>
-              ))}
-            </div>
-          </Field>
-          {profiles.map((profile) => (
-            <div key={profile.key} hidden={active !== profile.key}>
-              <ProfileEditor
-                profile={profile}
-                knowledge={data.knowledge}
-                canManage={data.canManage === true}
-              />
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="grid gap-stack">
+        <p className="muted">{t("agentProfilesDescription")}</p>
+        {query.isLoading && <p role="status">{t("loading")}</p>}
+        {query.error && <Callout tone="error">{query.error.message}</Callout>}
+        {data && (
+          <div className="grid gap-stack">
+            {data.enabled === false && (
+              <Callout>{t("agentProfilesDisabled")}</Callout>
+            )}
+            {!data.canManage && <Callout>{t("agentProfileAdminOnly")}</Callout>}
+            <Field label={t("agentProfileRole")}>
+              <div className="flex min-w-0 flex-wrap gap-2" role="group">
+                {profiles.map((profile) => (
+                  <Button
+                    key={profile.key}
+                    type="button"
+                    variant="outline"
+                    aria-pressed={active === profile.key}
+                    className="h-auto max-w-full whitespace-normal py-cell aria-pressed:bg-muted aria-pressed:border-foreground"
+                    onClick={() => setSelected(profile.key)}
+                  >
+                    {t(roleLabels[profile.key])}
+                  </Button>
+                ))}
+              </div>
+            </Field>
+            {profiles.map((profile) => (
+              <div key={profile.key} hidden={active !== profile.key}>
+                <ProfileEditor
+                  profile={profile}
+                  knowledge={data.knowledge}
+                  canManage={data.canManage === true}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </Section>
   );
 }
@@ -138,7 +140,10 @@ function ProfileEditor({
         if (!disabled && dirty) save.mutate();
       }}
     >
-      <Field label={t("agentProfileInstructions")}>
+      <Field
+        label={t("agentProfileInstructions")}
+        hint={t("agentProfileInstructionsHint")}
+      >
         <Textarea
           className="text-ui md:text-ui"
           rows={4}
