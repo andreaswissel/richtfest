@@ -220,6 +220,13 @@ async function commit(
     return true;
   });
 }
+// jsonb reorders object keys on persistence; that must not invalidate recovery.
+function checkpointHash(value: unknown) {
+  return createHash("sha256").update(JSON.stringify(value, (_key, item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item,
+  )).digest("hex");
+}
 export async function stepSupervisor(d: AppDeps, id: string) {
   let run: any;
   let state: any;
@@ -301,14 +308,25 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       context: unknown,
       runId = id,
     ) => {
-      const callId = crypto.randomUUID();
+      // Retry state lives in the existing durable phase history. A restart must
+      // honor the saved deadline and attempt budget, not start a fresh burst.
+      const callKey = checkpointHash({ phase, goal, context, runId, revision: state.revision });
+      const checkpoint = state.history.findLast((entry: any) => entry.phase === "provider_retry" && entry.callKey === callKey);
+      const sameGeneration = checkpoint?.generation === state.generation;
+      const callId = sameGeneration ? checkpoint.callId : crypto.randomUUID();
       failurePhase = phase;
       await assertActive();
       const started = await commit(d, run, token, async (tx) => {
         await log(d, tx, run, "provider_call_started", phase, callId);
       });
       if (!started) throw conflict("Supervisor no longer active");
-      const maxAttempts = 3;
+      if (sameGeneration && checkpoint.terminal) throw Object.assign(new Error("Supervisor model execution failed."), {
+        failurePhase: phase, failureCategory: checkpoint.failureCategory, providerStatus: checkpoint.providerStatus,
+      });
+      // A deliberate resume gets a new attempt budget, but never skips a
+      // provider cooldown that is still in effect.
+      let retryAt = sameGeneration || checkpoint?.providerStatus === 429 ? checkpoint.retryAt : 0;
+      let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
       const providerContext = {
         ...(context as object),
         workspaceGuidance: (() => {
@@ -332,9 +350,20 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxRevisions: state.modelPolicy?.maxRevisions,
         },
       };
-      let outputValidationFeedback: ReturnType<typeof sanitizeProviderDiagnostics> | undefined;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let outputValidationFeedback = sameGeneration && checkpoint.failureCategory === "validation"
+        ? sanitizeProviderDiagnostics(checkpoint.diagnostics) : undefined;
+      for (let attempt = (sameGeneration ? checkpoint.attempt : 0) + 1; attempt <= 5; attempt++) {
         await assertActive();
+        if (retryDeadline && retryAt >= retryDeadline) throw Object.assign(new Error("Provider cooldown exceeds recovery window."), {
+          failurePhase: phase, failureCategory: "provider", providerStatus: 429,
+        });
+        while (Date.now() < retryAt) {
+          await new Promise(resolve => setTimeout(resolve, Math.min(1000, retryAt - Date.now())));
+          await assertActive();
+        }
+        if (retryDeadline && Date.now() >= retryDeadline) throw Object.assign(new Error("Provider recovery window expired."), {
+          failurePhase: phase, failureCategory: "provider", providerStatus: 429,
+        });
         if (phase === "review") {
           partialOutput = "";
           lastCheckpoint = 0;
@@ -354,7 +383,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
           }));
           if (response.status !== "completed") throw conflict("Provider unavailable");
-          const completed = await commit(d, run, token, async (tx) => {
+          const completed = await commit(d, run, token, async (tx, current) => {
+            await tx.update(supervisorRuns).set({ history: current.history.filter((entry: any) =>
+              entry.phase !== "provider_retry" || entry.callKey !== callKey) }).where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "provider_call_completed", phase, callId);
           });
           if (!completed) throw conflict("Supervisor no longer active");
@@ -363,23 +394,41 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           const metadata = typeof error === "object" && error !== null
             ? error as { code?: unknown; retryable?: unknown; providerFailure?: unknown; providerStatus?: unknown; failureCategory?: unknown; retryAfterMs?: unknown; diagnostics?: unknown }
             : {};
-          const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics: sanitizeProviderDiagnostics(metadata.diagnostics) });
+          const diagnostics = sanitizeProviderDiagnostics(metadata.diagnostics);
           const providerFailureStatus = typeof metadata.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
             && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : undefined;
           const failureCategory: RunFailureCategory = metadata.code === "timeout" || metadata.failureCategory === "timeout" ? "timeout" : metadata.providerFailure === true
             ? providerFailureStatus === 401 || providerFailureStatus === 403 ? "permission"
               : metadata.failureCategory === "validation" ? "validation" : "provider"
             : classifyRunFailure(error, phase);
-          const cooldownExceedsBudget = typeof metadata.retryAfterMs === "number" && metadata.retryAfterMs > 300000;
+          const rateLimited = providerFailureStatus === 429;
+          const quotaFailure = diagnostics.providerCode === "insufficient_quota" || diagnostics.providerCode === "billing_hard_limit_reached";
+          const maxAttempts = rateLimited ? 5 : 3;
+          if (rateLimited) retryDeadline ??= Date.now() + 600000;
+          const fallbackMs = rateLimited ? Math.min(120000, 30000 * 2 ** (attempt - 1)) : attempt === 1 ? 350 : 800;
+          const rateLimit = diagnostics.rateLimit;
+          const delayMs = Math.max(fallbackMs,
+            typeof metadata.retryAfterMs === "number" && Number.isFinite(metadata.retryAfterMs) ? metadata.retryAfterMs : 0,
+            rateLimited && rateLimit?.remainingRequests === 0 ? rateLimit.resetRequestsMs ?? 0 : 0,
+            rateLimited && rateLimit?.remainingTokens === 0 ? rateLimit.resetTokensMs ?? 0 : 0);
+          const cooldownExceedsBudget = rateLimited ? Date.now() + delayMs >= retryDeadline! : delayMs > 300000;
           const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
-            && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
+            && !quotaFailure && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
+          retryAt = Date.now() + delayMs;
+          const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics, providerStatus: providerFailureStatus,
+            ...(shouldRetry ? { delayMs, retryAt } : {}), recoveryExhausted: cooldownExceedsBudget });
+          const saveRetry = async (tx: any, current: any) => {
+            await tx.update(supervisorRuns).set({ history: [
+              ...current.history.filter((entry: any) => entry.phase !== "provider_retry" || entry.callKey !== callKey),
+              { phase: "provider_retry", callKey, callId, generation: state.generation, attempt, retryAt, retryDeadline, diagnostics,
+                failureCategory, providerStatus: providerFailureStatus, terminal: !shouldRetry },
+            ] }).where(eq(supervisorRuns.runId, id));
+          };
           if (shouldRetry) {
             if (failureCategory === "validation")
-              outputValidationFeedback = sanitizeProviderDiagnostics(metadata.diagnostics);
-            const fallbackMs = providerFailureStatus === 429 ? 5000 * attempt : attempt === 1 ? 350 : 800;
-            const delayMs = typeof metadata.retryAfterMs === "number" && Number.isFinite(metadata.retryAfterMs)
-              ? Math.min(300000, Math.max(fallbackMs, metadata.retryAfterMs)) : fallbackMs;
-            const retryLogged = await commit(d, run, token, async (tx) => {
+              outputValidationFeedback = diagnostics;
+            const retryLogged = await commit(d, run, token, async (tx, current) => {
+              await saveRetry(tx, current);
               await log(
                 d,
                 tx,
@@ -390,23 +439,18 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               );
             });
             if (!retryLogged) throw conflict("Supervisor no longer active");
-            // Check persisted cancellation/steering while cooling down.
-            const retryAt = Date.now() + delayMs;
-            do {
-              await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(0, retryAt - Date.now()))));
-              await assertActive();
-            } while (Date.now() < retryAt);
             continue;
           }
           // Provider errors are reduced to phase/category/attempt events only;
           // SDK messages and response bodies are never persisted.
-          await commit(d, run, token, async (tx) => {
+          await commit(d, run, token, async (tx, current) => {
+            await saveRetry(tx, current);
             await log(
               d,
               tx,
               run,
               "provider_call_failed",
-              `${phase}${providerFailureStatus === undefined ? "" : `; HTTP ${providerFailureStatus}`}${cooldownExceedsBudget ? "; provider cooldown exceeds five-minute automatic retry budget" : ""}`,
+              `${phase}${providerFailureStatus === undefined ? "" : `; HTTP ${providerFailureStatus}`}${cooldownExceedsBudget ? "; provider cooldown exceeds automatic recovery window" : ""}`,
               attemptMetadata,
             );
           });
@@ -734,7 +778,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         state.revision < policy.maxRevisions
       ) {
         assertRevisionAssignments(review.revisions, state.assignments as Assignment[]);
-        await commit(d, run, token, async (tx) => {
+        await commit(d, run, token, async (tx, current) => {
           const assignments = (state.assignments as Assignment[]).map((a) => {
             const revision = review.revisions.find(
               (r) => r.taskId === a.taskId,
@@ -766,7 +810,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               revision: state.revision + 1,
               review,
               history: [
-                ...state.history,
+                ...current.history,
                 { phase: "review", revision: state.revision, output: review },
               ],
             })
@@ -781,14 +825,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         review.decision === "accept" &&
         state.modelPolicy?.independentReviewEnabled === true
       ) {
-        await commit(d, run, token, async (tx) => {
+        await commit(d, run, token, async (tx, current) => {
           await tx
             .update(supervisorRuns)
             .set({
               phase: "independent_review",
               review,
               history: [
-                ...state.history,
+                ...current.history,
                 { phase: "review", revision: state.revision, output: review },
               ],
             })
@@ -797,7 +841,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           await log(d, tx, run, "independent_review_started");
         });
       } else {
-        await commit(d, run, token, async (tx) => {
+        await commit(d, run, token, async (tx, current) => {
           const summary =
             review.decision === "revise"
               ? `${review.summary}\n\nRevision limit reached. Unresolved issues require human review.`
@@ -854,7 +898,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               phase: "done",
               review: { ...review, result: resultReference },
               history: [
-                ...state.history,
+                ...current.history,
                 {
                   phase: "review",
                   revision: state.revision,
@@ -910,10 +954,20 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
       const firstPassReview = state.review;
       const sourceSlices = chunkSourceVersionIds([...readableSourceIds]);
+      const inputHash = checkpointHash({ goal, assignments, firstPassReview,
+        resolvedExcerpts, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
       for (let index = 0; index < sourceSlices.length; index++) {
         const sliceIds = sourceSlices[index];
         const sliceIdSet = new Set(sliceIds);
+        const savedSlice = state.history.find((entry: any) => entry.phase === "independent_review_slice"
+          && entry.inputHash === inputHash && entry.index === index);
+        if (savedSlice) {
+          const output = schemas.independent_review.parse(savedSlice.output);
+          assertIndependentReviewCitations(output, sliceIdSet);
+          sliceResults.push({ sourceVersionIds: sliceIds, output });
+          continue;
+        }
         const sourceExcerpts = resolvedExcerpts.filter(({ versionId }) => sliceIdSet.has(versionId));
         const workSources = sourceExcerpts.map(({ versionId, resolution }: any) => ({
           versionId, name: resolution.source.name, version: resolution.source.version,
@@ -967,12 +1021,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           revision: state.revision,
         }));
         assertIndependentReviewCitations(output, sliceIdSet);
-        await commit(d, run, token, async (tx) => {
+        const saved = await commit(d, run, token, async (tx, current) => {
+          await tx.update(supervisorRuns).set({ history: [...current.history,
+            { phase: "independent_review_slice", inputHash, index, output, sourceVersionIds: sliceIds },
+          ] }).where(eq(supervisorRuns.runId, id));
           await logWorkProgress(d, tx, run, {
             runId: id, stage: "independent_review", sources: workSources,
             batch: index + 1, batchCount: sourceSlices.length, summary: output.summary,
           });
+          await log(d, tx, run, "independent_review_checkpointed", `${index + 1}/${sourceSlices.length}`);
         });
+        if (!saved) throw conflict("Supervisor no longer active");
         sliceResults.push({ sourceVersionIds: sliceIds, output });
       }
       const aggregated = aggregateIndependentReviews(sliceResults, limits);
@@ -996,7 +1055,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       assertIndependentReviewDecision(output, assignments);
       if (output.decision === "revise" && output.revisions.length && state.revision < policy.maxRevisions) {
         assertRevisionAssignments(output.revisions, assignments);
-        await commit(d, run, token, async (tx) => {
+        await commit(d, run, token, async (tx, current) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
             return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined } : assignment;
@@ -1016,7 +1075,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             revision: state.revision + 1,
             review: { firstPassReview, independentReview: output },
             history: [
-              ...state.history,
+              ...current.history,
               { phase: "independent_review", revision: state.revision, output },
             ],
           }).where(eq(supervisorRuns.runId, id));
@@ -1028,7 +1087,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             });
         });
       } else {
-        await commit(d, run, token, async (tx) => {
+        await commit(d, run, token, async (tx, current) => {
           const unresolved = output.decision === "revise";
           const coverageNote = coverageIncomplete
             ? sourceVersionIds.length === 0
@@ -1081,7 +1140,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             phase: "done",
             review: { ...output, firstPassReview, unresolved, result: resultReference },
             history: [
-              ...state.history,
+              ...current.history,
               { phase: "independent_review", revision: state.revision, generation: state.generation, output, result: resultReference },
             ],
           }).where(eq(supervisorRuns.runId, id));

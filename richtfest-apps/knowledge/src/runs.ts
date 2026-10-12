@@ -1143,6 +1143,37 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       .select()
       .from(supervisorRuns)
       .where(eq(supervisorRuns.runId, run.id));
+    // Only interrupted provider-rate-limit runs resume. Other failures retain
+    // the existing new-run behavior; a review gate is never bypassed.
+    if (d.supervisorEnabled && previousPolicy && run.status === "failed"
+      && /(?:^|;)\s*provider_http_status=429(?:;|$)/.test(run.error ?? "")) {
+      d.requirePermission("knowledge:read");
+      d.requirePermission("knowledge:write");
+      d.requirePermission("projects:read");
+      if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
+      if (run.conversationId) await conversation(d, run.conversationId, run.projectId);
+      return d.db.transaction(async (tx: any) => {
+        const current = await getRun(d, run.id, tx, true);
+        const [state] = await tx.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id)).for("update");
+        if (current.status !== "failed" || !state || state.phase === "done"
+          || !/(?:^|;)\s*provider_http_status=429(?:;|$)/.test(current.error ?? "")) throw conflict("Run is no longer resumable");
+        await sources({ ...d, db: tx }, run.projectId, [...new Set<string>([
+          ...run.sourceVersionIds, ...state.assignments.flatMap((a: any) => a.sourceVersionIds),
+        ])]);
+        for (const assignment of state.assignments.filter((a: any) => !a.output)) {
+          await tx.update(agentRuns).set({ status: "queued", error: null, finishedAt: null, durationMs: null, updatedAt: new Date() })
+            .where(and(eq(agentRuns.id, assignment.runId), eq(agentRuns.tenantId, d.tenantId)));
+          await tx.update(tasks).set({ status: "in_progress" })
+            .where(and(eq(tasks.id, assignment.taskId), eq(tasks.tenantId, d.tenantId)));
+        }
+        await tx.update(supervisorRuns).set({ generation: state.generation + 1, leaseToken: null, leaseUntil: null })
+          .where(eq(supervisorRuns.runId, run.id));
+        const [updated] = await tx.update(agentRuns).set({ status: "queued", error: null, requestedBy: d.actorId,
+          startedAt: null, finishedAt: null, durationMs: null, updatedAt: new Date() }).where(eq(agentRuns.id, run.id)).returning();
+        await event(d, tx, run, "resumed", undefined, "Rate-limited run resumed from saved progress");
+        return updated;
+      });
+    }
     return create(
       d,
       runInput.parse({

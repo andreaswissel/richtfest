@@ -407,6 +407,31 @@ test("diagnostics exclude unknown paths, messages, values and unbounded numeric 
     { code: "too_small", path: ["tasks"], minimum: Infinity },
   ] })).toEqual({ issues: [{ code: "too_big", path: ["summary"], maximum: 10000 }, { code: "too_small", path: ["tasks"] }] });
 });
+
+test("provider 429 diagnostics distinguish quota from throttling without retaining bodies or arbitrary headers", async () => {
+  for (const providerCode of ["rate_limit_exceeded", "insufficient_quota", "billing_hard_limit_reached", "secret-provider-code"]) {
+    let invocations = 0;
+    const model = new MastraLanguageModelV2Mock({ doStream: async () => {
+      invocations++;
+      throw Object.assign(new Error("secret exception message"), { statusCode: 429, isRetryable: true,
+        responseBody: JSON.stringify({ error: { code: providerCode, message: "secret request body" } }),
+        responseHeaders: { "Retry-After": "72", "authorization": "secret key",
+          "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "0",
+          "x-ratelimit-reset-requests": "1m2.5s", "x-ratelimit-remaining-tokens": "secret header" },
+      });
+    } });
+    const error = await callMastraSupervisor({ ...base, phase: "independent_review" }, "test-key", { model })
+      .then(() => { throw new Error("Expected rate-limit failure"); }, error => error);
+    expect(error).toMatchObject({ providerStatus: 429, retryAfterMs: 72000,
+      retryable: !["insufficient_quota", "billing_hard_limit_reached"].includes(providerCode),
+      diagnostics: { retryAfterMs: 72000, rateLimit: { limitRequests: 100, remainingRequests: 0, resetRequestsMs: 62500 } },
+    });
+    expect(error.diagnostics.providerCode).toBe(providerCode.startsWith("secret") ? undefined : providerCode);
+    expect(JSON.stringify(error)).not.toContain("secret");
+    expect(error.cause).toBeUndefined();
+    expect(invocations).toBe(1);
+  }
+});
 test("real Mastra agent returns a valid focused plan", async () => {
   const plan = { tasks: [{ role: "source_reviewer", goal: "Check assigned source", sourceVersionIds: [crypto.randomUUID()] }] };
   expect(await callMastraSupervisor({ ...base, phase: "plan" }, "test-key", {

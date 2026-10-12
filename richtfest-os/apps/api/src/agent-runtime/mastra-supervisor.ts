@@ -91,12 +91,15 @@ function providerFailureMetadata(error: unknown): {
   status?: number;
   retryAfterMs?: number;
   category?: "provider" | "validation";
+  diagnostics: ReturnType<typeof sanitizeProviderDiagnostics>;
 } {
   let current: unknown = error;
   let retryable = false;
   let category: "provider" | "validation" = "provider";
   let status: number | undefined;
   let retryAfterMs: number | undefined;
+  let providerCode: string | undefined;
+  const rateLimit: Record<string, number> = {};
   // Inspect structured metadata only; never retain SDK bodies, messages or causes.
   for (let depth = 0; depth < 4 && current && typeof current === "object"; depth++) {
     const value = current as Record<string, unknown>;
@@ -105,18 +108,37 @@ function providerFailureMetadata(error: unknown): {
     const statusValue = value.status ?? value.statusCode ?? response?.status;
     if (typeof statusValue === "number" && Number.isInteger(statusValue) && statusValue >= 100 && statusValue <= 599) {
       status = statusValue;
-      if (status === 401 || status === 403) return { retryable: false, status };
+      if (status === 401 || status === 403) return { retryable: false, status, diagnostics: {} };
     }
     const headers = value.responseHeaders ?? response?.headers;
-    const header = headers instanceof Headers ? headers.get("retry-after")
-      : headers && typeof headers === "object"
-        ? Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after")?.[1]
-        : undefined;
+    const readHeader = (name: string) => headers instanceof Headers ? headers.get(name)
+      : headers && typeof headers === "object" ? Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1] : undefined;
+    const header = readHeader("retry-after");
     if (typeof header === "string" || typeof header === "number") {
       const seconds = Number(header);
       const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(String(header)) - Date.now();
-      if (Number.isFinite(delay)) retryAfterMs = Math.min(300001, Math.max(0, delay));
+      if (Number.isFinite(delay)) retryAfterMs = Math.max(retryAfterMs ?? 0, Math.min(1e12, Math.max(0, delay)));
     }
+    for (const [suffix, key] of [["limit-requests", "limitRequests"], ["remaining-requests", "remainingRequests"],
+      ["limit-tokens", "limitTokens"], ["remaining-tokens", "remainingTokens"]]) {
+      const raw = readHeader(`x-ratelimit-${suffix}`);
+      if (typeof raw === "string" && /^\d+(?:\.\d+)?$/.test(raw)) rateLimit[key!] = Number(raw);
+    }
+    for (const [suffix, key] of [["reset-requests", "resetRequestsMs"], ["reset-tokens", "resetTokensMs"]]) {
+      const raw = readHeader(`x-ratelimit-${suffix}`);
+      if (typeof raw === "string" && /^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/.test(raw)) {
+        rateLimit[key!] = [...raw.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)]
+          .reduce((total, match) => total + Number(match[1]) * ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2]!]!), 0);
+      }
+    }
+    // Read only allowlisted codes from structured SDK data or bounded JSON bodies.
+    let data: any = value.data;
+    if (!data && typeof value.responseBody === "string" && value.responseBody.length <= 65536) {
+      try { data = JSON.parse(value.responseBody); } catch { /* Not structured provider data. */ }
+    }
+    const code = [data?.error?.code, data?.error?.type, value.code, value.type]
+      .map(providerCode => sanitizeProviderDiagnostics({ providerCode }).providerCode).find(Boolean);
+    if (code) providerCode = code;
     const name = value.name;
     // Mastra uses stable IDs, not error names; OpenAI schema wrappers can omit causes.
     if (["ZodError", "SyntaxError", "NoObjectGeneratedError", "AI_NoObjectGeneratedError",
@@ -129,8 +151,10 @@ function providerFailureMetadata(error: unknown): {
     current = value.cause;
   }
   // A permanent HTTP response overrides wrapper retry hints and parse errors.
-  return { retryable: status === undefined ? retryable : transientHttpStatuses.has(status), status, retryAfterMs,
-    category: status === undefined ? category : "provider" };
+  const quotaFailure = providerCode === "insufficient_quota" || providerCode === "billing_hard_limit_reached";
+  const diagnostics = sanitizeProviderDiagnostics({ providerCode, retryAfterMs, rateLimit });
+  return { retryable: !quotaFailure && (status === undefined ? retryable : transientHttpStatuses.has(status)), status, retryAfterMs,
+    category: status === undefined ? category : "provider", diagnostics };
 }
 function safeProviderError(
   retryable: boolean,
@@ -216,6 +240,10 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
     name: `Richtfest ${input.phase}`,
     instructions,
     model: resolvedModel,
+    // The app owns durable retries. Mastra's default error processors otherwise
+    // retry outside modelSettings.maxRetries and our attempt/usage records.
+    maxRetries: 0,
+    errorProcessorDefaults: false,
   });
   agent.__setLogger(noopLogger);
   // Historical snapshots keep the deadlines that applied before limits were configurable.
@@ -333,7 +361,7 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
       metadata.status,
       metadata.category,
       metadata.retryAfterMs,
-    ), { diagnostics: safeDiagnostics });
+    ), { diagnostics: sanitizeProviderDiagnostics({ ...safeDiagnostics, ...metadata.diagnostics }) });
   } finally {
     if (failed) await input.onResponse?.(responseMetadata).catch(() => undefined);
     else await input.onResponse?.(responseMetadata);

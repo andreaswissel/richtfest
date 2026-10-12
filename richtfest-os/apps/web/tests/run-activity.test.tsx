@@ -180,6 +180,38 @@ test("malformed and legacy correlation is safe and does not invent numeric limit
     ),
   ).not.toContain("10000");
 });
+test("rate-limit activity distinguishes known quota, known throttling and unknown 429s", () => {
+  for (const [providerCode, expected] of [
+    ["insufficient_quota", "Check provider billing"],
+    ["rate_limit_exceeded", "reported a rate limit"],
+    [undefined, "rate limit or exhausted quota"],
+  ]) {
+    const html = renderToStaticMarkup(
+      <RunActivityFeed
+        active={true}
+        events={[
+          {
+            id: "limited",
+            eventType: "provider_call_retrying",
+            resultSummary: "independent_review; attempt 2 of 5",
+            paramsSummary: JSON.stringify({
+              callId: "call",
+              runId: "own",
+              attempt: 2,
+              providerStatus: 429,
+              delayMs: 75000,
+              diagnostics: { providerCode, message: "SECRET" },
+            }),
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain(expected!);
+    expect(html).toContain("75 seconds");
+    expect(html).not.toContain("SECRET");
+    expect(html).not.toContain("check the provider connection");
+  }
+});
 test("terminal diagnostics cannot attribute a sibling or another phase failure", () => {
   const run = {
     id: "own",

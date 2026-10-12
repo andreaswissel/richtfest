@@ -7,6 +7,14 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
   const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
+  const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error"];
+  const rateLimit: Partial<Record<"limitRequests" | "remainingRequests" | "limitTokens" | "remainingTokens" | "resetRequestsMs" | "resetTokensMs", number>> = {};
+  if (value.rateLimit && typeof value.rateLimit === "object") {
+    for (const key of ["limitRequests", "remainingRequests", "limitTokens", "remainingTokens", "resetRequestsMs", "resetTokensMs"] as const) {
+      const number = (value.rateLimit as Record<string, unknown>)[key];
+      if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 1e12) rateLimit[key] = number;
+    }
+  }
   const issues = Array.isArray(value.issues) ? value.issues.slice(0, 10).flatMap(rawIssue => {
     if (!rawIssue || typeof rawIssue !== "object") return [];
     const issue = rawIssue as Record<string, unknown>;
@@ -24,6 +32,10 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   return {
     ...(ids.includes(value.errorId as string) ? { errorId: value.errorId as string } : {}),
     ...(finishes.includes(value.finishReason as string) ? { finishReason: value.finishReason as string } : {}),
+    ...(providerCodes.includes(value.providerCode as string) ? { providerCode: value.providerCode as string } : {}),
+    ...(typeof value.retryAfterMs === "number" && Number.isFinite(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= 1e12
+      ? { retryAfterMs: value.retryAfterMs } : {}),
+    ...(Object.keys(rateLimit).length ? { rateLimit } : {}),
     ...(issues.length ? { issues } : {}),
   };
 }

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { and, eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
@@ -35,6 +35,204 @@ const policy = {
   maxTasks: 4,
   maxRevisions: 2,
 };
+
+for (const outcome of ["recover", "exhaust", "cancel", "quota", "long_cooldown"] as const) integration(
+  `429 recovery is durable, bounded and cancellable: ${outcome}`, async () => {
+    const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+    const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+    let now = Date.now(), calls = 0, runId = "", finished = false;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let pending: Promise<void> | undefined;
+    const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+      validateProject: async () => true, listProjectSources: async () => ({ sources: [], truncated: false }),
+      executeSupervisor: async () => {
+        calls++;
+        if (outcome === "recover" && calls === 5) return { status: "completed", output: {
+          tasks: [{ role: "source_reviewer", goal: "Read evidence", sourceVersionIds: [] }],
+        } };
+        throw Object.assign(new Error("secret provider response"), { providerFailure: true, retryable: true,
+          providerStatus: 429, failureCategory: "provider",
+          retryAfterMs: outcome === "long_cooldown" ? 600001 : calls === 1 ? 75000 : undefined,
+          diagnostics: { providerCode: outcome === "quota" ? "insufficient_quota" : "rate_limit_exceeded", raw: "secret",
+            ...(calls === 2 ? { rateLimit: { remainingTokens: 0, resetTokensMs: 90000 } } : {}),
+          },
+        });
+      },
+    };
+    try {
+      const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Recover rate limit",
+        provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+      runId = run!.id;
+      await createSupervisor(d, db, run, "medium", policy);
+      pending = stepSupervisor(d, runId).finally(() => { finished = true; });
+      let restarted = false;
+      const delays: number[] = [];
+      let seenAttempt = 0;
+      for (let polls = 0; !finished && polls < 1500; polls++) {
+        const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+        const saved = (state!.history as any[]).find(entry => entry.phase === "provider_retry");
+        if (saved && !saved.terminal && saved.attempt > seenAttempt) {
+          seenAttempt = saved.attempt;
+          delays.push(saved.retryAt - now);
+          if (outcome === "cancel") {
+            await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, runId));
+          } else {
+            if (outcome === "recover" && !restarted) {
+              // Lose the worker during cooldown, then restart before it expires.
+              await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+              await pending;
+              finished = false;
+              pending = stepSupervisor(d, runId).finally(() => { finished = true; });
+              await new Promise(resolve => setTimeout(resolve, 50));
+              expect(calls).toBe(1); // Restart must not bypass the saved cooldown.
+              restarted = true;
+            }
+            now = saved.retryAt;
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(finished).toBe(true);
+      await pending;
+      const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+      expect(result!.status).toBe(outcome === "recover" ? "running" : outcome === "cancel" ? "cancelled" : "failed");
+      expect(calls).toBe(outcome === "recover" || outcome === "exhaust" ? 5 : 1);
+      if (calls === 5) expect(delays).toEqual([75000, 90000, 120000, 120000]);
+      const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, runId));
+      expect(attempts.map(a => a.attemptNumber).sort()).toEqual(Array.from({ length: calls }, (_, i) => i + 1));
+      expect(new Set(attempts.map(a => a.operationId)).size).toBe(1);
+      const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, runId));
+      expect(JSON.stringify(events)).not.toContain("secret");
+      if (outcome === "recover") {
+        const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+        expect(state!.phase).toBe("specialists");
+      }
+    } finally {
+      await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, runId));
+      await pending;
+      clock.mockRestore();
+      for (const table of [agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+        await db.delete(table).where(eq(table.tenantId, tenantId));
+      await pool.end();
+    }
+  }, 20000,
+);
+
+for (const changedEvidence of [false, true]) integration(`rate-limited review resumes saved work, invalidating changed evidence: ${changedEvidence}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const versions = Array.from({ length: 4 }, () => crypto.randomUUID());
+  const calls: string[] = [];
+  let rateLimited = true, evidence = "Original evidence", permitted = true;
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true,
+    requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async (_p: string, id: string) => versions.includes(id),
+    listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId })), truncated: false }),
+    resolveSource: async (_p: string, { versionId }: any) => ({ status: "resolved", source: { versionId }, content: { status: "available", text: `${evidence} ${versionId}` } }),
+    executeSupervisor: async ({ phase, context }: any) => {
+      calls.push(phase === "independent_review" ? `slice-${context.sourceCoverage.slice}` : phase);
+      if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Read all sources", sourceVersionIds: versions }] } };
+      if (phase === "specialist") return { status: "completed", output: { summary: "Saved findings", rationale: "Evidence", citations: context.sourceVersionIds } };
+      if (phase === "review") return { status: "completed", output: { summary: "Saved handoff", rationale: "Draft only", citations: versions,
+        decision: "accept", revisions: [], document: { title: "Preserved draft", content: "# Original document\n\nDo not regenerate this draft." } } };
+      if (context.sourceCoverage.slice === 2 && rateLimited) throw Object.assign(new Error("secret"), {
+        providerFailure: true, providerStatus: 429, retryable: false, failureCategory: "provider", diagnostics: { providerCode: "insufficient_quota" },
+      });
+      return { status: "completed", output: { summary: `Reviewed slice ${context.sourceCoverage.slice}`, rationale: "Checked evidence. ".repeat(150), citations: context.sourceCoverage.sliceVersionIds,
+        decision: "accept", revisions: [], findings: [] } };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ error: e.message })).listen(0);
+  const address = server.address() as { port: number };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Draft with independent review", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { ...policy, independentReviewEnabled: true,
+      executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 4000, documentMaxCharacters: 60000, timeoutSeconds: 180 },
+    });
+    for (let phase = 0; phase < 4; phase++) await stepSupervisor(d, run!.id);
+    const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(failed!.status).toBe("failed");
+    const [checkpoint] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    expect((checkpoint!.review as any).document.title).toBe("Preserved draft");
+    const before = [...calls];
+    permitted = false;
+    expect((await fetch(`http://127.0.0.1:${address.port}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(403);
+    permitted = true;
+    const retry = await fetch(`http://127.0.0.1:${address.port}/runs/${run!.id}/retry`, { method: "POST" });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).data.id).toBe(run!.id);
+    expect((await fetch(`http://127.0.0.1:${address.port}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(409);
+    rateLimited = false;
+    if (changedEvidence) evidence = "Corrected extraction";
+    // Advance past the recorded rate-limit cooldown, without waiting in real time.
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120001);
+    try { await stepSupervisor(d, run!.id); } finally { clock.mockRestore(); }
+    expect(calls.slice(before.length)).toEqual(changedEvidence ? ["slice-1", "slice-2"] : ["slice-2"]);
+    const [completed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(completed!.status).toBe("needs_review");
+    const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]!.content).toContain("Do not regenerate this draft.");
+  } finally {
+    server.close();
+    for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+integration("retrying a rate-limited specialist preserves its successful sibling", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const calls: string[] = [];
+  let limited = true;
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true,
+    requirePermission: () => {}, auditRun: async () => {}, validateProject: async () => true,
+    listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async ({ phase, goal }: any) => {
+      calls.push(phase === "specialist" ? goal : phase);
+      if (phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Successful sibling", sourceVersionIds: [] },
+        { role: "requirements_reviewer", goal: "Interrupted specialist", sourceVersionIds: [] },
+      ] } };
+      if (phase === "specialist" && goal === "Interrupted specialist" && limited)
+        throw Object.assign(new Error("Rate limited"), { providerFailure: true, retryable: true, providerStatus: 429,
+          diagnostics: { providerCode: "insufficient_quota" } });
+      return { status: "completed", output: { summary: goal, rationale: "Checked", citations: [],
+        ...(phase === "review" ? { decision: "accept", revisions: [] } : {}),
+      } };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  const address = server.address() as { port: number };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Recover specialists",
+      provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(failed!.status).toBe("failed");
+    const retry = await fetch(`http://127.0.0.1:${address.port}/runs/${run!.id}/retry`, { method: "POST" });
+    expect(retry.status).toBe(201);
+    expect((await retry.json()).data.id).toBe(run!.id);
+    limited = false;
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 30001);
+    try { await stepSupervisor(d, run!.id); } finally { clock.mockRestore(); }
+    await stepSupervisor(d, run!.id);
+    expect(calls.filter(c => c === "Successful sibling")).toHaveLength(1);
+    expect(calls.filter(c => c === "Interrupted specialist")).toHaveLength(2);
+    expect(calls.filter(c => c === "plan")).toHaveLength(1);
+    const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(result!.status).toBe("needs_review");
+  } finally {
+    server.close();
+    for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
 integration("large specialist assignments preserve every UTF-8 source slice and resume checkpointed findings", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();

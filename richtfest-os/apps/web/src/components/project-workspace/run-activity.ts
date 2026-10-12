@@ -148,6 +148,16 @@ export function providerActivityMetadata(event: RecordData) {
       value.diagnostics && typeof value.diagnostics === "object"
         ? (value.diagnostics as RecordData)
         : undefined,
+    providerStatus: Number.isInteger(value.providerStatus)
+      ? (value.providerStatus as number)
+      : undefined,
+    delayMs:
+      typeof value.delayMs === "number" &&
+      Number.isFinite(value.delayMs) &&
+      value.delayMs >= 0 &&
+      value.delayMs <= 600000
+        ? value.delayMs
+        : undefined,
   };
 }
 
@@ -155,6 +165,18 @@ export function providerFailureExplanation(
   diagnostics: RecordData | undefined,
   t: ReturnType<typeof useT>,
 ) {
+  if (
+    ["insufficient_quota", "billing_hard_limit_reached"].includes(
+      diagnostics?.providerCode,
+    )
+  )
+    return t("workspaceFailureQuota");
+  if (
+    ["rate_limit_exceeded", "rate_limit_error"].includes(
+      diagnostics?.providerCode,
+    )
+  )
+    return t("workspaceFailureThrottled");
   if (diagnostics?.errorId === "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED") {
     const summary =
       Array.isArray(diagnostics.issues) &&
@@ -191,8 +213,15 @@ export function providerActivityExplanation(
   t: ReturnType<typeof useT>,
 ) {
   const metadata = providerActivityMetadata(event);
-  const explanation = providerFailureExplanation(metadata.diagnostics, t);
+  let explanation =
+    providerFailureExplanation(metadata.diagnostics, t) ??
+    (metadata.providerStatus === 429 ||
+    /;\s*HTTP 429(?:;|$)/.test(event.resultSummary ?? "")
+      ? t("workspaceFailureRateLimit")
+      : undefined);
   if (!explanation) return undefined;
+  if (metadata.delayMs !== undefined)
+    explanation += ` ${t("workspaceRetryDelay")}: ${Math.ceil(metadata.delayMs / 1000)} ${t("workspaceRetrySeconds")}.`;
   const phase =
     typeof event.resultSummary === "string"
       ? event.resultSummary.split(";")[0]
@@ -258,6 +287,8 @@ const activityLabels = {
   supervisor_revision_requested: "workspaceActivityRevision",
   supervisor_review_completed: "workspaceActivityReviewed",
   independent_review_started: "workspaceActivityIndependentReviewStarted",
+  independent_review_checkpointed:
+    "workspaceActivityIndependentReviewCheckpointed",
   independent_review_completed: "workspaceActivityIndependentReviewCompleted",
   independent_review_revision_requested:
     "workspaceActivityIndependentReviewRevision",
@@ -283,7 +314,8 @@ const toolLabels = {
 type ActivityTranslationKey =
   | (typeof activityLabels)[keyof typeof activityLabels]
   | (typeof toolLabels)[keyof typeof toolLabels]
-  | "workspaceActivityTimedOut";
+  | "workspaceActivityTimedOut"
+  | "workspaceFailureRateLimit";
 
 export function runActivityLabel(
   event: RecordData,
@@ -294,6 +326,12 @@ export function runActivityLabel(
     /(?:^|;)\s*category=timeout(?:;|$)/.test(event.paramsSummary)
   )
     return "workspaceActivityTimedOut";
+  if (
+    ["failed", "supervisor_failed"].includes(event.eventType) &&
+    typeof event.paramsSummary === "string" &&
+    /(?:^|;)\s*provider_http_status=429(?:;|$)/.test(event.paramsSummary)
+  )
+    return "workspaceFailureRateLimit";
   if (event.eventType === "tool_executed")
     return (
       toolLabels[event.toolName as keyof typeof toolLabels] ??

@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Rate-limited project agents now wait for provider cooldowns across worker restarts, distinguish reported quota failures from throttling, and resume saved drafts, specialist work and independent-review progress when retried. Unclassified older 429 errors remain explicitly uncertain.
+
 - Agent progress now names the sources and revisions being reviewed, shows batch progress and saved findings marked as unreviewed, and updates in place as specialists work. The full timestamped history and retry details stay available on expansion.
 
 - Project agents can read text in PNG, JPEG, WebP and BMP images and use configured visual interpretation for text-free diagrams. Affinity Publisher files contribute embedded-preview evidence only, clearly distinguished from a full document; visual inferences remain unreviewed and full Publisher reading still requires a PDF export.

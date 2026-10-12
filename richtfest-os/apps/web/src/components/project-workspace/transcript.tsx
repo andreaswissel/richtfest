@@ -111,7 +111,10 @@ function safeRunFailureReason(run: RecordData, t: ReturnType<typeof useT>) {
   const translation = category && runFailureCategoryLabels[category];
   const translatedPhase = phase && runFailurePhaseLabels[phase];
   if (!translation) return t("workspaceRunFailedNoReason");
-  const categoryReason = t(translation as Parameters<typeof t>[0]);
+  const categoryReason =
+    providerStatus === "429"
+      ? t("workspaceFailureRateLimit")
+      : t(translation as Parameters<typeof t>[0]);
   const reasonText = translatedPhase
     ? `${t("workspaceRunFailedDuring")} ${t(translatedPhase as Parameters<typeof t>[0])}: ${categoryReason}`
     : categoryReason;

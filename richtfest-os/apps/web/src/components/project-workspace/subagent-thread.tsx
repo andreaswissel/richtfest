@@ -88,7 +88,9 @@ function formatPersistedRunReason(reason: string, t: ReturnType<typeof useT>) {
     runReasonCategories[match[2] as keyof typeof runReasonCategories];
   if (!phaseKey || !categoryKey) return t("workspaceRunNoSpecificReason");
   const phase = t(phaseKey);
-  const category = t(categoryKey);
+  const category = /(?:^|;)\s*provider_http_status=429(?:;|$)/.test(reason)
+    ? t("workspaceFailureRateLimit")
+    : t(categoryKey);
   const cause = match[3];
   const childCauseKey = cause.startsWith("The supervisor failed during")
     ? "workspaceRunChildCauseSupervisorFailed"
