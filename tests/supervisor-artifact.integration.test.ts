@@ -75,14 +75,18 @@ integration("acoustic reports preserve late-page results and attachments across 
   const bytes = Buffer.from(await pdf.save());
   const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
   try {
-    for (const scenario of ["resume", "timeout", "review", "tokens", "characters", "placeholder", "incomplete"] as const) {
+    for (const scenario of ["resume", "timeout", "review", "large", "legacy_limit", "tokens", "characters", "placeholder", "incomplete"] as const) {
       const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
       const keys = acousticSectionKeys("exterior-noise-concept");
+      const large = ["large", "legacy_limit", "review"].includes(scenario);
       let interrupted = false;
+      let permitted = true;
       let runId = "";
       const calls: string[] = [];
       const d: any = {
-        db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
+        db, tenantId, actorId, supervisorEnabled: true,
+        requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
+        audit: async () => {}, providerConfigured: async () => false,
         validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
         listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
         readSourcePdf: async (_: string, id: string) => id === versionId ? bytes : null,
@@ -113,6 +117,13 @@ integration("acoustic reports preserve late-page results and attachments across 
               { versionId, pageStart: 3, pageEnd: 3, section: "calculationAppendix", label: "All calculation pages" }],
           };
           else if (context.documentTask === "section") {
+            if (scenario === "legacy_limit" && context.section === "openIssues" && !interrupted) {
+              interrupted = true;
+              // Stop with a real saved draft above the old aggregate cap. Below,
+              // seed the terminal diagnostics emitted by the previous version.
+              await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+              throw new Error("Worker disconnected");
+            }
             if (context.section === "components" && (scenario === "resume" || scenario === "timeout") && !interrupted) {
               interrupted = true;
               if (scenario === "timeout") throw Object.assign(new Error("Call timed out"), { code: "timeout", providerFailure: true, retryable: true });
@@ -125,10 +136,10 @@ integration("acoustic reports preserve late-page results and attachments across 
               diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" },
             });
             output = { complete: scenario !== "incomplete", citations: context.sources.length ? [versionId] : [], content:
-              scenario === "characters" ? "Source-grounded detail. ".repeat(60)
+              scenario === "characters" ? "x".repeat(12001)
                 : scenario === "placeholder" ? "Nicht verwendet."
                 : context.sources.length ? `${context.sources.map((s: any) => s.text).join("\n")} [${versionId}]`
-                : `No further ${context.section} evidence supplied; obtain the missing project input.`,
+                : `No further ${context.section} evidence supplied; obtain the missing project input.${large ? "\n" + "Detailed evidence gap; obtain the original project specification. ".repeat(170) : ""}`,
             };
           } else throw new Error("Unexpected document call");
           return { status: "completed", output };
@@ -141,34 +152,66 @@ integration("acoustic reports preserve late-page results and attachments across 
         runId = run!.id;
         await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
           specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: scenario === "review", maxParallel: 2, maxTasks: 4, maxRevisions: 1,
-          executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: scenario === "characters" ? 1000 : 60000, timeoutSeconds: 180 },
+          executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: 60000, timeoutSeconds: 180 },
         });
-        for (let step = 0; step < 5; step++) await stepSupervisor(d, runId);
-        if (scenario === "timeout") {
+        for (let step = 0; step < (scenario === "legacy_limit" ? 3 : 5); step++) await stepSupervisor(d, runId);
+        if (scenario === "legacy_limit") {
+          const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+          const parts = Object.values((saved!.review as any).documentDraft.sections).flatMap((s: any) => s.parts);
+          expect(parts.map((p: any) => p.content).join("\n\n").length).toBeGreaterThan(60000);
+          expect(parts.every((p: any) => p.content.length <= 12000)).toBe(true);
+          await db.update(agentRuns).set({ status: "failed", error: "phase=review; category=validation; The run returned unsupported or invalid output. Review the inputs and retry." }).where(eq(agentRuns.id, runId));
+          // A saved draft alone must not turn other failures into a resume.
+          for (const metadata of [
+            { callId: crypto.randomUUID(), diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: [{ code: "too_big", path: ["content"], maximum: 60000 }] } },
+            { diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: [{ code: "too_big", path: ["document", "template", "components"], maximum: 200000 }] } },
+            { diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" } },
+          ]) {
+            await db.insert(agentRunEvents).values({ tenantId, runId, eventType: "provider_call_failed", resultSummary: "review", paramsSummary: JSON.stringify({ runId, ...metadata }) });
+            const retry = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" });
+            expect(retry.status).toBe(201);
+            expect((await retry.json()).data.id).not.toBe(runId);
+            const [original] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+            expect(original!.status).toBe("failed");
+          }
+          await db.insert(agentRunEvents).values({ tenantId, runId, eventType: "provider_call_failed", resultSummary: "review",
+            paramsSummary: JSON.stringify({ runId, diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+              issues: [{ code: "too_big", path: ["content"], maximum: 60000 }] } }),
+          });
+        }
+        if (scenario === "timeout" || scenario === "legacy_limit") {
           const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
           expect(failed!.status).toBe("failed");
-          expect(failed!.error).toContain("phase=review; category=timeout;");
+          expect(failed!.error).toContain(`phase=review; category=${scenario === "timeout" ? "timeout" : "validation"};`);
           const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
           expect(Object.keys((saved!.review as any).documentDraft.sections).length).toBeGreaterThan(0);
+          permitted = false;
+          expect((await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" })).status).toBe(403);
+          permitted = true;
           const retry = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" });
           expect(retry.status).toBe(201);
           expect((await retry.json()).data.id).toBe(runId);
+          expect((await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" })).status).toBe(409);
           const [resumed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
           expect(resumed!.review).toEqual(saved!.review);
           expect(resumed!.assignments).toEqual(saved!.assignments);
           expect(resumed!.modelPolicy).toEqual(saved!.modelPolicy);
           const before = calls.length;
           await stepSupervisor(d, runId);
-          expect(calls.slice(before)[0]).toBe("components");
+          expect(calls.slice(before)[0]).toBe(scenario === "timeout" ? "components" : "openIssues");
           for (const completed of ["plan", "specialist", "outline", "preliminaryRemarks"])
             expect(calls.filter(call => call === completed)).toHaveLength(1);
         }
         const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
         const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
-        if (scenario === "resume" || scenario === "timeout" || scenario === "review") {
-          expect(interrupted).toBe(scenario !== "review");
+        if (scenario === "resume" || scenario === "timeout" || large) {
+          expect(interrupted).toBe(["resume", "timeout", "legacy_limit"].includes(scenario));
           expect(result!.status).toBe("needs_review");
           expect(revisions).toHaveLength(1);
+          if (large) {
+            expect(revisions[0]!.content.length).toBeGreaterThan(60000);
+            expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 1) * 170);
+          }
           expect(revisions[0]!.content).toContain("Last room: required 33.2 dB; available 42.1 dB.");
           expect(revisions[0]!.content.match(/Component detail\./g)).toHaveLength(800);
           expect(revisions[0]!.content.match(/No further preliminaryRemarks evidence/g)).toHaveLength(1);
@@ -181,7 +224,7 @@ integration("acoustic reports preserve late-page results and attachments across 
           const failure = events.find(e => e.eventType === "provider_call_failed");
           const diagnostics = JSON.parse(failure!.paramsSummary!).diagnostics;
           if (scenario === "tokens") expect(diagnostics.finishReason).toBe("length");
-          if (scenario === "characters") expect(diagnostics.issues).toContainEqual({ code: "too_big", path: ["content"], maximum: 1000 });
+          if (scenario === "characters") expect(diagnostics.issues).toContainEqual({ code: "too_big", path: ["content"], maximum: 12000 });
           if (scenario === "placeholder") expect(diagnostics.issues[0].path).toEqual(["document", "template", "preliminaryRemarks"]);
           if (scenario === "incomplete") expect(diagnostics.issues[0].path).toEqual(["complete"]);
         }
@@ -192,7 +235,7 @@ integration("acoustic reports preserve late-page results and attachments across 
       }
     }
   } finally { await pool.end(); }
-});
+}, 15000);
 
 for (const templateId of ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const)
 for (const independentReviewEnabled of [false, true]) integration(

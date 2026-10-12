@@ -28,6 +28,7 @@ export async function authorAcousticConcept(input: {
 }) {
   const { d, id, projectId, limits } = input;
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  // Preserve the fingerprint contract so drafts saved under the old aggregate cap resume.
   const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens });
   const sourceIds = new Set(input.sourceVersionIds);
   const keys = acousticSectionKeys(id);
@@ -102,18 +103,15 @@ export async function authorAcousticConcept(input: {
         previousReview: draft.previousReview,
       }, value => partSchema.parse(value)));
       progress.parts.push(part);
-      // Save the received part even if the assembled size is too large, for inspection/recovery.
+      // A response cap applies to each piece, not the concatenated report.
       await input.checkpoint(draft, key, index + 1, batches.length);
-      z.object({ content: z.string().max(limits.documentMaxCharacters) }).parse({
-        content: Object.values(draft.sections).flatMap(s => s.parts.map(p => p.content)).join("\n\n"),
-      });
     }
     bodies[key] = progress.parts.map(part => part.content).join("\n\n");
     for (const part of progress.parts) for (const citation of part.citations) citations.add(citation);
   }
   const template = acousticConceptTemplateSchema.parse({ id, version: 1, language: outline.language,
     project: outline.project, attachments: outline.attachments, ...bodies });
-  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template }, id, limits.documentMaxCharacters)!;
+  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template }, id, null)!;
   return {
     document, citations: [...citations], decision: "accept" as const, revisions: [],
     summary: outline.language === "de" ? "Konzeptentwurf mit Quellenbelegen erstellt. Fachliche Prüfung und Freigabe stehen aus."

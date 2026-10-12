@@ -283,7 +283,6 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const limits = policy.executionLimits;
     const schemas = agentOutputSchemas(limits);
-    const reviewSchema = schemas.review.extend({ document: schemas.review.shape.document.nullish() });
     const assertActive = async () => {
       if (!(await commit(d, run, token, async () => {})))
         throw conflict("Supervisor no longer active");
@@ -783,6 +782,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         });
       });
       const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
+      // Only application-assembled concepts are exempt from the per-response cap.
+      const reviewSchema = schemas.review.extend({
+        document: (conceptId ? agentDocumentSchema : schemas.review.shape.document).nullish(),
+      });
       const review = reviewSchema.parse(
         conceptId ? await authorAcousticConcept({
           d, projectId: run.projectId, id: conceptId, goal, limits, maxOutputTokens: policy.supervisor.maxOutputTokens,
@@ -808,7 +811,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }),
       );
-      review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, limits.documentMaxCharacters);
+      review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId ? null : limits.documentMaxCharacters);
       await sources(d, run.projectId, review.citations);
       const allowedCitations = (state.assignments as Assignment[]).flatMap(
         (a) => a.output?.citations ?? [],

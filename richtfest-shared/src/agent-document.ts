@@ -30,12 +30,13 @@ export const acousticDocumentTemplateSchema = z.union([soundInsulationTemplateSc
 /** A proposed deliverable, distinct from the short conversational handoff. */
 export const agentDocumentSchema = z.object({
   title: z.string().trim().min(1).max(300),
-  content: z.string().trim().min(1).max(60000),
+  // Assembled documents are not model responses; their template bounds each section.
+  content: z.string().trim().min(1),
   template: acousticDocumentTemplateSchema.optional(),
 }).strict();
 
 /** Both preview and PDF consume this saved Markdown, never model-chosen headings. */
-export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation: boolean | AcousticConceptId = false, maxCharacters = 60000) {
+export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation: boolean | AcousticConceptId = false, maxCharacters: number | null = 60000) {
   if (!document?.template) {
     if (requireSoundInsulation) throw new Error("Sound insulation review requires its versioned document template");
     return document;
@@ -47,7 +48,9 @@ export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchem
     if (typeof value === "string" && /^(?:nicht verwendet|siehe (?:konzeptdatensatz|nachfolgenden)|not used|see (?:concept dataset|below))(?:[.;\s]|$)/i.test(value))
       throw new z.ZodError([{ code: "custom", path: ["document", "template", key], message: "Author this section; a placeholder is not a report." }]);
   }
-  const schema = agentDocumentSchema.extend({ content: z.string().trim().min(1).max(maxCharacters) });
+  // null is reserved for application-assembled, already bounded section pieces.
+  const schema = maxCharacters === null ? agentDocumentSchema
+    : agentDocumentSchema.extend({ content: z.string().trim().min(1).max(maxCharacters) });
   if (template.id !== "sound-insulation-review") {
     return schema.parse({ ...document, content: renderAcousticConcept(template), template });
   }

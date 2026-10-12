@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Acoustic reports assembled from saved sections can now exceed the per-response character limit without losing content. Retrying an older combined-report limit failure resumes saved work instead of starting over; model limits and review requirements stay unchanged.
+
 - Added an opt-in public-data catalogue with scheduled Berlin building/tree imports, retained source evidence and version-pinned project context. Projects can inspect provenance and import health, then explicitly confirm adoption of newer releases. Failed refreshes preserve context, planning objects and notes.
 
 - Short acknowledgements such as “thanks” or “danke” now stay in project chat without starting a new agent run or redirecting an active one. Follow-up requests and attached sources still trigger agent work.

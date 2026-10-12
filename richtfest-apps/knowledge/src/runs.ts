@@ -1147,11 +1147,29 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       .select()
       .from(supervisorRuns)
       .where(eq(supervisorRuns.runId, run.id));
-    // Explicit retries of provider interruptions reuse saved work. Other failures
-    // retain the new-run behavior; settings and review gates remain unchanged.
-    const resumableFailure = /(?:^|;)\s*(?:provider_http_status=429|category=timeout)(?:;|$)/;
-    if (d.supervisorEnabled && previousPolicy && run.status === "failed"
-      && resumableFailure.test(run.error ?? "")) {
+    const canResume = async (current: typeof run, state: typeof previousPolicy, db = d.db) => {
+      if (current.status !== "failed" || !state || state.phase === "done") return false;
+      if (/(?:^|;)\s*(?:provider_http_status=429|category=timeout)(?:;|$)/.test(current.error ?? "")) return true;
+      // Older concept runs checkpointed valid pieces before applying the response
+      // cap to their combined length. Recover only that diagnosed assembly failure.
+      if (state.phase !== "review" || !state.review?.documentDraft
+        || !/^phase=review; category=validation;/.test(current.error ?? "")) return false;
+      const [failure] = await db.select().from(agentRunEvents).where(and(
+        eq(agentRunEvents.tenantId, d.tenantId), eq(agentRunEvents.runId, current.id),
+        eq(agentRunEvents.eventType, "provider_call_failed"),
+      )).orderBy(desc(agentRunEvents.createdAt)).limit(1);
+      if (failure?.resultSummary !== "review") return false;
+      try {
+        const { diagnostics, callId } = JSON.parse(failure.paramsSummary ?? "{}");
+        const issue = diagnostics?.issues?.[0];
+        return !callId && diagnostics?.errorId === "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED"
+          && diagnostics.finishReason !== "length" && diagnostics.issues.length === 1
+          && issue?.code === "too_big"
+          && issue.maximum === (state.modelPolicy?.executionLimits?.documentMaxCharacters ?? 60000)
+          && ['["content"]', '["document","content"]'].includes(JSON.stringify(issue.path));
+      } catch { return false; }
+    };
+    if (d.supervisorEnabled && await canResume(run, previousPolicy)) {
       d.requirePermission("knowledge:read");
       d.requirePermission("knowledge:write");
       d.requirePermission("projects:read");
@@ -1160,8 +1178,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       return d.db.transaction(async (tx: any) => {
         const current = await getRun(d, run.id, tx, true);
         const [state] = await tx.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id)).for("update");
-        if (current.status !== "failed" || !state || state.phase === "done"
-          || !resumableFailure.test(current.error ?? "")) throw conflict("Run is no longer resumable");
+        if (!await canResume(current, state, tx)) throw conflict("Run is no longer resumable");
         await sources({ ...d, db: tx }, run.projectId, [...new Set<string>([
           ...run.sourceVersionIds, ...state.assignments.flatMap((a: any) => a.sourceVersionIds),
         ])]);

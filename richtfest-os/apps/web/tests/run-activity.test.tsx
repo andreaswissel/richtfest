@@ -180,7 +180,7 @@ test("report content character limits identify stopped sections without offering
     };
     const explanation = providerFailureExplanation(diagnostics, t);
     expect(explanation).toContain("12000 characters");
-    expect(explanation).toContain("no completed report was produced");
+    expect(explanation).toMatch(/no completed report was produced/i);
     expect(explanation).toContain("not a token limit");
     expect(
       providerFailureExplanation(

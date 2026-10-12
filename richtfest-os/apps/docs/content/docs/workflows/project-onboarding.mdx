@@ -34,6 +34,8 @@ Comments also appear in the artifact's originating thread. **Continue in thread*
 
 If a run fails, read the specific reason in chat or run details. Summary and document/section character limits are distinct from output-token limits; more tokens do not fix an overlong field. Confirmed token truncation can offer a higher limit with **Yes / No / Describe what Richtfest should do differently**. Yes lets a workspace administrator double the affected role's limit (up to 128,000), with a warning about cost and model limits. At the maximum, the explanation remains visible without an increase button. It saves the workspace setting for new runs without starting one. **Retry run** still uses the failed run's original settings; send a new request to use the higher limit. No leaves settings unchanged; Describe opens the composer so you can give a different direction before sending.
 
+Acoustic concepts are assembled from saved sections and may exceed the 60,000-character response default without shortening the report. If an older acoustic run stopped at the combined-report cap, **Retry run** resumes its saved sections when the recorded diagnostics confirm that failure. Completed specialist work and matching sections are reused, settings stay unchanged, and the finished draft still requires review. Single-response limits and incomplete or token-truncated sections remain enforced.
+
 Search and message links return to a stable turn. Scrolling, selecting text, opening a source, loading older history or following another run does not take the reader's place. Reopening a conversation returns to the last meaningful turn and preserves the composer draft.
 
 ## 3D location editor
