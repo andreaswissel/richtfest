@@ -271,7 +271,7 @@
   "workspaceRunPhaseCancellation": "des Abbruchs",
   "workspaceRunPhaseApproval": "der Freigabeprüfung",
   "workspaceRunCategoryProvider": "Der Anbieteraufruf konnte nicht abgeschlossen werden. Prüfen Sie die Anbieter-Verbindung und versuchen Sie es erneut.",
-  "workspaceRunCategoryTimeout": "Der Anbieteraufruf hat sein Zeitlimit überschritten. Erhöhen Sie das Zeitlimit in den Agenten-Modelleinstellungen und starten Sie einen neuen Lauf oder versuchen Sie es erneut mit einem enger gefassten Auftrag oder einem schnelleren Modell.",
+  "workspaceRunCategoryTimeout": "Der Anbieteraufruf hat sein Zeitlimit überschritten. „Ausführung erneut starten“ setzt betreute Läufe am gespeicherten Fortschritt fort. Die Einstellungen bleiben unverändert; Änderungen am Modell oder Zeitlimit in den Agenten-Modelleinstellungen erfordern eine neue Anfrage.",
   "workspaceRunCategoryPermission": "Eine erforderliche Berechtigung fehlt. Bitten Sie eine Arbeitsplatzadministration um Zugriff und versuchen Sie es erneut.",
   "workspaceRunCategoryValidation": "Der Lauf hat ungültige oder nicht unterstützte Ergebnisse geliefert. Prüfen Sie die Eingaben und versuchen Sie es erneut.",
   "workspaceRunCategorySource": "Erforderliche Projektquellen sind nicht verfügbar. Stellen Sie lesbare Quellen wieder her oder wählen Sie sie aus und versuchen Sie es erneut.",

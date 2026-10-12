@@ -1147,10 +1147,11 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       .select()
       .from(supervisorRuns)
       .where(eq(supervisorRuns.runId, run.id));
-    // Only interrupted provider-rate-limit runs resume. Other failures retain
-    // the existing new-run behavior; a review gate is never bypassed.
+    // Explicit retries of provider interruptions reuse saved work. Other failures
+    // retain the new-run behavior; settings and review gates remain unchanged.
+    const resumableFailure = /(?:^|;)\s*(?:provider_http_status=429|category=timeout)(?:;|$)/;
     if (d.supervisorEnabled && previousPolicy && run.status === "failed"
-      && /(?:^|;)\s*provider_http_status=429(?:;|$)/.test(run.error ?? "")) {
+      && resumableFailure.test(run.error ?? "")) {
       d.requirePermission("knowledge:read");
       d.requirePermission("knowledge:write");
       d.requirePermission("projects:read");
@@ -1160,7 +1161,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         const current = await getRun(d, run.id, tx, true);
         const [state] = await tx.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id)).for("update");
         if (current.status !== "failed" || !state || state.phase === "done"
-          || !/(?:^|;)\s*provider_http_status=429(?:;|$)/.test(current.error ?? "")) throw conflict("Run is no longer resumable");
+          || !resumableFailure.test(current.error ?? "")) throw conflict("Run is no longer resumable");
         await sources({ ...d, db: tx }, run.projectId, [...new Set<string>([
           ...run.sourceVersionIds, ...state.assignments.flatMap((a: any) => a.sourceVersionIds),
         ])]);
@@ -1174,7 +1175,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           .where(eq(supervisorRuns.runId, run.id));
         const [updated] = await tx.update(agentRuns).set({ status: "queued", error: null, requestedBy: d.actorId,
           startedAt: null, finishedAt: null, durationMs: null, updatedAt: new Date() }).where(eq(agentRuns.id, run.id)).returning();
-        await event(d, tx, run, "resumed", undefined, "Rate-limited run resumed from saved progress");
+        await event(d, tx, run, "resumed", undefined, "Interrupted run resumed from saved progress");
         return updated;
       });
     }

@@ -5,6 +5,7 @@ import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
 import { acousticSectionKeys } from "../richtfest-shared/src/acoustic-concept";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
+import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
 import {
   stepSupervisor,
   createSupervisor,
@@ -74,13 +75,14 @@ integration("acoustic reports preserve late-page results and attachments across 
   const bytes = Buffer.from(await pdf.save());
   const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
   try {
-    for (const scenario of ["resume", "review", "tokens", "characters", "placeholder", "incomplete"] as const) {
+    for (const scenario of ["resume", "timeout", "review", "tokens", "characters", "placeholder", "incomplete"] as const) {
       const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
       const keys = acousticSectionKeys("exterior-noise-concept");
       let interrupted = false;
       let runId = "";
+      const calls: string[] = [];
       const d: any = {
-        db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+        db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
         validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
         listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
         readSourcePdf: async (_: string, id: string) => id === versionId ? bytes : null,
@@ -93,6 +95,7 @@ integration("acoustic reports preserve late-page results and attachments across 
           } };
         },
         executeSupervisor: async ({ phase, context }: any) => {
+          calls.push(context.documentTask === "section" ? context.section : context.documentTask ?? phase);
           let output: any;
           if (phase === "plan") output = { tasks: [{ role: "source_reviewer", goal: "Read report evidence", sourceVersionIds: [versionId] }] };
           else if (phase === "specialist") {
@@ -110,8 +113,9 @@ integration("acoustic reports preserve late-page results and attachments across 
               { versionId, pageStart: 3, pageEnd: 3, section: "calculationAppendix", label: "All calculation pages" }],
           };
           else if (context.documentTask === "section") {
-            if (context.section === "components" && scenario === "resume" && !interrupted) {
+            if (context.section === "components" && (scenario === "resume" || scenario === "timeout") && !interrupted) {
               interrupted = true;
+              if (scenario === "timeout") throw Object.assign(new Error("Call timed out"), { code: "timeout", providerFailure: true, retryable: true });
               // Simulate loss of the worker lease, not a user retry/new generation.
               await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
               throw new Error("Worker disconnected");
@@ -130,6 +134,8 @@ integration("acoustic reports preserve late-page results and attachments across 
           return { status: "completed", output };
         },
       };
+      const server = express().use(express.json()).use(runsRouter(() => d))
+        .use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ error: e.message })).listen(0);
       try {
         const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Create exterior-noise-concept v1", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
         runId = run!.id;
@@ -138,10 +144,29 @@ integration("acoustic reports preserve late-page results and attachments across 
           executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: scenario === "characters" ? 1000 : 60000, timeoutSeconds: 180 },
         });
         for (let step = 0; step < 5; step++) await stepSupervisor(d, runId);
+        if (scenario === "timeout") {
+          const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+          expect(failed!.status).toBe("failed");
+          expect(failed!.error).toContain("phase=review; category=timeout;");
+          const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+          expect(Object.keys((saved!.review as any).documentDraft.sections).length).toBeGreaterThan(0);
+          const retry = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" });
+          expect(retry.status).toBe(201);
+          expect((await retry.json()).data.id).toBe(runId);
+          const [resumed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+          expect(resumed!.review).toEqual(saved!.review);
+          expect(resumed!.assignments).toEqual(saved!.assignments);
+          expect(resumed!.modelPolicy).toEqual(saved!.modelPolicy);
+          const before = calls.length;
+          await stepSupervisor(d, runId);
+          expect(calls.slice(before)[0]).toBe("components");
+          for (const completed of ["plan", "specialist", "outline", "preliminaryRemarks"])
+            expect(calls.filter(call => call === completed)).toHaveLength(1);
+        }
         const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
         const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
-        if (scenario === "resume" || scenario === "review") {
-          expect(interrupted).toBe(scenario === "resume");
+        if (scenario === "resume" || scenario === "timeout" || scenario === "review") {
+          expect(interrupted).toBe(scenario !== "review");
           expect(result!.status).toBe("needs_review");
           expect(revisions).toHaveLength(1);
           expect(revisions[0]!.content).toContain("Last room: required 33.2 dB; available 42.1 dB.");
@@ -161,6 +186,7 @@ integration("acoustic reports preserve late-page results and attachments across 
           if (scenario === "incomplete") expect(diagnostics.issues[0].path).toEqual(["complete"]);
         }
       } finally {
+        server.close();
         for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
           await db.delete(table).where(eq(table.tenantId, tenantId));
       }

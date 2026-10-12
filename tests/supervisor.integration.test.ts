@@ -118,7 +118,8 @@ for (const outcome of ["recover", "exhaust", "cancel", "quota", "long_cooldown"]
   }, 20000,
 );
 
-for (const changedEvidence of [false, true]) integration(`rate-limited review resumes saved work, invalidating changed evidence: ${changedEvidence}`, async () => {
+for (const failure of ["rate_limit", "timeout"] as const)
+for (const changedEvidence of [false, true]) integration(`${failure} review resumes saved work, invalidating changed evidence: ${changedEvidence}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
   const versions = Array.from({ length: 4 }, () => crypto.randomUUID());
@@ -136,7 +137,8 @@ for (const changedEvidence of [false, true]) integration(`rate-limited review re
       if (phase === "review") return { status: "completed", output: { summary: "Saved handoff", rationale: "Draft only", citations: versions,
         decision: "accept", revisions: [], document: { title: "Preserved draft", content: "# Original document\n\nDo not regenerate this draft." } } };
       if (context.sourceCoverage.slice === 2 && rateLimited) throw Object.assign(new Error("secret"), {
-        providerFailure: true, providerStatus: 429, retryable: false, failureCategory: "provider", diagnostics: { providerCode: "insufficient_quota" },
+        providerFailure: true, retryable: false,
+        ...(failure === "timeout" ? { code: "timeout" } : { providerStatus: 429, failureCategory: "provider", diagnostics: { providerCode: "insufficient_quota" } }),
       });
       return { status: "completed", output: { summary: `Reviewed slice ${context.sourceCoverage.slice}`, rationale: "Checked evidence. ".repeat(150), citations: context.sourceCoverage.sliceVersionIds,
         decision: "accept", revisions: [], findings: [] } };
@@ -181,7 +183,8 @@ for (const changedEvidence of [false, true]) integration(`rate-limited review re
   }
 });
 
-integration("retrying a rate-limited specialist preserves its successful sibling", async () => {
+for (const failure of ["rate_limit", "timeout"] as const)
+integration(`retrying a ${failure} specialist preserves its successful sibling`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
   const calls: string[] = [];
@@ -196,8 +199,8 @@ integration("retrying a rate-limited specialist preserves its successful sibling
         { role: "requirements_reviewer", goal: "Interrupted specialist", sourceVersionIds: [] },
       ] } };
       if (phase === "specialist" && goal === "Interrupted specialist" && limited)
-        throw Object.assign(new Error("Rate limited"), { providerFailure: true, retryable: true, providerStatus: 429,
-          diagnostics: { providerCode: "insufficient_quota" } });
+        throw Object.assign(new Error("Provider interrupted"), { providerFailure: true, retryable: true,
+          ...(failure === "timeout" ? { code: "timeout" } : { providerStatus: 429, diagnostics: { providerCode: "insufficient_quota" } }) });
       return { status: "completed", output: { summary: goal, rationale: "Checked", citations: [],
         ...(phase === "review" ? { decision: "accept", revisions: [] } : {}),
       } };
@@ -391,7 +394,7 @@ integration("specialist timeouts stop unchanged retries and preserve completed s
     const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
     expect(parent!.status).toBe("failed");
     expect(parent!.error).toContain("phase=specialist; category=timeout;");
-    expect(parent!.error).toContain("Increase the call timeout in Agent model settings and start a new run");
+    expect(parent!.error).toContain("Retry run resumes saved progress for supervised runs");
     const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
     expect(children.find(child => child.goal === "Completes")).toMatchObject({ status: "needs_review", outputSummary: "Saved evidence" });
     const failed = children.find(child => child.goal === "Times out")!;

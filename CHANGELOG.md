@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Retrying a timed-out project agent now resumes saved specialist work, report sections and review progress instead of starting over. Existing failed runs can resume too; model settings and approval requirements stay unchanged.
+
 - Acoustic concepts now enforce the requested template, read complete saved PDF evidence and write resumable sections. PDF exports include numbered contents and original plan/calculation pages as unverified sources. Token truncation and document-size limits stop incomplete reports and show distinct recovery guidance.
 
 - Project threads now have their own artifact previews, tasks and run links. Open documents and PDFs directly from chat, and review generated documents with persistent passage highlights and revision-specific comments that carry into continuing agent work.

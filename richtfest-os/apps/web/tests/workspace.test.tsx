@@ -432,8 +432,9 @@ describe("workspace records and navigation", () => {
     expect(html).not.toContain("Check the provider connection");
     expect(html).not.toContain("Token limit exceeded");
     expect(html).toContain(
-      "Increase the call timeout in Agent model settings and start a new run",
+      "Retry run resumes saved progress for supervised runs",
     );
+    expect(html).toContain("Settings stay unchanged");
     expect(html).toContain(`agentRun=${runId}`);
     expect(html).not.toContain("No messages yet.");
   });
