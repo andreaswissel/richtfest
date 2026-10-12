@@ -46,7 +46,10 @@ import { ChatMarkdown } from "../chat-markdown";
 import { formatSourceCitations, sourceReferenceLabel } from "@richtfest/shared";
 import { Marker, MarkerContent } from "../ui/marker";
 import { LiveRun } from "./live-run";
-import { useRichtfestCelebration } from "./richtfest-celebration";
+import {
+  isPositiveFeedback,
+  useRichtfestCelebration,
+} from "./richtfest-celebration";
 import { TokenLimitAction } from "./token-limit-action";
 import {
   providerActivityExplanation,
@@ -519,7 +522,11 @@ function Conversation({
     }) => api<WorkspaceMessage>(`${path}/messages`, body),
     onSuccess: async (message, submitted) => {
       richtfest.onMessageSent(message);
-      if (readiness.data?.executionAvailable) {
+      // A text-only acknowledgement belongs in chat, not in a new plan or
+      // steering round. Attached sources and messages containing work still run.
+      const feedbackOnly =
+        !submitted.sourceVersionIds.length && isPositiveFeedback(submitted.body);
+      if (readiness.data?.executionAvailable && !feedbackOnly) {
         const nextRun = {
           goal: submitted.body,
           sourceVersionIds: submitted.sourceVersionIds,

@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Short acknowledgements such as “thanks” or “danke” now stay in project chat without starting a new agent run or redirecting an active one. Follow-up requests and attached sources still trigger agent work.
+
 - App updates now retain older frontend files so open tabs can load account security and other deferred screens without a forced reload. New releases verify file retention before accepting traffic; authentication load failures keep their underlying browser error available for diagnosis.
 
 - Retrying a timed-out project agent now resumes saved specialist work, report sections and review progress instead of starting over. Existing failed runs can resume too; model settings and approval requirements stay unchanged.
