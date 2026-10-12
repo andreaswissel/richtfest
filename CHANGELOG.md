@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-## 2026-10-12
+## 2026-10-13
 
 - Agent runs now retain structured intermediate results and tool receipts. Retry reuses saved work without duplicating drafts or questions; Run again starts fresh. Saved inputs, outputs and review links provide a foundation for future training datasets.
+
+## 2026-10-12
 
 - Acoustic reports assembled from saved sections can now exceed the per-response character limit without losing content. Retrying an older combined-report limit failure resumes saved work instead of starting over; model limits and review requirements stay unchanged.
 
