@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or, isNull, lt } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { agentDocumentSchema, agentPresetSnapshotSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot } from "@richtfest/shared";
 import { z } from "zod";
@@ -1165,6 +1165,7 @@ export async function supervisorProgress(d: AppDeps, id: string) {
 export async function listPendingSupervisors(
   db: any,
   limit = 4,
+  activeRunIds: string[] = [],
 ): Promise<
   { runId: string; tenantId: string; actorId: string; generation: number }[]
 > {
@@ -1180,6 +1181,7 @@ export async function listPendingSupervisors(
     .where(
       and(
         inArray(agentRuns.status, ["queued", "running"]),
+        activeRunIds.length ? notInArray(agentRuns.id, activeRunIds) : undefined,
         or(
           isNull(supervisorRuns.leaseUntil),
           lt(supervisorRuns.leaseUntil, new Date()),

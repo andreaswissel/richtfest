@@ -41,6 +41,7 @@ export async function startSupervisorWorker(db: Database, pool: Pool, options: {
   const resolveDeps = options.resolveDeps ?? ((tenantId, actorId) => backgroundKnowledgeDeps(db, tenantId, actorId));
   let stopping = false;
   let current: Promise<void> | undefined;
+  const active = new Map<string, Promise<void>>();
   let lastTickErrorAt = 0;
   const lastRunErrorAt = new Map<string, number>();
   const errorDetails = (error: unknown) => ({
@@ -50,46 +51,53 @@ export async function startSupervisorWorker(db: Database, pool: Pool, options: {
       : {}),
   });
   async function tick() {
-    const pending = await listPendingSupervisors(db, 3);
-    const pendingIds = new Set(pending.map(entry => entry.runId));
+    if (active.size >= 3) return;
+    const pending = await listPendingSupervisors(db, 3 - active.size, [...active.keys()]);
+    const pendingIds = new Set([...active.keys(), ...pending.map(entry => entry.runId)]);
     for (const runId of lastRunErrorAt.keys()) if (!pendingIds.has(runId)) lastRunErrorAt.delete(runId);
-    await Promise.all(pending.map(async entry => {
-      let connection: PoolClient | undefined;
-      let locked = false;
-      try {
-        connection = await pool.connect();
-        // A session lock spans framework checkpoints and coordinates replicas without Redis.
-        const result = await connection.query("select pg_try_advisory_lock(hashtextextended($1, 0)) as locked", [`richtfest-supervisor:${entry.runId}`]);
-        locked = result.rows[0]?.locked === true;
-        if (!locked || stopping) return;
-        const runtime = createSupervisorWorkflowRuntime({ storage, advance: async runId => {
-          const deps = await resolveDeps(entry.tenantId, entry.actorId);
-          const before = await supervisorProgress(deps, runId);
-          if (before.generation !== entry.generation || !["queued", "running"].includes(before.status)) return { done: true };
-          if (stopping) throw new Error("Worker is shutting down");
-          await stepSupervisor(deps, runId);
-          const after = await supervisorProgress(deps, runId);
-          return { done: after.generation !== entry.generation || !["queued", "running"].includes(after.status) };
-        } });
-        await runtime.execute(entry.runId, entry.generation);
-        lastRunErrorAt.delete(entry.runId);
-      } catch (error) {
-        const now = Date.now();
-        if (now - (lastRunErrorAt.get(entry.runId) ?? 0) >= 60_000) {
-          console.error("Supervisor worker could not execute a queued run", {
-            runId: entry.runId,
-            generation: entry.generation,
-            ...errorDetails(error),
-          });
-          lastRunErrorAt.set(entry.runId, now);
-        }
-      } finally {
-        if (connection) {
-          if (locked) await connection.query("select pg_advisory_unlock(hashtextextended($1, 0))", [`richtfest-supervisor:${entry.runId}`]).catch(() => undefined);
-          connection.release();
-        }
+    for (const entry of pending) {
+      if (stopping) break;
+      // Track each run independently; the polling loop must not await a whole workflow.
+      const execution = execute(entry).finally(() => { active.delete(entry.runId); });
+      active.set(entry.runId, execution);
+    }
+  }
+  async function execute(entry: Awaited<ReturnType<typeof listPendingSupervisors>>[number]) {
+    let connection: PoolClient | undefined;
+    let locked = false;
+    try {
+      connection = await pool.connect();
+      // A session lock spans framework checkpoints and coordinates replicas without Redis.
+      const result = await connection.query("select pg_try_advisory_lock(hashtextextended($1, 0)) as locked", [`richtfest-supervisor:${entry.runId}`]);
+      locked = result.rows[0]?.locked === true;
+      if (!locked || stopping) return;
+      const runtime = createSupervisorWorkflowRuntime({ storage, advance: async runId => {
+        const deps = await resolveDeps(entry.tenantId, entry.actorId);
+        const before = await supervisorProgress(deps, runId);
+        if (before.generation !== entry.generation || !["queued", "running"].includes(before.status)) return { done: true };
+        if (stopping) throw new Error("Worker is shutting down");
+        await stepSupervisor(deps, runId);
+        const after = await supervisorProgress(deps, runId);
+        return { done: after.generation !== entry.generation || !["queued", "running"].includes(after.status) };
+      } });
+      await runtime.execute(entry.runId, entry.generation);
+      lastRunErrorAt.delete(entry.runId);
+    } catch (error) {
+      const now = Date.now();
+      if (now - (lastRunErrorAt.get(entry.runId) ?? 0) >= 60_000) {
+        console.error("Supervisor worker could not execute a queued run", {
+          runId: entry.runId,
+          generation: entry.generation,
+          ...errorDetails(error),
+        });
+        lastRunErrorAt.set(entry.runId, now);
       }
-    }));
+    } finally {
+      if (connection) {
+        if (locked) await connection.query("select pg_advisory_unlock(hashtextextended($1, 0))", [`richtfest-supervisor:${entry.runId}`]).catch(() => undefined);
+        connection.release();
+      }
+    }
   }
   const schedule = () => {
     if (stopping || current) return;
@@ -105,5 +113,11 @@ export async function startSupervisorWorker(db: Database, pool: Pool, options: {
   timer.unref();
   console.info("Supervisor worker started; polling queued runs.");
   schedule();
-  return { stop: async () => { stopping = true; clearInterval(timer); await current; await storage.close(); } };
+  return { stop: async () => {
+    stopping = true;
+    clearInterval(timer);
+    await current;
+    await Promise.all(active.values());
+    await storage.close();
+  } };
 }

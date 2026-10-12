@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Agent runs in different threads now start independently when capacity is available, rather than waiting for an entire batch to finish. The existing three-run limit per worker remains in place.
+
 - Projects now have an Analytics tab for exploring agent-run costs, including all subagents, with per-agent models and token usage. Partial or missing cost data is clearly marked, and older runs remain browsable.
 
 - Added Innenlärm and Außenlärm concept draft formats based on the completed reference reports, with distinct sections, project details, tables and source-linked plan/calculation inventories. Existing acoustic reviews keep their default format. These are draft structures, not new calculations or replicas of the original page design; template uploads in agent settings remain planned.

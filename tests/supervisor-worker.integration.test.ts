@@ -285,3 +285,87 @@ integration(
   },
   20000,
 );
+
+integration("a late thread starts in a free slot and a freed slot refills before other runs finish", async () => {
+  const databaseUrl = process.env.DATABASE_URL!;
+  const { db, pool } = createDatabase(databaseUrl);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const model = { modelId: "test-model", maxOutputTokens: 1024, maxSteps: 1 };
+  const policy = { provider: "openai", effort: "medium", version: 1, source: "vendor", supervisor: model,
+    specialists: { source_reviewer: model, requirements_reviewer: model }, maxParallel: 1, maxTasks: 1, maxRevisions: 1 };
+  const gates = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+  const started = new Set<string>();
+  const ids: string[] = [];
+  const d = {
+    db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async (input: any) => {
+      if (input.phase === "plan") {
+        started.add(input.runId);
+        const index = ids.indexOf(input.runId);
+        if (index < 3) await gates[index]!.promise;
+        return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Review sources", sourceVersionIds: [] }] } };
+      }
+      return { status: "completed", output: { summary: "Evidence reviewed", rationale: "Unreviewed proposal", citations: [], decision: "accept", revisions: [] } };
+    },
+  } as unknown as AppDeps;
+  const createRun = async () => {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, conversationId: crypto.randomUUID(),
+      goal: "Independent thread", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    ids.push(run!.id);
+    await createSupervisor(d, db, run, "medium", policy);
+  };
+  const waitFor = async (check: () => boolean | Promise<boolean>) => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await Bun.sleep(25);
+    }
+    expect(await check()).toBe(true);
+  };
+  let worker: Awaited<ReturnType<typeof startSupervisorWorker>> | undefined;
+  try {
+    await createRun();
+    worker = await startSupervisorWorker(db, pool, { enabled: true, databaseUrl, resolveDeps: async (tenant, actor) => {
+      if (tenant !== tenantId || actor !== actorId) throw new Error("Test worker never touches another tenant");
+      return d;
+    } });
+    await waitFor(() => started.has(ids[0]!));
+    // Even if its phase lease expires, a locally active workflow must not take another slot.
+    await db.update(supervisorRuns).set({ leaseUntil: new Date(0) })
+      .where(eq(supervisorRuns.runId, ids[0]!));
+    // These threads arrive after the first run has already entered its provider call.
+    await createRun();
+    await createRun();
+    await createRun();
+    await waitFor(() => started.has(ids[1]!) && started.has(ids[2]!));
+    await Bun.sleep(1800); // An additional poll must respect the three-run capacity.
+    const [queued] = await db.select().from(agentRuns).where(eq(agentRuns.id, ids[3]!));
+    expect(queued!.status).toBe("queued");
+    expect(started.has(ids[3]!)).toBe(false);
+    gates[1]!.resolve();
+    await waitFor(() => started.has(ids[3]!));
+    await waitFor(async () => {
+      const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, ids[3]!));
+      return run!.status === "needs_review";
+    });
+    for (const index of [0, 2]) {
+      const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, ids[index]!));
+      expect(run!.status).toBe("running");
+    }
+    // Shutdown must drain active executions instead of closing their checkpoint store early.
+    let stopped = false;
+    const stopping = worker.stop().then(() => { stopped = true; });
+    await Bun.sleep(50);
+    expect(stopped).toBe(false);
+    gates.forEach(gate => gate.resolve());
+    await stopping;
+    worker = undefined;
+  } finally {
+    gates.forEach(gate => gate.resolve());
+    await worker?.stop();
+    for (const table of [artifactRevisions, artifacts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+}, 20000);
