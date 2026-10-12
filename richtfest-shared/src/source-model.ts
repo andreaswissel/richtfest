@@ -23,6 +23,7 @@ export const sourceFactInput = z.object({
   evidence: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("ifc"), expressId: z.number().int().positive(), attribute: z.string(), dataType: z.string().optional(), relationshipId: z.number().int().positive().optional() }),
     z.object({ kind: z.literal("text"), page: z.number().int().positive(), quote: z.string().min(1) }),
+    z.object({ kind: z.literal("image"), scope: z.enum(["image", "affinity_preview"]), description: z.string().min(1).max(1500) }),
   ]),
 });
 export type SourceValue = z.infer<typeof sourceValueSchema>;
@@ -46,12 +47,16 @@ export const documentModelOutput = z.object({
     ]),
     unit: z.object({ label: z.string().min(1).max(100) }).strict().nullable(),
     provenance: z.enum(["extracted", "inferred"]),
-    evidence: z.object({ kind: z.literal("text"), page: z.number().int().positive(), quote: z.string().min(1).max(1500) }),
+    evidence: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("text"), page: z.number().int().positive(), quote: z.string().min(1).max(1500) }),
+      z.object({ kind: z.literal("image"), scope: z.enum(["image", "affinity_preview"]), description: z.string().min(1).max(1500) }),
+    ]),
   })).max(60),
 }).strict();
 export type DocumentModelInput = {
   tenantId: string; actorId: string; versionId: string;
   pages: { page: number; text: string }[];
+  image?: { mediaType: "image/jpeg"; data: string; scope: "image" | "affinity_preview" };
 };
 export type DocumentModelResult =
   | { status: "unconfigured" | "forbidden" }

@@ -126,7 +126,7 @@ export async function callProvider(
       modelId, requestedReasoningEffort: input.reasoningEffort ?? null, reasoningEffort: effort ?? null,
       maxOutputTokens: input.maxOutputTokens ?? 2500, maxSteps: 1, maxRetries: 0, timeoutMs,
       stream: true, store: isOpenAi ? false : null, instructionsHash: metadataHash(effectiveInstructions),
-      promptHash: metadataHash(prompt), outputSchemaHash: null });
+      promptHash: metadataHash(input.image ? JSON.stringify({ prompt, image: input.image }) : prompt), outputSchemaHash: null });
     const response = await fetcher(
       isOpenAi
         ? isVercel ? `${env.VERCEL_GATEWAY_URL.replace(/\/$/, "")}/responses` : "https://api.openai.com/v1/responses"
@@ -152,7 +152,10 @@ export async function callProvider(
                 store: false,
                 instructions:
                   effectiveInstructions,
-                input: prompt,
+                input: input.image ? [{ role: "user", content: [
+                  { type: "input_text", text: prompt },
+                  { type: "input_image", image_url: `data:${input.image.mediaType};base64,${input.image.data}`, detail: "high" },
+                ] }] : prompt,
                 max_output_tokens: input.maxOutputTokens ?? 2500,
                 ...(effort ? { reasoning: { effort } } : {}),
               }
@@ -162,7 +165,10 @@ export async function callProvider(
                 max_tokens: input.maxOutputTokens ?? 2500,
                 system:
                   effectiveInstructions,
-                messages: [{ role: "user", content: prompt }],
+                messages: [{ role: "user", content: input.image ? [
+                  { type: "text", text: prompt },
+                  { type: "image", source: { type: "base64", media_type: input.image.mediaType, data: input.image.data } },
+                ] : prompt }],
               },
         ),
       },

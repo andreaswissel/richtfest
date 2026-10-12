@@ -1,10 +1,11 @@
 import { Worker } from "node:worker_threads";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { documentModelOutput, type SourceModelImport } from "@richtfest/shared";
+import { documentModelOutput, type SourceModelImport, type DocumentModelInput } from "@richtfest/shared";
 import type { SourceModelDeps } from "./deps";
 import { sourceModels as jobs, sourceEntities, sourceFacts, sourcePages, sourceExtractions, files, fileVersions } from "./schema";
 import { isIfcSource } from "./ifc-model";
 import { readSourceText } from "./source-extraction";
+import { extractSourceImage, isImageSource } from "./source-text";
 
 async function parseIfc(bytes: Uint8Array, signal: AbortSignal): Promise<SourceModelImport> {
   signal.throwIfAborted();
@@ -63,7 +64,8 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
         imported = await parseIfc(Buffer.concat(parts), workSignal);
       } finally { (stream as { destroy?: () => void }).destroy?.(); }
     } else {
-      // One bounded pass over persisted pages, not another original-file read.
+      // Reuse saved text. Images additionally supply one bounded raster to this
+      // upload-time pass, never to subsequent agent reads.
       const rows: { page: number; text: string | null }[] = await d.db.select({ page: sourcePages.page, text: sql<string>`left(${sourcePages.content}->>'text', 24000)` })
         .from(sourcePages).where(and(eq(sourcePages.versionId, job.versionId), eq(sourcePages.tenantId, job.tenantId)))
         .orderBy(sourcePages.page).limit(24);
@@ -74,19 +76,33 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
         return text ? [{ page: row.page, text }] : [];
       });
       imported.metadata = { scope: "Bounded proposal index, not exhaustive document interpretation", inputPages: pages.map(p => p.page),
-        inputCharacters: 24000 - remaining, sourcePages: extraction.result?.pages ?? null, sourceExtractionStatus: extraction.status };
-      if (!pages.length) status = "unsupported";
+        inputCharacters: 24000 - remaining, sourcePages: extraction.result?.pages ?? null, sourceExtractionStatus: extraction.status,
+        sourceExtractionNotes: extraction.result?.reason, sourceTruncated: extraction.result?.truncated };
+      let image: DocumentModelInput["image"];
+      if (isImageSource(source.mimeType ?? "", name)) {
+        const stream = await d.fileStorage.read(source.storageKey, workSignal);
+        if (!stream) throw new Error("Source image unavailable");
+        try {
+          const visual = await extractSourceImage(stream, name, true);
+          image = visual.image;
+          imported.metadata.visualNotes = visual.content.reason;
+          imported.metadata.imageScope = image?.scope;
+        } finally { (stream as { destroy?: () => void }).destroy?.(); }
+      }
+      if (!pages.length && !image) status = "unsupported";
       else {
         workSignal.throwIfAborted();
-        const result = await d.structureDocument({ tenantId: job.tenantId, actorId: source.createdBy, versionId: job.versionId, pages });
+        const result = await d.structureDocument({ tenantId: job.tenantId, actorId: source.createdBy, versionId: job.versionId, pages, image });
         if ("metadata" in result) imported.metadata = { ...imported.metadata, ...result.metadata };
         if (result.status !== "completed") status = result.status;
         else {
           const output = documentModelOutput.parse(result.output);
           const keys = new Set(output.entities.map(entity => entity.key));
           if (keys.size !== output.entities.length || output.facts.some(fact => !keys.has(fact.entityKey)
-            || !pages.find(page => page.page === fact.evidence.page)?.text.includes(fact.evidence.quote)))
-            throw new Error("Source evidence does not match persisted text");
+            || (fact.evidence.kind === "image"
+              ? !image || fact.evidence.scope !== image.scope || fact.provenance !== "inferred"
+              : !pages.find(page => fact.evidence.kind === "text" && page.page === fact.evidence.page)?.text.includes(fact.evidence.quote))))
+            throw new Error("Source evidence does not match supplied text or image");
           imported = { ...imported, ...output };
         }
       }
@@ -145,9 +161,14 @@ export async function readSourceModel(db: any, tenantId: string, versionId: stri
 /** Default agent reads prefer the saved model; explicit page reads retain original text evidence. */
 export async function readSourceEvidence(db: any, tenantId: string, versionId: string,
   input: { name: string; mimeType: string; pageStart?: number; pageEnd?: number; textQuery?: string; entityKey?: string; modelOffset?: number }) {
-  const model = await readSourceModel(db, tenantId, versionId, { query: input.textQuery, entityKey: input.entityKey, offset: input.modelOffset });
+  const image = isImageSource(input.mimeType, input.name);
+  // Short visual descriptions need not share the task's wording. Return their
+  // bounded fact index rather than treating a keyword miss as unreadable content.
+  const model = await readSourceModel(db, tenantId, versionId, { query: image ? undefined : input.textQuery, entityKey: input.entityKey, offset: input.modelOffset });
   const ifc = isIfcSource(input.mimeType, input.name);
   const explicitPages = input.pageStart !== undefined || input.pageEnd !== undefined;
+  if (image && !explicitPages && model && ["queued", "running"].includes(model.status))
+    return { status: "processing" as const, reason: "Image interpretation is pending; saved OCR alone may not describe the source." };
   if (model?.status === "complete" && (!explicitPages || ifc) && model.facts.length) {
     let budget = 16000, omitted = false;
     const lines: string[] = [];
@@ -158,10 +179,13 @@ export async function readSourceEvidence(db: any, tenantId: string, versionId: s
       lines.push(line); budget -= line.length + 1;
     }
     return { status: "available" as const, text: lines.join("\n"), truncated: true,
-      reason: `${model.coverage} Saved ${model.method} model facts, not a fresh extraction. ${omitted ? "Oversized facts omitted from this excerpt. " : ""}Use the model API for full fact records, entityKey/modelOffset for more claims, or explicit page ranges for document text.`,
+      reason: `${model.coverage} ${model.metadata.sourceExtractionNotes ?? ""} ${model.metadata.visualNotes ?? ""} Saved ${model.method} model facts, not a fresh extraction. ${omitted ? "Oversized facts omitted from this excerpt. " : ""}Use the model API for full fact records, entityKey/modelOffset for more claims, or explicit page ranges for document text.`,
       model: { status: model.status, method: model.method, metadata: model.metadata, nextOffset: model.nextOffset } };
   }
   if (ifc) return { status: model && ["queued", "running"].includes(model.status) ? "processing" as const : "extraction_failed" as const,
     reason: model?.status === "complete" ? "No imported IFC facts match this selection. No absence or engineering result can be inferred." : "Deterministic IFC model import is pending or unavailable; the original remains available. No LLM fallback is used." };
-  return { ...await readSourceText(db, tenantId, versionId, input), model: model ? { status: model.status, metadata: model.metadata } : null };
+  const text = await readSourceText(db, tenantId, versionId, input);
+  return { ...text,
+    reason: image ? `${text.reason ?? ""} Visual model: ${model?.status ?? "unavailable"}. ${model?.metadata.visualNotes ?? ""}` : text.reason,
+    model: model ? { status: model.status, metadata: model.metadata } : null };
 }

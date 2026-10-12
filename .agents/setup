@@ -7,7 +7,7 @@ TIMEFORMAT='[orb setup] Step took %3R seconds'
 
 echo '[orb setup] Checking system prerequisites'
 packages=()
-for package in postgresql-15 postgresql-client-15 libpq-dev curl unzip poppler-utils tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng; do
+for package in postgresql-15 postgresql-client-15 libpq-dev curl unzip poppler-utils imagemagick tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng; do
   if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
     packages+=("$package")
   fi

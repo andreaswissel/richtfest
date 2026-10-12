@@ -8,6 +8,8 @@ import { files, fileVersions, projects, sourceExtractions, sourcePages, sourceMo
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import type { SourceModelDeps } from "../richtfest-apps/projects/src/deps";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 const run = process.env.DATABASE_URL ? test : test.skip;
 
@@ -141,6 +143,7 @@ run("upload models are persisted once, IFC bypasses AI, and source claims remain
   const originals = new Map<string, Buffer>();
   const audits: string[] = [];
   let providerCalls = 0, reads = 0, accessTenant = tenantId, mayApprove = true;
+  let visualProvenance = "inferred", wrongImageScope = false;
   const signal = new AbortController().signal;
   let server: ReturnType<ReturnType<typeof express>["listen"]> | undefined;
   const d: SourceModelDeps = {
@@ -156,6 +159,15 @@ run("upload models are persisted once, IFC bypasses AI, and source claims remain
       providerCalls++;
       expect(input.pages.reduce((n, page) => n + page.text.length, 0)).toBeLessThanOrEqual(24000);
       expect(input.actorId).toBe(actorId);
+      if (input.image) {
+        expect(input.image.mediaType).toBe("image/jpeg");
+        expect(Buffer.from(input.image.data, "base64").subarray(0, 2)).toEqual(Buffer.from([255, 216]));
+        return { status: "completed", metadata: {}, output: {
+          entities: [{ key: "illustration", kind: "diagram", name: "Source illustration" }],
+          facts: [{ entityKey: "illustration", predicate: "appearance", kind: "attribute", value: { type: "text", value: "Visible source illustration" }, unit: null,
+            provenance: visualProvenance, evidence: { kind: "image", scope: wrongImageScope ? "affinity_preview" : input.image.scope, description: "Visible shapes in the supplied illustration" } }],
+        } };
+      }
       return { status: "completed", metadata: { provider: "mock", usage: { inputTokens: 10, outputTokens: 5 } },
         output: { entities: [{ key: "wall-a", kind: "wall", name: "Wall A" }], facts: [240, 300].map(value => ({
           entityKey: "wall-a", predicate: "thickness", kind: "requirement", value: { type: "number", value }, unit: { label: "mm" }, provenance: "extracted",
@@ -199,25 +211,27 @@ ENDSEC; END-ISO-10303-21;`));
     expect(await readSourceModel(db, crypto.randomUUID(), ifcVersion)).toBeNull();
     expect(reads).toBe(1); expect(providerCalls).toBe(0);
 
+    const contentTypes = new Map<string, string>();
     const app = express(); app.use(express.json());
     app.use("/api", createRouter(() => ({
       db, tenantId: accessTenant, actorId,
       requirePermission: permission => { if (permission === "knowledge:approve" && !mayApprove) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
       audit: async (_tx, action) => { audits.push(action); }, validateCustomer: async () => false, customerNames: async () => ({}),
       fileStorage: { kind: "bucket", ...d.fileStorage, initiate: async () => ({ uploadUrl: "/unused", headers: {}, expiresAt: new Date().toISOString() }),
-        head: async key => ({ sizeBytes: originals.get(key)!.length, checksum: "fixture", mimeType: "text/plain" }),
+        head: async key => ({ sizeBytes: originals.get(key)!.length, checksum: "fixture", mimeType: contentTypes.get(key)! }),
         saveStream: async () => { throw new Error("unused"); }, remove: async () => {}, download: async () => null },
     })));
     app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? 500).json({ message: error.message }));
     server = app.listen(0);
     const base = `http://127.0.0.1:${(server.address() as any).port}`;
     const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const upload = async (text: string, fileId?: string) => {
-      const response = await post(`/api/projects/${projectId}/files${fileId ? `/${fileId}/versions` : ""}/initiate`, { name: "requirements.txt", mimeType: "text/plain" });
+    const upload = async (text: string | Buffer, fileId?: string, name = "requirements.txt", mimeType = "text/plain") => {
+      const response = await post(`/api/projects/${projectId}/files${fileId ? `/${fileId}/versions` : ""}/initiate`, { name, mimeType });
       expect(response.status).toBe(201);
       const { data } = await response.json();
       const [source] = await db.select().from(fileVersions).where(eq(fileVersions.id, data.versionId));
       originals.set(source.storageKey!, Buffer.from(text));
+      contentTypes.set(source.storageKey!, mimeType);
       expect((await post(data.completeUrl, {})).status).toBe(200);
       expect((await db.select().from(sourceModels).where(eq(sourceModels.versionId, data.versionId)))[0].status).toBe("queued");
       await runSourceExtraction(d, signal);
@@ -266,6 +280,61 @@ ENDSEC; END-ISO-10303-21;`));
     await runSourceModel(d, signal); expect(providerCalls).toBe(3);
     expect(await readSourceModel(db, tenantId, invalid.versionId)).toMatchObject({ status: "failed", facts: [], metadata: { usage: { inputTokens: 10 } } });
     expect(await runSourceModel(d, signal)).toBe(false);
+
+    // Real OCR travels through upload completion, durable extraction, and both
+    // agent evidence paths. Preview limitations must survive model indexing.
+    const { stdout: image } = await promisify(execFile)("convert", ["-size", "1000x400", "xc:white", "-font", "DejaVu-Sans", "-pointsize", "38", "-fill", "black", "-annotate", "+40+100", "Wall A thickness 240 mm", "-annotate", "+40+200", "Wall A thickness 300 mm", "png:-"], { encoding: "buffer", maxBuffer: 1024 * 1024 });
+    for (const previewOnly of [false, true]) {
+      const input = previewOnly ? Buffer.concat([Buffer.from([0, 255, 75, 65]), image]) : image;
+      const name = previewOnly ? "concept.afpub" : "scan.png";
+      const mimeType = previewOnly ? "application/octet-stream" : "image/png";
+      const uploaded = await upload(input, undefined, name, mimeType);
+      expect((await host.resolveSource(projectId, { versionId: uploaded.versionId }) as any).content.status).toBe("processing");
+      const text: any = await host.resolveSource(projectId, { versionId: uploaded.versionId, pageStart: 1, pageEnd: 1 });
+      expect(text.content.status).toBe("available");
+      expect(text.content.text).toContain("Wall A thickness 240 mm");
+      expect(text.content.truncated).toBe(previewOnly);
+      expect(text.content.reason).toContain("unverified transcription");
+      const [source] = await db.select().from(fileVersions).where(eq(fileVersions.id, uploaded.versionId));
+      originals.set(source.storageKey!, input); // One additional upload-time visual read.
+      await runSourceModel(d, signal);
+      const indexed: any = await host.resolveSource(projectId, { versionId: uploaded.versionId, textQuery: "unrelated acoustic requirements" });
+      expect(indexed.content.text).toContain('"provenance":"inferred"');
+      expect(indexed.content.text).toContain('"reviewStatus":"unreviewed"');
+      expect(indexed.content.text).toContain('"kind":"image"');
+      expect(indexed.content.reason).toContain("unverified transcription");
+      if (previewOnly) {
+        expect(indexed.content.reason).toContain("embedded preview only; not the full document");
+        expect(indexed.content.model.metadata.sourcePages).toBeNull();
+      }
+      const saved: any = await host.resolveSource(projectId, { versionId: uploaded.versionId, pageStart: 1, pageEnd: 1 });
+      expect(saved.content.text).toContain("Wall A thickness 300 mm");
+      expect(saved.content.truncated).toBe(previewOnly);
+    }
+    const { stdout: drawing } = await promisify(execFile)("convert", ["-size", "400x200", "xc:white", "-fill", "blue", "-draw", "rectangle 20,20 120,160", "-fill", "red", "-draw", "circle 260,100 300,100", "png:-"], { encoding: "buffer" });
+    for (const scenario of ["valid", "extracted", "wrong_scope"]) {
+      visualProvenance = scenario === "extracted" ? "extracted" : "inferred";
+      wrongImageScope = scenario === "wrong_scope";
+      const uploaded = await upload(drawing, undefined, "drawing.png", "image/png");
+      expect((await readSourceText(db, tenantId, uploaded.versionId)).status).toBe("extraction_failed");
+      const [source] = await db.select().from(fileVersions).where(eq(fileVersions.id, uploaded.versionId));
+      originals.set(source.storageKey!, drawing);
+      const before = providerCalls;
+      await runSourceModel(d, signal);
+      expect(providerCalls).toBe(before + 1);
+      const result: any = await host.resolveSource(projectId, { versionId: uploaded.versionId, textQuery: "acoustics" });
+      if (scenario === "valid") {
+        expect(result.content.status).toBe("available");
+        expect(result.content.text).toContain("Visible source illustration");
+        const readsBefore = reads;
+        expect(await host.resolveSource(projectId, { versionId: uploaded.versionId, textQuery: "acoustics" })).toEqual(result);
+        expect(reads).toBe(readsBefore);
+      } else {
+        expect(result.content.model.status).toBe("failed");
+        expect(result.content.text).toBeUndefined();
+      }
+    }
+    expect(await runSourceExtraction(d, signal)).toBe(false);
   } finally {
     server?.closeAllConnections(); server?.close();
     await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();

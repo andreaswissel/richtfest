@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Project agents can read text in PNG, JPEG, WebP and BMP images and use configured visual interpretation for text-free diagrams. Affinity Publisher files contribute embedded-preview evidence only, clearly distinguished from a full document; visual inferences remain unreviewed and full Publisher reading still requires a PDF export.
+
 - Open tabs now show “New updates available” above the profile in the navigation rail when a different app build is available. Click to reload when ready; deployments no longer need a manual refresh to discover updates.
 
 - Corrected release-note dates for shipped updates and made dated changelog sections a required deployment step.

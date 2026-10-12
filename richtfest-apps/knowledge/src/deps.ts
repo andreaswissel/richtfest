@@ -103,6 +103,7 @@ export type ProviderRequest = {
   executionLimits?: AgentExecutionLimits;
   goal: string;
   context: unknown;
+  image?: { mediaType: "image/jpeg"; data: string };
   toolResults?: unknown[];
   runId?: string;
   onSummaryDelta?: (delta: string) => Promise<void>;

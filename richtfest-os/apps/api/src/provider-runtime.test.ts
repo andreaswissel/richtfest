@@ -67,6 +67,27 @@ test("direct adapter retains received usage after a transient telemetry write fa
   expect(saved).toHaveLength(1);
   expect(saved[0]).toMatchObject({ inputTokens: 37, outputTokens: 11, totalTokens: 48 });
 });
+test("visual evidence is sent as an image alongside text for each provider, not as prompt JSON", async () => {
+  for (const provider of ["openai", "anthropic", "vercel"] as const) {
+    const image = { mediaType: "image/jpeg" as const, data: "aW1hZ2UtYnl0ZXM=" };
+    let settings: any;
+    await callProvider({ provider, modelId: "vision-model", goal: "Read illustration", context: { imageScope: "affinity_preview" }, image,
+      onRequest: async value => { settings = value; },
+    }, "test-secret", async (_url, init) => {
+      const body = JSON.parse(String(init.body));
+      const parts = provider === "anthropic" ? body.messages[0].content : body.input[0].content;
+      expect(JSON.parse(parts[0].text).context).toEqual({ imageScope: "affinity_preview" });
+      expect(parts[0].text).not.toContain(image.data);
+      expect(parts[1]).toEqual(provider === "anthropic"
+        ? { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image.data } }
+        : { type: "input_image", image_url: `data:image/jpeg;base64,${image.data}`, detail: "high" });
+      expect(JSON.stringify(settings)).not.toContain(image.data);
+      return Response.json(provider === "anthropic"
+        ? { content: [{ type: "text", text: JSON.stringify(output) }] }
+        : { output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(output) }] }] });
+    });
+  }
+});
 describe("trusted provider adapter", () => {
   for (const provider of ["openai", "anthropic"] as const)
     test(`${provider} sends explicit provider request and reads only public text`, async () => {

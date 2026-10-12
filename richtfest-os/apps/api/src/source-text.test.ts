@@ -108,8 +108,67 @@ test("honest whole-page text ceiling, oversized page, corrupt PDF, invalid range
   expect((await extractSourceText(bytes(Buffer.from("%PDF-corrupt")), "application/pdf", "bad.pdf")).status).toBe("extraction_failed");
   expect((await extractSourceText(bytes(fixturePdf([native("Valid")])), "application/pdf", "range.pdf", { pageStart: 0 })).reason).toContain("Invalid PDF page range");
   expect((await extractSourceText(bytes(new Uint8Array(32 * 1024 * 1024 + 1)), "application/pdf", "huge.pdf")).reason).toContain("32 MiB");
-  expect((await extractSourceText(bytes(new Uint8Array()), "image/png", "drawing.png")).status).toBe("unsupported");
+  expect((await extractSourceText(bytes(new Uint8Array()), "image/png", "drawing.png")).status).toBe("extraction_failed");
 });
+
+test("reads standalone raster images and Publisher previews without claiming full document coverage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "image-source-fixture-"));
+  const exec = promisify(execFile);
+  try {
+    const png = join(directory, "labels.png");
+    await exec("convert", ["-size", "1200x600", "xc:none", "-font", "DejaVu-Sans", "-pointsize", "42", "-fill", "black", "-annotate", "+60+140", "Außenwand Stärke 240 mm", "-annotate", "+60+240", "Window width 1350 mm", png]);
+    for (const extension of ["png", "jpg", "webp", "bmp"]) {
+      const input = join(directory, `labels.${extension}`);
+      if (extension !== "png") await exec("convert", [png, "-background", "white", "-alpha", "remove", input]);
+      const result = await extractSourceText(bytes(await readFile(input)), "application/octet-stream", `labels.${extension}`);
+      expect(result.status).toBe("available");
+      expect(result.text).toContain("Außenwand Stärke 240 mm");
+      expect(result.text).toContain("Window width 1350 mm");
+      expect(result.text).toContain("OCR: German + English; unverified");
+      expect(result.truncated).toBe(false);
+    }
+    const preview = await readFile(png);
+    const publisher = Buffer.concat([Buffer.from([0, 255, 75, 65]), Buffer.alloc(100), preview]);
+    const partial = await extractSourceText(bytes(publisher), "application/octet-stream", "concept.afpub");
+    expect(partial.status).toBe("available");
+    expect(partial.text).toContain("Window width 1350 mm");
+    expect(partial.text).toContain("embedded preview only; not the full document");
+    expect(partial.reason).toContain("Export the full document as PDF");
+    expect(partial.truncated).toBe(true);
+    expect(partial.pages).toBeUndefined();
+    expect(partial.coverage).toBeUndefined();
+    const missing = await extractSourceText(bytes(publisher.subarray(0, 104)), "application/octet-stream", "no-preview.afpub");
+    expect(missing.status).toBe("unsupported");
+    expect(missing.reason).toContain("No usable embedded Affinity Publisher preview");
+    expect(missing.text).toBeUndefined();
+    expect((await extractSourceText(bytes(preview), "image/png", "scan.png", { pageStart: 2 })).status).toBe("extraction_failed");
+
+    const blank = join(directory, "blank.png");
+    await exec("convert", ["-size", "200x100", "xc:white", blank]);
+    const unreadable = await extractSourceText(bytes(await readFile(blank)), "image/png", "blank.png");
+    expect(unreadable.status).toBe("extraction_failed");
+    expect(unreadable.reason).toContain("No meaningful text");
+    expect(unreadable.text).toBeUndefined();
+    const fake = await extractSourceText(bytes(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')), "image/png", "fake.png");
+    expect(fake.status).toBe("extraction_failed");
+    expect(fake.reason).toContain("not a valid supported raster image");
+    expect((await extractSourceText(bytes(Buffer.alloc(32 * 1024 * 1024 + 1)), "image/png", "large.png")).status).toBe("extraction_too_large");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 30000);
+
+test("animated images expose first-frame-only coverage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "animated-source-fixture-"));
+  try {
+    const input = join(directory, "animated.webp");
+    await promisify(execFile)("convert", ["-size", "800x300", "-font", "DejaVu-Sans", "-pointsize", "42", "-fill", "black", "-delay", "100", "xc:white", "-annotate", "+40+100", "First frame 240 mm", "(", "xc:white", "-annotate", "+40+100", "Hidden frame 930 mm", ")", "-loop", "0", input]);
+    const result = await extractSourceText(bytes(await readFile(input)), "image/webp", "animated.webp");
+    expect(result.status).toBe("available");
+    expect(result.text).toContain("First frame 240 mm");
+    expect(result.text).not.toContain("Hidden frame 930 mm");
+    expect(result.truncated).toBe(true);
+    expect(result.reason).toContain("Only the first image frame");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 10000);
 function tinyPdf() {
   const stream = "BT /F1 12 Tf 20 50 Td (Source wall type AL24) Tj ET";
   const objects = [

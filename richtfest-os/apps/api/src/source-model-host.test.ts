@@ -70,6 +70,11 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     output = { entities: [{ key: "wall", kind: "wall", name: "Wall A" }], facts: [{ entityKey: "wall", predicate: "height", kind: "quantity", value: { type: "number", value: 3 }, unit: { label: "m" }, provenance: "extracted", evidence: { kind: "text", page: 2, quote: "Wall A is 3 m high." } }] };
     expect(await run()).toMatchObject({ status: "completed", output });
     expect(headers!.get("x-api-key")).toBe("test-workspace-key"); expect(body.max_tokens).toBe(800);
+    const image = { mediaType: "image/jpeg" as const, data: "cHJldmlldy1ieXRlcw==", scope: "affinity_preview" as const };
+    output = { entities: [{ key: "diagram", kind: "diagram", name: "Preview" }], facts: [{ entityKey: "diagram", predicate: "appearance", kind: "attribute", value: { type: "text", value: "Layered assembly" }, unit: null, provenance: "inferred", evidence: { kind: "image", scope: "affinity_preview", description: "Stacked layers in the preview" } }] };
+    expect(await structureSourceDocument(db, { ...input, pages: [], image }, fetcher)).toMatchObject({ status: "completed", output });
+    expect(body.messages[0].content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: image.data } });
+    expect(JSON.parse(body.messages[0].content[0].text).context).toEqual({ versionId: input.versionId, pages: [], imageScope: "affinity_preview" });
     output = { entities: [], facts: [], approved: true };
     expect(await run()).toMatchObject({ status: "failed", metadata: { usage: { inputTokens: 42, outputTokens: 12 } } });
     const before = calls;

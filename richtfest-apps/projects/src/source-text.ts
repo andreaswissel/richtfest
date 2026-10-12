@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SourceText } from "@richtfest/shared";
+import { extractAffinityPreview } from "./affinity-preview";
 
 const BYTE_LIMIT = 32 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024;
@@ -30,6 +31,78 @@ function meaningful(text: string) {
   return (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0) >= 3;
 }
 
+export function isImageSource(mimeType: string, name: string) {
+  return /^image\/(png|jpeg|webp|bmp)$/.test(mimeType) || /\.(png|jpe?g|webp|bmp|afpub)$/i.test(name);
+}
+
+/** Bounded local raster preparation shared by OCR and the one visual model pass. */
+export async function extractSourceImage(stream: AsyncIterable<Uint8Array>, name: string, vision = false): Promise<{
+  content: SourceText;
+  image?: { mediaType: "image/jpeg"; data: string; scope: "image" | "affinity_preview" };
+}> {
+  const affinity = /\.afpub$/i.test(name);
+  let directory: string | undefined;
+  try {
+    const deadline = Date.now() + DEADLINE_MS;
+    let data: Buffer;
+    if (affinity) {
+      const preview = await extractAffinityPreview(stream);
+      if (!preview) return { content: { status: "unsupported", reason: "No usable embedded Affinity Publisher preview was found. Export the full document as PDF for reading; native Publisher text and layout are not supported." } };
+      data = Buffer.from(preview);
+    } else {
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      for await (const chunk of stream) {
+        bytes += chunk.length;
+        if (bytes > BYTE_LIMIT) return { content: { status: "extraction_too_large", reason: "Image processing is limited to 32 MiB; the original upload remains available." } };
+        chunks.push(Buffer.from(chunk));
+      }
+      data = Buffer.concat(chunks);
+    }
+    // Force a raster decoder; never allow delegates selected by untrusted content.
+    const format = data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? "png"
+      : data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff ? "jpeg"
+      : data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP" ? "webp"
+      : data.toString("ascii", 0, 2) === "BM" ? "bmp" : null;
+    if (!format) return { content: { status: "extraction_failed", reason: "The source is not a valid supported raster image. Open the original for manual review." } };
+    directory = await mkdtemp(join(tmpdir(), "richtfest-image-"));
+    const input = join(directory, "source");
+    await writeFile(input, data);
+    await ocrSlot(deadline);
+    try {
+      const limits = ["-limit", "memory", "128MiB", "-limit", "map", "256MiB", "-limit", "disk", "0"];
+      const dimensions = await command("identify", [...limits, "-ping", "-format", "%w %h %n\n", `${format}:${input}`], deadline, 65536);
+      const [width, height, frames] = dimensions.trim().split("\n")[0].split(/\s+/).map(Number);
+      if (!width || !height || width * height > 40_000_000)
+        return { content: { status: "extraction_too_large", reason: "Image processing is limited to 40 megapixels; the original upload remains available." } };
+      const raster = join(directory, vision ? "visual.jpg" : "ocr.png");
+      await command("convert", [...limits, `${format}:${input}[0]`, "-background", "white", "-alpha", "remove", "-alpha", "off", "-resize", vision ? "1568x1568>" : "5000x5000>", "-strip", "-quality", "85", raster], deadline, 65536);
+      const scope = affinity
+        ? "Affinity Publisher embedded preview only; not the full document. Page count, omitted pages, native text and editable layout are unknown. Export the full document as PDF for complete page access"
+        : "Standalone image";
+      const reason = `${scope}. ${vision ? "Visual descriptions are unverified inferences, not measurements or verified material identification." : "OCR (German + English) is unverified transcription, not visual understanding."} Dimensions, acoustic values, table relationships and completeness require comparison with the original.${frames > 1 ? " Only the first image frame was read; later frames were omitted." : ""}`;
+      if (vision) {
+        if ((await stat(raster)).size > 4 * 1024 * 1024) return { content: { status: "extraction_too_large", reason: `${reason} Prepared image exceeds the 4 MiB provider input limit.` } };
+        return { content: { status: "available", reason, truncated: affinity || frames > 1 },
+          image: { mediaType: "image/jpeg", data: (await readFile(raster)).toString("base64"), scope: affinity ? "affinity_preview" : "image" } };
+      }
+      const lines = (await command("tesseract", [raster, "stdout", "-l", "deu+eng", "--psm", "11"], deadline)).trimEnd();
+      if (lines.length > TEXT_LIMIT) return { content: { status: "extraction_too_large", reason: `${reason} Image text exceeds the 256 Ki-character limit; no partial text was saved.` } };
+      return { content: {
+        status: meaningful(lines) ? "available" : "extraction_failed",
+        text: meaningful(lines) ? `[${scope}]\n[OCR: German + English; unverified]\n${lines}\n` : undefined,
+        truncated: affinity || frames > 1,
+        reason: meaningful(lines) ? reason : `${reason} No meaningful text was recognized; this does not establish that the original is blank.`,
+      } };
+    } finally { activeOcr--; }
+  } catch (error) {
+    return { content: {
+      status: (error as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "extraction_too_large" : "extraction_failed",
+      reason: `${affinity ? "Affinity Publisher embedded-preview" : "Image"} processing could not complete (invalid image, unavailable tools, resource limit or processing deadline). ${affinity ? "Native Publisher content is not supported; export the full document as PDF. " : ""}Open the original for manual review.`,
+    } };
+  } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
+}
+
 export async function extractSourceText(
   stream: AsyncIterable<Uint8Array>,
   mimeType: string,
@@ -41,6 +114,11 @@ export async function extractSourceText(
 ): Promise<SourceText> {
   const pdf = mimeType === "application/pdf" || /\.pdf$/i.test(name);
   const text = mimeType.startsWith("text/") || /\.(ifc|txt|csv|json|md)$/i.test(name);
+  if (isImageSource(mimeType, name)) {
+    if ((range.pageStart ?? 1) !== 1 || (range.pageEnd ?? 1) !== 1)
+      return { status: "extraction_failed", reason: "Images and embedded previews have only one saved excerpt; full Publisher page coverage is unknown." };
+    return (await extractSourceImage(stream, name)).content;
+  }
   if (!pdf && !text) return { status: "unsupported", reason: "Text extraction is not available for this format." };
   let directory: string | undefined;
   let persistenceFailed = false;

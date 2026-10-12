@@ -68,7 +68,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update \
-  && apt-get install --no-install-recommends --yes poppler-utils tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
+  && apt-get install --no-install-recommends --yes poppler-utils imagemagick tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=production-dependencies /app/node_modules ./node_modules
