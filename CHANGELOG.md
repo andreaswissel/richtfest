@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Account settings offers a single recovery message with Reload app for unavailable sign-in code or Try again for failed security details. Failed passkey loads no longer appear as an empty list, and unavailable security actions stay disabled.
+
 - Aligned agent model settings and optional specialist controls across screen sizes and density modes. Role settings now explain that blank instructions retain built-in behavior.
 
 - Docs now builds its changelog directly from the shared release notes, avoiding a separate copy. Commit guidelines require release notes and affected documentation alongside each completed change.

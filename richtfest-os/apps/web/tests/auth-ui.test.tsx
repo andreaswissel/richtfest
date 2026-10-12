@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Login } from "../src/screens/auth";
 import { Team } from "../src/screens/team";
 import { App } from "../src/app";
+import { Security } from "../src/screens/security";
+import { AuthClientLoadError } from "../src/lib/auth";
 
 function render(screen: React.ReactNode, path: string, data: unknown) {
   const client = new QueryClient({
@@ -25,13 +27,22 @@ test("sign-in asks for email only without exposing a disabled development choose
   expect(html).not.toContain("Local development access");
 });
 test("sign-in recognizes the server's email delivery modes", () => {
-  const configured = render(<Login />, "/auth/delivery-readiness", { configured: true, mode: "resend" });
+  const configured = render(<Login />, "/auth/delivery-readiness", {
+    configured: true,
+    mode: "resend",
+  });
   expect(configured).toContain("Email delivery is configured");
   expect(configured).not.toContain("has not confirmed");
-  const preview = render(<Login />, "/auth/delivery-readiness", { configured: false, mode: "development_outbox" });
+  const preview = render(<Login />, "/auth/delivery-readiness", {
+    configured: false,
+    mode: "development_outbox",
+  });
   expect(preview).toContain("Local email preview is enabled");
   expect(preview).not.toContain("has not confirmed");
-  const missing = render(<Login />, "/auth/delivery-readiness", { configured: false, mode: "unconfigured" });
+  const missing = render(<Login />, "/auth/delivery-readiness", {
+    configured: false,
+    mode: "unconfigured",
+  });
   expect(missing).toContain("not configured");
 });
 test("development identity chooser appears only with explicitly returned identities", () => {
@@ -59,6 +70,46 @@ test("authorized team administrator can open invitation creation", () => {
     roles: [],
   });
   expect(html).toContain("Create invitation");
+});
+
+test("account security offers recovery without claiming a failed passkey list is empty", async () => {
+  for (const error of [
+    new AuthClientLoadError("Sign-in could not load"),
+    new Error("Server unavailable"),
+  ]) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, retryOnMount: false } },
+    });
+    try {
+      for (const queryKey of [
+        ["/account/security"],
+        ["security", "passkeys"],
+        ["security", "sessions"],
+        ["security", "current"],
+      ]) {
+        await client
+          .fetchQuery({ queryKey, queryFn: () => Promise.reject(error) })
+          .catch(() => undefined);
+      }
+      const html = renderToStaticMarkup(
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <Security />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      expect(html).toContain(
+        error instanceof AuthClientLoadError ? "Reload app" : "Try again",
+      );
+      expect(html).not.toContain(error.message);
+      expect(html).not.toContain("No passkeys registered.");
+      expect(html).toMatch(
+        /<button[^>]*disabled=""[^>]*>Sign out other sessions<\/button>/,
+      );
+    } finally {
+      client.clear();
+    }
+  }
 });
 
 test("refresh keeps navigation visible but withholds protected content until authenticated", () => {

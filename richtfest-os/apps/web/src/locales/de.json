@@ -491,6 +491,8 @@
   "sendSignInLink": "Anmeldelink senden",
   "signInLoadFailed": "Die Anmeldung konnte nicht geladen werden. Die App wurde möglicherweise aktualisiert. Laden Sie die App neu und versuchen Sie es erneut.",
   "reloadApp": "App neu laden",
+  "accountSettingsCodeLoadFailed": "Die Kontosicherheit konnte nicht geladen werden. Die App wurde möglicherweise aktualisiert oder die Verbindung unterbrochen. Laden Sie die App neu, um fortzufahren. Es wurden keine Sicherheitseinstellungen geändert.",
+  "accountSettingsLoadFailed": "Einige Angaben zur Kontosicherheit konnten nicht geladen werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
   "magicLinkRequested": "Wenn diese E-Mail-Adresse Zugang hat, ist ein Anmeldelink unterwegs.",
   "inviteOnlyHint": "Dieser Arbeitsplatz ist nur auf Einladung zugänglich. Bitten Sie die Administration um Zugang.",
   "deliveryConfigured": "Der E-Mail-Versand ist eingerichtet. Prüfen Sie bei berechtigten Anfragen Ihren Posteingang.",

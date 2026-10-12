@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { getAuthClient, authResult, supportsPasskeys } from "../lib/auth";
+import {
+  AuthClientLoadError,
+  getAuthClient,
+  authResult,
+  supportsPasskeys,
+} from "../lib/auth";
 import { api } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { useT } from "../i18n";
@@ -86,6 +91,14 @@ export function Security() {
       void queryClient.invalidateQueries({ queryKey: ["security"] });
     },
   });
+  const clientLoadFailed = [
+    passkeys.error,
+    sessions.error,
+    current.error,
+    operation.error,
+  ].some((error) => error instanceof AuthClientLoadError);
+  const settingsLoadFailed =
+    status.isError || passkeys.isError || sessions.isError || current.isError;
   return (
     <Page>
       <PageHeader
@@ -95,6 +108,40 @@ export function Security() {
       />
       <SettingsNavigation />
       <Callout>{t("enrollmentHint")}</Callout>
+      {(settingsLoadFailed || clientLoadFailed) && (
+        <Callout tone="error">
+          <p>
+            {t(
+              clientLoadFailed
+                ? "accountSettingsCodeLoadFailed"
+                : "accountSettingsLoadFailed",
+            )}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={
+              status.isFetching ||
+              passkeys.isFetching ||
+              sessions.isFetching ||
+              current.isFetching
+            }
+            onClick={() => {
+              if (clientLoadFailed) {
+                window.location.reload();
+                return;
+              }
+              void status.refetch();
+              void passkeys.refetch();
+              void sessions.refetch();
+              void current.refetch();
+            }}
+          >
+            {t(clientLoadFailed ? "reloadApp" : "retry")}
+          </Button>
+        </Callout>
+      )}
       <Section title={t("preferences")}>
         {savePreference.error && (
           <Callout tone="error">{savePreference.error.message}</Callout>
@@ -146,7 +193,6 @@ export function Security() {
         </div>
       </Section>
       <Section title={t("password")}>
-        {status.error && <Callout tone="error">{status.error.message}</Callout>}
         {status.data && (
           <div className="connection-form">
             <Badge>
@@ -195,7 +241,9 @@ export function Security() {
         {!supportsPasskeys() && <Callout>{t("passkeyUnavailable")}</Callout>}
         <Form
           label={t("addPasskey")}
-          disabled={!supportsPasskeys()}
+          disabled={
+            !supportsPasskeys() || clientLoadFailed || !passkeys.isSuccess
+          }
           pending={operation.isPending}
           onSubmit={(form) => {
             if (supportsPasskeys())
@@ -209,9 +257,6 @@ export function Security() {
             <Input name="name" required disabled={!supportsPasskeys()} />
           </Field>
         </Form>
-        {passkeys.error && (
-          <Callout tone="error">{passkeys.error.message}</Callout>
-        )}
         {passkeys.data?.length ? (
           <Table
             headers={[t("name"), t("manage")]}
@@ -222,11 +267,16 @@ export function Security() {
                 <div className="inline-actions">
                   <Button
                     variant="link"
+                    disabled={clientLoadFailed}
                     onClick={() => setEditing({ id: p.id, name: p.name || "" })}
                   >
                     {t("rename")}
                   </Button>
-                  <Button variant="link" onClick={() => setRemove(p.id)}>
+                  <Button
+                    variant="link"
+                    disabled={clientLoadFailed}
+                    onClick={() => setRemove(p.id)}
+                  >
                     {t("removePasskey")}
                   </Button>
                 </div>,
@@ -234,26 +284,28 @@ export function Security() {
             }))}
           />
         ) : (
-          !passkeys.isPending && <Empty>{t("noPasskeys")}</Empty>
+          passkeys.isSuccess && <Empty>{t("noPasskeys")}</Empty>
         )}
       </Section>
-      {operation.error && (
+      {operation.error && !clientLoadFailed && (
         <Callout tone="error">{operation.error.message}</Callout>
       )}
       <Section
         title={t("activeSessions")}
         meta={
           <Button
-            disabled={operation.isPending}
+            disabled={
+              operation.isPending ||
+              clientLoadFailed ||
+              !sessions.isSuccess ||
+              !current.isSuccess
+            }
             onClick={() => operation.mutate({ kind: "others" })}
           >
             {t("revokeOthers")}
           </Button>
         }
       >
-        {sessions.error && (
-          <Callout tone="error">{sessions.error.message}</Callout>
-        )}
         {sessions.data && (
           <Table
             headers={[t("device"), t("status")]}
@@ -266,7 +318,11 @@ export function Security() {
                 ) : (
                   <Button
                     variant="link"
-                    disabled={operation.isPending}
+                    disabled={
+                      operation.isPending ||
+                      clientLoadFailed ||
+                      !current.isSuccess
+                    }
                     onClick={() =>
                       operation.mutate({ kind: "revoke", id: s.token })
                     }
