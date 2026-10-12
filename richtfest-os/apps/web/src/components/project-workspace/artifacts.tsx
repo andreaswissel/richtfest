@@ -6,7 +6,6 @@ import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
 import {
-  ArtifactContent,
   ArtifactSourceRegister,
   ArtifactExportActions,
   ArtifactPrintDocument,
@@ -16,6 +15,14 @@ import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field } from "../ui/primitives";
 import { LazyOpenUI } from "./lazy-openui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
+import { FileText, ExternalLink } from "lucide-react";
+import { SharedWork } from "../../screens/foundation";
+import {
+  AnnotatedDocument,
+  type DocumentSelection,
+} from "./annotated-document";
+import "./document-review.css";
 const IMAGE_PREVIEW_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -39,6 +46,10 @@ export function ArtifactPanel({
 }) {
   const t = useT(),
     [params, setParams] = useSearchParams();
+  const [documentSelection, setDocumentSelection] =
+    useState<DocumentSelection>();
+  const [activeNote, setActiveNote] = useState<{ id: string }>();
+  const returnFocus = useRef<HTMLElement | null>(null);
   const reply = useWrite(`/knowledge/conversations/${conversationId}/messages`);
   const files = useApi(
     `/projects/${projectId}/files`,
@@ -73,6 +84,14 @@ export function ArtifactPanel({
   const revision = list(artifact.data?.revisions).find(
     (r) => r.id === revisionId,
   );
+  useEffect(() => {
+    setDocumentSelection(undefined);
+    setActiveNote(undefined);
+  }, [revisionId]);
+  const artifactConversationId = artifact.data?.artifact?.conversationId;
+  const revisionNotes = list(artifact.data?.annotations).filter(
+    (note) => note.artifactRevisionId === revisionId,
+  );
   const version =
     list(versions.data).find((r) => r.id === versionId) ||
     (exactSource.data
@@ -104,256 +123,276 @@ export function ArtifactPanel({
   const selectedFileName =
     selectedFile?.name || exactSource.data?.fileName || "";
   const isAffinityPublisher = /\.afpub$/i.test(selectedFileName);
-  const tab = params.get("panel") || "documents";
+  const tab = artifactId
+    ? "artifacts"
+    : fileId || sourceVersion
+      ? "documents"
+      : params.get("panel") || "artifacts";
+  const previewOpen = Boolean(artifactId || fileId || sourceVersion);
   const target = (updates: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
     for (const [k, v] of Object.entries(updates))
       v ? next.set(k, v) : next.delete(k);
     return `?${next}`;
   };
-  return (
-    <aside className="project-artifacts" aria-label={t("workspaceArtifacts")}>
-      <nav
-        className="workspace-view-links"
-        aria-label={t("workspaceArtifacts")}
-      >
-        <Link
-          aria-current={tab === "documents" ? "page" : undefined}
-          to={target({ panel: "documents" })}
-        >
-          {t("sources")}
-        </Link>
-        <Link
-          aria-current={tab === "artifacts" ? "page" : undefined}
-          to={target({ panel: "artifacts" })}
-        >
-          {t("workspaceArtifacts")}
-        </Link>
-        <Link
-          aria-current={tab === "runs" ? "page" : undefined}
-          to={target({ panel: "runs" })}
-        >
-          {t("agentThreadList")} ·{" "}
-          {
-            runs.filter(
-              (run) =>
-                (run.isSupervisor ||
-                  (run.parentRunId && run.status !== "cancelled")) &&
-                (!conversationId || run.conversationId === conversationId),
-            ).length
-          }
-        </Link>
-        <Link
-          aria-current={tab === "tasks" ? "page" : undefined}
-          to={target({ panel: "tasks" })}
-        >
-          {t("sharedWork")} · {tasks.length}
-        </Link>
-      </nav>
-      <div className="artifact-panel-body">
-        {reply.error && <Callout tone="error">{reply.error.message}</Callout>}
-        {reply.data && <p role="status">{t("workspaceInputSent")}</p>}
-        {tab === "runs" ? (
-          <SubagentList
+  const artifactCards = (
+    <div className="artifact-gallery">
+      {artifacts.map((a) => (
+        <article className="artifact-preview-card" key={a.id}>
+          <Link
+            className="artifact-preview-link"
+            to={target({
+              panel: "artifacts",
+              artifact: a.id,
+              file: null,
+              sourceVersion: null,
+              revision: null,
+            })}
+          >
+            <div className="artifact-card-heading">
+              <FileText className="size-icon" aria-hidden="true" />
+              <strong>{a.title}</strong>
+            </div>
+            <p className="artifact-card-excerpt">
+              {a.preview || t("workspaceExportNoContent")}
+            </p>
+            <div className="artifact-card-meta">
+              <Badge>
+                {a.status === "approved" ? t("approved") : t("draft")}
+              </Badge>
+              <span>
+                {t("version")} {a.version}
+              </span>
+            </div>
+          </Link>
+          {a.runId && (
+            <Link
+              className="artifact-run-link"
+              to={target({
+                artifact: null,
+                revision: null,
+                file: null,
+                sourceVersion: null,
+                agentRun: a.runId,
+                conversation: a.conversationId,
+              })}
+            >
+              {t("workspaceOriginRun")} · {a.runGoal || a.runId.slice(0, 8)}
+            </Link>
+          )}
+        </article>
+      ))}
+      {!artifacts.length && <Empty>{t("workspaceNoThreadArtifacts")}</Empty>}
+    </div>
+  );
+  const panelBody = (
+    <div className="artifact-panel-body">
+      {reply.error && <Callout tone="error">{reply.error.message}</Callout>}
+      {reply.data && <p role="status">{t("workspaceInputSent")}</p>}
+      {tab === "runs" ? (
+        <SubagentList
+          projectId={projectId}
+          conversationId={conversationId}
+          runs={runs.filter(
+            (run) => conversationId && run.conversationId === conversationId,
+          )}
+        />
+      ) : tab === "tasks" ? (
+        conversationId ? (
+          <SharedWork
+            key={conversationId}
             projectId={projectId}
             conversationId={conversationId}
-            runs={runs}
+            tasks={tasks}
+            runs={runs.filter((run) => run.conversationId === conversationId)}
           />
-        ) : tab === "tasks" ? (
-          <>
-            {tasks.map((task) => (
-              <div className="task-row" key={task.id}>
-                <Badge>{task.status}</Badge>
-                <span>{task.title}</span>
-              </div>
-            ))}
-            {!tasks.length && <Empty>{t("noWork")}</Empty>}
-            <Link to={`/projects/${projectId}?view=sharedWork`}>
-              {t("addTask")}
-            </Link>
-          </>
-        ) : tab === "documents" ? (
-          <>
-            {exactSource.error && (
-              <Callout tone="error">{exactSource.error.message}</Callout>
-            )}
-            {files.error && (
-              <Callout tone="error">{files.error.message}</Callout>
-            )}
-            {!fileId && (
-              <>
-                {list(filesData, "files").map((file) => (
-                  <Link
-                    className="artifact-list-item"
-                    key={file.id}
-                    to={target({
-                      file: file.id,
-                      artifact: null,
-                      sourceVersion: null,
-                    })}
-                  >
-                    <span>{file.name}</span>
-                    <Badge>
-                      {t("version")} {file.version}
-                    </Badge>
-                  </Link>
-                ))}
-                {filesData && !list(filesData, "files").length && (
-                  <Empty>{t("noSources")}</Empty>
-                )}
-                <Button asChild variant="outline">
-                  <Link to={`/projects/${projectId}?view=sources`}>
-                    {t("attachFile")}
-                  </Link>
-                </Button>
-              </>
-            )}
-            {fileId && (
-              <>
-                <Link to={target({ file: null, sourceVersion: null })}>
-                  ← {t("sources")}
-                </Link>
-                <h3>
-                  {selectedFile?.name ||
-                    exactSource.data?.fileName ||
-                    t("source")}
-                </h3>
-                <Field label={t("version")}>
-                  <NativeSelect
-                    value={versionId || ""}
-                    onChange={(e) =>
-                      setParams(
-                        target({ sourceVersion: e.target.value }).slice(1),
-                      )
-                    }
-                  >
-                    <option value="" disabled>
-                      {t("workspaceChooseRevision")}
-                    </option>
-                    {list(versions.data)
-                      .filter((v) => v.status === "ready")
-                      .map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.version} · {v.mimeType}
-                        </option>
-                      ))}
-                  </NativeSelect>
-                </Field>
-                {!version && <Callout>{t("workspaceExactVersion")}</Callout>}
-                {version && (
-                  <>
-                    <Badge>
-                      {version.version ===
-                      Math.max(
-                        ...list(versions.data)
-                          .filter((v) => v.status === "ready")
-                          .map((v) => v.version),
-                      )
-                        ? t("workspaceLatestUploaded")
-                        : t("version")}{" "}
-                      · {version.version}
-                    </Badge>
-                    <Button asChild variant="outline">
-                      <a
-                        href={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {t("downloadFile")} · {version.version}
-                      </a>
-                    </Button>
-                    {isAffinityPublisher ? (
-                      <AffinityPublisherPreview
-                        key={version.id}
-                        projectId={projectId}
-                        fileId={fileId}
-                        version={version.version}
-                        fileName={selectedFileName}
-                      />
-                    ) : version.mimeType === "application/pdf" ? (
-                      <iframe
-                        className="source-preview"
-                        title={`${selectedFile?.name} · ${version.version}`}
-                        src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download#page=${params.get("page") || 1}`}
-                      />
-                    ) : IMAGE_PREVIEW_MIME_TYPES.includes(version.mimeType) ? (
-                      <img
-                        className="source-image"
-                        src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download`}
-                        alt={
-                          selectedFile?.name ||
-                          exactSource.data?.fileName ||
-                          t("source")
-                        }
-                      />
-                    ) : (
-                      <Callout>{t("workspaceUnsupportedPreview")}</Callout>
-                    )}
-                    <p className="muted text-ui-xs">
-                      {t("workspaceUnreviewedSource")} ·{" "}
-                      {version.checksum || t("workspaceChecksumUnavailable")}
-                    </p>
-                    <SourceText
-                      key={version.id}
-                      projectId={projectId}
-                      conversationId={conversationId}
-                      versionId={version.id}
-                    />
-                  </>
-                )}
-                <VersionUpload projectId={projectId} fileId={fileId} />
-              </>
-            )}
-          </>
         ) : (
-          <>
-            {artifactQuery.data && !artifact.data && (
-              <Callout tone="error">{t("workspaceWrongProject")}</Callout>
-            )}
-            {!artifactId && (
-              <>
-                {artifacts.map((a) => (
-                  <Link
-                    key={a.id}
-                    className="artifact-list-item"
-                    to={target({ artifact: a.id, file: null, revision: null })}
-                  >
-                    <span>{a.title}</span>
-                    <Badge>
-                      {a.status === "approved" ? t("approved") : t("draft")}
-                    </Badge>
-                  </Link>
-                ))}
-                {!artifacts.length && (
-                  <Empty>{t("workspaceNoArtifacts")}</Empty>
-                )}
-              </>
-            )}
-            {artifactId && (
-              <>
-                <Link to={target({ artifact: null, revision: null })}>
-                  ← {t("workspaceArtifacts")}
+          <Empty>{t("noWork")}</Empty>
+        )
+      ) : tab === "documents" ? (
+        <>
+          {exactSource.error && (
+            <Callout tone="error">{exactSource.error.message}</Callout>
+          )}
+          {files.error && <Callout tone="error">{files.error.message}</Callout>}
+          {!fileId && (
+            <>
+              {list(filesData, "files").map((file) => (
+                <Link
+                  className="artifact-list-item"
+                  key={file.id}
+                  to={target({
+                    file: file.id,
+                    artifact: null,
+                    sourceVersion: null,
+                  })}
+                >
+                  <span>{file.name}</span>
+                  <Badge>
+                    {t("version")} {file.version}
+                  </Badge>
                 </Link>
-                <h3>{artifact.data?.artifact?.title}</h3>
-                <Field label={t("version")}>
-                  <NativeSelect
-                    value={revisionId || ""}
-                    onChange={(e) =>
-                      setParams(target({ revision: e.target.value }).slice(1))
-                    }
-                  >
-                    <option value="" disabled>
-                      {t("workspaceChooseRevision")}
-                    </option>
-                    {list(artifact.data?.revisions).map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.revision || r.version} · {r.status || t("draft")}
+              ))}
+              {filesData && !list(filesData, "files").length && (
+                <Empty>{t("noSources")}</Empty>
+              )}
+              <Button asChild variant="outline">
+                <Link to={`/projects/${projectId}?view=sources`}>
+                  {t("attachFile")}
+                </Link>
+              </Button>
+            </>
+          )}
+          {fileId && (
+            <>
+              <Link to={target({ file: null, sourceVersion: null })}>
+                ← {t("sources")}
+              </Link>
+              <h3>
+                {selectedFile?.name ||
+                  exactSource.data?.fileName ||
+                  t("source")}
+              </h3>
+              <Field label={t("version")}>
+                <NativeSelect
+                  value={versionId || ""}
+                  onChange={(e) =>
+                    setParams(
+                      target({ sourceVersion: e.target.value }).slice(1),
+                    )
+                  }
+                >
+                  <option value="" disabled>
+                    {t("workspaceChooseRevision")}
+                  </option>
+                  {list(versions.data)
+                    .filter((v) => v.status === "ready")
+                    .map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.version} · {v.mimeType}
                       </option>
                     ))}
-                  </NativeSelect>
-                </Field>
-                {revision ? (
-                  <>
+                </NativeSelect>
+              </Field>
+              {!version && <Callout>{t("workspaceExactVersion")}</Callout>}
+              {version && (
+                <>
+                  <Badge>
+                    {version.version ===
+                    Math.max(
+                      ...list(versions.data)
+                        .filter((v) => v.status === "ready")
+                        .map((v) => v.version),
+                    )
+                      ? t("workspaceLatestUploaded")
+                      : t("version")}{" "}
+                    · {version.version}
+                  </Badge>
+                  <Button asChild variant="outline">
+                    <a
+                      href={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <ExternalLink
+                        className="size-icon-sm"
+                        aria-hidden="true"
+                      />{" "}
+                      {t("workspaceOpenOriginal")} · {version.version}
+                    </a>
+                  </Button>
+                  {isAffinityPublisher ? (
+                    <AffinityPublisherPreview
+                      key={version.id}
+                      projectId={projectId}
+                      fileId={fileId}
+                      version={version.version}
+                      fileName={selectedFileName}
+                    />
+                  ) : version.mimeType === "application/pdf" ? (
+                    <iframe
+                      className="source-preview"
+                      title={`${selectedFileName} · ${version.version}`}
+                      src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download#page=${params.get("page") || 1}`}
+                    />
+                  ) : IMAGE_PREVIEW_MIME_TYPES.includes(version.mimeType) ? (
+                    <img
+                      className="source-image"
+                      src={`/api/projects/${projectId}/files/${fileId}/versions/${version.version}/download`}
+                      alt={
+                        selectedFile?.name ||
+                        exactSource.data?.fileName ||
+                        t("source")
+                      }
+                    />
+                  ) : (
+                    <Callout>{t("workspaceUnsupportedPreview")}</Callout>
+                  )}
+                  <p className="muted text-ui-xs">
+                    {t("workspaceUnreviewedSource")} ·{" "}
+                    {version.checksum || t("workspaceChecksumUnavailable")}
+                  </p>
+                  <SourceText
+                    key={version.id}
+                    projectId={projectId}
+                    conversationId={conversationId}
+                    versionId={version.id}
+                  />
+                </>
+              )}
+              <VersionUpload projectId={projectId} fileId={fileId} />
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {artifactQuery.data && !artifact.data && (
+            <Callout tone="error">{t("workspaceWrongProject")}</Callout>
+          )}
+          {artifactQuery.error && (
+            <Callout tone="error">{artifactQuery.error.message}</Callout>
+          )}
+          {!artifactId && artifactCards}
+          {artifactId && (
+            <>
+              <Link to={target({ artifact: null, revision: null })}>
+                ← {t("workspaceArtifacts")}
+              </Link>
+              <h3>{artifact.data?.artifact?.title}</h3>
+              {artifact.data?.artifact?.runId && (
+                <Link
+                  to={target({
+                    artifact: null,
+                    revision: null,
+                    agentRun: artifact.data.artifact.runId,
+                    conversation: artifactConversationId,
+                  })}
+                >
+                  {t("workspaceOriginRun")} ·{" "}
+                  {artifact.data.artifact.runGoal ||
+                    artifact.data.artifact.runId.slice(0, 8)}
+                </Link>
+              )}
+              <Field label={t("version")}>
+                <NativeSelect
+                  value={revisionId || ""}
+                  onChange={(e) =>
+                    setParams(target({ revision: e.target.value }).slice(1))
+                  }
+                >
+                  <option value="" disabled>
+                    {t("workspaceChooseRevision")}
+                  </option>
+                  {list(artifact.data?.revisions).map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.revision || r.version} · {r.status || t("draft")}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </Field>
+              {revision ? (
+                <div className="artifact-review-layout">
+                  <div className="artifact-document-sheet">
                     <ArtifactExportActions
                       artifact={
                         artifact.data?.artifact || { title: "Artifact" }
@@ -376,8 +415,9 @@ export function ArtifactPanel({
                     artifact.data?.artifact?.type === "openui" ? (
                       <LazyOpenUI
                         projectId={projectId}
-                        conversationId={conversationId}
+                        conversationId={artifactConversationId}
                         onReply={
+                          artifactConversationId === conversationId &&
                           conversationId
                             ? (body) => reply.mutate({ body })
                             : undefined
@@ -389,12 +429,13 @@ export function ArtifactPanel({
                         }
                       />
                     ) : (
-                      <div className="artifact-content">
-                        <ArtifactContent
-                          projectId={projectId}
-                          revision={revision}
-                        />
-                      </div>
+                      <AnnotatedDocument
+                        projectId={projectId}
+                        revision={revision}
+                        notes={revisionNotes}
+                        activeNote={activeNote}
+                        onSelect={setDocumentSelection}
+                      />
                     )}
                     <ArtifactSourceRegister
                       projectId={projectId}
@@ -435,29 +476,125 @@ export function ArtifactPanel({
                     {review.error && (
                       <Callout tone="error">{review.error.message}</Callout>
                     )}
+                  </div>
+                  <aside
+                    className="artifact-comments"
+                    aria-label={t("workspaceComments")}
+                  >
+                    <h3>
+                      {t("workspaceComments")} · {t("version")}{" "}
+                      {revision.version}
+                    </h3>
+                    <p className="text-ui-xs text-muted-foreground">
+                      {t("workspaceCommentRunHint")}
+                    </p>
+                    {revisionNotes.map((a) => (
+                      <article className="artifact-annotation" key={a.id}>
+                        <div className="text-ui-xs text-muted-foreground">
+                          {a.authorName || t("teamMember")}
+                          {a.createdAt &&
+                            !Number.isNaN(new Date(a.createdAt).getTime()) && (
+                              <>
+                                {" "}
+                                ·{" "}
+                                <time dateTime={a.createdAt}>
+                                  {new Date(a.createdAt).toLocaleString()}
+                                </time>
+                              </>
+                            )}
+                        </div>
+                        {a.quote &&
+                          (a.selection ? (
+                            <button
+                              type="button"
+                              className="annotation-quote-link"
+                              onClick={() => setActiveNote({ id: a.id })}
+                              title={t("workspaceShowPassage")}
+                            >
+                              <blockquote>{a.quote}</blockquote>
+                            </button>
+                          ) : (
+                            <blockquote>{a.quote}</blockquote>
+                          ))}
+                        <p className="preserve-lines">{a.body}</p>
+                        {artifactConversationId && a.messageId && (
+                          <Link
+                            to={`/projects/${projectId}?conversation=${artifactConversationId}&message=${a.messageId}`}
+                          >
+                            {t("workspaceContinueThread")}
+                          </Link>
+                        )}
+                      </article>
+                    ))}
                     <Annotation
                       key={revision.id}
                       projectId={projectId}
-                      conversationId={conversationId}
+                      conversationId={artifactConversationId}
                       artifactRevisionId={revision.id}
+                      selectedQuote={documentSelection?.quote}
+                      selection={documentSelection?.selection}
                     />
-                  </>
-                ) : (
-                  <Callout>{t("workspaceExactVersion")}</Callout>
-                )}
-                {list(artifact.data?.annotations)
-                  .filter((a) => a.artifactRevisionId === revisionId)
-                  .map((a) => (
-                    <div className="artifact-annotation" key={a.id}>
-                      <Badge>{t("workspaceAnnotation")}</Badge>
-                      <p>{a.body}</p>
-                    </div>
-                  ))}
-              </>
-            )}
-          </>
-        )}
-      </div>
+                  </aside>
+                </div>
+              ) : (
+                <Callout>{t("workspaceExactVersion")}</Callout>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+  const closePreview = () =>
+    setParams(
+      target({
+        artifact: null,
+        revision: null,
+        file: null,
+        sourceVersion: null,
+        page: null,
+      }).slice(1),
+    );
+  return (
+    <aside className="project-artifacts" aria-label={t("workspaceArtifacts")}>
+      <h2 className="thread-panel-heading">
+        {tab === "tasks"
+          ? t("sharedWork")
+          : tab === "runs"
+            ? t("agentThreadList")
+            : tab === "documents"
+              ? t("sources")
+              : t("workspaceArtifacts")}
+      </h2>
+      {previewOpen ? artifactCards : panelBody}
+      <Dialog
+        open={previewOpen}
+        onOpenChange={(open) => {
+          if (!open) closePreview();
+        }}
+      >
+        <DialogContent
+          className="document-review-dialog"
+          aria-describedby={undefined}
+          onOpenAutoFocus={() => {
+            returnFocus.current = document.activeElement as HTMLElement;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (returnFocus.current?.isConnected)
+              returnFocus.current.focus({ preventScroll: true });
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {artifactId
+                ? artifact.data?.artifact?.title || t("workspaceArtifacts")
+                : selectedFileName || t("source")}
+            </DialogTitle>
+          </DialogHeader>
+          {panelBody}
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
@@ -468,6 +605,7 @@ function Annotation({
   artifactRevisionId,
   selectedQuote,
   selectedPage,
+  selection,
 }: {
   projectId: string;
   conversationId?: string;
@@ -475,6 +613,7 @@ function Annotation({
   artifactRevisionId?: string;
   selectedQuote?: string;
   selectedPage?: number;
+  selection?: DocumentSelection["selection"];
 }) {
   const t = useT();
   const [body, setBody] = useState("");
@@ -493,23 +632,28 @@ function Annotation({
           body,
           page: f.get("page") ? Number(f.get("page")) : undefined,
           quote: f.get("quote") || undefined,
+          selection: f.get("quote") === selectedQuote ? selection : undefined,
         });
       }}
     >
-      <h3>{t("workspaceAnnotation")}</h3>
+      <h3>{t("workspaceAddComment")}</h3>
       <div className="annotation-context">
-        <Field label={t("workspacePage")}>
-          <Input
-            type="number"
-            min="1"
-            name="page"
-            key={selectedPage}
-            defaultValue={selectedPage}
-          />
-        </Field>
+        {sourceVersionId && (
+          <Field label={t("workspacePage")}>
+            <Input
+              type="number"
+              min="1"
+              name="page"
+              key={selectedPage}
+              defaultValue={selectedPage}
+            />
+          </Field>
+        )}
         <Field label={t("workspaceSelection")}>
-          <Input
+          <Textarea
             name="quote"
+            rows={2}
+            maxLength={10000}
             key={selectedQuote}
             defaultValue={selectedQuote}
           />
@@ -534,7 +678,7 @@ function Annotation({
           <Link
             to={`/projects/${projectId}?conversation=${conversationId}${write.data.message?.id ? `&message=${write.data.message.id}` : ""}`}
           >
-            {t("workspaceConversation")}
+            {t("workspaceContinueThread")}
           </Link>
         </p>
       )}
@@ -621,8 +765,10 @@ function SourceText({
   const textRef = useRef<HTMLDivElement>(null);
   const sourcePath = `/knowledge/projects/${projectId}/sources/${versionId}/content?pageStart=${page}&pageEnd=${page}`;
   const source = useQuery({
-    queryKey: [sourcePath], queryFn: () => api(sourcePath),
-    refetchInterval: query => query.state.data?.content?.status === "processing" ? 2000 : false,
+    queryKey: [sourcePath],
+    queryFn: () => api(sourcePath),
+    refetchInterval: (query) =>
+      query.state.data?.content?.status === "processing" ? 2000 : false,
   });
   const content = source.data?.content;
   useEffect(() => {

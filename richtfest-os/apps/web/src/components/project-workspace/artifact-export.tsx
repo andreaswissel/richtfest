@@ -1,5 +1,5 @@
 import { Printer } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   formatSourceCitations,
   sourceReferenceLabel,
@@ -59,6 +59,10 @@ export function ArtifactSourceRegister({
   revision,
 }: Pick<ArtifactExportProps, "projectId" | "revision">) {
   const t = useT();
+  const location = useLocation();
+  const conversationId = new URLSearchParams(location.search).get(
+    "conversation",
+  );
   const sources = revision.sourceReferences ?? [];
   const ids = Array.isArray(revision.sourceVersionIds)
     ? revision.sourceVersionIds.flatMap((ref) =>
@@ -83,7 +87,7 @@ export function ArtifactSourceRegister({
               <li key={id}>
                 {source ? (
                   <Link
-                    to={`/projects/${encodeURIComponent(projectId)}?panel=documents&sourceVersion=${encodeURIComponent(id)}`}
+                    to={`/projects/${encodeURIComponent(projectId)}?panel=documents&sourceVersion=${encodeURIComponent(id)}${conversationId ? `&conversation=${encodeURIComponent(conversationId)}` : ""}`}
                   >
                     {sourceReferenceLabel(source)}
                   </Link>

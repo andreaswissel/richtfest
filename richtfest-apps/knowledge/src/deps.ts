@@ -105,6 +105,7 @@ export type AppDeps = {
     versionId: string,
   ) => Promise<boolean>;
   validateUser: (userId: string) => Promise<boolean>;
+  userNames?: (userIds: string[]) => Promise<Record<string, string>>;
   validateConversation: (conversationId: string) => Promise<boolean>;
 };
 export type ProviderRequest = {

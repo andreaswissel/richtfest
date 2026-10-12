@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
@@ -22,6 +22,7 @@ import {
   missing,
   conflict,
   createArtifact,
+  artifactReviewContext,
 } from "./workspace";
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
@@ -257,10 +258,12 @@ export async function executeRun(d: AppDeps, run: any) {
         status: artifacts.status,
       })
       .from(artifacts)
+      .innerJoin(agentRuns, and(eq(artifacts.runId, agentRuns.id), eq(agentRuns.tenantId, d.tenantId)))
       .where(
         and(
           eq(artifacts.tenantId, d.tenantId),
           eq(artifacts.projectId, run.projectId),
+          run.conversationId ? eq(agentRuns.conversationId, run.conversationId) : sql`false`,
         ),
       )
       .orderBy(desc(artifacts.createdAt))
@@ -293,6 +296,7 @@ export async function executeRun(d: AppDeps, run: any) {
       .reverse();
     const context = {
       history: boundedHistory,
+      documentReview: await artifactReviewContext(d, run.conversationId),
       artifacts: recentArtifacts,
       priorRuns: recentRuns,
       specialistRole: run.specialistRole ?? null,

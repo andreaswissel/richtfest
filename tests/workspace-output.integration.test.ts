@@ -16,8 +16,9 @@ integration("workspace returns scoped historical citation names and terminal chi
   const thread = crypto.randomUUID(), artifact = crypto.randomUUID(), revision = crypto.randomUUID();
   const parent = crypto.randomUUID(), child = crypto.randomUUID(), unrelated = crypto.randomUUID();
   const app = express();
+  app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = { id: actor, tenantId: req.headers["x-other"] ? otherTenant : tenant, permissions: new Set(["knowledge:read", "projects:read"]) };
+    (req as any).actor = { id: actor, tenantId: req.headers["x-other"] ? otherTenant : tenant, permissions: new Set(["knowledge:read", "knowledge:write", "projects:read"]) };
     next();
   });
   app.use(workspaceRouter(req => knowledgeDeps(db, req)));
@@ -48,6 +49,27 @@ integration("workspace returns scoped historical citation names and terminal chi
     expect(failed.failureRole).toBe("source_reviewer");
     expect(JSON.parse(failed.failureEvent.paramsSummary).runId).toBe(child);
     expect(failed.failureEvent.paramsSummary).not.toContain("SECRET");
+    const secondThread = crypto.randomUUID();
+    await pool.query(`insert into knowledge_conversations(id,tenant_id,project_id,title,created_by) values($1,$2,$3,'Other thread',$4)`, [secondThread, tenant, project, actor]);
+    await pool.query(`update knowledge_artifacts set run_id=$1 where id=$2`, [child, artifact]);
+    await pool.query(`update knowledge_agent_runs set created_at='2020-01-01' where id=$1`, [child]);
+    for (let index = 0; index < 51; index++)
+      await pool.query(`insert into knowledge_agent_runs(tenant_id,project_id,conversation_id,goal,provider,status,requested_by,correlation_id) values($1,$2,$3,'Newer unrelated run','openai','failed',$4,$5)`, [tenant, project, secondThread, actor, crypto.randomUUID()]);
+    const scoped = (await (await fetch(`${url}/workspaces/${project}`)).json() as any).data;
+    expect(scoped.runs.some((run: any) => run.id === child)).toBe(false);
+    expect(scoped.artifacts[0]).toMatchObject({ id: artifact, conversationId: thread, runId: child, preview: content.slice(0, 500), version: 1 });
+    const noteBody = { projectId: project, artifactRevisionId: revision, body: "Verify the requirement before revising.", quote: "Maßnahmen", selection: { start: 0, end: 9 } };
+    const note = async (body: any, headers = {}) => fetch(`${url}/annotations`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    expect((await note({ ...noteBody, conversationId: secondThread })).status).toBe(409);
+    expect((await note(noteBody, { "x-other": "1" })).status).toBe(404);
+    const savedResponse = await note(noteBody);
+    expect(savedResponse.status).toBe(201);
+    const saved = (await savedResponse.json() as any).data;
+    expect(saved.message.conversationId).toBe(thread);
+    const annotated = (await (await fetch(`${url}/artifacts/${artifact}`)).json() as any).data;
+    expect(annotated.artifact.conversationId).toBe(thread);
+    expect(annotated.annotations).toHaveLength(1);
+    expect(annotated.annotations[0]).toMatchObject({ artifactRevisionId: revision, quote: "Maßnahmen", selection: { start: 0, end: 9 }, messageId: saved.message.id });
     const pdf = await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`);
     expect(pdf.status).toBe(200);
     await writeFile(join(directory, "result.pdf"), Buffer.from(await pdf.arrayBuffer()));
@@ -61,7 +83,7 @@ integration("workspace returns scoped historical citation names and terminal chi
     expect((await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`, { headers: { "x-other": "1" } })).status).toBe(404);
   } finally {
     server.close();
-    for (const table of ["knowledge_agent_run_events", "knowledge_agent_runs", "knowledge_messages", "knowledge_conversations", "knowledge_artifact_revisions", "knowledge_artifacts", "projects_file_versions", "projects_files", "projects_projects"])
+    for (const table of ["os_audit_events", "knowledge_annotations", "knowledge_agent_run_events", "knowledge_agent_runs", "knowledge_messages", "knowledge_conversations", "knowledge_artifact_revisions", "knowledge_artifacts", "projects_file_versions", "projects_files", "projects_projects"])
       await pool.query(`delete from ${table} where tenant_id=$1`, [tenant]);
     await pool.end();
     await rm(directory, { recursive: true, force: true });

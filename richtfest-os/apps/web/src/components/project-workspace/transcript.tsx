@@ -373,7 +373,8 @@ function Conversation({
     [query.data?.pages],
   );
   const title = useMutation({
-    mutationFn: (_originalTitle: string) => api<{ title: string }>(`${path}/title-from-message`, {}),
+    mutationFn: (_originalTitle: string) =>
+      api<{ title: string }>(`${path}/title-from-message`, {}),
     retry: (failureCount, error) =>
       failureCount < 1 && (!(error instanceof ApiError) || error.status >= 500),
     onSuccess: ({ title }, originalTitle) => {
@@ -397,7 +398,11 @@ function Conversation({
   useEffect(() => {
     // Recover missed naming requests on reopen, including paginated threads.
     // The server, not the loaded message page, selects the first user message.
-    if (messages.length && /^Thread\s+\d+$/i.test(conversationTitle.trim()) && title.isIdle)
+    if (
+      messages.length &&
+      /^Thread\s+\d+$/i.test(conversationTitle.trim()) &&
+      title.isIdle
+    )
       title.mutate(conversationTitle);
   }, [messages.length, conversationTitle, title.isIdle, title.mutate]);
   const initial = query.data?.pages[0]?.readState || readState;
@@ -951,7 +956,9 @@ function Conversation({
                       <LiveRun
                         run={run}
                         projectId={projectId}
-                        children={runs.filter((candidate) => candidate.parentRunId === run.id)}
+                        children={runs.filter(
+                          (candidate) => candidate.parentRunId === run.id,
+                        )}
                       />
                     </MessageContent>
                   </Message>
@@ -1260,7 +1267,7 @@ const MessageRow = memo(function MessageRow({
             {message.annotation.quote && <p>{message.annotation.quote}</p>}
             {message.annotation.artifactId && (
               <Link
-                to={`/projects/${projectId}?panel=artifacts&artifact=${message.annotation.artifactId}&revision=${message.annotation.artifactRevisionId}`}
+                to={`/projects/${projectId}?conversation=${conversationId}&panel=artifacts&artifact=${message.annotation.artifactId}&revision=${message.annotation.artifactRevisionId}`}
               >
                 {t("workspaceArtifacts")}
               </Link>

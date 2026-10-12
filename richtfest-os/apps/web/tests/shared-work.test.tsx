@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SharedWork } from "../src/screens/foundation";
 
-test("shared conversations link into the workspace without a misleading empty transcript", () => {
+test("shared work shows supplied thread tasks rather than a project-wide conversation list", () => {
   const client = new QueryClient();
   client.setQueryData(["/knowledge/conversations?projectId=project-one"], {
     conversations: [
@@ -19,14 +19,19 @@ test("shared conversations link into the workspace without a misleading empty tr
   const html = renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/projects/project-one?view=sharedWork"]}>
-        <SharedWork projectId="project-one" />
+        <SharedWork
+          projectId="project-one"
+          conversationId="conversation-one"
+          tasks={[
+            { id: "task-one", title: "Check facade detail", status: "open" },
+          ]}
+          runs={[]}
+        />
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  expect(html).toContain(
-    'href="/projects/project-one?conversation=conversation-one"',
-  );
-  expect(html).toContain("Review floor plans");
+  expect(html).toContain("Check facade detail");
+  expect(html).not.toContain("Review floor plans");
   expect(html).toContain("Create task");
   expect(html).not.toContain("No messages yet");
   expect(html).not.toContain("aria-pressed");

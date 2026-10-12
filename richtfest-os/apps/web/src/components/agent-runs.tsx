@@ -16,10 +16,12 @@ import "./agent-runs.css";
 
 export function AgentRuns({
   projectId,
+  conversationId,
   initialRuns,
 }: {
   projectId: string;
-  initialRuns?: RecordData[];
+  conversationId: string;
+  initialRuns: RecordData[];
 }) {
   const t = useT();
   const [effort, setEffort] = useState("medium");
@@ -28,7 +30,6 @@ export function AgentRuns({
   const [sources, setSources] = useState<{ id: string; label: string }[]>([]);
   const readiness = useApi("/agent/readiness");
   const supervisor = readiness.data?.supervisor;
-  const runs = useApi(`/knowledge/runs?projectId=${projectId}`, !initialRuns);
   const files = useApi(`/projects/${projectId}/files`, open);
   const versions = useApi(
     `/projects/${projectId}/files/${fileId}/versions`,
@@ -62,15 +63,8 @@ export function AgentRuns({
       {readiness.error && (
         <Callout tone="error">{readiness.error.message}</Callout>
       )}
-      {runs.error && <Callout tone="error">{runs.error.message}</Callout>}
-      <RunSections
-        runs={list(initialRuns || runs.data, "items")}
-        projectId={projectId}
-      />
-      {(initialRuns || runs.data) &&
-        !list(initialRuns || runs.data, "items").length && (
-          <Empty>{t("noAgentRuns")}</Empty>
-        )}
+      <RunSections runs={initialRuns} projectId={projectId} />
+      {!initialRuns.length && <Empty>{t("noAgentRuns")}</Empty>}
       {open && (
         <Modal title={t("assignAgentGoal")} onClose={() => setOpen(false)}>
           <Form
@@ -80,6 +74,7 @@ export function AgentRuns({
             onSubmit={(form) =>
               create.mutate({
                 projectId,
+                conversationId,
                 effort,
                 goal: form.get("goal"),
                 sourceVersionIds: sources.map((s) => s.id),

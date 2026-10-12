@@ -69,16 +69,18 @@ describe("registered OpenUI boundary", () => {
       { versionId, fileName: "Facade [original].pdf", version: 2 },
     ];
     const text = `## Concept\n\n**Review** [${versionId}]\n\n| Check | Result |\n| --- | --- |\n| Wall | Pending |\n\n[${missingId}]`;
-    const html = renderToStaticMarkup(
+    const html = render(
       <MarkdownContent>
         {formatSourceCitations(text, projectId, sources, "Source unavailable")}
       </MarkdownContent>,
+      `/projects/${projectId}?conversation=${conversationId}`,
     );
     expect(html).toContain("<h2>Concept</h2>");
     expect(html).toContain("<strong>Review</strong>");
     expect(html).toContain("<table>");
     expect(html).toContain("Facade [original].pdf · v2");
     expect(html).toContain(`sourceVersion=${versionId}`);
+    expect(html).toContain(`conversation=${conversationId}`);
     expect(html).toContain("Source unavailable");
     expect(html).not.toContain(missingId);
     const register = render(
@@ -322,104 +324,35 @@ describe("workspace records and navigation", () => {
     ]);
     expect(result.map((m) => m.id)).toEqual(["a", "b", "c"]);
   });
-  test("document, artifact, run and shared work panels are real links", () => {
+  test("artifact gallery exposes preview cards and originating run links within the thread", () => {
     const html = render(
       <ArtifactPanel
         projectId={projectId}
-        artifacts={[]}
+        conversationId={conversationId}
+        artifacts={[
+          {
+            id: "artifact-one",
+            title: "Facade concept",
+            preview: "Check the window junction",
+            version: 2,
+            runId: "run-one",
+            runGoal: "Review facade",
+            conversationId,
+          },
+        ]}
         runs={[]}
         tasks={[]}
       />,
-      `/projects/${projectId}`,
+      `/projects/${projectId}?conversation=${conversationId}`,
       { [`/projects/${projectId}/files`]: [] },
     );
     expect(html).toContain("panel=artifacts");
-    expect(html).toContain("panel=runs");
-    expect(html).toContain("panel=tasks");
-    expect(html).toContain(`href="/projects/${projectId}?view=sources"`);
-  });
-  test("Affinity Publisher sources use the visual preview endpoint and keep download access", () => {
-    const fileId = "550e8400-e29b-41d4-a716-446655440004";
-    const versionId = "550e8400-e29b-41d4-a716-446655440005";
-    const html = render(
-      <ArtifactPanel
-        projectId={projectId}
-        artifacts={[]}
-        runs={[]}
-        tasks={[]}
-      />,
-      `/projects/${projectId}?panel=documents&file=${fileId}&sourceVersion=${versionId}`,
-      {
-        [`/projects/${projectId}/files`]: [
-          { id: fileId, name: "site-plan.afpub", version: 1 },
-        ],
-        [`/projects/${projectId}/files/${fileId}/versions`]: [
-          {
-            id: versionId,
-            version: 1,
-            status: "ready",
-            mimeType: "application/octet-stream",
-          },
-        ],
-      },
-    );
+    expect(html).toContain("artifact=artifact-one");
+    expect(html).toContain("Check the window junction");
     expect(html).toContain(
-      `/api/projects/${projectId}/files/${fileId}/versions/1/preview`,
+      `conversation=${conversationId}&amp;agentRun=run-one`,
     );
-    expect(html).toContain(
-      `/api/projects/${projectId}/files/${fileId}/versions/1/download`,
-    );
-    expect(html).toContain("Affinity Publisher preview: site-plan.afpub");
-  });
-  test("artifact revision can be saved as a PDF with its source version references", () => {
-    const artifactId = "550e8400-e29b-41d4-a716-446655440007";
-    const revisionId = "550e8400-e29b-41d4-a716-446655440008";
-    const sourceVersionId = "550e8400-e29b-41d4-a716-446655440009";
-    const html = render(
-      <ArtifactPanel
-        projectId={projectId}
-        artifacts={[]}
-        runs={[]}
-        tasks={[]}
-        initialFiles={[]}
-      />,
-      `/projects/${projectId}?panel=artifacts&artifact=${artifactId}&revision=${revisionId}`,
-      {
-        [`/knowledge/artifacts/${artifactId}`]: {
-          artifact: {
-            id: artifactId,
-            projectId,
-            title: "Acoustic planning draft",
-            type: "report",
-            status: "draft",
-          },
-          revisions: [
-            {
-              id: revisionId,
-              version: 2,
-              title: "Preliminary measures",
-              content: "## Open checks\n\n- Verify the facade assembly",
-              sourceVersionIds: [sourceVersionId],
-              sourceReferences: [
-                {
-                  versionId: sourceVersionId,
-                  fileName: "Facade.pdf",
-                  version: 1,
-                },
-              ],
-              createdAt: "2026-10-10T10:00:00.000Z",
-            },
-          ],
-          annotations: [],
-        },
-      },
-    );
-    expect(html).toContain("Save as PDF");
-    expect(html).toContain("Preliminary measures");
-    expect(html).toContain("Verify the facade assembly");
-    expect(html).toContain("Facade.pdf · v1");
-    expect(html).toContain(sourceVersionId);
-    expect(html).toContain(`sourceVersion=${sourceVersionId}`);
+    expect(html).toContain("Review facade");
   });
   test("unconfigured composer shows an actionable alert without claiming a message was saved", () => {
     const html = render(

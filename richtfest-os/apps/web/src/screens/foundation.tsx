@@ -9,7 +9,6 @@ import { NativeSelect } from "../components/ui/native-select";
 import { Button } from "../components/ui/button";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowUpRight, MessageSquare } from "lucide-react";
 import "./shared-work.css";
 import { list, type RecordData } from "../api";
 import { useApi, useWrite } from "../query";
@@ -541,92 +540,45 @@ function safeUrl(url: unknown) {
     return undefined;
   }
 }
-export function SharedWork({ projectId }: { projectId: string }) {
+export function SharedWork({
+  projectId,
+  conversationId,
+  tasks,
+  runs,
+}: {
+  projectId: string;
+  conversationId: string;
+  tasks: RecordData[];
+  runs: RecordData[];
+}) {
   const t = useT();
-  const navigate = useNavigate();
-  const query = useApi(`/knowledge/conversations?projectId=${projectId}`);
   const [create, setCreate] = useState(false);
-  const [taskConversation, setTaskConversation] = useState<string | null>(null);
-  const write = useWrite("/knowledge/conversations", (data) => {
-    setCreate(false);
-    navigate(
-      `/projects/${projectId}?conversation=${encodeURIComponent(data.id)}`,
-    );
-  });
-  const taskWrite = useWrite("/knowledge/tasks", () =>
-    setTaskConversation(null),
-  );
-  const conversations = list(query.data, "conversations").filter(
-    (conversation) => !conversation.archivedAt,
-  );
+  const taskWrite = useWrite("/knowledge/tasks", () => setCreate(false));
   return (
     <div className="shared-work-view">
       <Section
-        title={t("sharedWorkConversations")}
+        title={t("sharedWork")}
         meta={
-          <Button onClick={() => setCreate(true)}>
-            ＋ {t("startConversation")}
+          <Button variant="outline" onClick={() => setCreate(true)}>
+            {t("addTask")}
           </Button>
         }
       >
-        <LoadState query={query} />
-        {conversations.length ? (
-          <ul className="shared-conversation-list">
-            {conversations.map((conversation) => (
-              <li className="shared-conversation-row" key={conversation.id}>
-                <Link
-                  className="shared-conversation-link"
-                  to={`/projects/${projectId}?conversation=${encodeURIComponent(conversation.id)}`}
-                >
-                  <MessageSquare
-                    className="size-icon muted"
-                    aria-hidden="true"
-                  />
-                  <span className="shared-conversation-title">
-                    {conversation.title}
-                  </span>
-                  <ArrowUpRight
-                    className="size-icon-sm muted"
-                    aria-hidden="true"
-                  />
-                </Link>
-                <Button
-                  variant="ghost"
-                  onClick={() => setTaskConversation(conversation.id)}
-                >
-                  {t("addTask")}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          !query.isPending &&
-          !query.error && <Empty>{t("noConversations")}</Empty>
-        )}
+        {tasks.map((task) => (
+          <div className="task-row" key={task.id}>
+            <Badge>{t(`task_${task.status}` as never) || task.status}</Badge>
+            <span>{task.title}</span>
+          </div>
+        ))}
+        {!tasks.length && <Empty>{t("noWork")}</Empty>}
       </Section>
-      <AgentRuns projectId={projectId} />
+      <AgentRuns
+        projectId={projectId}
+        conversationId={conversationId}
+        initialRuns={runs}
+      />
       {create && (
-        <Modal title={t("startConversation")} onClose={() => setCreate(false)}>
-          <Form
-            label={t("startConversation")}
-            pending={write.isPending}
-            error={write.error}
-            onSubmit={(form) => write.mutate({ ...values(form), projectId })}
-          >
-            <Field label={t("title")}>
-              <Input autoFocus required name="title" />
-            </Field>
-            <Field label={t("assignTo")}>
-              <NativeSelect name="assigneeType">
-                <option value="user">{t("yourself")}</option>
-                <option value="agent">{t("agent")}</option>
-              </NativeSelect>
-            </Field>
-          </Form>
-        </Modal>
-      )}
-      {taskConversation && (
-        <Modal title={t("addTask")} onClose={() => setTaskConversation(null)}>
+        <Modal title={t("addTask")} onClose={() => setCreate(false)}>
           <Form
             label={t("addTask")}
             pending={taskWrite.isPending}
@@ -635,7 +587,7 @@ export function SharedWork({ projectId }: { projectId: string }) {
               taskWrite.mutate({
                 ...values(form),
                 projectId,
-                conversationId: taskConversation,
+                conversationId,
               })
             }
           >

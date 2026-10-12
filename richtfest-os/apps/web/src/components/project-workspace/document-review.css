@@ -1,0 +1,191 @@
+.thread-resource-nav {
+  display: grid;
+  gap: 0.2rem;
+  border-top: 1px solid var(--border);
+  padding-top: var(--stack);
+}
+.thread-resource-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem;
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  font-size: var(--ui-sm);
+  text-decoration: none;
+}
+.thread-resource-nav a span:first-of-type {
+  flex: 1;
+}
+.thread-resource-nav a[aria-current],
+.thread-resource-nav a:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.thread-panel-heading {
+  margin: 0;
+  padding: var(--stack);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--ui-sm);
+  font-weight: 600;
+}
+.artifact-gallery {
+  display: grid;
+  gap: var(--stack);
+  padding: var(--stack);
+}
+.artifact-panel-body > .artifact-gallery {
+  padding: 0;
+}
+.artifact-preview-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
+}
+.artifact-preview-link {
+  display: block;
+  padding: var(--stack);
+  color: inherit;
+  text-decoration: none;
+}
+.artifact-preview-link:hover {
+  background: var(--muted);
+}
+.artifact-card-heading,
+.artifact-card-meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.artifact-card-heading {
+  font-size: var(--ui-sm);
+}
+.artifact-card-heading svg {
+  flex-shrink: 0;
+}
+.artifact-card-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  font-size: var(--ui-xs);
+  line-height: 1.6;
+  margin: var(--stack) 0;
+}
+.artifact-card-meta {
+  font-size: var(--ui-xs);
+  color: var(--muted-foreground);
+}
+.artifact-run-link {
+  display: block;
+  padding: 0.5rem var(--stack);
+  border-top: 1px solid var(--border);
+  font-size: var(--ui-xs);
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-review-dialog[data-slot="dialog-content"] {
+  width: calc(100vw - 3rem);
+  max-width: 90rem;
+  height: calc(100dvh - 3rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  padding: var(--stack);
+  font-size: var(--ui);
+}
+.document-review-dialog [data-slot="dialog-header"] {
+  flex-shrink: 0;
+  padding: 0.5rem 2rem 0.5rem 0.5rem;
+}
+.document-review-dialog [data-slot="dialog-title"] {
+  font-size: var(--ui-lg);
+}
+.document-review-dialog > .artifact-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.artifact-review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 19rem;
+  gap: var(--section);
+  align-items: start;
+  background: var(--muted);
+  padding: var(--stack);
+}
+.artifact-document-sheet {
+  min-width: 0;
+  padding: var(--page);
+  background: var(--background);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--stack);
+}
+.artifact-document-sheet > .artifact-content {
+  min-width: 0;
+}
+.artifact-comments {
+  min-width: 0;
+  display: grid;
+  gap: var(--stack);
+}
+.artifact-comments h3 {
+  font-size: var(--ui-sm);
+  margin: 0;
+}
+.artifact-comments .artifact-annotation {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--stack);
+  font-size: var(--ui-sm);
+}
+.artifact-comments blockquote {
+  margin: 0 0 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+}
+.artifact-comments .annotation-context {
+  display: block;
+}
+.annotation-quote-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.annotation-quote-link:hover {
+  text-decoration: underline;
+}
+::highlight(artifact-comments) {
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  text-decoration: underline;
+}
+.document-review-dialog .source-preview {
+  width: 100%;
+  min-height: 60dvh;
+}
+@media (max-width: 800px) {
+  .document-review-dialog[data-slot="dialog-content"] {
+    width: calc(100vw - 1rem);
+    height: calc(100dvh - 1rem);
+  }
+  .artifact-review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .artifact-document-sheet {
+    padding: var(--stack);
+  }
+  .artifact-document-sheet .chat-markdown table {
+    min-width: 28rem;
+  }
+}

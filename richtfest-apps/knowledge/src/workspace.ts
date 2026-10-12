@@ -1,6 +1,6 @@
 import { repairLegacyRuns } from "./run-recovery";
 import { Router, type Request } from "express";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, acousticDocumentTemplateSchema } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
@@ -25,6 +25,33 @@ export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
 export const conflict = (message: string) =>
   Object.assign(new Error(message), { status: 409, code: "invalid_state" });
+
+/** Bounded, revision-specific human feedback for every phase of a subsequent run. */
+export async function artifactReviewContext(d: AppDeps, conversationId: string | null) {
+  if (!conversationId) return { comments: [], documents: [] };
+  const rows = await d.db.select({
+    revisionId: artifactRevisions.id, title: artifactRevisions.title,
+    content: sql<string>`left(${artifactRevisions.content}, 12000)`,
+    contentLength: sql<number>`length(${artifactRevisions.content})`,
+    body: annotations.body, quote: annotations.quote,
+  }).from(annotations)
+    .innerJoin(messages, and(eq(annotations.messageId, messages.id), eq(messages.tenantId, d.tenantId)))
+    .innerJoin(artifactRevisions, and(eq(annotations.artifactRevisionId, artifactRevisions.id), eq(artifactRevisions.tenantId, d.tenantId)))
+    .where(and(eq(annotations.tenantId, d.tenantId), eq(messages.conversationId, conversationId)))
+    .orderBy(desc(annotations.createdAt)).limit(10);
+  let budget = 24000;
+  const documents = new Map<string, { revisionId: string; title: string; excerpt: string; truncated: boolean }>();
+  for (const row of rows) {
+    if (documents.has(row.revisionId)) continue;
+    const excerpt = row.content.slice(0, budget);
+    budget -= excerpt.length;
+    documents.set(row.revisionId, { revisionId: row.revisionId, title: row.title, excerpt, truncated: excerpt.length < row.contentLength });
+  }
+  return {
+    comments: rows.map((row: any) => ({ revisionId: row.revisionId, body: row.body.slice(0, 2000), quote: row.quote?.slice(0, 2000) })),
+    documents: [...documents.values()],
+  };
+}
 // The web client uses this format when a thread has not received a meaningful title yet.
 // Keep this deliberately narrow so a user-chosen title is never overwritten.
 export const isGeneratedConversationPlaceholder = (title: string) =>
@@ -277,8 +304,15 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           )
           .orderBy(desc(conversations.createdAt)),
         d.db
-          .select()
+          .select({
+            ...getTableColumns(artifacts),
+            conversationId: agentRuns.conversationId,
+            runGoal: agentRuns.goal,
+            preview: sql<string>`(select left(r.content, 500) from knowledge_artifact_revisions r where r.artifact_id=${artifacts.id} and r.tenant_id=${d.tenantId} order by r.version desc limit 1)`,
+            version: sql<number>`(select max(r.version) from knowledge_artifact_revisions r where r.artifact_id=${artifacts.id} and r.tenant_id=${d.tenantId})`,
+          })
           .from(artifacts)
+          .leftJoin(agentRuns, and(eq(artifacts.runId, agentRuns.id), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, id)))
           .where(
             and(
               eq(artifacts.tenantId, d.tenantId),
@@ -695,8 +729,9 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
   );
   route("get", "/artifacts/:artifactId", "knowledge:read", async (d, req) => {
     const [artifact] = await d.db
-      .select()
+      .select({ ...getTableColumns(artifacts), conversationId: agentRuns.conversationId, runGoal: agentRuns.goal })
       .from(artifacts)
+      .leftJoin(agentRuns, and(eq(artifacts.runId, agentRuns.id), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, artifacts.projectId)))
       .where(
         and(
           eq(artifacts.id, String(req.params.artifactId)),
@@ -726,11 +761,12 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           eq(annotations.tenantId, d.tenantId),
           eq(artifactRevisions.artifactId, artifact.id),
         ),
-      );
+      ).orderBy(asc(annotations.createdAt));
+    const names = await d.userNames?.(notes.map((r: any) => r.annotation.createdBy)) ?? {};
     return {
       artifact,
       revisions: await withSourceReferences(d, artifact.projectId, revisions),
-      annotations: notes.map((r: any) => r.annotation),
+      annotations: notes.map((r: any) => ({ ...r.annotation, authorName: names[r.annotation.createdBy] ?? null })),
     };
   });
   route(
@@ -833,11 +869,13 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
     if (!(await d.validateProject(input.projectId))) throw missing();
     if (input.sourceVersionId)
       await sources(d, input.projectId, [input.sourceVersionId]);
+    let targetConversationId = input.conversationId;
     if (input.artifactRevisionId) {
       const [revision] = await d.db
-        .select()
+        .select({ conversationId: agentRuns.conversationId })
         .from(artifactRevisions)
         .innerJoin(artifacts, eq(artifactRevisions.artifactId, artifacts.id))
+        .leftJoin(agentRuns, and(eq(artifacts.runId, agentRuns.id), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, input.projectId)))
         .where(
           and(
             eq(artifactRevisions.id, input.artifactRevisionId),
@@ -847,11 +885,17 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           ),
         );
       if (!revision) throw missing("Artifact version not found in project");
+      if (revision.conversationId) {
+        if (targetConversationId && targetConversationId !== revision.conversationId)
+          throw conflict("Artifact belongs to another conversation");
+        targetConversationId = revision.conversationId;
+      }
     }
-    if (input.conversationId)
-      await conversation(d, input.conversationId, input.projectId);
+    if (targetConversationId)
+      await conversation(d, targetConversationId, input.projectId);
     return d.db.transaction(async (tx: any) => {
-      const { conversationId, ...values } = input;
+      const { conversationId: _conversationId, ...values } = input;
+      const conversationId = targetConversationId;
       const [annotation] = await tx
         .insert(annotations)
         .values({ ...values, tenantId: d.tenantId, createdBy: d.actorId })

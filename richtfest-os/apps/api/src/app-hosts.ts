@@ -367,6 +367,13 @@ export const knowledgeDeps = (
   };
   return {
     ...base(db, req),
+    userNames: async (userIds) => {
+      if (!userIds.length) return {};
+      const result = await db.execute(sql`select u.id, u.name from os_users u
+        join os_memberships m on m.user_id=u.id and m.tenant_id=${actor.tenantId}
+        where u.id in (${sql.join([...new Set(userIds)].map(id => sql`${id}::uuid`), sql`, `)})`);
+      return Object.fromEntries(result.rows.map((row: any) => [row.id, row.name]));
+    },
     supervisorEnabled: env.AGENT_SUPERVISOR_ENABLED,
     resolveSupervisorPreset: (effort, provider) => resolveAgentPreset(db, actor.tenantId, effort, provider),
     resolveActiveProvider: () => getActiveProvider(db, actor.tenantId),

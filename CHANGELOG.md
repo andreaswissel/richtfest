@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Project threads now have their own artifact previews, tasks and run links. Open documents and PDFs directly from chat, and review generated documents with persistent passage highlights and revision-specific comments that carry into continuing agent work.
+
 - Missing app files after an update now show a reload prompt instead of crashing the conversation. Unsent text stays accessible, Markdown remains readable as plain text, and reloading requires confirmation. Failed page loads also offer recovery within the app.
 
 - Rate-limited project agents now wait for provider cooldowns across worker restarts, distinguish reported quota failures from throttling, and resume saved drafts, specialist work and independent-review progress when retried. Unclassified older 429 errors remain explicitly uncertain.

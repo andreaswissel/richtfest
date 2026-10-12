@@ -19,8 +19,51 @@ import {
   agentRunAttempts,
   agentRunUsage,
   tasks,
+  annotations,
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
+
+integration("continued document review receives only its thread's comments and their exact historical revision", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
+  let received: any;
+  const d: any = { db, tenantId, actorId, auditRun: async () => {}, audit: async () => {}, requirePermission: () => {},
+    validateProject: async () => true,
+    executeSupervisor: async (input: any) => {
+      received = input.context.documentReview;
+      return { status: "completed", output: { summary: "Needs evidence", rationale: "Human feedback checked", decision: "accept", revisions: [], citations: [], document: { title: "Revised proposal", content: "Request the missing specification." } } };
+    },
+  };
+  const app = express(); app.use(express.json()); app.use(workspaceRouter(() => d));
+  const server = app.listen(0);
+  const url = `http://127.0.0.1:${(server.address() as any).port}`;
+  try {
+    const threadIds: string[] = [], revisionIds: string[] = [];
+    for (const title of ["Acoustics", "Other thread"]) {
+      const [thread] = await db.insert(conversations).values({ tenantId, projectId, title, createdBy: actorId }).returning();
+      threadIds.push(thread!.id);
+      const [origin] = await db.insert(agentRuns).values({ tenantId, projectId, conversationId: thread!.id, goal: title, provider: "openai", status: "needs_review", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+      const [artifact] = await db.insert(artifacts).values({ tenantId, projectId, runId: origin!.id, title, type: "document", createdBy: actorId }).returning();
+      const [revision] = await db.insert(artifactRevisions).values({ tenantId, artifactId: artifact!.id, version: 1, title, content: `${title}: original window specification`, createdBy: actorId }).returning();
+      revisionIds.push(revision!.id);
+      await db.insert(artifactRevisions).values({ tenantId, artifactId: artifact!.id, version: 2, title, content: "LATER CONTENT MUST NOT REPLACE THE ANCHOR", createdBy: actorId });
+      const response = await fetch(`${url}/annotations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId, artifactRevisionId: revision!.id, body: `${title}: verify this specification`, quote: "original window specification", selection: { start: title.length + 2, end: title.length + 31 } }) });
+      expect(response.status).toBe(201);
+    }
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, conversationId: threadIds[0], goal: "Revise using my comments", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model, specialists: { source_reviewer: model, requirements_reviewer: model }, maxParallel: 2, maxTasks: 4, maxRevisions: 1 });
+    await db.update(supervisorRuns).set({ phase: "review", assignments: [] }).where(eq(supervisorRuns.runId, run!.id));
+    await stepSupervisor(d, run!.id);
+    expect(received.comments).toEqual([{ revisionId: revisionIds[0], body: "Acoustics: verify this specification", quote: "original window specification" }]);
+    expect(received.documents).toEqual([{ revisionId: revisionIds[0], title: "Acoustics", excerpt: "Acoustics: original window specification", truncated: false }]);
+  } finally {
+    server.close();
+    for (const table of [annotations, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, messages, artifactRevisions, artifacts, agentRuns, conversations])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
 
 for (const templateId of ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const)
 for (const independentReviewEnabled of [false, true]) integration(

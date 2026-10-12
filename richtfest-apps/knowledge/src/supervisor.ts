@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, notInArray, or, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or, isNull, lt, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
 import { z } from "zod";
@@ -15,7 +15,7 @@ import {
   artifacts,
 } from "./schema";
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
-import { conflict, sources, createArtifact } from "./workspace";
+import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider } from "./usage";
 import { resolveRunSource } from "./source-evidence";
 import {
@@ -329,6 +329,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
       const providerContext = {
         ...(context as object),
+        documentReview: await artifactReviewContext(d, run.conversationId),
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.
           const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
@@ -477,6 +478,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               sourceVersionIds: messages.sourceVersionIds,
               annotation: {
                 sourceVersionId: annotations.sourceVersionId,
+                artifactRevisionId: annotations.artifactRevisionId,
                 page: annotations.page,
                 quote: annotations.quote,
               },
@@ -505,10 +507,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           status: artifacts.status,
         })
         .from(artifacts)
+        .innerJoin(agentRuns, and(eq(artifacts.runId, agentRuns.id), eq(agentRuns.tenantId, d.tenantId)))
         .where(
           and(
             eq(artifacts.tenantId, d.tenantId),
             eq(artifacts.projectId, run.projectId),
+            run.conversationId ? eq(agentRuns.conversationId, run.conversationId) : sql`false`,
           ),
         )
         .orderBy(desc(artifacts.createdAt))

@@ -58,7 +58,7 @@ function ArtifactLink({
   return z.string().uuid().safeParse(artifactId).success ? (
     <Button asChild variant="outline">
       <Link
-        to={`/projects/${context.projectId}?panel=artifacts&artifact=${artifactId}`}
+        to={`/projects/${context.projectId}?panel=artifacts&artifact=${artifactId}${context.conversationId ? `&conversation=${context.conversationId}` : ""}`}
       >
         {label}
       </Link>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { formatProjectAddress } from "@richtfest/shared";
 import { api, list } from "../api";
@@ -11,7 +11,7 @@ import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import { Badge, Callout, Field } from "../components/ui/primitives";
 import { ThreadRail } from "../components/project-workspace/thread-rail";
-import { LoadState, Sources, SharedWork, Knowledge } from "./foundation";
+import { LoadState, Sources, Knowledge } from "./foundation";
 import { Transcript } from "../components/project-workspace/transcript";
 import { ArtifactPanel } from "../components/project-workspace/artifacts";
 import { LiveRun } from "../components/project-workspace/live-run";
@@ -107,6 +107,12 @@ export function ProjectWorkspace() {
   const selected =
     conversations.find((c) => c.id === params.get("conversation")) ||
     conversations.find((conversation) => !conversation.archivedAt);
+  const threadArtifacts = list(workspace.data?.artifacts).filter(
+    (artifact) => selected && artifact.conversationId === selected.id,
+  );
+  const threadTasks = list(workspace.data?.tasks).filter(
+    (task) => selected && task.conversationId === selected.id,
+  );
   const agentRunId = params.get("agentRun");
   const selectedRun = list(workspace.data?.runs).find(
     (run) => run.id === agentRunId,
@@ -128,6 +134,8 @@ export function ProjectWorkspace() {
     next.set("conversation", data.id);
     next.delete("message");
     next.delete("agentRun");
+    for (const key of ["artifact", "revision", "file", "sourceVersion", "page"])
+      next.delete(key);
     setParams(next);
   });
   const updateProject = useMutation({
@@ -142,6 +150,12 @@ export function ProjectWorkspace() {
   const [width, setWidth] = useState(38);
   const details = project.data?.project || project.data || {};
   const title = details.name || t("project");
+  if (view === "sharedWork") {
+    const next = new URLSearchParams(params);
+    next.delete("view");
+    next.set("panel", "tasks");
+    return <Navigate replace to={`?${next}`} />;
+  }
   return (
     <Page>
       <PageHeader
@@ -168,7 +182,6 @@ export function ProjectWorkspace() {
           "location",
           "details",
           "sources",
-          "sharedWork",
           "knowledge",
           "analytics",
         ].map((key) => (
@@ -203,6 +216,8 @@ export function ProjectWorkspace() {
                 projectId={id!}
                 conversations={conversations}
                 selectedId={selected?.id}
+                artifactCount={threadArtifacts.length}
+                taskCount={threadTasks.length}
                 creating={create.isPending}
                 onCreate={() =>
                   create.mutate({
@@ -221,6 +236,14 @@ export function ProjectWorkspace() {
                   else next.delete("conversation");
                   next.delete("message");
                   next.delete("agentRun");
+                  for (const key of [
+                    "artifact",
+                    "revision",
+                    "file",
+                    "sourceVersion",
+                    "page",
+                  ])
+                    next.delete(key);
                   setParams(next, { replace: true });
                 }}
               />
@@ -351,9 +374,9 @@ export function ProjectWorkspace() {
                   <ArtifactPanel
                     projectId={id!}
                     conversationId={selected?.id}
-                    artifacts={list(workspace.data?.artifacts)}
+                    artifacts={threadArtifacts}
                     runs={list(workspace.data?.runs)}
-                    tasks={list(workspace.data?.tasks)}
+                    tasks={threadTasks}
                     initialFiles={list(project.data?.files)}
                   />
                 </div>
@@ -485,7 +508,6 @@ export function ProjectWorkspace() {
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />
       )}
-      {view === "sharedWork" && <SharedWork projectId={id!} />}{" "}
       {view === "knowledge" && <Knowledge projectId={id!} />}
     </Page>
   );

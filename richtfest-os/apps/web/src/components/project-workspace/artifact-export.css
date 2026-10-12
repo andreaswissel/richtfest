@@ -27,7 +27,10 @@
   }
 
   /* Hidden application layout must not reserve extra printed pages. */
-  body *:not(:has(.artifact-export-print-document)):not(.artifact-export-print-document):not(.artifact-export-print-document *) {
+  body
+    *:not(:has(.artifact-export-print-document)):not(
+      .artifact-export-print-document
+    ):not(.artifact-export-print-document *) {
     display: none !important;
   }
 
@@ -41,6 +44,11 @@
     overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;
+    transform: none !important;
+    translate: none !important;
+    max-width: none !important;
+    border: 0 !important;
+    box-shadow: none !important;
   }
 
   .artifact-export-print-document,
