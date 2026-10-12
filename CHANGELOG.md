@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The 3D location editor now supports Rheinland-Pfalz addresses, including Alzey, using official building footprints and heights. Scenes from a different address are preserved but hidden by default. Unavailable trees, terrain and LiDAR are clearly identified.
+
 - Account settings offers a single recovery message with Reload app for unavailable sign-in code or Try again for failed security details. Failed passkey loads no longer appear as an empty list, and unavailable security actions stay disabled.
 
 - Aligned agent model settings and optional specialist controls across screen sizes and density modes. Role settings now explain that blank instructions retain built-in behavior.

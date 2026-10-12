@@ -3,17 +3,21 @@ import { projectAddressInput, type ProjectAddress, type LocationContext, type Lo
 export function validateLocationAddress(input: ProjectAddress) {
   const address = projectAddressInput.parse(input);
   if (!address.street || !address.city) throw new Error("Site address requires a street, house number and city in project details");
-  if (address.city.toLowerCase() !== "berlin" || (address.country && !["de", "deutschland", "germany"].includes(address.country.toLowerCase())))
-    throw new Error("Site context currently supports Berlin, Germany only");
+  if (address.country && !["de", "deutschland", "germany"].includes(address.country.toLowerCase()))
+    throw new Error("Site context currently supports Berlin and Rheinland-Pfalz, Germany only");
   const parts = address.street.match(/^(.+?)\s+(\d+)\s*([a-z]?)$/i);
   if (!parts || (address.postalCode && !/^\d{5}$/.test(address.postalCode)))
     throw new Error("Site address needs a street and exact house number (for example Giersstraße 20); check the postal code too");
   return { address, street: parts[1]!, house: Number(parts[2]), suffix: parts[3]!.toLowerCase() };
 }
 
-/** Resolve one exact official Berlin address. Never substitute a street/city centroid. */
+/** Resolve one exact house address. Never substitute a street/city centroid. */
 export async function resolveLocationAddress(input: ProjectAddress, signal: AbortSignal) {
   const { address, street, house, suffix } = validateLocationAddress(input);
+  if (address.city!.toLowerCase() !== "berlin") {
+    const { resolveRlpAddress } = await import("./location-rlp");
+    return resolveRlpAddress(address, signal);
+  }
   const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
   const normal = (value: string) => value.trim().toLowerCase().replaceAll("ß", "ss");
   // Fetch bounded spelling candidates, then require exact normalized equality
@@ -37,14 +41,14 @@ export async function resolveLocationAddress(input: ProjectAddress, signal: Abor
     throw new Error("Berlin address service returned invalid coordinates");
   return { siteId: `berlin-address:${p.adressid}`, projectAddress: address,
     address: `${p.str_name} ${p.hnr}${p.hnr_zusatz || ""}, ${p.plz} Berlin`, longitude, latitude,
-    radius: 100, origin: toUtm33(longitude, latitude),
+    radius: 100, origin: toUtm(longitude, latitude, 33),
     sources: [{ label: "Official Berlin address register (CC BY 3.0 DE); Amt für Statistik Berlin-Brandenburg; not a surveyed setting-out point", url: url.href, surveyedAt: null }] };
 }
-/** WGS84 -> ETRS89 / UTM zone 33N. WGS84/ETRS89 difference is immaterial
+/** WGS84 -> ETRS89 / UTM zone 32N or 33N. WGS84/ETRS89 difference is immaterial
  * for this unsurveyed display; this must not be used for engineering clearance. */
-export function toUtm33(longitude: number, latitude: number): [number, number] {
+export function toUtm(longitude: number, latitude: number, zone: 32 | 33): [number, number] {
   const a = 6378137, e2 = 0.00669438002290, k = 0.9996;
-  const p = latitude * Math.PI / 180, l = (longitude - 15) * Math.PI / 180;
+  const p = latitude * Math.PI / 180, l = (longitude - (zone * 6 - 183)) * Math.PI / 180;
   const ep = e2 / (1 - e2), n = a / Math.sqrt(1 - e2 * Math.sin(p) ** 2);
   const t = Math.tan(p) ** 2, c = ep * Math.cos(p) ** 2, A = Math.cos(p) * l;
   const m = a * ((1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256) * p
@@ -89,6 +93,11 @@ export async function boundedBody(response: Response, max: number): Promise<Buff
 }
 export async function importLocationContext(address: ProjectAddress, signal: AbortSignal): Promise<LocationContext> {
   const site = await resolveLocationAddress(address, signal);
+  if ("crs" in site && site.crs === "EPSG:25832") {
+    const { importRlpBuildings } = await import("./location-rlp");
+    const { buildings, sources } = await importRlpBuildings(site.origin, site.radius, signal);
+    return { ...site, buildings, trees: [], sources: [...site.sources, ...sources], importedAt: new Date().toISOString() };
+  }
   const { origin, radius: r } = site;
   const bbox = [origin[0] - r, origin[1] - r, origin[0] + r, origin[1] + r, "EPSG:25833"].join(",");
   const layers = [

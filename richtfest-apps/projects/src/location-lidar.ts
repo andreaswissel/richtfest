@@ -135,6 +135,7 @@ export class LasCrop {
 }
 const crcTable = Array.from({ length: 256 }, (_, n) => { for (let k=0;k<8;k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1; return n >>> 0; });
 export async function fetchLocationLidar(context: LocationContext, signal: AbortSignal): Promise<LocationPointCloud> {
+  if (context.crs === "EPSG:25832") throw new Error("Site LiDAR is not available for Rheinland-Pfalz; no substitute data imported");
   const { entries, total } = await directory(signal), [e,n] = context.origin, r = context.radius;
   const tiles: ZipEntry[] = [];
   for (let x = Math.floor((e-r)/1000); x <= Math.floor((e+r)/1000); x++) for (let y = Math.floor((n-r)/1000); y <= Math.floor((n+r)/1000); y++) {

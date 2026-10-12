@@ -316,8 +316,14 @@ export function LocationEditor({
       setMeasurement((m) => (m.length === 1 ? [...m, point] : [point])),
   };
   const hasContext = !!state.data?.context;
+  const addressMismatch =
+    hasContext && !locationMatchesAddress(state.data!.context!, address);
+  const [retainedAddress, setRetainedAddress] = useState<string | null>(null);
+  const showContext =
+    hasContext && (!addressMismatch || retainedAddress === addressLabel);
+  const rlpContext = state.data?.context?.crs === "EPSG:25832";
   useEffect(() => {
-    if (!hasContext || !host.current) return;
+    if (!showContext || !host.current) return;
     let disposed = false;
     void import("./viewport")
       .then(({ createViewport }) => {
@@ -340,7 +346,7 @@ export function LocationEditor({
       viewport.current = null;
       setViewportReady(false);
     };
-  }, [hasContext]);
+  }, [showContext]);
   useEffect(() => {
     if (viewport.current && state.data?.context)
       viewport.current.update({
@@ -508,41 +514,48 @@ export function LocationEditor({
           )}
         </Callout>
       )}
-      {hasContext &&
-        (!hasAddress ||
-          !locationMatchesAddress(state.data!.context!, address)) && (
-          <Callout>
-            <p>
-              {t(
-                hasAddress
-                  ? "locationAddressChanged"
-                  : "locationAddressMissing",
-              )}
-            </p>
-            {hasAddress && <p>{addressLabel}</p>}
-            <Link to={`/projects/${projectId}?view=details`}>
-              {t("projectDetails")} ↗
-            </Link>
-            {hasAddress && (
-              <>
-                <p>{t("locationAddressObjects")}</p>
-                <Button
-                  variant="outline"
-                  disabled={
-                    !!draft ||
-                    scene.objects.length > 0 ||
-                    importContext.isPending ||
-                    busy(state.data?.contextJob.status) ||
-                    busy(state.data?.lidarJob.status)
-                  }
-                  onClick={() => importContext.mutate()}
-                >
-                  {t("locationUseProjectAddress")}
-                </Button>
-              </>
+      {addressMismatch && (
+        <Callout>
+          <p>
+            {t(
+              hasAddress ? "locationAddressChanged" : "locationAddressMissing",
             )}
-          </Callout>
-        )}
+          </p>
+          {hasAddress && <p>{addressLabel}</p>}
+          <p>
+            {t("locationRetainedSite")}: {state.data!.context!.address}
+          </p>
+          <Link to={`/projects/${projectId}?view=details`}>
+            {t("projectDetails")} ↗
+          </Link>
+          <Button
+            variant="outline"
+            onClick={() =>
+              setRetainedAddress(showContext ? null : addressLabel)
+            }
+          >
+            {t(showContext ? "locationHideRetained" : "locationViewRetained")}
+          </Button>
+          {hasAddress && (
+            <>
+              <p>{t("locationAddressObjects")}</p>
+              <Button
+                variant="outline"
+                disabled={
+                  !!draft ||
+                  scene.objects.length > 0 ||
+                  importContext.isPending ||
+                  busy(state.data?.contextJob.status) ||
+                  busy(state.data?.lidarJob.status)
+                }
+                onClick={() => importContext.mutate()}
+              >
+                {t("locationUseProjectAddress")}
+              </Button>
+            </>
+          )}
+        </Callout>
+      )}
       {!hasContext ? (
         <div className="location-empty">
           <Scan className="size-icon" />
@@ -572,7 +585,7 @@ export function LocationEditor({
               : t("locationSetup")}
           </Button>
         </div>
-      ) : (
+      ) : showContext ? (
         <>
           <div className="location-toolbar">
             <div className="location-toolbar-group">
@@ -675,90 +688,98 @@ export function LocationEditor({
                   )}
                 </details>
               </div>
-              <div className="location-layer-section">
-                {layer(
-                  "trees",
-                  t("locationTrees"),
-                  <Trees className="size-icon-sm" />,
-                  state.data!.context!.trees.length,
-                )}
-                <Field label={t("locationTreeStyle")}>
-                  <Segmented
-                    items={[
-                      { value: "schematic", label: t("locationSchematic") },
-                      {
-                        value: "illustrative",
-                        label: t("locationIllustrative"),
-                      },
-                    ]}
-                    value={treeStyle}
-                    onChange={(value) => {
-                      setTreeStyle(
-                        value === "illustrative" ? "illustrative" : "schematic",
-                      );
-                      if (tool === "measure") setTool("select");
-                    }}
-                  />
-                </Field>
-                {treeStyle === "illustrative" && (
-                  <p className="text-ui-xs muted">
-                    {t("locationTreeStyleHint")}
-                  </p>
-                )}
-                <details>
-                  <summary>{t("locationReadOnly")}</summary>
-                  {state.data!.context!.trees.map((b) =>
-                    row(
-                      `tree:${b.id}`,
-                      `${b.species} · ${b.height ?? "—"} m`,
+              {rlpContext ? (
+                <Callout>{t("locationRlpCoverage")}</Callout>
+              ) : (
+                <>
+                  <div className="location-layer-section">
+                    {layer(
+                      "trees",
+                      t("locationTrees"),
                       <Trees className="size-icon-sm" />,
-                    ),
-                  )}
-                </details>
-              </div>
-              <div className="location-layer-section">
-                {layer(
-                  "lidar",
-                  t("locationLidar"),
-                  <Scan className="size-icon-sm" />,
-                )}
-                <p className="text-ui-xs muted">
-                  {busy(state.data?.lidarJob.status) || cloud.isFetching
-                    ? t("locationCloudLoading")
-                    : t("locationCloudHint")}
-                </p>
-                {(state.data?.lidarJob.error || cloud.error) && (
-                  <Callout tone="error">
-                    {state.data?.lidarJob.error || cloud.error?.message}
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        state.data?.lidarJob.status === "failed"
-                          ? importLidar.mutate()
-                          : void cloud.refetch()
-                      }
-                    >
-                      {t("locationRetry")}
-                    </Button>
-                  </Callout>
-                )}
-                {cloud.data && (
-                  <>
-                    <NumberField
-                      label={t("locationClip")}
-                      value={clipHeight}
-                      min={-20}
-                      onChange={setClipHeight}
-                    />
+                      state.data!.context!.trees.length,
+                    )}
+                    <Field label={t("locationTreeStyle")}>
+                      <Segmented
+                        items={[
+                          { value: "schematic", label: t("locationSchematic") },
+                          {
+                            value: "illustrative",
+                            label: t("locationIllustrative"),
+                          },
+                        ]}
+                        value={treeStyle}
+                        onChange={(value) => {
+                          setTreeStyle(
+                            value === "illustrative"
+                              ? "illustrative"
+                              : "schematic",
+                          );
+                          if (tool === "measure") setTool("select");
+                        }}
+                      />
+                    </Field>
+                    {treeStyle === "illustrative" && (
+                      <p className="text-ui-xs muted">
+                        {t("locationTreeStyleHint")}
+                      </p>
+                    )}
+                    <details>
+                      <summary>{t("locationReadOnly")}</summary>
+                      {state.data!.context!.trees.map((b) =>
+                        row(
+                          `tree:${b.id}`,
+                          `${b.species} · ${b.height ?? "—"} m`,
+                          <Trees className="size-icon-sm" />,
+                        ),
+                      )}
+                    </details>
+                  </div>
+                  <div className="location-layer-section">
+                    {layer(
+                      "lidar",
+                      t("locationLidar"),
+                      <Scan className="size-icon-sm" />,
+                    )}
                     <p className="text-ui-xs muted">
-                      {t("locationCloudStats")}
-                      <br />
-                      {cloud.data.classifications.length.toLocaleString()} /{" "}
-                      {cloud.data.sourcePointCount.toLocaleString()}
+                      {busy(state.data?.lidarJob.status) || cloud.isFetching
+                        ? t("locationCloudLoading")
+                        : t("locationCloudHint")}
                     </p>
-                  </>
-                )}
-              </div>
+                    {(state.data?.lidarJob.error || cloud.error) && (
+                      <Callout tone="error">
+                        {state.data?.lidarJob.error || cloud.error?.message}
+                        <Button
+                          variant="outline"
+                          onClick={() =>
+                            state.data?.lidarJob.status === "failed"
+                              ? importLidar.mutate()
+                              : void cloud.refetch()
+                          }
+                        >
+                          {t("locationRetry")}
+                        </Button>
+                      </Callout>
+                    )}
+                    {cloud.data && (
+                      <>
+                        <NumberField
+                          label={t("locationClip")}
+                          value={clipHeight}
+                          min={-20}
+                          onChange={setClipHeight}
+                        />
+                        <p className="text-ui-xs muted">
+                          {t("locationCloudStats")}
+                          <br />
+                          {cloud.data.classifications.length.toLocaleString()} /{" "}
+                          {cloud.data.sourcePointCount.toLocaleString()}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
               <div className="location-layer-section">
                 {layer(
                   "objects",
@@ -1072,13 +1093,15 @@ export function LocationEditor({
               ) : (
                 <>
                   <p className="muted text-ui-sm">{t("locationSelectHint")}</p>
-                  <Callout>
-                    {t(
-                      treeStyle === "illustrative"
-                        ? "locationTreeIllustrationHint"
-                        : "locationTreeHint",
-                    )}
-                  </Callout>
+                  {!rlpContext && (
+                    <Callout>
+                      {t(
+                        treeStyle === "illustrative"
+                          ? "locationTreeIllustrationHint"
+                          : "locationTreeHint",
+                      )}
+                    </Callout>
+                  )}
                   <Callout>{t("locationBuildingHint")}</Callout>
                 </>
               )}
@@ -1094,13 +1117,15 @@ export function LocationEditor({
                     {source.label}
                   </a>
                 ))}
-                <a
-                  href="https://gdi.berlin.de/geonetwork/srv/api/records/85a97801-36bb-4627-8790-f5e53b1e38b3"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  LiDAR · 24.02.–02.03.2021 · dl-de-zero-2.0
-                </a>
+                {!rlpContext && (
+                  <a
+                    href="https://gdi.berlin.de/geonetwork/srv/api/records/85a97801-36bb-4627-8790-f5e53b1e38b3"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    LiDAR · 24.02.–02.03.2021 · dl-de-zero-2.0
+                  </a>
+                )}
                 {cloud.data && (
                   <p>
                     {t("locationGround")}:{" "}
@@ -1113,13 +1138,13 @@ export function LocationEditor({
           <footer className="location-status">
             <span>{t("locationOrigin")}</span>
             <span>
-              EPSG:25833 ·{" "}
+              {state.data!.context!.crs ?? "EPSG:25833"} ·{" "}
               {state.data!.context!.origin.map((n) => n.toFixed(2)).join(" / ")}
             </span>
             <span>{t("locationLighting")}</span>
           </footer>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

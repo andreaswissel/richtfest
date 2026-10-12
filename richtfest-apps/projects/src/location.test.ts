@@ -1,11 +1,11 @@
 import { expect, test, spyOn } from "bun:test";
-import { buildingFeature, treeFeature, toUtm33, resolveLocationAddress, importLocationContext } from "./location-context";
-import { LasCrop, rangeResponse, zipDirectory } from "./location-lidar";
+import { buildingFeature, treeFeature, toUtm, resolveLocationAddress, importLocationContext } from "./location-context";
+import { LasCrop, rangeResponse, zipDirectory, fetchLocationLidar } from "./location-lidar";
 import { locationMatchesAddress } from "@richtfest/shared";
 
 test("real Berlin coordinate conversion, south-positive rings and null heights", () => {
   // Independent EPSG:25833 reference for the first supplied Berlin street tree.
-  const tree = toUtm33(13.48238982, 52.55715888);
+  const tree = toUtm(13.48238982, 52.55715888, 33);
   expect(tree[0]).toBeCloseTo(397116.74, 0);
   expect(tree[1]).toBeCloseTo(5824091.87, 0);
   const feature = { id: "tree.1", properties: { gisid: "1", baumhoehe: null, kronedurch: "0", art_dtsch: "Linde" }, geometry: { type: "Point", coordinates: tree } };
@@ -23,6 +23,7 @@ test("project address resolves exact Berlin house numbers and anchors context to
   let features: any[] = [feature];
   const upstream = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
+    if (url.hostname === "maps.rlp.de") return Response.json({ features: [] });
     if (url.pathname.endsWith("adressen_berlin")) {
       const house = Number(url.searchParams.get("CQL_FILTER")?.match(/hnr=(\d+)/)?.[1]);
       const matches = features.filter(f => f.properties.hnr === house);
@@ -53,6 +54,61 @@ test("project address resolves exact Berlin house numbers and anchors context to
     await expect(resolveLocationAddress(address, new AbortController().signal)).rejects.toThrow("not found");
     await expect(resolveLocationAddress({ ...address, city: "Hamburg" }, new AbortController().signal)).rejects.toThrow("Berlin");
     await expect(resolveLocationAddress({}, new AbortController().signal)).rejects.toThrow("requires");
+  } finally { upstream.mockRestore(); }
+});
+
+test("Alzey imports exact house context across RLP tile boundaries without invented layers or heights", async () => {
+  const address = { street: "Bendenweg 6", postalCode: "55232", city: "Alzey", country: "DE" };
+  const feature = { id: "DERPLP150000Q0dQ", geometry: { type: "Point", coordinates: [8.09628, 49.739843] },
+    properties: { typ: "Haus", bundesland: "Rheinland-Pfalz", strasse: "Bendenweg", haus: "6", ort: "Alzey", plz: "55232" } };
+  let features: unknown[] = [feature], broken = false;
+  const ring = (coords: string) => `<gml:LinearRing><gml:posList srsDimension="3">${coords}</gml:posList></gml:LinearRing>`;
+  const building = (id: string, x: number, y: number, height = "") => `<bldg:Building gml:id="${id}">
+    ${height ? `<bldg:measuredHeight uom="urn:adv:uom:m">${height}</bldg:measuredHeight>` : ""}
+    <bldg:boundedBy><bldg:GroundSurface><gml:Polygon>
+      <gml:exterior>${ring(`${x} ${y} 170 ${x + 12} ${y} 170 ${x + 12} ${y + 7} 170 ${x} ${y} 170`)}</gml:exterior>
+      <gml:interior>${ring(`${x + 2} ${y + 1} 170 ${x + 4} ${y + 1} 170 ${x + 4} ${y + 2} 170 ${x + 2} ${y + 1} 170`)}</gml:interior>
+    </gml:Polygon></bldg:GroundSurface></bldg:boundedBy>
+    <bldg:boundedBy><bldg:RoofSurface><gml:Polygon><gml:exterior>${ring("1 2 180 3 4 180 5 6 180 1 2 180")}</gml:exterior></gml:Polygon></bldg:RoofSurface></bldg:boundedBy>
+    <xal:ThoroughfareName>Bendenweg</xal:ThoroughfareName><xal:ThoroughfareNumber>6</xal:ThoroughfareNumber>
+  </bldg:Building>`;
+  const tile = (body: string) => `<core:CityModel xmlns:core="http://www.opengis.net/citygml/1.0" xmlns:bldg="http://www.opengis.net/citygml/building/1.0" xmlns:gml="http://www.opengis.net/gml" xmlns:xal="urn:oasis:names:tc:ciq:xsdschema:xAL:2.0">
+    <gml:boundedBy><gml:Envelope srsName="urn:adv:crs:ETRS89_UTM32*DE_DHHN2016_NH"/></gml:boundedBy>${body}</core:CityModel>`;
+  const upstream = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(String(input));
+    if (url.hostname === "maps.rlp.de") return Response.json({ features });
+    const body = url.pathname.endsWith("LoD2_32_434_5508_2_RP.gml")
+      ? tile(building("south", 434880, 5509999))
+      : url.pathname.endsWith("LoD2_32_434_5510_2_RP.gml")
+        ? tile(building("site", 434885, 5510098, "13.455") + building("outside", 436000, 5512000)) : "unexpected tile";
+    const bytes = new TextEncoder().encode(broken ? body.slice(0, -15) : body);
+    // Split XML tags and numeric lists across response chunks.
+    return new Response(new ReadableStream({ start(c) { for (let i = 0; i < bytes.length; i += 37) c.enqueue(bytes.slice(i, i + 37)); c.close(); } }));
+  }, { preconnect: fetch.preconnect }));
+  try {
+    const context = await importLocationContext(address, AbortSignal.timeout(5000));
+    expect(context).toMatchObject({ address: "Bendenweg 6, 55232 Alzey", crs: "EPSG:25832", projectAddress: address, trees: [] });
+    // Independent official EPSG:25832 address result (WGS84 rounding < 0.1m).
+    expect(context.origin[0]).toBeCloseTo(434884.641, 0);
+    expect(context.origin[1]).toBeCloseTo(5510097.868, 0);
+    expect(context.buildings.map(b => b.id)).toEqual(["south", "site"]);
+    expect(context.buildings[0]!.height).toBeNull();
+    const site = context.buildings[1]!;
+    expect(site).toMatchObject({ height: 13.455, label: "Bendenweg 6", sourceId: "site" });
+    expect(site.polygons).toHaveLength(1);
+    expect(site.polygons[0]).toHaveLength(2);
+    expect(site.polygons[0]![0]![0]![0]).toBeCloseTo(0.35, 1);
+    expect(site.polygons[0]![0]![0]![1]).toBeCloseTo(-0.19, 1);
+    expect(context.sources).toHaveLength(3);
+    await expect(fetchLocationLidar(context, AbortSignal.timeout(5000))).rejects.toThrow("not available for Rheinland-Pfalz");
+    broken = true;
+    await expect(importLocationContext(address, AbortSignal.timeout(5000))).rejects.toThrow();
+    for (const properties of [{ typ: "Strasse" }, { haus: "60" }, { ort: "Mainz" }, { plz: "55116" }, { bundesland: "Hessen" }]) {
+      features = [{ ...feature, properties: { ...feature.properties, ...properties } }];
+      await expect(resolveLocationAddress(address, AbortSignal.timeout(5000))).rejects.toThrow("not found");
+    }
+    features = [feature, { ...feature, id: "other" }];
+    await expect(resolveLocationAddress(address, AbortSignal.timeout(5000))).rejects.toThrow("ambiguous");
   } finally { upstream.mockRestore(); }
 });
 

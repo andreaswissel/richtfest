@@ -65,7 +65,9 @@ export type LocationContext = {
   /** Saved address used for this import; absent on legacy fixed-site scenes. */
   projectAddress?: ProjectAddress;
   address: string;
-  /** EPSG:25833 */
+  /** Legacy contexts omit this and use EPSG:25833 (Berlin). */
+  crs?: "EPSG:25832" | "EPSG:25833";
+  /** Metres in crs. Rheinland-Pfalz uses EPSG:25832. */
   origin: [number, number];
   longitude: number;
   latitude: number;
