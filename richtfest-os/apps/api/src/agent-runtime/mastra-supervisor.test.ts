@@ -20,7 +20,8 @@ test("concept authoring accepts separate outline and section contracts through M
     sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 88 }] })),
     attachments: [{ versionId, pageStart: 17, pageEnd: 88, section: "calculationAppendix", label: "Original appendix" }],
   };
-  const section = { content: `WE31 Kind 1: source-stated 40.5 dB, page 88 [${versionId}].`, citations: [versionId], complete: true };
+  const section = { content: `${"Source-backed detail. ".repeat(650)}WE31 Kind 1: source-stated 40.5 dB, page 88 [${versionId}].`, citations: [versionId], complete: true };
+  expect(section.content.length).toBeGreaterThan(12000);
   for (const [documentTask, output] of [["outline", outline], ["section", section]] as const) {
     const request = { ...base, phase: "review" as const, goal: "Create Außenlärmkonzept", modelPolicy: responsePolicy,
       context: { documentTask, documentTemplate: { id, version: 1 } } };
@@ -29,7 +30,7 @@ test("concept authoring accepts separate outline and section contracts through M
     })).toEqual(output);
     await expect(callMastraSupervisor(request, "test-key", {
       model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: documentTask === "outline"
-        ? { ...outline, id: "interior-noise-concept" } : { ...section, content: "x".repeat(12001) } }),
+        ? { ...outline, id: "interior-noise-concept" } : { ...section, content: " " } }),
     })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
   }
 });

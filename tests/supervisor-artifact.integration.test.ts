@@ -67,7 +67,7 @@ integration("continued document review receives only its thread's comments and t
   }
 });
 
-integration("acoustic reports preserve late-page results and attachments across checkpoints; limit failures publish no artifact", async () => {
+integration("acoustic reports preserve oversized sections and resume old character failures; incomplete reports publish no artifact", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const { PDFDocument } = await import("../richtfest-apps/knowledge/node_modules/pdf-lib");
   const pdf = await PDFDocument.create();
@@ -75,10 +75,11 @@ integration("acoustic reports preserve late-page results and attachments across 
   const bytes = Buffer.from(await pdf.save());
   const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
   try {
-    for (const scenario of ["resume", "timeout", "review", "large", "legacy_limit", "tokens", "characters", "placeholder", "incomplete"] as const) {
+    for (const scenario of ["resume", "timeout", "review", "large", "legacy_limit", "legacy_piece_limit", "tokens", "characters", "placeholder", "incomplete"] as const) {
       const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
       const keys = acousticSectionKeys("exterior-noise-concept");
-      const large = ["large", "legacy_limit", "review"].includes(scenario);
+      const legacyLimit = scenario === "legacy_limit" || scenario === "legacy_piece_limit";
+      const large = ["large", "legacy_limit", "legacy_piece_limit", "review"].includes(scenario);
       let interrupted = false;
       let permitted = true;
       let runId = "";
@@ -117,7 +118,7 @@ integration("acoustic reports preserve late-page results and attachments across 
               { versionId, pageStart: 3, pageEnd: 3, section: "calculationAppendix", label: "All calculation pages" }],
           };
           else if (context.documentTask === "section") {
-            if (scenario === "legacy_limit" && context.section === "openIssues" && !interrupted) {
+            if (legacyLimit && context.section === "openIssues" && !interrupted) {
               interrupted = true;
               // Stop with a real saved draft above the old aggregate cap. Below,
               // seed the terminal diagnostics emitted by the previous version.
@@ -136,11 +137,12 @@ integration("acoustic reports preserve late-page results and attachments across 
               diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" },
             });
             output = { complete: scenario !== "incomplete", citations: context.sources.length ? [versionId] : [], content:
-              scenario === "characters" ? "x".repeat(12001)
-                : scenario === "placeholder" ? "Nicht verwendet."
+              scenario === "placeholder" ? "Nicht verwendet."
                 : context.sources.length ? `${context.sources.map((s: any) => s.text).join("\n")} [${versionId}]`
                 : `No further ${context.section} evidence supplied; obtain the missing project input.${large ? "\n" + "Detailed evidence gap; obtain the original project specification. ".repeat(170) : ""}`,
             };
+            if (scenario === "characters" && context.sources.length)
+              output.content += `\n\n${"Long evidence note. ".repeat(3000)}\n\n| Source | Final result |\n| --- | --- |\n| [${versionId}] | Unverified, retain for review |`;
           } else throw new Error("Unexpected document call");
           return { status: "completed", output };
         },
@@ -151,11 +153,11 @@ integration("acoustic reports preserve late-page results and attachments across 
         const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Create exterior-noise-concept v1", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
         runId = run!.id;
         await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
-          specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: scenario === "review", maxParallel: 2, maxTasks: 4, maxRevisions: 1,
+          specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: scenario === "review" || scenario === "characters", maxParallel: 2, maxTasks: 4, maxRevisions: 1,
           executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: 60000, timeoutSeconds: 180 },
         });
-        for (let step = 0; step < (scenario === "legacy_limit" ? 3 : 5); step++) await stepSupervisor(d, runId);
-        if (scenario === "legacy_limit") {
+        for (let step = 0; step < (legacyLimit ? 3 : 5); step++) await stepSupervisor(d, runId);
+        if (legacyLimit) {
           const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
           const parts = Object.values((saved!.review as any).documentDraft.sections).flatMap((s: any) => s.parts);
           expect(parts.map((p: any) => p.content).join("\n\n").length).toBeGreaterThan(60000);
@@ -176,10 +178,10 @@ integration("acoustic reports preserve late-page results and attachments across 
           }
           await db.insert(agentRunEvents).values({ tenantId, runId, eventType: "provider_call_failed", resultSummary: "review",
             paramsSummary: JSON.stringify({ runId, diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
-              issues: [{ code: "too_big", path: ["content"], maximum: 60000 }] } }),
+              issues: [{ code: "too_big", path: ["content"], maximum: scenario === "legacy_piece_limit" ? 12000 : 60000 }] } }),
           });
         }
-        if (scenario === "timeout" || scenario === "legacy_limit") {
+        if (scenario === "timeout" || legacyLimit) {
           const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
           expect(failed!.status).toBe("failed");
           expect(failed!.error).toContain(`phase=review; category=${scenario === "timeout" ? "timeout" : "validation"};`);
@@ -204,13 +206,21 @@ integration("acoustic reports preserve late-page results and attachments across 
         }
         const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
         const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
-        if (scenario === "resume" || scenario === "timeout" || large) {
-          expect(interrupted).toBe(["resume", "timeout", "legacy_limit"].includes(scenario));
+        if (scenario === "resume" || scenario === "timeout" || scenario === "characters" || large) {
+          expect(interrupted).toBe(["resume", "timeout", "legacy_limit", "legacy_piece_limit"].includes(scenario));
           expect(result!.status).toBe("needs_review");
           expect(revisions).toHaveLength(1);
           if (large) {
             expect(revisions[0]!.content.length).toBeGreaterThan(60000);
             expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 1) * 170);
+          }
+          if (scenario === "characters") {
+            const components = (revisions[0]!.payload as any).template.components;
+            expect(components.length).toBeGreaterThan(200000);
+            expect(revisions[0]!.content).toContain(components);
+            const pieces = calls.filter(call => call === "components").length;
+            expect(components.match(/Long evidence note\./g)).toHaveLength(pieces * 3000);
+            expect(components.match(/Unverified, retain for review/g)).toHaveLength(pieces);
           }
           expect(revisions[0]!.content).toContain("Last room: required 33.2 dB; available 42.1 dB.");
           expect(revisions[0]!.content.match(/Component detail\./g)).toHaveLength(800);
@@ -224,7 +234,6 @@ integration("acoustic reports preserve late-page results and attachments across 
           const failure = events.find(e => e.eventType === "provider_call_failed");
           const diagnostics = JSON.parse(failure!.paramsSummary!).diagnostics;
           if (scenario === "tokens") expect(diagnostics.finishReason).toBe("length");
-          if (scenario === "characters") expect(diagnostics.issues).toContainEqual({ code: "too_big", path: ["content"], maximum: 12000 });
           if (scenario === "placeholder") expect(diagnostics.issues[0].path).toEqual(["document", "template", "preliminaryRemarks"]);
           if (scenario === "incomplete") expect(diagnostics.issues[0].path).toEqual(["complete"]);
         }

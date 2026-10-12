@@ -103,7 +103,7 @@ export async function authorAcousticConcept(input: {
         previousReview: draft.previousReview,
       }, value => partSchema.parse(value)));
       progress.parts.push(part);
-      // A response cap applies to each piece, not the concatenated report.
+      // Keep complete pieces even when they exceed the soft writing target.
       await input.checkpoint(draft, key, index + 1, batches.length);
     }
     bodies[key] = progress.parts.map(part => part.content).join("\n\n");

@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Acoustic concept reports now treat section length as a writing target instead of failing on character counts. Complete text, tables and citations are preserved; Retry run resumes saved work after older character-limit failures. Token limits and review safeguards remain unchanged.
+
 - Agent runs now retain structured intermediate results and tool receipts. Retry reuses saved work without duplicating drafts or questions; Run again starts fresh. Saved inputs, outputs and review links provide a foundation for future training datasets.
 
 ## 2026-10-12

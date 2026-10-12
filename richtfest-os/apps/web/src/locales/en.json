@@ -276,7 +276,7 @@
   "workspaceFailureTruncated": "The report section stopped at the provider’s output length limit. No completed report was produced. Split the report into smaller sections or check output-token limits before starting a new run.",
   "workspaceFailureIncomplete": "The agent marked a report section as incomplete, so no completed report was produced. Narrow the request or check output limits before starting a new run. Provider token truncation was not confirmed.",
   "workspaceFailureContentLimit": "Report content exceeded a character limit",
-  "workspaceFailureContentAction": "No completed report was produced. Retry run resumes saved acoustic sections after an older combined-report limit failure. For a response or section limit, narrow the request or check character limits before starting a new run. This is not a token limit.",
+  "workspaceFailureContentAction": "No completed report was produced. Acoustic report sections now use soft character targets: choose Retry run to resume saved work after an older character-limit failure. Other report formats still enforce character limits. This is not a token limit.",
   "workspaceActivityProviderCallFailed": "Provider call failed",
   "workspaceActivityResumed": "Resuming work",
   "workspaceActivityPlanned": "Plan prepared and specialist tasks assigned",

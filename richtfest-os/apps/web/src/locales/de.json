@@ -276,7 +276,7 @@
   "workspaceFailureTruncated": "Der Berichtsabschnitt wurde am Ausgabelängenlimit des Anbieters abgebrochen. Es wurde kein vollständiger Bericht erstellt. Teilen Sie den Bericht in kleinere Abschnitte auf oder prüfen Sie die Ausgabe-Token-Limits vor einem neuen Lauf.",
   "workspaceFailureIncomplete": "Der Agent hat einen Berichtsabschnitt als unvollständig markiert. Deshalb wurde kein vollständiger Bericht erstellt. Grenzen Sie den Auftrag ein oder prüfen Sie die Ausgabelimits vor einem neuen Lauf. Ein Abbruch durch das Tokenlimit des Anbieters wurde nicht bestätigt.",
   "workspaceFailureContentLimit": "Der Berichtsinhalt überschritt ein Zeichenlimit",
-  "workspaceFailureContentAction": "Es wurde kein vollständiger Bericht erstellt. Nach einem Abbruch am früheren Gesamtberichtslimit setzt „Ausführung erneut starten“ gespeicherte Akustikabschnitte fort. Bei einem Antwort- oder Abschnittslimit grenzen Sie den Auftrag ein oder prüfen Sie die Zeichenlimits vor einem neuen Lauf. Dies ist kein Tokenlimit.",
+  "workspaceFailureContentAction": "Es wurde kein vollständiger Bericht erstellt. Akustikabschnitte verwenden jetzt unverbindliche Zeichenrichtwerte: „Ausführung erneut versuchen“ setzt gespeicherte Arbeit nach einem früheren Zeichenlimit-Abbruch fort. Für andere Berichtsformate gelten weiterhin feste Zeichenlimits. Dies ist kein Tokenlimit.",
   "workspaceActivityProviderCallFailed": "Anbieteraufruf fehlgeschlagen",
   "workspaceActivityResumed": "Arbeit wird fortgesetzt",
   "workspaceActivityPlanned": "Plan erstellt und Fachaufgaben zugewiesen",

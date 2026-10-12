@@ -30,7 +30,7 @@ export const acousticDocumentTemplateSchema = z.union([soundInsulationTemplateSc
 /** A proposed deliverable, distinct from the short conversational handoff. */
 export const agentDocumentSchema = z.object({
   title: z.string().trim().min(1).max(300),
-  // Assembled documents are not model responses; their template bounds each section.
+  // Assembled documents are not model responses; preserve their complete sections.
   content: z.string().trim().min(1),
   template: acousticDocumentTemplateSchema.optional(),
 }).strict();
@@ -48,7 +48,7 @@ export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchem
     if (typeof value === "string" && /^(?:nicht verwendet|siehe (?:konzeptdatensatz|nachfolgenden)|not used|see (?:concept dataset|below))(?:[.;\s]|$)/i.test(value))
       throw new z.ZodError([{ code: "custom", path: ["document", "template", key], message: "Author this section; a placeholder is not a report." }]);
   }
-  // null is reserved for application-assembled, already bounded section pieces.
+  // null is reserved for application-assembled, validated section pieces.
   const schema = maxCharacters === null ? agentDocumentSchema
     : agentDocumentSchema.extend({ content: z.string().trim().min(1).max(maxCharacters) });
   if (template.id !== "sound-insulation-review") {

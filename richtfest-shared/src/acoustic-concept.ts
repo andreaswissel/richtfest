@@ -1,7 +1,8 @@
 import { z } from "zod";
 
-// Sections are assembled from bounded authoring calls, not one model response.
-const section = z.string().trim().min(1).max(200000);
+// Length is writing guidance, not grounds for discarding complete acoustic evidence.
+// Model token budgets still bound each call; assembled sections retain every piece.
+const section = z.string().trim().min(1);
 const metadata = z.string().trim().min(1).max(300).nullable();
 export const acousticConceptIdSchema = z.enum(["interior-noise-concept", "exterior-noise-concept"]);
 export type AcousticConceptId = z.infer<typeof acousticConceptIdSchema>;
@@ -70,7 +71,7 @@ export const acousticConceptOutlineSchema = z.object({
 }).strict();
 
 export const acousticSectionOutputSchema = z.object({
-  content: z.string().trim().min(1).max(12000),
+  content: section.describe("Aim for 12000 characters or fewer. This is a soft target: preserve complete evidence, citations and tables rather than truncating to fit."),
   citations: z.array(z.string().uuid()).max(100),
   complete: z.boolean(),
 }).strict();
