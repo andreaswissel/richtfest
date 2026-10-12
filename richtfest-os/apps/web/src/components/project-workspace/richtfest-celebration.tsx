@@ -13,7 +13,10 @@ export function useRichtfestCelebration(
   messages: WorkspaceMessage[],
 ) {
   const [enabled, setEnabled] = useState(false);
-  const [celebrating, setCelebrating] = useState<string>();
+  const [celebrating, setCelebrating] = useState<{
+    id: string;
+    preview: boolean;
+  }>();
   const taps = useRef({ count: 0, startedAt: 0 });
   const pending = useRef(new Set<string>());
   const seen = useRef(new Set<string>());
@@ -49,7 +52,7 @@ export function useRichtfestCelebration(
         continue;
       pending.current.delete(run.id);
       seen.current.add(run.id);
-      setCelebrating(run.id);
+      setCelebrating({ id: run.id, preview: false });
     }
   }, [enabled, conversationId, runs, messages]);
 
@@ -82,7 +85,8 @@ export function useRichtfestCelebration(
       taps.current = { count: 0, startedAt: now };
     if (++taps.current.count === 10) {
       taps.current = { count: 0, startedAt: 0 };
-      setEnabled((value) => !value);
+      setEnabled(true);
+      setCelebrating({ id: crypto.randomUUID(), preview: true });
     }
   }
 
@@ -92,14 +96,21 @@ export function useRichtfestCelebration(
     onChatClick,
     celebration: celebrating ? (
       <RichtfestCelebration
-        key={celebrating}
+        key={celebrating.id}
+        preview={celebrating.preview}
         onDismiss={() => setCelebrating(undefined)}
       />
     ) : null,
   };
 }
 
-function RichtfestCelebration({ onDismiss }: { onDismiss: () => void }) {
+function RichtfestCelebration({
+  onDismiss,
+  preview,
+}: {
+  onDismiss: () => void;
+  preview: boolean;
+}) {
   const t = useT();
   return (
     <div className="richtfest-celebration">
@@ -151,7 +162,7 @@ function RichtfestCelebration({ onDismiss }: { onDismiss: () => void }) {
           {t("workspaceRichtfestTitle")}
         </p>
         <p className="text-ui-sm text-muted-foreground">
-          {t("workspaceRichtfestResult")}
+          {t(preview ? "workspaceRichtfestPreview" : "workspaceRichtfestResult")}
         </p>
       </div>
       <Button

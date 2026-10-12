@@ -759,6 +759,7 @@
   "agentProfilesDisabled": "The supervisor workflow is disabled. Saved settings take effect when it is enabled.",
   "workspaceRichtfestTitle": "Richtfest!",
   "workspaceRichtfestResult": "Your result is ready.",
+  "workspaceRichtfestPreview": "Richtfest mode is on.",
   "workspaceRichtfestEnabled": "Richtfest mode · until you leave this chat",
   "workspaceRichtfestDisable": "Turn off Richtfest mode",
   "workspaceRichtfestDismiss": "Dismiss celebration"
