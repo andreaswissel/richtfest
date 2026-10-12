@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { AgentAnalyticsMember, AgentUsageAnalytics, ProjectAgentAnalytics } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentRuns, agentRunUsage, agentRunAttempts, supervisorRuns } from "./schema";
@@ -27,7 +27,7 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
       ), missing_attempts as (
         select a.run_id, count(*) as count from knowledge_agent_run_attempts a
         join tree on tree.id=a.run_id
-        where a.tenant_id=${d.tenantId} and not exists (
+        where a.tenant_id=${d.tenantId} and a.usage_status <> 'not_applicable' and not exists (
           select 1 from usage u where u.attempt_id=a.id and u.run_id=a.run_id
             and u.input_tokens is not null and u.output_tokens is not null
         ) group by a.run_id
@@ -94,7 +94,7 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
   const [usageRows, attempts] = await Promise.all([
     d.db.select().from(agentRunUsage).where(and(eq(agentRunUsage.tenantId, d.tenantId), inArray(agentRunUsage.runId, ids))),
     d.db.select({ id: agentRunAttempts.id, runId: agentRunAttempts.runId }).from(agentRunAttempts)
-      .where(and(eq(agentRunAttempts.tenantId, d.tenantId), inArray(agentRunAttempts.runId, ids))),
+      .where(and(eq(agentRunAttempts.tenantId, d.tenantId), inArray(agentRunAttempts.runId, ids), ne(agentRunAttempts.usageStatus, "not_applicable"))),
   ]);
   const usageByRun = new Map<string, (typeof agentRunUsage.$inferSelect)[]>();
   const attemptsByRun = new Map<string, { id: string; runId: string }[]>();

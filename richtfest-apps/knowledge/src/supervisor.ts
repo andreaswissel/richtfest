@@ -373,7 +373,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         }
         try {
           const response = await executeTrackedProvider(d, { ...run, id: runId }, {
-            phase, operationId: callId, attemptNumber: attempt, generation: state.generation,
+            phase, operationId: callId, attemptNumber: attempt, generation: state.generation, assertActive,
           }, async telemetry => {
             const response = await d.executeSupervisor!({
             ...telemetry,
@@ -543,16 +543,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) }))
             .reverse(),
           artifacts: recentArtifacts,
+        }, id, raw => {
+          const parsed = supervisorPlan.parse(raw);
+          if (parsed.tasks.length > policy.maxTasks) throw conflict("Plan exceeds effort task budget");
+          assertConfiguredAssignments(parsed, policy);
+          if (parsed.tasks.some(task => task.sourceVersionIds.some(v => !availableSourceIds.has(v))))
+            throw conflict("Assignment exceeds source scope");
+          return parsed;
         }),
       );
-      if (plan.tasks.length > policy.maxTasks)
-        throw conflict("Plan exceeds effort task budget");
-      assertConfiguredAssignments(plan, policy);
       for (const task of plan.tasks) {
-        if (
-          task.sourceVersionIds.some((v) => !availableSourceIds.has(v))
-        )
-          throw conflict("Assignment exceeds source scope");
         await sources(d, run.projectId, task.sourceVersionIds);
       }
       await commit(d, run, token, async (tx) => {
@@ -706,9 +706,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     assignedVersionCount: assignment.sourceVersionIds.length,
                     readableVersionCount: readableSourceIds.size,
                   },
-                }, assignment.runId));
-                if (result.citations.some(versionId => !allowedCitations.has(versionId)))
-                  throw conflict("Citation has no readable source text in this batch or prior findings");
+                }, assignment.runId, raw => {
+                  const parsed = schemas.specialist.parse(raw);
+                  if (parsed.citations.some(versionId => !allowedCitations.has(versionId)))
+                    throw conflict("Citation has no readable source text in this batch or prior findings");
+                  return parsed;
+                }));
                 const output = { ...result, citations: [...new Set([...(accumulated?.citations ?? []), ...result.citations])] };
                 const saved = await commit(d, run, token, async (tx, current) => {
                   await tx.update(supervisorRuns).set({
@@ -786,7 +789,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const reviewSchema = schemas.review.extend({
         document: (conceptId ? agentDocumentSchema : schemas.review.shape.document).nullish(),
       });
-      const review = reviewSchema.parse(
+      const validateReview = (raw: unknown) => {
+        const review = reviewSchema.parse(raw);
+        review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId ? null : limits.documentMaxCharacters);
+        const allowedCitations = (state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []);
+        if (review.citations.some(v => !allowedCitations.includes(v))) throw conflict("Review introduced unsupported citations");
+        assertDocumentCitations(review.document, review.citations);
+        if (review.decision === "revise" && state.revision < policy.maxRevisions)
+          assertRevisionAssignments(review.revisions, state.assignments as Assignment[]);
+        return review;
+      };
+      const review = validateReview(
         conceptId ? await authorAcousticConcept({
           d, projectId: run.projectId, id: conceptId, goal, limits, maxOutputTokens: policy.supervisor.maxOutputTokens,
           findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
@@ -809,21 +822,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           revision: state.revision,
           previousReview: state.review,
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
-        }),
+        }, id, validateReview),
       );
-      review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId ? null : limits.documentMaxCharacters);
       await sources(d, run.projectId, review.citations);
-      const allowedCitations = (state.assignments as Assignment[]).flatMap(
-        (a) => a.output?.citations ?? [],
-      );
-      if (review.citations.some((v) => !allowedCitations.includes(v)))
-        throw conflict("Review introduced unsupported citations");
-      assertDocumentCitations(review.document, review.citations);
       if (
         review.decision === "revise" &&
         state.revision < policy.maxRevisions
       ) {
-        assertRevisionAssignments(review.revisions, state.assignments as Assignment[]);
         await commit(d, run, token, async (tx, current) => {
           const assignments = (state.assignments as Assignment[]).map((a) => {
             const revision = review.revisions.find(
@@ -1074,8 +1079,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             unreadableSources,
           },
           revision: state.revision,
+        }, id, raw => {
+          const parsed = schemas.independent_review.parse(raw);
+          assertIndependentReviewCitations(parsed, sliceIdSet);
+          return parsed;
         }));
-        assertIndependentReviewCitations(output, sliceIdSet);
         const saved = await commit(d, run, token, async (tx, current) => {
           await tx.update(supervisorRuns).set({ history: [...current.history,
             { phase: "independent_review_slice", inputHash, index, output, sourceVersionIds: sliceIds },

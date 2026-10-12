@@ -77,6 +77,8 @@ export const agentRuns = pgTable("knowledge_agent_runs", {
   parentRunId: uuid("parent_run_id"),
   specialistRole: text("specialist_role"),
   retryOfRunId: uuid("retry_of_run_id"),
+  checkpointVersion: integer("checkpoint_version").notNull().default(0),
+  generation: integer("generation").notNull().default(0),
   goal: text("goal").notNull(),
   sourceVersionIds: jsonb("source_version_ids").notNull().default([]),
   provider: text("provider").notNull(),
@@ -148,6 +150,25 @@ export const agentRunEvents = pgTable("knowledge_agent_run_events", {
     .defaultNow()
     .notNull(),
 });
+/** Immutable execution records; provider failures retain metadata, never raw SDK errors. */
+export const agentRunSteps = pgTable("knowledge_agent_run_steps", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  runId: uuid("run_id").notNull(),
+  attemptId: uuid("attempt_id"),
+  generation: integer("generation").notNull(),
+  version: integer("version").notNull().default(1),
+  kind: text("kind").notNull(),
+  stepKey: text("step_key").notNull(),
+  inputHash: text("input_hash").notNull(),
+  input: jsonb("input").notNull(),
+  output: jsonb("output"),
+  status: text("status").notNull(),
+  reusedFromStepId: uuid("reused_from_step_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  lookup: index("knowledge_agent_run_steps_lookup").on(table.tenantId, table.runId, table.kind, table.stepKey, table.inputHash),
+}));
 export const agentRunApprovals = pgTable("knowledge_agent_run_approvals", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

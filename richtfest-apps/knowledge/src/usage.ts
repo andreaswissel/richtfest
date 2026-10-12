@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDeps, ProviderResult, ProviderTelemetry, ProviderUsage } from "./deps";
 import { agentRunAttempts, agentRuns, agentRunUsage } from "./schema";
+import { recordStep, savedStep, stepHash } from "./run-steps";
 
 export function summarizeUsageRows(rows: any[]) {
   const sum = (key: string) => rows.length > 0 && rows.every((row) => row[key] !== null && row[key] !== undefined)
@@ -74,13 +75,13 @@ export async function recordProviderUsage(
 export async function executeTrackedProvider(
   d: AppDeps,
   run: { id: string; provider: string; correlationId: string },
-  invocation: { phase: string; operationId?: string; attemptNumber?: number; generation?: number },
+  invocation: { phase: string; operationId?: string; attemptNumber?: number; generation?: number; assertActive?: () => Promise<void> },
   execute: (telemetry: ProviderTelemetry) => Promise<ProviderResult>,
 ): Promise<ProviderResult> {
   const [attempt] = await d.db.transaction(async (tx: any) => {
     const rows = await tx.insert(agentRunAttempts).values({
       tenantId: d.tenantId, runId: run.id, provider: run.provider,
-      ...invocation,
+      phase: invocation.phase, generation: invocation.generation,
       operationId: invocation.operationId ?? crypto.randomUUID(),
       attemptNumber: invocation.attemptNumber ?? 1,
     }).returning();
@@ -92,6 +93,10 @@ export async function executeTrackedProvider(
   const where = and(eq(agentRunAttempts.id, attempt.id), eq(agentRunAttempts.tenantId, d.tenantId));
   let usageRecorded = false;
   let usageReported = false;
+  let settings: Parameters<NonNullable<ProviderTelemetry["onRequest"]>>[0] | undefined;
+  let prepared: Parameters<NonNullable<ProviderTelemetry["onPrepared"]>>[0] | undefined;
+  let inputHash = "";
+  let reusedFromStepId: string | undefined;
   const onUsage: NonNullable<ProviderTelemetry["onUsage"]> = async (usage) => {
     if (usageRecorded) return;
     await recordProviderUsage(d, run, usage, attempt.startedAt, new Date(), attempt.id);
@@ -99,24 +104,45 @@ export async function executeTrackedProvider(
     usageReported = [usage.inputTokens, usage.outputTokens, usage.totalTokens].some(value => value != null);
     await d.db.update(agentRunAttempts).set({ usageStatus: usageReported ? "reported" : "missing" }).where(where);
   };
-  const finish = (status: string, failureCategory: string | null = null, providerStatus: number | null = null) =>
+  const finish = (status: string, failureCategory: string | null = null, providerStatus: number | null = null, output?: unknown) =>
     d.db.transaction(async (tx: any) => {
       await tx.update(agentRunAttempts).set({
         status, failureCategory, providerStatus, completedAt: new Date(),
-        usageStatus: usageReported ? "reported" : "missing",
+        usageStatus: reusedFromStepId ? "not_applicable" : usageReported ? "reported" : "missing",
       }).where(where);
       await d.auditRun(tx, "knowledge.agent_run.attempt_finished", "agent_run_attempt", attempt.id, run.id, run.correlationId, {
-        status, failureCategory, providerStatus, usageStatus: usageReported ? "reported" : "missing",
+        status, failureCategory, providerStatus, usageStatus: reusedFromStepId ? "not_applicable" : usageReported ? "reported" : "missing",
+      });
+      if (prepared) await recordStep(d, tx, run, {
+        kind: "model", stepKey: invocation.phase, generation: invocation.generation ?? 0,
+        attemptId: attempt.id, inputHash, input: { ...prepared, settings }, output, status, reusedFromStepId,
       });
     });
   try {
     const result = await execute({
-      onRequest: async (settings) => { await d.db.update(agentRunAttempts).set({ settings }).where(where); },
+      onRequest: async (value) => { settings = value; await d.db.update(agentRunAttempts).set({ settings }).where(where); },
       onResponse: async (response) => { await d.db.update(agentRunAttempts).set({ response }).where(where); },
       onUsage,
+      onPrepared: async (input) => {
+        await invocation.assertActive?.();
+        prepared = input;
+        // Effective settings include prompt/instruction/schema hashes and adapter/app versions.
+        // Never key by redacted text alone: different secrets may redact to the same string.
+        inputHash = stepHash({ provider: run.provider, settings });
+        const saved = settings ? await savedStep(d, run.id, "model", invocation.phase, inputHash) : undefined;
+        await d.db.transaction((tx: any) => recordStep(d, tx, run, {
+          kind: "model", stepKey: invocation.phase, generation: invocation.generation ?? 0,
+          attemptId: attempt.id, inputHash, input: { ...input, settings }, status: "started",
+        }));
+        if (saved) {
+          reusedFromStepId = saved.id;
+          return { output: saved.output };
+        }
+      },
     });
+    await invocation.assertActive?.();
     if (result.status === "completed" && result.usage && !usageRecorded) await onUsage(result.usage);
-    await finish(result.status);
+    await finish(reusedFromStepId ? "reused" : result.status, null, null, result.status === "completed" ? result.output : undefined);
     return result;
   } catch (error) {
     // Never persist exception messages or objects, including nested SDK errors.

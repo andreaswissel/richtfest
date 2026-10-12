@@ -14,6 +14,7 @@ import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Badge, Callout } from "../ui/primitives";
 import { AgentRunReview, AgentRunReviews } from "../agent-run-review";
+import { AgentRunRetryActions } from "../agent-run-retry-actions";
 import { Message, MessageContent, MessageHeader } from "../ui/message";
 import { Bubble, BubbleContent } from "../ui/bubble";
 import { ChatMarkdown } from "../chat-markdown";
@@ -483,7 +484,7 @@ export function SubagentThread({
   useEffect(() => {
     setLiveEvents([]);
     setStreamStatus(undefined);
-  }, [runId]);
+  }, [runId, run?.generation, query.data?.orchestration?.generation]);
   useEffect(() => {
     if (!run || !["queued", "running"].includes(run.status)) return;
     const stream = new EventSource(
@@ -528,7 +529,13 @@ export function SubagentThread({
       }
     });
     return () => stream.close();
-  }, [runId, run?.status, query.refetch]);
+  }, [
+    runId,
+    run?.status,
+    run?.generation,
+    query.data?.orchestration?.generation,
+    query.refetch,
+  ]);
   const back = new URLSearchParams(params);
   back.delete("agentRun");
   back.delete("message");
@@ -557,7 +564,7 @@ export function SubagentThread({
   const managed = Boolean(run.parentRunId);
   const output = run.outputSummary || run.partialOutput;
   const currentStatus = ["queued", "running"].includes(run.status)
-    ? streamStatus ?? run.status
+    ? (streamStatus ?? run.status)
     : run.status;
   const running = ["queued", "running"].includes(currentStatus);
   const executing = currentStatus === "running";
@@ -671,15 +678,16 @@ export function SubagentThread({
                               · {attempt.runId}
                             </p>
                           )}
-                          {attempt.usageStatus !== "reported" && (
-                            <p className="text-muted-foreground">
-                              {t(
-                                attempt.usageStatus === "pending"
-                                  ? "runExecutionUsagePending"
-                                  : "runExecutionUsageMissing",
-                              )}
-                            </p>
-                          )}
+                          {attempt.usageStatus !== "reported" &&
+                            attempt.usageStatus !== "not_applicable" && (
+                              <p className="text-muted-foreground">
+                                {t(
+                                  attempt.usageStatus === "pending"
+                                    ? "runExecutionUsagePending"
+                                    : "runExecutionUsageMissing",
+                                )}
+                              </p>
+                            )}
                           {attempt.failureCategory && (
                             <p>
                               {t("workspaceRunReason")}:{" "}
@@ -892,6 +900,10 @@ export function SubagentThread({
           </Button>
         )}
         {cancel.error && <Callout tone="error">{cancel.error.message}</Callout>}
+        <AgentRunRetryActions
+          key={run.id}
+          run={{ ...run, status: currentStatus }}
+        />
       </footer>
       {review && !managed && (
         <AgentRunReview

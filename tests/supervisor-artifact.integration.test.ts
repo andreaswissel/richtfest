@@ -161,14 +161,14 @@ integration("acoustic reports preserve late-page results and attachments across 
           expect(parts.map((p: any) => p.content).join("\n\n").length).toBeGreaterThan(60000);
           expect(parts.every((p: any) => p.content.length <= 12000)).toBe(true);
           await db.update(agentRuns).set({ status: "failed", error: "phase=review; category=validation; The run returned unsupported or invalid output. Review the inputs and retry." }).where(eq(agentRuns.id, runId));
-          // A saved draft alone must not turn other failures into a resume.
+          // Run again stays fresh regardless of saved drafts or failure diagnostics.
           for (const metadata of [
             { callId: crypto.randomUUID(), diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: [{ code: "too_big", path: ["content"], maximum: 60000 }] } },
             { diagnostics: { errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: [{ code: "too_big", path: ["document", "template", "components"], maximum: 200000 }] } },
             { diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" } },
           ]) {
             await db.insert(agentRunEvents).values({ tenantId, runId, eventType: "provider_call_failed", resultSummary: "review", paramsSummary: JSON.stringify({ runId, ...metadata }) });
-            const retry = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" });
+            const retry = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/rerun`, { method: "POST" });
             expect(retry.status).toBe(201);
             expect((await retry.json()).data.id).not.toBe(runId);
             const [original] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));

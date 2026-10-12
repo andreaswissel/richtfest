@@ -62,6 +62,7 @@ export type AppDeps = {
     onUsage?: (usage: ProviderUsage) => Promise<void>;
     onRequest?: ProviderTelemetry["onRequest"];
     onResponse?: ProviderTelemetry["onResponse"];
+    onPrepared?: ProviderTelemetry["onPrepared"];
   }) => Promise<ProviderResult>;
   cancelExecution: (runId: string) => void;
   providerConfigured: (provider: AgentProvider) => Promise<boolean>;
@@ -130,6 +131,7 @@ export type ProviderRequest = {
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   onRequest?: ProviderTelemetry["onRequest"];
   onResponse?: ProviderTelemetry["onResponse"];
+  onPrepared?: ProviderTelemetry["onPrepared"];
 };
 /** Allowlisted metadata only: never headers, credentials, raw prompts or SDK errors. */
 export type ProviderExecutionSettings = {
@@ -159,6 +161,8 @@ export type ProviderTelemetry = {
   onRequest?: (settings: ProviderExecutionSettings) => Promise<void>;
   onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
+  /** Sanitized model-visible input only. A hit skips inference, not application validation. */
+  onPrepared?: (input: { version: 1; instructions: string; prompt: string; outputSchema?: unknown }) => Promise<{ output: unknown } | undefined>;
 };
 export type ProviderUsage = {
   provider: AgentProvider;

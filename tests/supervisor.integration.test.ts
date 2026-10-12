@@ -118,7 +118,7 @@ for (const outcome of ["recover", "exhaust", "cancel", "quota", "long_cooldown"]
   }, 20000,
 );
 
-for (const failure of ["rate_limit", "timeout"] as const)
+for (const failure of ["rate_limit", "timeout", "service"] as const)
 for (const changedEvidence of [false, true]) integration(`${failure} review resumes saved work, invalidating changed evidence: ${changedEvidence}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
@@ -138,7 +138,8 @@ for (const changedEvidence of [false, true]) integration(`${failure} review resu
         decision: "accept", revisions: [], document: { title: "Preserved draft", content: "# Original document\n\nDo not regenerate this draft." } } };
       if (context.sourceCoverage.slice === 2 && rateLimited) throw Object.assign(new Error("secret"), {
         providerFailure: true, retryable: false,
-        ...(failure === "timeout" ? { code: "timeout" } : { providerStatus: 429, failureCategory: "provider", diagnostics: { providerCode: "insufficient_quota" } }),
+        ...(failure === "timeout" ? { code: "timeout" } : failure === "service" ? { providerStatus: 500, failureCategory: "provider" }
+          : { providerStatus: 429, failureCategory: "provider", diagnostics: { providerCode: "insufficient_quota" } }),
       });
       return { status: "completed", output: { summary: `Reviewed slice ${context.sourceCoverage.slice}`, rationale: "Checked evidence. ".repeat(150), citations: context.sourceCoverage.sliceVersionIds,
         decision: "accept", revisions: [], findings: [] } };
@@ -394,7 +395,7 @@ integration("specialist timeouts stop unchanged retries and preserve completed s
     const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
     expect(parent!.status).toBe("failed");
     expect(parent!.error).toContain("phase=specialist; category=timeout;");
-    expect(parent!.error).toContain("Retry run resumes saved progress for supervised runs");
+    expect(parent!.error).toContain("Retry run reuses available saved progress");
     const children = await db.select().from(agentRuns).where(eq(agentRuns.parentRunId, run!.id));
     expect(children.find(child => child.goal === "Completes")).toMatchObject({ status: "needs_review", outputSummary: "Saved evidence" });
     const failed = children.find(child => child.goal === "Times out")!;

@@ -211,6 +211,13 @@
       "when": 1791597000000,
       "tag": "0029_public_data",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791760000000,
+      "tag": "0030_agent_run_steps",
+      "breakpoints": true
     }
   ]
 }

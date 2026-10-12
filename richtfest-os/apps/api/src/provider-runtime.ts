@@ -10,7 +10,7 @@ import type { Database } from "./db/client";
 import { withProviderCredential } from "./ai-connections";
 import { env } from "./env";
 import { estimateCostUsd } from "./model-pricing";
-import { appRevision, metadataHash } from "./provider-metadata";
+import { appRevision, metadataHash, serializeProviderInput } from "./provider-metadata";
 export type ProviderFetch = (
   url: string,
   init: RequestInit,
@@ -88,7 +88,7 @@ export async function callProvider(
   key: string,
   fetcher: ProviderFetch = fetch,
 ): Promise<unknown> {
-  const prompt = JSON.stringify({
+  const prompt = serializeProviderInput({
     goal: input.goal,
     context: input.context,
     toolResults: input.toolResults ?? [],
@@ -127,6 +127,9 @@ export async function callProvider(
       maxOutputTokens: input.maxOutputTokens ?? 2500, maxSteps: 1, maxRetries: 0, timeoutMs,
       stream: true, store: isOpenAi ? false : null, instructionsHash: metadataHash(effectiveInstructions),
       promptHash: metadataHash(input.image ? JSON.stringify({ prompt, image: input.image }) : prompt), outputSchemaHash: null });
+    const saved = await input.onPrepared?.({ version: 1,
+      instructions: redactProviderText(effectiveInstructions, key), prompt: redactProviderText(prompt, key) });
+    if (saved) return saved.output;
     const response = await fetcher(
       isOpenAi
         ? isVercel ? `${env.VERCEL_GATEWAY_URL.replace(/\/$/, "")}/responses` : "https://api.openai.com/v1/responses"

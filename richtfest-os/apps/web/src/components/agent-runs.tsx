@@ -9,6 +9,7 @@ import { AgentRunMetrics, isAgentRunActive } from "./agent-run-metrics";
 import { Section } from "./layout";
 import { Textarea } from "./ui/input";
 import { AgentRunReview } from "./agent-run-review";
+import { AgentRunRetryActions } from "./agent-run-retry-actions";
 import { NativeSelect } from "./ui/native-select";
 import { Button } from "./ui/button";
 import { Badge, Callout, Empty, Field, Form, Modal } from "./ui/primitives";
@@ -316,7 +317,6 @@ function RunDetails({
   const t = useT();
   const [review, setReview] = useState(false);
   const cancel = useWrite(`/knowledge/runs/${run.id}/cancel`);
-  const retry = useWrite(`/knowledge/runs/${run.id}/retry`);
   return (
     <div className="agent-run-details">
       {run.outputSummary && (
@@ -371,24 +371,8 @@ function RunDetails({
               {t("workspaceStop")}
             </Button>
           )}
-        {!run.parentRunId &&
-          [
-            "unconfigured",
-            "failed",
-            "cancelled",
-            "validated_tool_unavailable",
-          ].includes(run.status) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={retry.isPending}
-              onClick={() => retry.mutate({})}
-            >
-              {t("workspaceRetryRun")}
-            </Button>
-          )}
+        <AgentRunRetryActions key={run.id} run={run} />
       </div>
-      {retry.error && <Callout tone="error">{retry.error.message}</Callout>}
       {cancel.error && <Callout tone="error">{cancel.error.message}</Callout>}
       {review && !run.parentRunId && (
         <AgentRunReview run={run} onClose={() => setReview(false)} />

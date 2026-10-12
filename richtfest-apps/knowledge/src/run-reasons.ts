@@ -56,7 +56,7 @@ export function classifyRunFailure(
 
 const actionableMessage: Record<RunFailureCategory, string> = {
   provider: "The provider call could not complete. Check the provider connection and retry.",
-  timeout: "The model call exceeded its configured time limit. Retry run resumes saved progress for supervised runs. Settings stay unchanged; changing the model or timeout in Agent model settings requires a new request.",
+  timeout: "The model call exceeded its configured time limit. Retry run reuses available saved progress with the original settings. Use Run again to start fresh with current model settings.",
   permission: "A required permission is unavailable. Ask an administrator for access and retry.",
   validation: "The run returned unsupported or invalid output. Review the inputs and retry.",
   source: "Required project source content is unavailable. Restore or select readable sources and retry.",

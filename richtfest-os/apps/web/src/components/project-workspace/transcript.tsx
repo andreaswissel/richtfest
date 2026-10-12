@@ -128,14 +128,12 @@ function FailedRunOutcome({
   run,
   projectId,
   conversationId,
-  hasRetry,
   hasActiveRun,
   onDescribe,
 }: {
   run: RecordData;
   projectId: string;
   conversationId: string;
-  hasRetry: boolean;
   hasActiveRun: boolean;
   onDescribe: () => void;
 }) {
@@ -162,8 +160,13 @@ function FailedRunOutcome({
     safeRunFailureReason(run, t);
   const retry = useMutation({
     mutationFn: () => api(`/knowledge/runs/${run.id}/retry`, {}),
-    onSuccess: () => void queryClient.invalidateQueries(),
+    onSuccess: () => queryClient.invalidateQueries(),
   });
+  // A durable retry can fail again on the same ID. A fresh rerun's lineage
+  // does not mean this run was resumed, nor should it disable its retry.
+  useEffect(() => {
+    retry.reset();
+  }, [run.id, run.status, run.updatedAt, retry.reset]);
   const params = new URLSearchParams({
     conversation: conversationId,
     agentRun: run.id,
@@ -185,14 +188,12 @@ function FailedRunOutcome({
           <Button
             variant="outline"
             size="sm"
-            disabled={
-              retry.isPending || retry.isSuccess || hasRetry || hasActiveRun
-            }
+            disabled={retry.isPending || retry.isSuccess || hasActiveRun}
             onClick={() => retry.mutate()}
           >
             {retry.isPending
               ? t("workspaceRunRetrying")
-              : retry.isSuccess || hasRetry
+              : retry.isSuccess
                 ? t("workspaceRunRetryStarted")
                 : t("workspaceRetryRun")}
           </Button>
@@ -525,7 +526,8 @@ function Conversation({
       // A text-only acknowledgement belongs in chat, not in a new plan or
       // steering round. Attached sources and messages containing work still run.
       const feedbackOnly =
-        !submitted.sourceVersionIds.length && isPositiveFeedback(submitted.body);
+        !submitted.sourceVersionIds.length &&
+        isPositiveFeedback(submitted.body);
       if (readiness.data?.executionAvailable && !feedbackOnly) {
         const nextRun = {
           goal: submitted.body,
@@ -917,9 +919,6 @@ function Conversation({
                     projectId={projectId}
                     conversationId={conversationId}
                     onDescribe={describeDifferentApproach}
-                    hasRetry={runs.some(
-                      (run) => run.retryOfRunId === message.runId,
-                    )}
                     hasActiveRun={runs.some(
                       (run) =>
                         !run.parentRunId &&

@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
@@ -15,6 +15,7 @@ import {
   annotations,
   agentRunUsage,
   agentRunAttempts,
+  agentRunSteps,
 } from "./schema";
 import {
   conversation,
@@ -27,6 +28,7 @@ import {
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
 import { executeTrackedProvider, summarizeUsageRows } from "./usage";
+import { recordStep, savedStep, stepHash } from "./run-steps";
 import { resolveRunSource } from "./source-evidence";
 import {
   classifyRunFailure,
@@ -184,7 +186,7 @@ async function event(
 async function active(d: AppDeps, run: any, fn: (tx: any) => Promise<unknown>) {
   return d.db.transaction(async (tx: any) => {
     const current = await getRun(d, run.id, tx, true);
-    if (current.status !== "running") throw conflict("Run is no longer active");
+    if (current.status !== "running" || current.generation !== (run.generation ?? 0)) throw conflict("Run is no longer active");
     return fn(tx);
   });
 }
@@ -194,7 +196,7 @@ export async function executeRun(d: AppDeps, run: any) {
   try {
     const claimed = await d.db.transaction(async (tx: any) => {
       const current = await getRun(d, run.id, tx, true);
-      if (current.status !== "queued") return false;
+      if (current.status !== "queued" || current.generation !== (run.generation ?? 0)) return false;
       await tx
         .update(agentRuns)
         .set({ status: "running", updatedAt: new Date() })
@@ -210,6 +212,11 @@ export async function executeRun(d: AppDeps, run: any) {
       return true;
     });
     if (!claimed) return;
+    d.requirePermission("agent:run");
+    d.requirePermission("knowledge:read");
+    d.requirePermission("projects:read");
+    if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
+    await sources(d, run.projectId, run.sourceVersionIds);
     failurePhase = "source_resolution";
     failureCategory = "execution";
     const sourceInventory = await d.listProjectSources(run.projectId);
@@ -246,6 +253,7 @@ export async function executeRun(d: AppDeps, run: any) {
             and(
               eq(messages.tenantId, d.tenantId),
               eq(messages.conversationId, run.conversationId),
+              or(isNull(messages.runId), ne(messages.runId, run.id)),
             ),
           )
           .orderBy(desc(messages.createdAt), desc(messages.id))
@@ -263,6 +271,7 @@ export async function executeRun(d: AppDeps, run: any) {
         and(
           eq(artifacts.tenantId, d.tenantId),
           eq(artifacts.projectId, run.projectId),
+          ne(artifacts.runId, run.id),
           run.conversationId ? eq(agentRuns.conversationId, run.conversationId) : sql`false`,
         ),
       )
@@ -280,6 +289,7 @@ export async function executeRun(d: AppDeps, run: any) {
             and(
               eq(agentRuns.tenantId, d.tenantId),
               eq(agentRuns.conversationId, run.conversationId),
+              ne(agentRuns.id, run.id),
             ),
           )
           .orderBy(desc(agentRuns.createdAt))
@@ -344,7 +354,9 @@ export async function executeRun(d: AppDeps, run: any) {
     };
     failurePhase = "provider";
     failureCategory = "provider";
-    let response = await executeTrackedProvider(d, run, { phase: "direct" }, telemetry => d.executeProvider({
+    let response = await executeTrackedProvider(d, run, { phase: "direct", generation: run.generation,
+      assertActive: () => active(d, run, async () => {}).then(() => {}) }, async telemetry => {
+      const result = await d.executeProvider({
       ...telemetry,
       runId: run.id,
       onSummaryDelta,
@@ -355,7 +367,14 @@ export async function executeRun(d: AppDeps, run: any) {
       executionLimits: limits,
       goal: run.goal,
       context,
-    }));
+      });
+      if (result.status === "completed") {
+        result.output = outputSchema.parse(result.output);
+        assertEvidenceCitations(result.output as z.infer<typeof outputSchema>, evidence);
+        for (const tool of (result.output as z.infer<typeof outputSchema>).tools) validateTool(tool.name, tool.input, limits);
+      }
+      return result;
+    });
     failurePhase = "execution";
     failureCategory = "execution";
     if (response.status === "unconfigured") {
@@ -391,7 +410,7 @@ export async function executeRun(d: AppDeps, run: any) {
     };
     failurePhase = "tool_execution";
     failureCategory = "execution";
-    for (const tool of output.tools) {
+    for (const [toolIndex, tool] of output.tools.entries()) {
       const input = validateTool(tool.name, tool.input, limits) as any;
       if (tool.name === "delegate_source_review") {
         if (run.parentRunId)
@@ -411,6 +430,28 @@ export async function executeRun(d: AppDeps, run: any) {
           : undefined;
       recordResolvedEvidence(evidence, resolved);
       await active(d, run, async (tx) => {
+        const stepKey = `tool:${toolIndex}`;
+        const stepInput = { name: tool.name, input, citations: output.citations, ...(resolved ? { resolved } : {}) };
+        const inputHash = stepHash(stepInput);
+        const saved = await savedStep(d, run.id, "tool", stepKey, undefined, tx);
+        if (saved && tool.name !== "resolve_project_source") {
+          if (saved.inputHash !== inputHash) throw conflict("Saved action inputs changed. Start a new run instead of repeating a completed action.");
+          results.push({ tool: tool.name, result: saved.output });
+          if (tool.name === "validated_calculation") calculationUnavailable = true;
+          if (tool.name === "delegate_source_review") {
+            childRun = await getRun(d, saved.output.runId, tx, true);
+            if (!childRun.outputSummary && ["failed", "cancelled", "unconfigured"].includes(childRun.status)) {
+              [childRun] = await tx.update(agentRuns).set({ status: "queued", error: null,
+                generation: childRun.generation + 1, requestedBy: d.actorId, updatedAt: new Date() })
+                .where(eq(agentRuns.id, childRun.id)).returning();
+              await tx.update(tasks).set({ status: "in_progress" }).where(and(eq(tasks.id, childRun.taskId), eq(tasks.tenantId, d.tenantId)));
+              await event(d, tx, childRun, "resumed");
+            }
+          }
+          await recordStep(d, tx, run, { kind: "tool", stepKey, inputHash, input: stepInput,
+            output: saved.output, status: "reused", reusedFromStepId: saved.id });
+          return;
+        }
         let result: any;
         if (tool.name === "resolve_project_source") result = resolved;
         else if (tool.name === "delegate_source_review") {
@@ -438,6 +479,7 @@ export async function executeRun(d: AppDeps, run: any) {
               sourceVersionIds: input.sourceVersionIds,
               provider: run.provider,
               modelPolicy: modelPolicy ?? run.modelPolicy ?? null,
+              checkpointVersion: 1,
               status: "queued",
               correlationId: run.correlationId,
               requestedBy: d.actorId,
@@ -490,6 +532,7 @@ export async function executeRun(d: AppDeps, run: any) {
                 body: input.question,
               })
               .returning();
+            result.messageId = message.id;
             await d.auditRun(
               tx,
               "knowledge.message.created",
@@ -507,6 +550,7 @@ export async function executeRun(d: AppDeps, run: any) {
           };
           calculationUnavailable = true;
         }
+        await recordStep(d, tx, run, { kind: "tool", stepKey, inputHash, input: stepInput, output: result, status: "completed" });
         // Duplicate reads must not duplicate the same evidence in model input.
         if (tool.name !== "resolve_project_source" || !results.some((entry: any) =>
           entry.tool === tool.name && JSON.stringify(entry.result) === JSON.stringify(result)))
@@ -547,7 +591,9 @@ export async function executeRun(d: AppDeps, run: any) {
       partialOutput = "";
       failurePhase = "provider";
       failureCategory = "provider";
-      response = await executeTrackedProvider(d, run, { phase: "tool_followup" }, telemetry => d.executeProvider({
+      response = await executeTrackedProvider(d, run, { phase: "tool_followup", generation: run.generation,
+        assertActive: () => active(d, run, async () => {}).then(() => {}) }, async telemetry => {
+        const result = await d.executeProvider({
         ...telemetry,
         runId: run.id,
         onSummaryDelta,
@@ -560,7 +606,15 @@ export async function executeRun(d: AppDeps, run: any) {
         context: { ...context, sources: context.sources.filter(source => !results.some((entry: any) =>
           entry.tool === "resolve_project_source" && JSON.stringify(entry.result) === JSON.stringify(source))) },
         toolResults: results,
-      }));
+        });
+        if (result.status === "completed") {
+          const parsed = outputSchema.parse(result.output);
+          assertEvidenceCitations(parsed, evidence);
+          if (parsed.tools.length) throw conflict("Provider exceeded the permitted tool round");
+          result.output = parsed;
+        }
+        return result;
+      });
       failurePhase = "execution";
       failureCategory = "execution";
       if (response.status !== "completed")
@@ -662,6 +716,7 @@ export async function executeRun(d: AppDeps, run: any) {
     // Never persist provider exceptions or raw tool arguments; errors may contain credentials.
     await d.db.transaction(async (tx: any) => {
       const current = await getRun(d, run.id, tx, true);
+      if (current.generation !== (run.generation ?? 0)) return;
       if (current.status !== "running" && current.status !== "queued") return;
       await tx
         .update(agentRuns)
@@ -838,6 +893,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         .values({
           ...input,
           provider,
+          checkpointVersion: configured ? 1 : 0,
           modelPolicy: modelPolicy ?? null,
           retryOfRunId,
           parentRunId: lineage?.parentRunId,
@@ -881,6 +937,23 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
   route("post", "/runs", "agent:run", (d, req) =>
     create(d, runInput.parse(req.body)),
   );
+  route("get", "/runs/:runId/steps", "knowledge:read", async (d, req) => {
+    const run = await getRun(d, String(req.params.runId));
+    const page = z.coerce.number().int().min(0).default(0).parse(req.query.page);
+    return d.db.select({ id: agentRunSteps.id, runId: agentRunSteps.runId, attemptId: agentRunSteps.attemptId,
+      version: agentRunSteps.version, generation: agentRunSteps.generation, kind: agentRunSteps.kind,
+      stepKey: agentRunSteps.stepKey, inputHash: agentRunSteps.inputHash, status: agentRunSteps.status,
+      reusedFromStepId: agentRunSteps.reusedFromStepId, createdAt: agentRunSteps.createdAt,
+    }).from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.runId, run.id)))
+      .orderBy(agentRunSteps.createdAt, agentRunSteps.id).limit(50).offset(page * 50);
+  });
+  route("get", "/runs/:runId/steps/:stepId", "knowledge:read", async (d, req) => {
+    const run = await getRun(d, String(req.params.runId));
+    const [step] = await d.db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, d.tenantId),
+      eq(agentRunSteps.runId, run.id), eq(agentRunSteps.id, z.string().uuid().parse(req.params.stepId))));
+    if (!step) throw missing("Run step not found");
+    return step;
+  });
   route("get", "/runs/:runId", "knowledge:read", async (d, req) => {
     let run = await getRun(d, String(req.params.runId));
     const [orchestration] = await d.db
@@ -1131,7 +1204,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       return updated;
     });
   });
-  route("post", "/runs/:runId/retry", "agent:run", async (d, req) => {
+  const retryRun = async (d: AppDeps, req: Request, fresh: boolean) => {
     const run = await getRun(d, String(req.params.runId));
     await requireIndependentRun(d, run);
     if (
@@ -1140,6 +1213,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         "failed",
         "cancelled",
         "validated_tool_unavailable",
+        ...(fresh ? ["needs_review", "approved"] : []),
       ].includes(run.status)
     )
       throw conflict("Only a stopped or unsuccessful run can be retried");
@@ -1147,29 +1221,8 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       .select()
       .from(supervisorRuns)
       .where(eq(supervisorRuns.runId, run.id));
-    const canResume = async (current: typeof run, state: typeof previousPolicy, db = d.db) => {
-      if (current.status !== "failed" || !state || state.phase === "done") return false;
-      if (/(?:^|;)\s*(?:provider_http_status=429|category=timeout)(?:;|$)/.test(current.error ?? "")) return true;
-      // Older concept runs checkpointed valid pieces before applying the response
-      // cap to their combined length. Recover only that diagnosed assembly failure.
-      if (state.phase !== "review" || !state.review?.documentDraft
-        || !/^phase=review; category=validation;/.test(current.error ?? "")) return false;
-      const [failure] = await db.select().from(agentRunEvents).where(and(
-        eq(agentRunEvents.tenantId, d.tenantId), eq(agentRunEvents.runId, current.id),
-        eq(agentRunEvents.eventType, "provider_call_failed"),
-      )).orderBy(desc(agentRunEvents.createdAt)).limit(1);
-      if (failure?.resultSummary !== "review") return false;
-      try {
-        const { diagnostics, callId } = JSON.parse(failure.paramsSummary ?? "{}");
-        const issue = diagnostics?.issues?.[0];
-        return !callId && diagnostics?.errorId === "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED"
-          && diagnostics.finishReason !== "length" && diagnostics.issues.length === 1
-          && issue?.code === "too_big"
-          && issue.maximum === (state.modelPolicy?.executionLimits?.documentMaxCharacters ?? 60000)
-          && ['["content"]', '["document","content"]'].includes(JSON.stringify(issue.path));
-      } catch { return false; }
-    };
-    if (d.supervisorEnabled && await canResume(run, previousPolicy)) {
+    if (!fresh && previousPolicy && previousPolicy.phase !== "done") {
+      if (!d.supervisorEnabled) throw conflict("Supervisor execution is disabled");
       d.requirePermission("knowledge:read");
       d.requirePermission("knowledge:write");
       d.requirePermission("projects:read");
@@ -1178,14 +1231,14 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       return d.db.transaction(async (tx: any) => {
         const current = await getRun(d, run.id, tx, true);
         const [state] = await tx.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id)).for("update");
-        if (!await canResume(current, state, tx)) throw conflict("Run is no longer resumable");
+        if (!["failed", "cancelled"].includes(current.status) || !state || state.phase === "done") throw conflict("Run is no longer resumable");
         await sources({ ...d, db: tx }, run.projectId, [...new Set<string>([
           ...run.sourceVersionIds, ...state.assignments.flatMap((a: any) => a.sourceVersionIds),
         ])]);
-        for (const assignment of state.assignments.filter((a: any) => !a.output)) {
-          await tx.update(agentRuns).set({ status: "queued", error: null, finishedAt: null, durationMs: null, updatedAt: new Date() })
+        for (const assignment of state.assignments) {
+          await tx.update(agentRuns).set({ status: assignment.output ? "needs_review" : "queued", error: null, finishedAt: null, durationMs: null, updatedAt: new Date() })
             .where(and(eq(agentRuns.id, assignment.runId), eq(agentRuns.tenantId, d.tenantId)));
-          await tx.update(tasks).set({ status: "in_progress" })
+          await tx.update(tasks).set({ status: assignment.output ? "needs_review" : "in_progress" })
             .where(and(eq(tasks.id, assignment.taskId), eq(tasks.tenantId, d.tenantId)));
         }
         await tx.update(supervisorRuns).set({ generation: state.generation + 1, leaseToken: null, leaseUntil: null })
@@ -1196,11 +1249,33 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         return updated;
       });
     }
+    if (!fresh && !previousPolicy && run.checkpointVersion === 1 && !run.outputSummary && run.intent !== "calculation") {
+      d.requirePermission("knowledge:read");
+      d.requirePermission("projects:read");
+      if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
+      if (run.conversationId) await conversation(d, run.conversationId, run.projectId);
+      if (!(await d.providerConfigured(run.provider))) throw conflict("Configure the selected provider before retrying");
+      const modelPolicy = run.modelPolicy ?? await d.resolveSupervisorPreset?.("medium", run.provider);
+      const updated = await d.db.transaction(async (tx: any) => {
+        const current = await getRun(d, run.id, tx, true);
+        if (!["failed", "cancelled", "unconfigured", "validated_tool_unavailable"].includes(current.status)
+          || current.generation !== run.generation) throw conflict("Run is no longer resumable");
+        await sources({ ...d, db: tx }, run.projectId, run.sourceVersionIds);
+        const [row] = await tx.update(agentRuns).set({ status: "queued", error: null, modelPolicy,
+          generation: current.generation + 1, requestedBy: d.actorId, partialOutput: "",
+          startedAt: null, finishedAt: null, durationMs: null, updatedAt: new Date() })
+          .where(eq(agentRuns.id, run.id)).returning();
+        await event(d, tx, run, "resumed", undefined, "Run resumed from saved steps");
+        return row;
+      });
+      void executeRun(d, updated).catch(() => undefined);
+      return updated;
+    }
     return create(
       d,
       runInput.parse({
         ...run,
-        effort: previousPolicy?.effort ?? "medium",
+        effort: previousPolicy?.effort ?? run.modelPolicy?.effort ?? "medium",
         messageId: run.messageId ?? undefined,
         conversationId: run.conversationId ?? undefined,
         taskId: run.taskId ?? undefined,
@@ -1211,9 +1286,11 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         specialistRole: run.specialistRole ?? undefined,
       },
       run.provider,
-      run.modelPolicy ?? previousPolicy?.modelPolicy,
+      fresh ? undefined : run.modelPolicy ?? previousPolicy?.modelPolicy,
     );
-  });
+  };
+  route("post", "/runs/:runId/retry", "agent:run", (d, req) => retryRun(d, req, false));
+  route("post", "/runs/:runId/rerun", "agent:run", (d, req) => retryRun(d, req, true));
   route("post", "/runs/:runId/cancel", "knowledge:write", async (d, req) =>
     d.db.transaction(async (tx: any) => {
       const run = await getRun(d, String(req.params.runId), tx, true);
