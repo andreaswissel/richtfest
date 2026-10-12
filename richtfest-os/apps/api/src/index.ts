@@ -7,7 +7,7 @@ import { startSourceModelWorker } from "@richtfest/projects/source-model";
 import { structureSourceDocument } from "./source-model-host";
 import { fileStorage } from "./app-hosts";
 import { recordAudit } from "./audit";
-const { app, db, pool } = createServer();
+const { app, db, pool } = await createServer();
 const server = app.listen(env.PORT, () => console.log(`Richtfest API listening on ${env.PORT}`));
 const worker = await startSupervisorWorker(db, pool);
 const locationWorker = startLocationWorker({

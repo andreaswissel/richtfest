@@ -69,10 +69,28 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
     const bytes = new Uint8Array(await image.arrayBuffer());
     expect([...bytes.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
     expect(bytes.length).toBeGreaterThan(10_000);
-    const missingChunk = await fetch(base + "/assets/auth-client-old-deployment.js");
+    const manifest = await Bun.file(
+      new URL(
+        "../richtfest-os/apps/web/dist/.vite/manifest.json",
+        import.meta.url,
+      ),
+    ).json();
+    const currentChunk = await fetch(
+      base + "/" + manifest["src/lib/auth-client.ts"].file,
+    );
+    expect(currentChunk.status).toBe(200);
+    expect(currentChunk.headers.get("content-type")).toContain("javascript");
+    expect(currentChunk.headers.get("cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+    const missingChunk = await fetch(
+      base + "/assets/auth-client-old-deployment.js",
+    );
     expect(missingChunk.status).toBe(404);
     expect(missingChunk.headers.get("cache-control")).toBe("no-store");
-    expect(missingChunk.headers.get("content-type") ?? "").not.toContain("text/html");
+    expect(missingChunk.headers.get("content-type") ?? "").not.toContain(
+      "text/html",
+    );
   } finally {
     Object.assign(env, previous);
     server?.close();

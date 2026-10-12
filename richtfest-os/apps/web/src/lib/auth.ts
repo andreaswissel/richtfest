@@ -11,6 +11,17 @@ export const getAuthClient = async () => {
   try {
     return (await import("./auth-client")).authClient;
   } catch (cause) {
+    // Keep the browser's original download/evaluation error and build identity
+    // available for diagnosis without collecting account data or reloading tabs.
+    console.error("Authentication module failed to load or initialize", {
+      build:
+        typeof document === "undefined"
+          ? null
+          : document.querySelector<HTMLMetaElement>(
+              'meta[name="richtfest-build"]',
+            )?.content,
+      cause,
+    });
     throw new AuthClientLoadError("Sign-in could not load", { cause });
   }
 };

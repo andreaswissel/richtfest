@@ -103,13 +103,21 @@ An existing tab must have loaded a build containing this feature to detect subse
 
 ### Recovering an older open tab
 
-An open tab can still refer to a hashed JavaScript or CSS file from a previous deployment. Missing `/assets/` files return 404 rather than the application's HTML. A network interruption can produce the same browser module-loading error; the recovery notice does not claim that an update was definitely responsible.
+Open tabs can still request hashed JavaScript, CSS and other build assets from an earlier deployment. Before accepting traffic, production startup retains the current `dist/assets` files in the existing private Railway Bucket under `web-assets/v1/`. Existing filenames are reused; files are not automatically expired or deleted. Storage grows with distinct build assets, not with every restart. Bucket credentials are required: if retention fails, the new process refuses to listen, so Railway's healthcheck cannot promote an unarchived build. Development does not archive files or require bucket access.
+
+The API serves current assets from the container first, without a storage request. Missing local assets fall back to the archive, streamed on the same origin with the correct MIME type and one-year immutable caching. The bucket stays private. Only flat, hashed build filenames with allowed asset extensions are exposed; the fallback cannot access customer object keys, source maps, HTML or manifests. No browser CORS or new service is needed. Unknown `/assets/` files return a non-cacheable, non-HTML 404; a storage outage returns a non-cacheable 503 instead of pretending the file is missing.
+
+Retention protects builds archived after this feature is installed; it cannot recover files already removed by earlier deployments. Those tabs may still need one reload. Asset retention also does not make incompatible API changes safe: keep API contracts backward-compatible for open clients.
+
+A network interruption or JavaScript initialization error can still prevent loading. The account-security recovery notice does not claim an update was definitely responsible; the browser console logs the original authentication-module error and the tab's build fingerprint, without sending account data to a telemetry service. Use the Network panel's asset URL/status and this underlying error to distinguish a missing download from an initialization bug.
 
 OpenUI and Markdown loads have local error boundaries. A missing renderer shows a translated reload prompt in place of that content, without unmounting the surrounding conversation or composer. Markdown falls back to its original plain text. Copy unsent text or unsaved changes before choosing **Reload app**; confirmation is required, and cancellation leaves the page untouched. There is no automatic reload or retry loop. A confirmed reload keeps the current URL and fetches the current app; it cannot repair an ongoing outage.
 
 Lazy project and Help routes have eagerly available error and initial-loading elements so failed imports remain visible inside the shell, including on a direct page load. Ordinary rendering errors use a separate generic error message rather than being misidentified as a stale deployment. Recovery cannot run if the initial application bundle itself fails to load, and tabs opened before this behavior was deployed need a manual refresh once.
 
 To verify locally, build the web app and block its hashed OpenUI or Help module in browser network interception. Check that the conversation/composer or navigation shell remains, cancel the reload confirmation, then unblock the module and confirm reload. The browser regression checks can also be run on Vite with `import('/tests/module-recovery.browser.tsx').then(m => m.testModuleRecovery())`.
+
+Run `bun test richtfest-os/apps/api/src/web-assets.test.ts tests/social-preview.test.ts` to check archive retention across replacement builds, private-object isolation, outage behavior, cache headers and current HTML/version responses. The archive test uses an isolated loopback S3 fixture, never production storage. For browser verification, leave a built app tab open before visiting Account settings, replace the served build, then open Account settings: the old authentication module should return 200 through the archive and the tab should not reload.
 
 ## Docs build
 

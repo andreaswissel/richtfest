@@ -25,8 +25,9 @@ import { createAccessRouter } from "./access-routes";
 import { createAgentPresetsRouter, listAgentPresets } from "./agent-presets";
 import { createAuth } from "./auth";
 import { recordAudit } from "./audit";
+import { retainWebAssets, type WebAssetArchive } from "./web-assets";
 
-export const createApp = (db: Database, options: { allowDevAuth?: boolean; providerFetch?: import("./provider-runtime").ProviderFetch; supervisorRuntime?: Partial<Pick<import("@richtfest/knowledge/deps").AppDeps, "supervisorEnabled" | "executeSupervisor">> } = {}) => {
+export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; allowDevAuth?: boolean; providerFetch?: import("./provider-runtime").ProviderFetch; supervisorRuntime?: Partial<Pick<import("@richtfest/knowledge/deps").AppDeps, "supervisorEnabled" | "executeSupervisor">> } = {}) => {
   const app = express();
   const allowDevAuth = env.NODE_ENV !== "production" && (options.allowDevAuth ?? env.ALLOW_DEV_AUTH);
   const auth = createAuth(db, { allowDevAuth });
@@ -97,13 +98,22 @@ export const createApp = (db: Database, options: { allowDevAuth?: boolean; provi
       .replaceAll("__PUBLIC_ORIGIN__", new URL(env.BETTER_AUTH_URL).origin);
     app.get("/index.html", (_req, res) => res.set("Cache-Control", "no-store").type("html").send(webHtml));
     app.get("/version.json", (_req, res) => res.set("Cache-Control", "no-store").sendFile(path.join(webDirectory, "version.json")));
-    app.use(express.static(webDirectory, { index: false }));
-    // A removed deployment chunk is not an app route. Never return HTML as JS.
+    app.use("/assets", express.static(path.join(webDirectory, "assets"), { immutable: true, maxAge: "1y", index: false, redirect: false }));
+    if (options.webAssets) app.use("/assets", options.webAssets.serve);
+    // Never turn a missing module into HTML, or cache a temporary storage outage.
     app.use("/assets", (_req, res) => res.status(404).set("Cache-Control", "no-store").end());
+    app.use(express.static(webDirectory, { index: false }));
     app.get("*", (_req, res) => res.set("Cache-Control", "no-store").type("html").send(webHtml));
   }
   app.use((_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => { if (error instanceof z.ZodError) return res.status(400).json(fail("validation_error", "Request validation failed", error.flatten())); if (error instanceof HttpError || (error as any)?.status) { const e = error as any; return res.status(e.status ?? 500).json(fail(e.code ?? "request_error", e.message)); } console.error(error); return res.status(500).json(fail("internal_error", "An unexpected error occurred")); });
   return app;
 };
-export const createServer = () => { const { db, pool } = createDatabase(env.DATABASE_URL); return { app: createApp(db), db, pool }; };
+export const createServer = async () => {
+  // Archive before listening: a successful rollout must not strand its own tabs.
+  const webAssets = env.NODE_ENV === "production"
+    ? await retainWebAssets(path.resolve(import.meta.dir, "../../web/dist/assets"))
+    : undefined;
+  const { db, pool } = createDatabase(env.DATABASE_URL);
+  return { app: createApp(db, { webAssets }), db, pool };
+};

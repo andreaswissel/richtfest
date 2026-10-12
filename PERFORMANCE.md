@@ -29,8 +29,10 @@ Changes that regress the bench budgets do not ship.
 
 ## Caching and deploys
 
-- **HTTP:** app HTML and `version.json` use `no-store`. Hashed files under `/assets/` use Express static caching
-  defaults; removed assets return a non-HTML 404. A reload requests the current build.
+- **HTTP:** app HTML and `version.json` use `no-store`. Hashed files under `/assets/` use one-year immutable caching.
+  Current files are served locally; older files fall back to the private Railway Bucket's `web-assets/v1/` archive.
+  Production startup archives the build before listening and fails if retention is unavailable. Unknown assets return
+  a non-HTML, non-cacheable 404; archive outages return a non-cacheable 503. A reload requests the current build.
 - **Build ID:** each web build gets an ID, a hash of its asset file names, so it only changes when the shipped frontend
   changes. It is written into `index.html` (`<meta name="richtfest-build">`) and `dist/version.json`.
 - **Open tabs:** a nonblocking TanStack Query check fetches `/version.json` once a minute while visible and on tab
