@@ -1,74 +1,131 @@
 import { list, type RecordData } from "../../api";
 import { useT } from "../../i18n";
-import { runActivityLabel, providerActivityExplanation } from "./run-activity";
+import {
+  currentRunTasks,
+  runActivityLabel,
+  providerActivityExplanation,
+  workProgressMetadata,
+  workProgressDescription,
+  agentName,
+} from "./run-activity";
 
 export function RunActivityFeed({
   events,
   active,
   status,
-  currentTask,
+  run,
+  children = [],
 }: {
   events: RecordData[];
   active: boolean;
   status?: string;
-  currentTask?: string;
+  run?: RecordData;
+  children?: RecordData[];
 }) {
   const t = useT();
   const visibleEvents = list(events).filter((event) => runActivityLabel(event));
+  const latest = visibleEvents.at(-1);
+  const latestLabel = latest && runActivityLabel(latest);
+  const currentTasks = run
+    ? currentRunTasks(run, children, t, visibleEvents)
+    : [];
+  const hasProgress = currentTasks.some((task) => task.hasProgress);
 
   if (!active && !visibleEvents.length) return null;
 
   return (
     <div
       className="run-activity-feed"
-      role="log"
+      role="group"
       aria-label={t("workspaceAgentProgress")}
-      aria-live="polite"
-      aria-relevant="additions text"
     >
-      {active && currentTask && (
-        <p className="run-activity-current">
-          <span className="run-activity-current-label">
-            {t("workspaceCurrentTask")}:
-          </span>
-          <span className="run-activity-current-text" title={currentTask}>
-            {currentTask}
-          </span>
-        </p>
-      )}
-      {visibleEvents.length ? (
-        <ol>
-          {visibleEvents.map((activity) => {
-            const label = runActivityLabel(activity);
-            if (!label) return null;
-            const timestamp = activity.createdAt
-              ? new Date(activity.createdAt)
-              : null;
-            return (
-              <li key={activity.id}>
-                {timestamp && !Number.isNaN(timestamp.getTime()) && (
-                  <time dateTime={timestamp.toISOString()}>
-                    {timestamp.toLocaleTimeString(undefined, {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </time>
-                )}
-                <span>
-                  {t(label)}
-                  {providerActivityExplanation(activity, t) &&
-                    ` · ${providerActivityExplanation(activity, t)}`}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      ) : (
-        <p>
-          {status === "queued"
-            ? t("agentRunWaitingForWorker")
-            : t("workspaceActivityWaiting")}
-        </p>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        {active && currentTasks.length > 0 && (
+          <div className="run-activity-current">
+            <span className="run-activity-current-label">
+              {t("workspaceCurrentTask")}:
+            </span>
+            <div className="run-activity-tasks">
+              {currentTasks.map((task) => (
+                <div key={task.id}>
+                  <p className="font-medium text-foreground">{task.name}</p>
+                  <p className={`run-activity-current-text${task.hasProgress ? " run-activity-work-text" : ""}`} title={task.text}>
+                    {task.text}
+                  </p>
+                  {task.summary && (
+                    <div className="run-activity-finding">
+                      <p className="text-ui-xs">{t("workspaceWorkFindings")}</p>
+                      <p
+                        className="run-activity-finding-text"
+                        title={task.summary}
+                      >
+                        {task.summary}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {latestLabel &&
+        (!active ||
+          !hasProgress ||
+          ["provider_call_retrying", "provider_call_failed"].includes(
+            latest?.eventType,
+          )) ? (
+          <p>{t(latestLabel)}</p>
+        ) : !currentTasks.length ? (
+          <p>
+            {status === "queued"
+              ? t("agentRunWaitingForWorker")
+              : t("workspaceActivityWaiting")}
+          </p>
+        ) : null}
+      </div>
+      {visibleEvents.length > 0 && (
+        <details className="run-activity-history">
+          <summary>
+            {t("workspaceActivityHistory")} · {visibleEvents.length}
+          </summary>
+          <ol>
+            {visibleEvents.map((activity) => {
+              const label = runActivityLabel(activity);
+              if (!label) return null;
+              const work = workProgressMetadata(activity);
+              const owner =
+                work &&
+                [run, ...children].find((agent) => agent?.id === work.runId);
+              const timestamp = activity.createdAt
+                ? new Date(activity.createdAt)
+                : null;
+              return (
+                <li key={activity.id}>
+                  {timestamp && !Number.isNaN(timestamp.getTime()) && (
+                    <time dateTime={timestamp.toISOString()}>
+                      {timestamp.toLocaleTimeString(undefined, {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  )}
+                  <div className="min-w-0 text-foreground wrap-anywhere">
+                    {work
+                      ? `${owner ? `${agentName(owner, t)}: ` : ""}${workProgressDescription(work, t)}`
+                      : t(label)}
+                    {work?.summary && (
+                      <p>
+                        {t("workspaceWorkFindings")}: {work.summary}
+                      </p>
+                    )}
+                    {providerActivityExplanation(activity, t) &&
+                      ` · ${providerActivityExplanation(activity, t)}`}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </details>
       )}
     </div>
   );

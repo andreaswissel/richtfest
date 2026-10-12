@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, notInArray, or, isNull, lt } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -171,6 +171,18 @@ async function log(
     run.id,
     run.correlationId,
   );
+}
+async function logWorkProgress(d: AppDeps, tx: any, run: any, progress: AgentWorkProgress) {
+  const data = agentWorkProgressSchema.parse({
+    ...progress,
+    summary: progress.summary && progress.summary.length > 1000
+      ? `${progress.summary.slice(0, 999)}…` : progress.summary,
+  });
+  // Both conversations receive the same durable, permission-scoped work facts.
+  // Do not copy source bodies or provider diagnostics into events/audit metadata.
+  await log(d, tx, run, "work_progress", undefined, JSON.stringify(data));
+  if (data.runId !== run.id)
+    await log(d, tx, { ...run, id: data.runId }, "work_progress", undefined, JSON.stringify(data));
 }
 export async function createSupervisor(
   d: AppDeps,
@@ -532,6 +544,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   .update(agentRuns)
                   .set({ status: "running", updatedAt: new Date() })
                   .where(eq(agentRuns.id, assignment.runId));
+                await logWorkProgress(d, tx, run, {
+                  runId: assignment.runId, stage: "resolving_sources", sources: [],
+                });
               });
               if (!claimed) return;
               await assertActive();
@@ -603,6 +618,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const batch = batches[index]!;
                 const batchIds = [...new Set(batch.map(source => source.versionId))];
                 const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
+                const workSources = batch.map(({ versionId, name, version }) => ({ versionId, name, version }));
+                const started = await commit(d, run, token, async (tx) => {
+                  await logWorkProgress(d, tx, run, {
+                    runId: assignment.runId, stage: "reading_sources", sources: workSources,
+                    batch: index + 1, batchCount: batches.length, summary: accumulated?.summary,
+                  });
+                });
+                if (!started) throw conflict("Supervisor no longer active");
                 const result = schemas.specialist.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
                   sourceVersionIds: batchIds,
@@ -629,6 +652,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     }],
                   }).where(eq(supervisorRuns.runId, id));
                   await log(d, tx, run, "specialist_batch_completed", `${index + 1}/${batches.length}`, assignment.runId);
+                  await logWorkProgress(d, tx, run, {
+                    runId: assignment.runId, stage: "source_findings", sources: workSources,
+                    batch: index + 1, batchCount: batches.length, summary: output.summary,
+                  });
                 });
                 if (!saved) throw conflict("Supervisor no longer active");
                 accumulated = output;
@@ -675,8 +702,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           .update(supervisorRuns)
           .set({ phase: "review" })
           .where(eq(supervisorRuns.runId, id));
+        await logWorkProgress(d, tx, run, {
+          runId: id, stage: "reviewing_findings", sources: [],
+        });
       });
     } else if (state.phase === "review") {
+      await commit(d, run, token, async (tx) => {
+        await logWorkProgress(d, tx, run, {
+          runId: id, stage: "reviewing_findings", sources: [],
+          summary: (state.assignments as Assignment[]).map(a => a.output?.summary).filter(Boolean).join("\n\n"),
+        });
+      });
       const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
       const review = reviewSchema.parse(
         await call("review", goal, {
@@ -736,6 +772,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             })
             .where(eq(supervisorRuns.runId, id));
           await log(d, tx, run, "supervisor_revision_requested");
+          for (const a of assignments.filter((a) => !a.output))
+            await logWorkProgress(d, tx, run, {
+              runId: a.runId, stage: "revision_requested", sources: [], summary: a.goal,
+            });
         });
       } else if (
         review.decision === "accept" &&
@@ -843,6 +883,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     } else if (state.phase === "independent_review") {
       const assignments = state.assignments as Assignment[];
       const sourceVersionIds = [...new Set(assignments.flatMap((a) => a.sourceVersionIds))];
+      await commit(d, run, token, async (tx) => {
+        await logWorkProgress(d, tx, run, {
+          runId: id, stage: "independent_review", sources: [],
+        });
+      });
       await sources(d, run.projectId, sourceVersionIds);
       const resolvedExcerpts = await Promise.all(sourceVersionIds.map(async (versionId) => {
         await assertActive();
@@ -870,6 +915,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         const sliceIds = sourceSlices[index];
         const sliceIdSet = new Set(sliceIds);
         const sourceExcerpts = resolvedExcerpts.filter(({ versionId }) => sliceIdSet.has(versionId));
+        const workSources = sourceExcerpts.map(({ versionId, resolution }: any) => ({
+          versionId, name: resolution.source.name, version: resolution.source.version,
+        }));
+        await commit(d, run, token, async (tx) => {
+          await logWorkProgress(d, tx, run, {
+            runId: id, stage: "independent_review", sources: workSources,
+            batch: index + 1, batchCount: sourceSlices.length,
+          });
+        });
         const sliceAssignments = assignments.filter((assignment) =>
           assignment.sourceVersionIds.some((versionId) => sliceIdSet.has(versionId)) ||
           (index === 0 && assignment.sourceVersionIds.length === 0),
@@ -913,6 +967,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           revision: state.revision,
         }));
         assertIndependentReviewCitations(output, sliceIdSet);
+        await commit(d, run, token, async (tx) => {
+          await logWorkProgress(d, tx, run, {
+            runId: id, stage: "independent_review", sources: workSources,
+            batch: index + 1, batchCount: sourceSlices.length, summary: output.summary,
+          });
+        });
         sliceResults.push({ sourceVersionIds: sliceIds, output });
       }
       const aggregated = aggregateIndependentReviews(sliceResults, limits);
@@ -962,6 +1022,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           }).where(eq(supervisorRuns.runId, id));
           await log(d, tx, run, "independent_review_completed");
           await log(d, tx, run, "independent_review_revision_requested");
+          for (const a of revisedAssignments.filter((a) => !a.output))
+            await logWorkProgress(d, tx, run, {
+              runId: a.runId, stage: "revision_requested", sources: [], summary: a.goal,
+            });
         });
       } else {
         await commit(d, run, token, async (tx) => {

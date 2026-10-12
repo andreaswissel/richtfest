@@ -19,6 +19,7 @@ import { Bubble, BubbleContent } from "../ui/bubble";
 import { ChatMarkdown } from "../chat-markdown";
 import { Marker, MarkerContent } from "../ui/marker";
 import {
+  agentName,
   runActivityLabel,
   providerActivityMetadata,
   providerActivityExplanation,
@@ -35,26 +36,6 @@ import {
   MessageScrollerItem,
 } from "../ui/message-scroller";
 import "./subagent-thread.css";
-
-function agentName(run: RecordData, t: ReturnType<typeof useT>) {
-  if (run.specialistRole === "source_reviewer")
-    return t("agentThreadSourceName");
-  if (run.specialistRole === "requirements_reviewer")
-    return t("agentThreadRequirementsName");
-  if (run.specialistRole === "independent_reviewer")
-    return t("supervisorIndependentReviewer");
-  if (run.specialistRole === "sound_insulation")
-    return t("supervisorSoundInsulation");
-  if (run.specialistRole === "construction_law")
-    return t("supervisorConstructionLaw");
-  if (run.specialistRole === "cost_optimizer")
-    return t("supervisorCostOptimizer");
-  if (run.isSupervisor) return t("supervisorRole");
-  if (!run.parentRunId) return t("agentThreadCoordinator");
-  return (
-    run.goal?.split(/[.!?\n]/)[0]?.slice(0, 72) || t("agentThreadSpecialist")
-  );
-}
 
 const runReasonPhases = {
   plan: "workspaceRunPhasePlan",
@@ -519,6 +500,8 @@ export function SubagentThread({
         if (
           [
             "supervisor_planned",
+            "provider_call_started",
+            "work_progress",
             "specialist_completed",
             "supervisor_revision_requested",
           ].includes(activity.eventType)
@@ -571,7 +554,9 @@ export function SubagentThread({
     );
   const managed = Boolean(run.parentRunId);
   const output = run.outputSummary || run.partialOutput;
-  const currentStatus = streamStatus ?? run.status;
+  const currentStatus = ["queued", "running"].includes(run.status)
+    ? streamStatus ?? run.status
+    : run.status;
   const running = ["queued", "running"].includes(currentStatus);
   const executing = currentStatus === "running";
   const persistedEvents = list(query.data?.events).filter((event) =>
@@ -592,13 +577,6 @@ export function SubagentThread({
     },
   );
   const childRuns = list(query.data?.children);
-  const activeChild = childRuns.find((child) =>
-    ["queued", "running"].includes(child.status),
-  );
-  const currentTask = run.isSupervisor
-    ? activeChild?.goal ||
-      t(childRuns.length ? "workspaceTaskReviewing" : "workspaceTaskPlanning")
-    : run.goal;
   const reason =
     terminalProviderFailure(
       run,
@@ -779,8 +757,10 @@ export function SubagentThread({
                     )}
                     <RunActivityFeed
                       events={activityEvents}
-                      active={executing}
-                      currentTask={currentTask}
+                      active={running}
+                      status={currentStatus}
+                      run={{ ...run, status: currentStatus }}
+                      children={childRuns}
                     />
                     {run.rationale && (
                       <p className="agent-thread-rationale">{run.rationale}</p>

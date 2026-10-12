@@ -62,6 +62,20 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
         { role: "requirements_reviewer", goal: "Read every source", sourceVersionIds: evidence.map(source => source.versionId) },
       ] } };
       const context = input.context;
+      const liveEvents = await db.select().from(agentRunEvents).where(and(
+        eq(agentRunEvents.runId, input.runId), eq(agentRunEvents.eventType, "work_progress"),
+      )).orderBy(agentRunEvents.createdAt);
+      const liveProgress = JSON.parse(liveEvents.at(-1)!.paramsSummary!);
+      expect(liveProgress).toMatchObject({
+        runId: input.runId, stage: "reading_sources",
+        batch: context.sourceCoverage.batch, batchCount: context.sourceCoverage.batchCount,
+        sources: context.sourceVersionIds.map((versionId: string) => ({
+          versionId, name: evidence.find(source => source.versionId === versionId)!.name,
+        })),
+      });
+      expect(liveProgress.summary).toBe(context.previousFindings?.summary);
+      expect(JSON.stringify(liveProgress)).not.toContain("textRange");
+      expect(JSON.stringify(liveProgress)).not.toContain("AAAA");
       if (context.sourceCoverage.batch === 2 && !interrupted) {
         interrupted = true;
         // Simulate a worker losing its lease after one saved batch. Its late
@@ -116,6 +130,15 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
     expect(assignment.output.citations).toEqual(evidence.slice(0, 8).map(source => source.versionId));
     expect(assignment.sourceProgress).toBeUndefined();
     expect(JSON.stringify(completed)).not.toContain("Discard this late response");
+    const workEvents = await db.select().from(agentRunEvents).where(and(
+      eq(agentRunEvents.tenantId, tenantId), eq(agentRunEvents.eventType, "work_progress"),
+    )).orderBy(agentRunEvents.createdAt);
+    const parentProgress = workEvents.filter(event => event.runId === runId).map(event => JSON.parse(event.paramsSummary!));
+    const childProgress = workEvents.filter(event => event.runId === assignment.runId).map(event => JSON.parse(event.paramsSummary!));
+    expect(parentProgress.filter(event => event.runId === assignment.runId)).toEqual(childProgress);
+    expect(parentProgress.at(-1).stage).toBe("reviewing_findings");
+    expect(childProgress.at(-1)).toMatchObject({ stage: "source_findings", summary: `Accumulated through batch ${accepted.length}` });
+    expect(JSON.stringify(workEvents)).not.toContain("Discard this late response");
     // A new extraction of the immutable file cannot inherit an older text
     // checkpoint, even when the version IDs are unchanged.
     evidence[0]!.text += "\nNewly recovered OCR line.";

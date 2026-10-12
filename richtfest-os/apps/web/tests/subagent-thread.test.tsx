@@ -163,3 +163,64 @@ test("noncanonical timeout reasons keep the safe unknown-reason fallback", () =>
   expect(html).not.toContain("SECRET");
   expect(html).not.toContain(en.workspaceRunCategoryTimeout);
 });
+
+test("supervisor progress names concurrent assignments, distinguishes waiting work and returns to review", () => {
+  const supervisor = {
+    ...run,
+    parentRunId: null,
+    specialistRole: null,
+    status: "running",
+  };
+  const children = [
+    {
+      ...run,
+      id: "queued",
+      status: "queued",
+      goal: "Check missing dimensions",
+    },
+    {
+      ...run,
+      id: "active",
+      status: "running",
+      goal: "Compare floor plan revisions",
+    },
+    {
+      ...run,
+      id: "active-two",
+      specialistRole: "requirements_reviewer",
+      status: "running",
+      goal: "Identify required acoustic evidence",
+    },
+    { ...run, id: "done", status: "completed", goal: "Obsolete assignment" },
+  ];
+  const node = <SubagentThread projectId={projectId} runId={run.id} />;
+  const data = {
+    run: supervisor,
+    orchestration: { phase: "specialists" },
+    events: [],
+    children,
+  };
+  const html = render(node, data);
+  expect(html).toContain("Source review");
+  expect(html).toContain("Compare floor plan revisions");
+  expect(html).toContain("Requirements check");
+  expect(html).toContain("Identify required acoustic evidence");
+  expect(html).toContain(`Source review · ${en.run_queued}`);
+  expect(html).toContain("Check missing dimensions");
+  expect(html.indexOf("Compare floor plan revisions")).toBeLessThan(
+    html.indexOf("Check missing dimensions"),
+  );
+  expect(html).not.toContain("Obsolete assignment");
+  const review = render(node, {
+    ...data,
+    children: children.map((child) => ({ ...child, status: "completed" })),
+  });
+  expect(review).toContain(en.workspaceTaskReviewing);
+  expect(review).not.toContain("Compare floor plan revisions");
+  const queued = render(node, {
+    ...data,
+    run: { ...supervisor, status: "queued" },
+  });
+  expect(queued).toContain(en.agentRunWaitingForWorker);
+  expect(queued).not.toContain("Compare floor plan revisions");
+});

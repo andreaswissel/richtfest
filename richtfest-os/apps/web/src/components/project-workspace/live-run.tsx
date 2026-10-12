@@ -13,12 +13,12 @@ import { AgentRunMetrics } from "../agent-run-metrics";
 export function LiveRun({
   run,
   projectId,
-  currentTask,
+  children,
   silent = false,
 }: {
   run: RecordData;
   projectId: string;
-  currentTask?: string;
+  children?: RecordData[];
   silent?: boolean;
 }) {
   const t = useT(),
@@ -54,11 +54,11 @@ export function LiveRun({
           activity.id &&
           [
             "supervisor_planned",
+            "provider_call_started",
+            "work_progress",
             "specialist_completed",
             "supervisor_revision_requested",
-          ].includes(
-            activity.eventType,
-          ) &&
+          ].includes(activity.eventType) &&
           !plannedEvents.current.has(activity.id)
         ) {
           plannedEvents.current.add(activity.id);
@@ -71,7 +71,7 @@ export function LiveRun({
         void queryClient.invalidateQueries({
           queryKey: [`/knowledge/runs/${run.id}`],
         });
-        setEvents((old) => [...old.slice(-49), activity]);
+        setEvents((old) => [...old, activity]);
       } catch {
         setOffline(true);
       }
@@ -152,7 +152,8 @@ export function LiveRun({
         events={events}
         active
         status={run.status}
-        currentTask={currentTask}
+        run={run}
+        children={children}
       />
       {offline && (
         <span className="muted text-ui-xs">{t("workspaceReconnecting")}</span>

@@ -950,23 +950,7 @@ function Conversation({
                       <LiveRun
                         run={run}
                         projectId={projectId}
-                        currentTask={(() => {
-                          if (!run.isSupervisor) return run.goal;
-                          const children = runs.filter(
-                            (candidate) => candidate.parentRunId === run.id,
-                          );
-                          const activeChild = children.find((child) =>
-                            ["queued", "running"].includes(child.status),
-                          );
-                          return (
-                            activeChild?.goal ||
-                            t(
-                              children.length
-                                ? "workspaceTaskReviewing"
-                                : "workspaceTaskPlanning",
-                            )
-                          );
-                        })()}
+                        children={runs.filter((candidate) => candidate.parentRunId === run.id)}
                       />
                     </MessageContent>
                   </Message>

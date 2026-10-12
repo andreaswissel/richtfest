@@ -1,5 +1,117 @@
 import type { RecordData } from "../../api";
 import type { useT } from "../../i18n";
+import {
+  agentWorkProgressSchema,
+  type AgentWorkProgress,
+} from "@richtfest/shared";
+
+export function agentName(run: RecordData, t: ReturnType<typeof useT>) {
+  if (run.specialistRole === "source_reviewer")
+    return t("agentThreadSourceName");
+  if (run.specialistRole === "requirements_reviewer")
+    return t("agentThreadRequirementsName");
+  if (run.specialistRole === "independent_reviewer")
+    return t("supervisorIndependentReviewer");
+  if (run.specialistRole === "sound_insulation")
+    return t("supervisorSoundInsulation");
+  if (run.specialistRole === "construction_law")
+    return t("supervisorConstructionLaw");
+  if (run.specialistRole === "cost_optimizer")
+    return t("supervisorCostOptimizer");
+  if (run.isSupervisor) return t("supervisorRole");
+  if (!run.parentRunId) return t("agentThreadCoordinator");
+  return (
+    run.goal?.split(/[.!?\n]/)[0]?.slice(0, 72) || t("agentThreadSpecialist")
+  );
+}
+
+export function currentRunTasks(
+  run: RecordData,
+  children: RecordData[],
+  t: ReturnType<typeof useT>,
+  events: RecordData[] = [],
+) {
+  const progress = new Map<string, AgentWorkProgress>();
+  for (const event of events) {
+    if (["resumed", "steered"].includes(event.eventType)) progress.clear();
+    const work = workProgressMetadata(event);
+    if (work) progress.set(work.runId, work);
+  }
+  const active = (run.isSupervisor ? children : [])
+    .filter((child) => ["running", "queued"].includes(child.status))
+    .sort(
+      (a, b) => Number(a.status === "queued") - Number(b.status === "queued"),
+    );
+  return (run.status !== "queued" && active.length ? active : [run]).map(
+    (agent) => {
+      const work =
+        agent.status === "queued" ? undefined : progress.get(agent.id);
+      return {
+        id: agent.id,
+        name: `${agentName(agent, t)}${agent.status === "queued" ? ` · ${t("run_queued")}` : ""}`,
+        text: work
+          ? workProgressDescription(work, t)
+          : agent.status === "queued"
+            ? `${t("agentRunWaitingForWorker")} · ${agent.goal}`
+            : agent.isSupervisor
+              ? t(
+                  children.length
+                    ? "workspaceTaskReviewing"
+                    : "workspaceTaskPlanning",
+                )
+              : agent.goal,
+        summary: work?.summary,
+        hasProgress: Boolean(work),
+      };
+    },
+  );
+}
+
+export function workProgressMetadata(
+  event: RecordData,
+): AgentWorkProgress | undefined {
+  if (event.eventType !== "work_progress") return;
+  try {
+    const parsed = agentWorkProgressSchema.safeParse(
+      typeof event.paramsSummary === "string"
+        ? JSON.parse(event.paramsSummary)
+        : event.paramsSummary,
+    );
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return;
+  }
+}
+
+export function workProgressDescription(
+  work: AgentWorkProgress,
+  t: ReturnType<typeof useT>,
+) {
+  const labels = {
+    resolving_sources: "workspaceWorkResolving",
+    reading_sources: work.sources.length
+      ? "workspaceWorkReading"
+      : "workspaceWorkNoSources",
+    source_findings: "workspaceWorkFindingsSaved",
+    reviewing_findings: "workspaceWorkReviewing",
+    independent_review: "workspaceWorkIndependent",
+    revision_requested: "workspaceWorkRevision",
+  } as const;
+  return [
+    t(labels[work.stage]),
+    work.batch && work.batchCount
+      ? `${t("workspaceWorkBatch")} ${work.batch}/${work.batchCount}`
+      : null,
+    work.sources
+      .map(
+        (source) =>
+          `${source.name || t("source")}${source.version ? ` (${t("version")} ${source.version})` : ""}`,
+      )
+      .join(", "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 const phases = {
   plan: "workspaceRunPhasePlan",
@@ -133,6 +245,7 @@ export function terminalProviderFailure(
 }
 
 const activityLabels = {
+  work_progress: "workspaceActivityStep",
   started: "workspaceActivityRunStarted",
   supervisor_started: "workspaceActivityStarted",
   provider_call_started: "workspaceActivityProviderCallStarted",
