@@ -5,3 +5,5 @@ export * from "./agent-document";
 export * from "./customer";
 export * from "./support";
 export * from "./location";
+export * from "./source-text";
+export * from "./source-model";

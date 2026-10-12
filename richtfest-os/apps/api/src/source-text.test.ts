@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { extractSourceText } from "./source-text";
+import { extractSourceText } from "@richtfest/projects/source-text";
 async function* bytes(value: Uint8Array) {
   yield value;
 }

@@ -26,6 +26,7 @@ import {
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
 import { executeTrackedProvider, summarizeUsageRows } from "./usage";
+import { resolveRunSource } from "./source-evidence";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -114,6 +115,9 @@ export const toolInputs = {
       fileId: z.string().uuid().optional(),
       versionId: z.string().uuid().optional(),
       query: z.string().trim().min(1).max(300).optional(),
+      textQuery: z.string().trim().min(1).max(5000).optional(),
+      entityKey: z.string().min(1).max(200).optional(),
+      modelOffset: z.number().int().min(0).max(1000000).optional(),
     })
     .strict(),
   create_draft: z
@@ -207,8 +211,8 @@ export async function executeRun(d: AppDeps, run: any) {
     const sourceInventory = await d.listProjectSources(run.projectId);
     const evidence = new Set<string>();
     const sourceContent = [];
-    for (const versionId of run.sourceVersionIds as string[]) {
-      const resolved = await d.resolveSource(run.projectId, { versionId });
+    for (const versionId of new Set<string>(run.sourceVersionIds)) {
+      const resolved = await resolveRunSource(d, run.projectId, { versionId, textQuery: run.goal }, () => active(d, run, async () => {}));
       sourceContent.push(resolved);
       recordResolvedEvidence(evidence, resolved);
     }
@@ -391,7 +395,7 @@ export async function executeRun(d: AppDeps, run: any) {
       let childRun: any;
       const resolved =
         tool.name === "resolve_project_source"
-          ? await d.resolveSource(run.projectId, input)
+          ? await resolveRunSource(d, run.projectId, { textQuery: run.goal, ...input }, () => active(d, run, async () => {}))
           : undefined;
       recordResolvedEvidence(evidence, resolved);
       await active(d, run, async (tx) => {
@@ -491,7 +495,10 @@ export async function executeRun(d: AppDeps, run: any) {
           };
           calculationUnavailable = true;
         }
-        results.push({ tool: tool.name, result });
+        // Duplicate reads must not duplicate the same evidence in model input.
+        if (tool.name !== "resolve_project_source" || !results.some((entry: any) =>
+          entry.tool === tool.name && JSON.stringify(entry.result) === JSON.stringify(result)))
+          results.push({ tool: tool.name, result });
         await event(
           d,
           tx,
@@ -537,7 +544,8 @@ export async function executeRun(d: AppDeps, run: any) {
         reasoningEffort: executionModel?.reasoningEffort,
         maxOutputTokens: executionModel?.maxOutputTokens,
         goal: run.goal,
-        context,
+        context: { ...context, sources: context.sources.filter(source => !results.some((entry: any) =>
+          entry.tool === "resolve_project_source" && JSON.stringify(entry.result) === JSON.stringify(source))) },
         toolResults: results,
       }));
       failurePhase = "execution";

@@ -3,11 +3,12 @@ import crypto from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/shared";
-import { files, fileVersions, projectMembers, projects } from "./schema";
+import { files, fileVersions, projectMembers, projects, sourceExtractions, sourceModels } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
 import { createLocationRouter } from "./location-router";
 import { searchAddresses } from "./address-search";
+import { createSourceModelRouter } from "./source-model-router";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -68,6 +69,7 @@ const projectFile = async (
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
+  router.use(createSourceModelRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -638,6 +640,8 @@ export function createRouter(getDeps: GetDeps) {
               status: 409,
               code: "upload_already_completed",
             });
+          await tx.insert(sourceExtractions).values({ versionId: updated.id, tenantId: d.tenantId });
+          await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId });
           await d.audit(tx, "projects.file.upload.completed", "file", fileId, {
             projectId,
             versionId: row.version.id,

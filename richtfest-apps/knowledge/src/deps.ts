@@ -60,8 +60,11 @@ export type AppDeps = {
       fileId?: string;
       versionId?: string;
       query?: string;
+      textQuery?: string;
       pageStart?: number;
       pageEnd?: number;
+      entityKey?: string;
+      modelOffset?: number;
     },
   ) => Promise<unknown>;
   auditRun: (

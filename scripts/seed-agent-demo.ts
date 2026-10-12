@@ -7,7 +7,7 @@ import { memberships, tenants, users } from "../richtfest-os/apps/api/src/db/sch
 import { projectsDeps } from "../richtfest-os/apps/api/src/app-hosts";
 import { resolveAgentPreset } from "../richtfest-os/apps/api/src/agent-presets";
 import { recordAudit } from "../richtfest-os/apps/api/src/audit";
-import { projects, files, fileVersions } from "../richtfest-apps/projects/src/schema";
+import { projects, files, fileVersions, sourceExtractions, sourceModels } from "../richtfest-apps/projects/src/schema";
 import { conversations, messages, artifacts, artifactRevisions, agentRuns,
   agentRunEvents, agentRunAttempts, supervisorRuns } from "../richtfest-apps/knowledge/src/schema";
 import { artifactPdf } from "../richtfest-apps/knowledge/src/artifact-pdf";
@@ -102,6 +102,8 @@ ${version === 1 ? "Dieser Entwurf verwendet den ursprünglichen Projektbrief (ac
       await tx.insert(fileVersions).values({ id: id(source.key), tenantId, fileId: id(source.file), version: source.version,
         status: "ready", storageKey: source.storageKey, sizeBytes: source.sizeBytes, checksum: source.checksum,
         mimeType: "application/pdf", sourceMetadata: { synthetic: true, fixture: "agent-demo-v1" }, createdBy: actorId, createdAt }).onConflictDoNothing();
+      await tx.insert(sourceExtractions).values({ versionId: id(source.key), tenantId }).onConflictDoNothing();
+      await tx.insert(sourceModels).values({ versionId: id(source.key), tenantId }).onConflictDoNothing();
     }
     for (const [key, title] of [["concept", "01 · Konzept und Quellen"], ["tokens", "02 · Tokenlimit – Entscheidung testen"], ["characters", "03 · Zeichenlimit – kein Tokenproblem"]]) {
       await tx.insert(conversations).values({ id: id(key), tenantId, projectId, title, createdBy: actorId, createdAt }).onConflictDoNothing();

@@ -241,6 +241,8 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
         .object({
           pageStart: z.coerce.number().int().positive().optional(),
           pageEnd: z.coerce.number().int().positive().optional(),
+          entityKey: z.string().min(1).max(200).optional(),
+          modelOffset: z.coerce.number().int().min(0).max(1000000).optional(),
         })
         .refine((v) => !v.pageEnd || v.pageEnd >= (v.pageStart ?? 1))
         .parse(req.query);

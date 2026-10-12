@@ -10,7 +10,7 @@ import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import crypto from "node:crypto";
 import path from "node:path";
-import { extractSourceText, type SourceText } from "./source-text";
+import { readSourceEvidence } from "@richtfest/projects/source-model";
 import { configuredProvider, getActiveProvider, withProviderCredential } from "./ai-connections";
 import { resolveAgentPreset } from "./agent-presets";
 import { cancelSupervisorExecution, withSupervisorCancellation } from "./supervisor-execution";
@@ -119,10 +119,10 @@ const localStorage = {
         }
       : null;
   },
-  read: async (key: string) => {
+  read: async (key: string, signal?: AbortSignal) => {
     if (!(await localStorage.head(key))) return null;
     try {
-      return openReadStream(safeStoragePath(key));
+      return openReadStream(safeStoragePath(key), { signal });
     } catch {
       return null;
     }
@@ -206,10 +206,11 @@ const bucketStorage = bucketReady
             { expiresIn: 900 },
           ),
         }),
-        read: async (key: string) => {
+        read: async (key: string, signal?: AbortSignal) => {
           try {
             const object = await client.send(
               new GetObjectCommand({ Bucket: env.BUCKET!, Key: key }),
+              { abortSignal: signal },
             );
             return (object.Body as AsyncIterable<Uint8Array> | undefined) ?? null;
           } catch {
@@ -246,7 +247,7 @@ const unavailableStorage = {
   download: async () => null,
   read: async () => null,
 };
-const fileStorage =
+export const fileStorage =
   env.NODE_ENV === "production"
     ? (bucketStorage ?? unavailableStorage)
     : (bucketStorage ?? localStorage);
@@ -459,32 +460,7 @@ export const knowledgeDeps = (
         };
       const selected = input.versionId ? rows[0] : latest[0];
       const { storageKey, ...source } = selected;
-      let content: SourceText = {
-        status: "unsupported",
-        reason: "No immutable source content is available.",
-      };
-      if (storageKey) {
-        const download = await fileStorage.download(
-          storageKey,
-          source.mimeType ?? "application/octet-stream",
-          "",
-        );
-        if (download) {
-          const stream =
-            "stream" in download
-              ? download.stream
-              : "redirectUrl" in download
-                ? (await fetch(download.redirectUrl)).body
-                : null;
-          if (stream)
-            content = await extractSourceText(
-              stream as any,
-              source.mimeType ?? "",
-              source.name,
-              input,
-            );
-        }
-      }
+      const content = await readSourceEvidence(db, actor.tenantId, source.versionId, { ...input, name: source.name, mimeType: source.mimeType ?? "" });
       return {
         status: "resolved",
         source,

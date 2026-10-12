@@ -1,4 +1,4 @@
-import type { PermissionKey } from "@richtfest/shared";
+import type { PermissionKey, DocumentModelInput, DocumentModelResult } from "@richtfest/shared";
 export type StoredObject = {
   sizeBytes: number;
   checksum: string;
@@ -31,7 +31,7 @@ export type FileStorage = {
     stream?: NodeJS.ReadableStream;
     sizeBytes?: number;
   } | null>;
-  read: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
+  read: (key: string, signal?: AbortSignal) => Promise<AsyncIterable<Uint8Array> | null>;
 };
 export type AppDeps = {
   db: any;
@@ -56,4 +56,15 @@ export type LocationWorkerDeps = {
   db: any;
   audit: (tx: any, tenantId: string, action: string, projectId: string, metadata?: unknown) => Promise<void>;
   reportError: () => void;
+};
+
+export type SourceExtractionDeps = {
+  db: any;
+  fileStorage: Pick<FileStorage, "read">;
+  audit: (tx: any, tenantId: string, action: string, versionId: string, metadata?: unknown) => Promise<void>;
+  reportError: () => void;
+};
+
+export type SourceModelDeps = SourceExtractionDeps & {
+  structureDocument: (input: DocumentModelInput) => Promise<DocumentModelResult>;
 };

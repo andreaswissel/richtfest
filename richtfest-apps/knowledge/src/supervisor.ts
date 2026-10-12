@@ -17,6 +17,7 @@ import {
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact } from "./workspace";
 import { executeTrackedProvider } from "./usage";
+import { resolveRunSource } from "./source-evidence";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -557,7 +558,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const excerpts = await Promise.all(
                 assignment.sourceVersionIds.map(async (versionId) => {
                   await assertActive();
-                  return d.resolveSource(run.projectId, { versionId });
+                  return resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
                 }),
               );
               const resolvedSources = assignment.sourceVersionIds.map(
@@ -604,6 +605,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   text: excerpt.content.text as string,
                   truncated: excerpt.content.truncated,
                   coverage: excerpt.content.coverage,
+                  retrieval: excerpt.content.retrieval,
+                  model: excerpt.content.model,
                   extractionNotes: excerpt.content.reason,
                 }),
               );
@@ -858,7 +861,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       await sources(d, run.projectId, sourceVersionIds);
       const resolvedExcerpts = await Promise.all(sourceVersionIds.map(async (versionId) => {
         await assertActive();
-        return { versionId, resolution: await d.resolveSource(run.projectId, { versionId }) };
+        // Independent review retains broad evidence coverage, not just the
+        // specialist's relevance selection, but never re-extracts the original.
+        return { versionId, resolution: await resolveRunSource(d, run.projectId, { versionId, pageStart: 1 }, assertActive) };
       }));
       const readableSourceIds = new Set(resolvedExcerpts.flatMap(({ versionId, resolution }: any) =>
         resolution?.status === "resolved" &&

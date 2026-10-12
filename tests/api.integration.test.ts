@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { createApp } from "../richtfest-os/apps/api/src/server";
+import { fileStorage } from "../richtfest-os/apps/api/src/app-hosts";
+import { startSourceExtractionWorker } from "../richtfest-apps/projects/src/source-extraction";
 
 const databaseUrl = process.env.DATABASE_URL;
 const run = databaseUrl ? test : test.skip;
@@ -10,6 +12,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
     "creates and reads tenant-scoped customer, project, file, knowledge and approval records",
     async () => {
       const { db, pool } = createDatabase(databaseUrl!);
+      const extractionWorker = startSourceExtractionWorker({ db, fileStorage, audit: async () => {}, reportError: () => { throw new Error("Extraction worker failed"); } });
       const providerRequests: any[] = [];
       let providerMode = "success";
       const server = createApp(db, {
@@ -30,7 +33,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
           const resolvedSourceId =
             prompt.toolResults?.[0]?.result?.source?.versionId;
           const output =
-            providerMode === "discover"
+            providerMode === "discover" || providerMode === "repeat"
               ? prompt.toolResults?.length
                 ? {
                     summary: "The project source was read and is ready for review.",
@@ -43,12 +46,10 @@ describe("accepted API workflow (PostgreSQL)", () => {
                     summary: "Resolving the relevant project source.",
                     rationale: "The project inventory identifies the source.",
                     citations: [],
-                    tools: [
-                      {
+                    tools: Array.from({ length: providerMode === "repeat" ? 2 : 1 }, () => ({
                         name: "resolve_project_source",
-                        input: { versionId: inventorySource?.versionId },
-                      },
-                    ],
+                        input: { versionId: providerMode === "repeat" ? prompt.context.sourceVersionIds[0] : inventorySource?.versionId },
+                      })),
                     artifact: null,
                   }
               : {
@@ -758,6 +759,12 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect([403, 404]).toContain((await request(`/api/knowledge/runs/${proposed.run.id}`, {}, outsiderCookie)).response.status);
         expect(JSON.stringify(providerRequests)).toContain("ISO-IFC-SOURCE");
         expect(JSON.stringify(providerRequests)).not.toContain("VERSION-TWO");
+        const repeated = await completedRun("repeat");
+        expect(repeated.run.status).toBe("needs_review");
+        const followup = JSON.parse(providerRequests.at(-1).input);
+        expect(followup.context.sources).toHaveLength(0);
+        expect(followup.toolResults).toHaveLength(1);
+        expect(followup.toolResults[0].result.content.text).toBe("ISO-IFC-SOURCE");
         providerMode = "discover";
         const discoveryStart = providerRequests.length;
         const discoveryRun = await request(
@@ -932,6 +939,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
       );
       expect(lucaAfterOffboarding.response.status).toBe(401);
       server.close();
+      await extractionWorker.stop();
       await pool.end();
     },
   );

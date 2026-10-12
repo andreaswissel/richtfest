@@ -2,21 +2,8 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SourceText } from "@richtfest/shared";
 
-export type SourceText = {
-  status: "available" | "unsupported" | "extraction_too_large" | "extraction_failed";
-  text?: string;
-  truncated?: boolean;
-  reason?: string;
-  pages?: number;
-  coverage?: {
-    pageStart: number;
-    pageEnd: number;
-    totalPages: number;
-    truncated: boolean;
-    nextPage: number | null;
-  };
-};
 const BYTE_LIMIT = 32 * 1024 * 1024;
 const TEXT_LIMIT = 256 * 1024;
 const DEADLINE_MS = 300_000;
@@ -48,11 +35,15 @@ export async function extractSourceText(
   mimeType: string,
   name: string,
   range: { pageStart?: number; pageEnd?: number } = {},
+  // Upload worker persists each page before continuing. No aggregate text cap
+  // in this mode: the cap applies per page, and reads have their own budget.
+  savePage?: (page: number, content: SourceText) => Promise<void>,
 ): Promise<SourceText> {
   const pdf = mimeType === "application/pdf" || /\.pdf$/i.test(name);
   const text = mimeType.startsWith("text/") || /\.(ifc|txt|csv|json|md)$/i.test(name);
   if (!pdf && !text) return { status: "unsupported", reason: "Text extraction is not available for this format." };
   let directory: string | undefined;
+  let persistenceFailed = false;
   try {
     const chunks: Buffer[] = [];
     let bytes = 0;
@@ -90,6 +81,7 @@ export async function extractSourceText(
       if (Date.now() >= deadline) { limitations.push(`Processing deadline reached before page ${page}.`); break; }
       let lines = "";
       let provenance = "Native text";
+      let pageOversized = false;
       try {
         // Layout mode retains line breaks and column spacing useful for construction tables.
         lines = (await command("pdftotext", ["-f", String(page), "-l", String(page), "-layout", "-enc", "UTF-8", input, "-"], deadline)).replace(/\f/g, "").trimEnd();
@@ -119,8 +111,9 @@ export async function extractSourceText(
         // A maxBuffer failure must not silently substitute a partial page.
         if ((error as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
           oversized = true;
+          pageOversized = true;
           limitations.push(`Page ${page} exceeds the 256 Ki-character extracted-text limit; no partial page was included.`);
-          break;
+          if (!savePage) break;
         }
         lines = "";
         provenance = "Extraction/OCR failed: unreadable; manual review required";
@@ -129,15 +122,28 @@ export async function extractSourceText(
       const pageText = `\n[Page ${page}]\n[${provenance}]\n${lines}\n`;
       if (pageText.length > TEXT_LIMIT) {
         oversized = true;
+        pageOversized = true;
         limitations.push(`Page ${page} exceeds the 256 Ki-character extracted-text limit; no partial page was included.`);
-        break;
+        if (!savePage) break;
       }
-      if (content.length + pageText.length > TEXT_LIMIT) {
+      if (!savePage && content.length + pageText.length > TEXT_LIMIT) {
         limitations.push(`256 Ki-character text ceiling reached before page ${page}; no partial page was included.`);
         break;
       }
-      content += pageText;
-      readable ||= meaningful(lines);
+      if (savePage) {
+        try {
+          await savePage(page, {
+            status: pageOversized ? "extraction_too_large" : meaningful(lines) ? "available" : "extraction_failed",
+            text: pageOversized ? undefined : pageText,
+            pages,
+            reason: limitations[0] + (pageOversized ? " Page exceeds the 256 Ki-character text limit; no partial page was saved." : ""),
+          });
+        } catch (error) {
+          persistenceFailed = true;
+          throw error;
+        }
+      } else content += pageText;
+      readable ||= !pageOversized && meaningful(lines);
       lastPage = page;
     }
     const truncated = lastPage < pages;
@@ -149,7 +155,8 @@ export async function extractSourceText(
       coverage: { pageStart, pageEnd: lastPage, totalPages: pages, truncated, nextPage: lastPage < pages ? lastPage + 1 : null },
       reason: limitations.join(" "),
     };
-  } catch {
+  } catch (error) {
+    if (persistenceFailed) throw error;
     return { status: "extraction_failed", reason: "The immutable source could not be extracted (invalid PDF, unavailable tools or processing deadline). Open the source for manual review." };
   } finally {
     if (directory) await rm(directory, { recursive: true, force: true });

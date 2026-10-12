@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Project sources are processed once per revision and reused from saved text and structured, source-linked facts. IFC properties and declared quantities import without AI; documents use one bounded structuring pass when configured. Conflicting claims and human reviews remain separate, and agents reuse saved evidence instead of repeatedly investigating originals.
+
 - Project details now offer searchable address selection with Geoapify, retaining the selected coordinates and source attribution. Manual entry remains available for missing addresses or unconfigured search; manual edits clear old search metadata without moving existing 3D scenes.
 
 - Project specialists read large source sets in smaller, checkpointed batches without dropping extracted text. Evidence and synthesis calls have more time to finish; timeouts now stop unchanged retries and show specific guidance instead of suggesting a token increase or connection repair.

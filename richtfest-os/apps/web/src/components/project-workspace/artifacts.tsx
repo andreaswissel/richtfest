@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, list, uploadFile, type RecordData } from "../../api";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
@@ -621,9 +621,11 @@ function SourceText({
     [selection, setSelection] = useState(""),
     [quotePage, setQuotePage] = useState<number>();
   const textRef = useRef<HTMLDivElement>(null);
-  const source = useApi(
-    `/knowledge/projects/${projectId}/sources/${versionId}/content?pageStart=${page}&pageEnd=${page}`,
-  );
+  const sourcePath = `/knowledge/projects/${projectId}/sources/${versionId}/content?pageStart=${page}&pageEnd=${page}`;
+  const source = useQuery({
+    queryKey: [sourcePath], queryFn: () => api(sourcePath),
+    refetchInterval: query => query.state.data?.content?.status === "processing" ? 2000 : false,
+  });
   const content = source.data?.content;
   useEffect(() => {
     const captureSelection = () => {
@@ -671,7 +673,7 @@ function SourceText({
                 disabled={!selection}
                 onClick={() => {
                   setQuote(selection);
-                  setQuotePage(page);
+                  setQuotePage(content.coverage ? page : undefined);
                 }}
               >
                 {t("workspaceUseSelection")}
@@ -704,7 +706,7 @@ function SourceText({
                 </>
               )}
             </div>
-            {content.coverage?.truncated && (
+            {content.truncated && (
               <p className="muted text-ui-xs">{t("workspacePartialText")}</p>
             )}
           </>
@@ -721,7 +723,7 @@ function SourceText({
         conversationId={conversationId}
         sourceVersionId={versionId}
         selectedQuote={quote}
-        selectedPage={quotePage || page}
+        selectedPage={content?.coverage ? quotePage || page : undefined}
       />
     </>
   );

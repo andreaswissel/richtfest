@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -7,8 +8,10 @@ import {
   integer,
   uniqueIndex,
   index,
+  primaryKey,
+  foreignKey,
 } from "drizzle-orm/pg-core";
-import type { AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress } from "@richtfest/shared";
+import type { AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress, SourceText, SourceFactInput } from "@richtfest/shared";
 
 export const projectLocations = pgTable("projects_locations", {
   projectId: uuid("project_id").primaryKey(),
@@ -89,3 +92,66 @@ export const fileVersions = pgTable(
     ),
   }),
 );
+
+export const sourceExtractions = pgTable("projects_source_extractions", {
+  versionId: uuid("version_id").primaryKey().references(() => fileVersions.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  status: text("status").notNull().default("queued"),
+  nextPage: integer("next_page").notNull().default(1),
+  attempts: integer("attempts").notNull().default(0),
+  result: jsonb("result").$type<SourceText>(),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ jobs: index("projects_source_extractions_jobs").on(table.status, table.leaseUntil) }));
+
+export const sourcePages = pgTable("projects_source_pages", {
+  versionId: uuid("version_id").notNull().references(() => sourceExtractions.versionId, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  page: integer("page").notNull(),
+  content: jsonb("content").$type<SourceText>().notNull(),
+}, table => ({ key: primaryKey({ columns: [table.versionId, table.page] }) }));
+
+export const sourceModels = pgTable("projects_source_models", {
+  versionId: uuid("version_id").primaryKey().references(() => fileVersions.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  status: text("status").notNull().default("queued"),
+  method: text("method"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ jobs: index("projects_source_models_jobs").on(table.status, table.leaseUntil) }));
+
+export const sourceEntities = pgTable("projects_source_entities", {
+  versionId: uuid("version_id").notNull().references(() => sourceModels.versionId, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  key: text("key").notNull(),
+  kind: text("kind").notNull(),
+  name: text("name").notNull(),
+  globalId: text("global_id"),
+}, table => ({ key: primaryKey({ columns: [table.versionId, table.key] }) }));
+
+export const sourceFacts = pgTable("projects_source_facts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionId: uuid("version_id").notNull(),
+  tenantId: uuid("tenant_id").notNull(),
+  entityKey: text("entity_key").notNull(),
+  predicate: text("predicate").notNull(),
+  kind: text("kind").notNull(),
+  value: jsonb("value").$type<SourceFactInput["value"]>().notNull(),
+  unit: jsonb("unit").$type<SourceFactInput["unit"]>(),
+  provenance: text("provenance").notNull(),
+  evidence: jsonb("evidence").$type<SourceFactInput["evidence"]>().notNull(),
+  reviewStatus: text("review_status").notNull().default("unreviewed"),
+  reviewRevision: integer("review_revision").notNull().default(0),
+  reviewedBy: uuid("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  reviewNote: text("review_note"),
+}, table => ({
+  entity: foreignKey({ columns: [table.versionId, table.entityKey], foreignColumns: [sourceEntities.versionId, sourceEntities.key] }).onDelete("cascade"),
+  lookup: index("projects_source_facts_lookup").on(table.tenantId, table.versionId, table.entityKey),
+  search: index("projects_source_facts_search").using("gin", sql`to_tsvector('simple', regexp_replace(${table.predicate} || ' ' || ${table.value}::text, '[[:punct:]]', ' ', 'g'))`),
+}));
