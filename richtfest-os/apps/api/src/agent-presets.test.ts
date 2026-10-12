@@ -1,8 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { agentPresetConfigSchema } from "@richtfest/shared";
+import { agentPresetConfigSchema, domainSpecialistRoles, specialistRoleSchema } from "@richtfest/shared";
 import { isConfiguredPreset, isGatewayModelId, vendorPreset } from "./agent-presets";
 
 describe("agent provider presets", () => {
+  test("domain models are optional, strictly validated, and do not replace required generic roles", () => {
+    const legacy = vendorPreset("openai", "medium");
+    expect(agentPresetConfigSchema.parse(legacy).specialists).toEqual(legacy.specialists);
+    for (const role of domainSpecialistRoles) {
+      expect(specialistRoleSchema.parse(role)).toBe(role);
+      const config = { ...legacy, specialists: { ...legacy.specialists, [role]: { ...legacy.supervisor, modelId: "domain-model" } } };
+      expect(isConfiguredPreset("openai", config)).toBe(true);
+      expect(isConfiguredPreset("vercel", { ...config, supervisor: { ...legacy.supervisor, modelId: "openai/model" }, specialists: { source_reviewer: { ...legacy.supervisor, modelId: "openai/model" }, requirements_reviewer: { ...legacy.supervisor, modelId: "openai/model" }, [role]: config.specialists[role] } })).toBe(false);
+      expect(agentPresetConfigSchema.safeParse({ ...config, specialists: { ...config.specialists, [role]: { ...legacy.supervisor, enabled: true } } }).success).toBe(false);
+    }
+    expect(agentPresetConfigSchema.safeParse({ ...legacy, specialists: { sound_insulation: legacy.supervisor } }).success).toBe(false);
+    expect(agentPresetConfigSchema.safeParse({ ...legacy, specialists: { ...legacy.specialists, unknown_role: legacy.supervisor } }).success).toBe(false);
+  });
+
   test("requires provider/model IDs for the Vercel Gateway", () => {
     expect(isGatewayModelId("openai/gpt-4.1-mini")).toBe(true);
     expect(isGatewayModelId("gpt-4.1-mini")).toBe(false);

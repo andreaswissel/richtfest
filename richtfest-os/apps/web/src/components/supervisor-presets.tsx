@@ -16,7 +16,15 @@ const roleLabels: Record<string, string> = {
   requirements_reviewer: "supervisorRequirementsReviewer",
   independent_reviewer: "supervisorIndependentReviewer",
   synthesizer: "supervisorSynthesizer",
+  sound_insulation: "supervisorSoundInsulation",
+  construction_law: "supervisorConstructionLaw",
+  cost_optimizer: "supervisorCostOptimizer",
 };
+const optionalSpecialists = {
+  sound_insulation: "source_reviewer",
+  construction_law: "requirements_reviewer",
+  cost_optimizer: "source_reviewer",
+} as const;
 
 type ProviderModel = { id: string; name: string };
 
@@ -65,7 +73,12 @@ export function SupervisorPresets({
         version,
         configured,
         ...body
-      } = activeDraft;
+      } = JSON.parse(JSON.stringify(activeDraft)) as RecordData;
+      body.specialists = Object.fromEntries(
+        Object.entries(body.specialists || {}).filter(
+          ([, config]) => config != null,
+        ),
+      );
       if (provider === "anthropic") {
         if (body.supervisor) delete body.supervisor.reasoningEffort;
         Object.values(body.specialists || {}).forEach((config: any) => {
@@ -98,7 +111,8 @@ export function SupervisorPresets({
         target[key] = target[key] || {};
         target = target[key];
       });
-      target[path.at(-1)!] = value;
+      if (value === undefined) delete target[path.at(-1)!];
+      else target[path.at(-1)!] = value;
       return next;
     });
   };
@@ -192,23 +206,72 @@ export function SupervisorPresets({
           onChange={(key, value) => updateConfig(["supervisor", key], value)}
           t={t}
         />
-        {Object.entries(specialists).map(([role, config]) => (
-          <PresetConfig
-            key={role}
-            title={
-              t((roleLabels[role] || "supervisorSpecialist") as never) || role
-            }
-            config={config as RecordData}
-            provider={provider}
-            models={modelCatalog?.models || []}
-            modelsLoading={modelsQuery.isLoading}
-            onChange={(key, value) =>
-              updateConfig(["specialists", role, key], value)
-            }
-            t={t}
-          />
-        ))}
+        {Object.entries(specialists)
+          .filter(
+            ([role, config]) =>
+              !(role in optionalSpecialists) && config != null,
+          )
+          .map(([role, config]) => (
+            <PresetConfig
+              key={role}
+              title={
+                t((roleLabels[role] || "supervisorSpecialist") as never) || role
+              }
+              config={config as RecordData}
+              provider={provider}
+              models={modelCatalog?.models || []}
+              modelsLoading={modelsQuery.isLoading}
+              onChange={(key, value) =>
+                updateConfig(["specialists", role, key], value)
+              }
+              t={t}
+            />
+          ))}
       </div>
+      <fieldset
+        className="grid min-w-0 gap-stack"
+        disabled={data.canManage !== true || save.isPending}
+      >
+        <h3 className="text-ui font-medium">
+          {t("supervisorOptionalSpecialists")}
+        </h3>
+        <p className="muted">{t("supervisorOptionalSpecialistsDescription")}</p>
+        {Object.entries(optionalSpecialists).map(([role, templateRole]) => (
+          <div key={role} className="grid min-w-0 gap-stack">
+            <Field label={t(roleLabels[role] as never)}>
+              <Segmented
+                value={specialists[role] ? "enabled" : "disabled"}
+                onChange={(value) => {
+                  if (data.canManage !== true || save.isPending) return;
+                  if (value === "disabled")
+                    updateConfig(["specialists", role], undefined);
+                  else if (specialists[templateRole])
+                    updateConfig(["specialists", role], {
+                      ...specialists[templateRole],
+                    });
+                }}
+                items={[
+                  { value: "disabled", label: t("disabled") },
+                  { value: "enabled", label: t("enabled") },
+                ]}
+              />
+            </Field>
+            {specialists[role] && (
+              <PresetConfig
+                title={t(roleLabels[role] as never)}
+                config={specialists[role]}
+                provider={provider}
+                models={modelCatalog?.models || []}
+                modelsLoading={modelsQuery.isLoading}
+                onChange={(key, value) =>
+                  updateConfig(["specialists", role, key], value)
+                }
+                t={t}
+              />
+            )}
+          </div>
+        ))}
+      </fieldset>
       <div className="supervisor-preset-limits">
         <Field label={t("supervisorMaxParallel")}>
           <Input

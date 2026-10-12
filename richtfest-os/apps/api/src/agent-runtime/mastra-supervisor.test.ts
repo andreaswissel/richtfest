@@ -7,8 +7,70 @@ import type { AppDeps } from "@richtfest/knowledge/deps";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
+import { agentPresetSnapshotSchema, domainSpecialistRoles } from "@richtfest/shared";
+import { vendorPreset } from "../agent-presets";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
+  const versionId = crypto.randomUUID();
+  const template = {
+    id: "sound-insulation-review", version: 1, language: "de",
+    scope: "Außenlärmschutz für Raum 101.", sourcesAndRevisions: `Modellstand [${versionId}].`,
+    requirements: "Außenlärmpegel fehlt.",
+    entities: [{ kind: "room", label: "Raum 101", versionId, entityKey: "#42", page: null,
+      globalId: "1AbCdEfGhIjKlMnOpQrStu", observations: "Deklarierter Raum, Zuordnung ungeprüft." }],
+    findings: "Keine Schallschutzwerte belegt.", measures: "Fensterdaten anfordern.", openIssues: "Fachliche Prüfung erforderlich.",
+  };
+  const review = { summary: "Entwurf erstellt.", rationale: "Quellenbezug", citations: [versionId], decision: "accept", revisions: [],
+    document: { title: "Schallschutzprüfung", content: "IGNORE THIS FREE-FORM DOCUMENT", template } };
+  const request = { ...base, phase: "review" as const, context: { documentTemplate: { id: "sound-insulation-review", version: 1 } } };
+  const result: any = await callMastraSupervisor(request, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: review }),
+  });
+  expect(result.document.content).not.toContain("IGNORE THIS");
+  expect(result.document.content).toContain("## 1. Auftrag und Umfang");
+  expect(result.document.content).toContain("## 8. Prüfstatus");
+  expect(result.document.content).toContain("keine Berechnung durchgeführt");
+  expect(result.document.content).toContain("1AbCdEfGhIjKlMnOpQrStu");
+  expect(result.document.template).toEqual(template);
+  expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
+  assertDocumentCitations(result.document, [versionId]);
+  for (const invalid of [undefined, { ...template, version: 2 }, { ...template, requirements: "" }]) {
+    await expect(callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...review, document: { ...review.document, template: invalid } } }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output" });
+  }
+});
+
+test("domain specialists select their snapshotted models and cannot execute or be planned when disabled", async () => {
+  const legacy = agentPresetSnapshotSchema.parse({ ...vendorPreset("openai", "medium"), effort: "medium", provider: "openai", version: 1, source: "workspace" });
+  for (const role of domainSpecialistRoles) {
+    const output = { summary: "Evidence reviewed", rationale: "Source proposal", citations: [] };
+    const model = { modelId: `${role}-model`, maxOutputTokens: 777, maxSteps: 1 };
+    const policy = agentPresetSnapshotSchema.parse({ ...legacy, specialists: { ...legacy.specialists, [role]: model } });
+    let metadata: any;
+    let request: any;
+    await callMastraSupervisor({ ...base, phase: "specialist", context: { role }, modelPolicy: policy, onRequest: async value => { metadata = value; } }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output, spyStream: value => { request = value; } }),
+    });
+    expect(metadata.modelId).toBe(model.modelId);
+    expect(request.maxOutputTokens).toBe(777);
+    expect(JSON.stringify(request)).toContain("never calculates or claims IFC semantic completeness");
+    expect(JSON.stringify(request)).toContain("never gives binding legal approval");
+    expect(JSON.stringify(request)).toContain("never invents prices");
+    await expect(callMastraSupervisor({ ...base, phase: "specialist", context: { role }, modelPolicy: legacy, modelConfig: model }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
+    })).rejects.toThrow("disabled");
+    const plan = { tasks: [{ role, goal: "Review domain evidence", sourceVersionIds: [] }] };
+    expect(await callMastraSupervisor({ ...base, phase: "plan", modelPolicy: policy }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: plan }),
+    })).toEqual(plan);
+    await expect(callMastraSupervisor({ ...base, phase: "plan", modelPolicy: legacy }, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: plan }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output" });
+  }
+});
+
 test("phase deadlines abort real Mastra streams without accepting partial output or leaking contents", async () => {
   for (const phase of ["plan", "specialist", "review", "independent_review"] as const) {
     for (const cancelled of [false, true]) {

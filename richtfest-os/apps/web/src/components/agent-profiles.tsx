@@ -6,13 +6,16 @@ import { useT } from "../i18n";
 import { Section } from "./layout";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { Badge, Callout, Field, Segmented } from "./ui/primitives";
+import { Badge, Callout, Field } from "./ui/primitives";
 
 const roleLabels: Record<string, Parameters<ReturnType<typeof useT>>[0]> = {
   supervisor: "supervisorRole",
   source_reviewer: "supervisorSourceReviewer",
   requirements_reviewer: "supervisorRequirementsReviewer",
   independent_reviewer: "supervisorIndependentReviewer",
+  sound_insulation: "supervisorSoundInsulation",
+  construction_law: "supervisorConstructionLaw",
+  cost_optimizer: "supervisorCostOptimizer",
 };
 type Profile = {
   key: string;
@@ -53,14 +56,20 @@ export function AgentProfiles() {
           )}
           {!data.canManage && <Callout>{t("agentProfileAdminOnly")}</Callout>}
           <Field label={t("agentProfileRole")}>
-            <Segmented
-              value={active || ""}
-              onChange={setSelected}
-              items={profiles.map((profile) => ({
-                value: profile.key,
-                label: t(roleLabels[profile.key]),
-              }))}
-            />
+            <div className="flex min-w-0 flex-wrap gap-2" role="group">
+              {profiles.map((profile) => (
+                <Button
+                  key={profile.key}
+                  type="button"
+                  variant="outline"
+                  aria-pressed={active === profile.key}
+                  className="h-auto max-w-full whitespace-normal py-cell aria-pressed:bg-muted aria-pressed:border-foreground"
+                  onClick={() => setSelected(profile.key)}
+                >
+                  {t(roleLabels[profile.key])}
+                </Button>
+              ))}
+            </div>
           </Field>
           {profiles.map((profile) => (
             <div key={profile.key} hidden={active !== profile.key}>

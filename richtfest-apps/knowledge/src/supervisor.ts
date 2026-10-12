@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, or, isNull, lt } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -35,7 +35,7 @@ export const supervisorPlan = z.object({
   tasks: z
     .array(
       z.object({
-        role: z.enum(["source_reviewer", "requirements_reviewer"]),
+        role: specialistRoleSchema,
         goal: z.string().min(1).max(2000),
         sourceVersionIds: z.array(z.string().uuid()).max(10),
       }),
@@ -43,6 +43,19 @@ export const supervisorPlan = z.object({
     .min(1)
     .max(4),
 });
+export function assertConfiguredAssignments(plan: z.infer<typeof supervisorPlan>, policy: AgentPresetSnapshot) {
+  for (const task of plan.tasks)
+    if (!policy.specialists[task.role]) throw conflict("Assignment specialist is disabled in the snapshotted preset");
+}
+
+export function plannerRoles(policy: AgentPresetSnapshot, profiles: ProfileSnapshot[]) {
+  const availableRoles = specialistRoleSchema.options.filter(role => !!policy.specialists[role]);
+  return {
+    availableRoles,
+    routingHints: profiles.filter(profile => availableRoles.some(role => role === profile.key))
+      .map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })),
+  };
+}
 export const supervisorReview = specialistOutput.extend({
   // Older persisted runs and host fixtures contain only the conversational summary.
   document: agentDocumentSchema.nullish(),
@@ -331,7 +344,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           );
           return {
             profile,
-            routingHints: phase === "plan" ? profiles.map(profile => ({ role: profile.key, triggerPhrases: profile.triggerPhrases })) : undefined,
+            ...(phase === "plan" ? plannerRoles(agentPresetSnapshotSchema.parse(state.modelPolicy), profiles) : {}),
           };
         })(),
         budgets: {
@@ -490,6 +503,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       );
       if (plan.tasks.length > policy.maxTasks)
         throw conflict("Plan exceeds effort task budget");
+      assertConfiguredAssignments(plan, policy);
       for (const task of plan.tasks) {
         if (
           task.sourceVersionIds.some((v) => !availableSourceIds.has(v))
@@ -696,12 +710,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           .where(eq(supervisorRuns.runId, id));
       });
     } else if (state.phase === "review") {
+      const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
       const review = supervisorReview.parse(
         await call("review", goal, {
           assignments: state.assignments,
           revision: state.revision,
+          documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }),
       );
+      review.document = prepareAgentDocument(review.document, requireSoundInsulation);
       await sources(d, run.projectId, review.citations);
       const allowedCitations = (state.assignments as Assignment[]).flatMap(
         (a) => a.output?.citations ?? [],
@@ -802,6 +819,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               payload: {
                 kind: "summary",
                 data: [{ summary, rationale: review.rationale }],
+                template: review.document?.template,
               },
               sourceVersionIds: review.citations,
             },
@@ -1012,7 +1030,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             title: firstPassReview?.document?.title ?? run.goal.slice(0, 200),
             type: "draft",
             content: `${firstPassReview?.document?.content ?? firstPassReview?.summary ?? summary}\n\nReview rationale\n\n${rationale}${unresolved ? "\n\nRevision limit reached. Unresolved independent-review issues require human review." : ""}`,
-            payload: { kind: "summary", data: [{ summary, rationale }] },
+            payload: { kind: "summary", data: [{ summary, rationale }], template: firstPassReview?.document?.template },
             sourceVersionIds: reviewCitations,
           }, id);
           const resultReference = {

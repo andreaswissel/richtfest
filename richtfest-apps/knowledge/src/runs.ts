@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { agentPresetSnapshotSchema, agentRunEvaluationSchema, ok } from "@richtfest/shared";
+import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import {
   supervisorRuns,
@@ -306,10 +306,11 @@ export async function executeRun(d: AppDeps, run: any) {
       : d.resolveSupervisorPreset
         ? await d.resolveSupervisorPreset(run.effort, run.provider)
         : undefined;
-    const specialistRole = run.specialistRole as "source_reviewer" | "requirements_reviewer" | undefined;
+    const specialistRole = run.specialistRole ? specialistRoleSchema.parse(run.specialistRole) : undefined;
     const executionModel = specialistRole
       ? modelPolicy?.specialists[specialistRole]
       : modelPolicy?.supervisor;
+    if (specialistRole && !executionModel) throw conflict("Specialist is disabled in the snapshotted preset");
     let partialOutput = "";
     let lastCheckpoint = 0;
     const onSummaryDelta = async (delta: string) => {

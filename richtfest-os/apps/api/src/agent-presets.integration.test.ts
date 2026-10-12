@@ -4,15 +4,16 @@ import { eq, sql } from "drizzle-orm";
 import { createDatabase } from "./db/client";
 import { agentPresets, auditEvents } from "./db/schema";
 import { createAgentPresetsRouter, vendorPreset } from "./agent-presets";
+import { domainSpecialistRoles } from "@richtfest/shared";
 
 // Explicit local-only opt-in: never write to a deployed database during verification.
 const url = process.env.AGENT_PRESET_TEST_DATABASE_URL;
 const integration = url && ["localhost", "127.0.0.1"].includes(new URL(url).hostname) ? test : test.skip;
-integration("output limit endpoint patches only one role, rejects stale/unauthorized changes and caps output", async () => {
+for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integration(`output limit endpoint patches only ${role}, rejects stale/unauthorized changes and caps output`, async () => {
   const { db, pool } = createDatabase(url!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
   const config = vendorPreset("openai", "medium");
-  config.specialists.source_reviewer = { ...config.specialists.source_reviewer, maxOutputTokens: 70000, reasoningEffort: "high" };
+  config.specialists[role] = { ...config.specialists.source_reviewer, maxOutputTokens: 70000, reasoningEffort: "high" };
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -24,7 +25,7 @@ integration("output limit endpoint patches only one role, rejects stale/unauthor
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   const port = (server.address() as { port: number }).port;
-  const body = { role: "source_reviewer", expectedVersion: 4, expectedModelId: config.specialists.source_reviewer.modelId, expectedMaxOutputTokens: 70000 };
+  const body = { role: role as string, expectedVersion: 4, expectedModelId: config.specialists[role]!.modelId, expectedMaxOutputTokens: 70000 };
   const patch = (payload = body, manage = true) => fetch(`http://127.0.0.1:${port}/agent/presets/openai/medium/output-limit`, { method: "PATCH", headers: { "Content-Type": "application/json", "x-manage": manage ? "yes" : "no" }, body: JSON.stringify(payload) });
   try {
     await db.insert(agentPresets).values({ tenantId, provider: "openai", effort: "medium", config, version: 4, updatedBy: actorId });
@@ -36,7 +37,7 @@ integration("output limit endpoint patches only one role, rejects stale/unauthor
     expect(response.status).toBe(200);
     const [row] = await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId));
     expect(row.version).toBe(5);
-    expect(row.config).toEqual({ ...config, specialists: { ...config.specialists, source_reviewer: { ...config.specialists.source_reviewer, maxOutputTokens: 128000 } } });
+    expect(row.config).toEqual({ ...config, specialists: { ...config.specialists, [role]: { ...config.specialists[role], maxOutputTokens: 128000 } } });
     expect((await patch()).status).toBe(409);
     expect((await patch({ ...body, expectedVersion: 5, expectedMaxOutputTokens: 128000 })).status).toBe(409);
     const audits = await db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantId));
@@ -52,6 +53,8 @@ integration("output limit endpoint patches only one role, rejects stale/unauthor
     expect((afterConcurrent.config as any).specialists).toEqual((row.config as any).specialists);
     // An absent vendor row is safely materialized only by a successful transaction.
     await db.delete(agentPresets).where(eq(agentPresets.tenantId, tenantId));
+    expect((await patch({ ...body, role: "sound_insulation", expectedVersion: 1 })).status).toBe(409);
+    expect(await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId))).toHaveLength(0);
     expect((await patch({ ...supervisorBody, expectedVersion: 2 })).status).toBe(409);
     expect(await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId))).toHaveLength(0);
     expect((await patch({ ...supervisorBody, expectedVersion: 1 })).status).toBe(200);

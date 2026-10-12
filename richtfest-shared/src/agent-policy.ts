@@ -14,11 +14,17 @@ export const agentModelConfigSchema = z.object({
   maxSteps: z.number().int().min(1).max(8),
 }).strict();
 export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
+export const domainSpecialistRoles = ["sound_insulation", "construction_law", "cost_optimizer"] as const;
+export const specialistRoleSchema = z.enum(["source_reviewer", "requirements_reviewer", ...domainSpecialistRoles]);
+export type SpecialistRole = z.infer<typeof specialistRoleSchema>;
 export const agentPresetConfigSchema = z.object({
   supervisor: agentModelConfigSchema,
   specialists: z.object({
     source_reviewer: agentModelConfigSchema,
     requirements_reviewer: agentModelConfigSchema,
+    sound_insulation: agentModelConfigSchema.optional(),
+    construction_law: agentModelConfigSchema.optional(),
+    cost_optimizer: agentModelConfigSchema.optional(),
   }).strict(),
   // Opt-in to a fresh reviewer pass after the supervisor's own evidence review.
   independentReviewEnabled: z.boolean().default(false),

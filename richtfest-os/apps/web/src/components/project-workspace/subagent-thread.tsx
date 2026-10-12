@@ -43,6 +43,12 @@ function agentName(run: RecordData, t: ReturnType<typeof useT>) {
     return t("agentThreadRequirementsName");
   if (run.specialistRole === "independent_reviewer")
     return t("supervisorIndependentReviewer");
+  if (run.specialistRole === "sound_insulation")
+    return t("supervisorSoundInsulation");
+  if (run.specialistRole === "construction_law")
+    return t("supervisorConstructionLaw");
+  if (run.specialistRole === "cost_optimizer")
+    return t("supervisorCostOptimizer");
   if (run.isSupervisor) return t("supervisorRole");
   if (!run.parentRunId) return t("agentThreadCoordinator");
   return (

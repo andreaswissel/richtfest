@@ -4,9 +4,47 @@ import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { createAgentPresetsRouter, resolveAgentPreset } from "../richtfest-os/apps/api/src/agent-presets";
 import { withSupervisorCancellation, cancelSupervisorExecution } from "../richtfest-os/apps/api/src/supervisor-execution";
 import { agentPresetConfigSchema } from "../richtfest-shared/src/index";
+import { agentProfilesRouter, defaultProfiles, snapshotAgentProfiles } from "../richtfest-apps/knowledge/src/agent-profiles";
+import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 const model = {modelId:"test-model",maxOutputTokens:1024,maxSteps:2};
 const policy = {supervisor:model,specialists:{source_reviewer:model,requirements_reviewer:model},maxParallel:2,maxTasks:3,maxRevisions:1};
+
+integration("supported agent profiles save and reload independently without changing existing guidance", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const deps = { db, tenantId, actorId, requirePermission: () => {}, audit: async () => {} } as unknown as AppDeps;
+  const app = express();
+  app.use(express.json());
+  app.use(agentProfilesRouter(() => deps));
+  app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? 500).json({ error: "rejected" }));
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as any).port}`;
+  try {
+    for (const profile of defaultProfiles()) {
+      const response = await fetch(`${base}/agent-profiles/${profile.key}`, { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instructions: `Guidance for ${profile.key}`, triggerPhrases: [profile.key], knowledgeIds: [] }) });
+      expect(response.status).toBe(200);
+    }
+    const snapshot = await snapshotAgentProfiles(deps);
+    const response: any = await (await fetch(`${base}/agent-profiles`)).json();
+    for (const profile of response.data.profiles) {
+      expect(profile.instructions).toBe(`Guidance for ${profile.key}`);
+      expect(profile.version).toBe(1);
+    }
+    const updated = await fetch(`${base}/agent-profiles/sound_insulation`, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instructions: "Revised acoustic guidance", triggerPhrases: [], knowledgeIds: [] }) });
+    expect(updated.status).toBe(200);
+    const after: any = await (await fetch(`${base}/agent-profiles`)).json();
+    expect(after.data.profiles.find((p: any) => p.key === "sound_insulation").version).toBe(2);
+    expect(after.data.profiles.find((p: any) => p.key === "source_reviewer").instructions).toBe("Guidance for source_reviewer");
+    expect(snapshot.find(p => p.key === "sound_insulation")!.instructions).toBe("Guidance for sound_insulation");
+  } finally {
+    server.close();
+    await pool.query("delete from knowledge_agent_profiles where tenant_id=$1", [tenantId]);
+    await pool.end();
+  }
+});
 
 integration("workspace presets enforce admin/provider boundaries and snapshot versioned policy",async()=>{
   const {db,pool}=createDatabase(process.env.DATABASE_URL!);

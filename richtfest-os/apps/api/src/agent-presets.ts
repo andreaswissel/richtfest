@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import {
   AGENT_MAX_OUTPUT_TOKENS,
-  agentEffortSchema, agentProviderSchema, agentPresetConfigSchema,
+  agentEffortSchema, agentProviderSchema, agentPresetConfigSchema, specialistRoleSchema,
   type AgentEffort, type AgentProvider, type AgentPresetConfig, type AgentPresetSnapshot, ok,
 } from "@richtfest/shared";
 import { agentPresets } from "./db/schema";
@@ -17,7 +17,7 @@ type Provider = AgentProvider;
 export const isGatewayModelId = (modelId: string) => /^[^/\s]+\/[^/\s]+$/.test(modelId);
 export const isConfiguredPreset = (provider: Provider, config: AgentPresetConfig) => {
   const structurallyValid = agentPresetConfigSchema.safeParse(config).success;
-  const gatewayModelsValid = provider !== "vercel" || [config.supervisor, ...Object.values(config.specialists)].every(role => isGatewayModelId(role.modelId));
+  const gatewayModelsValid = provider !== "vercel" || [config.supervisor, ...Object.values(config.specialists)].every(role => !role || isGatewayModelId(role.modelId));
   return structurallyValid && gatewayModelsValid;
 };
 // Provider model IDs are configured by the deployment owner or workspace admin.
@@ -131,10 +131,10 @@ export function createAgentPresetsRouter(db: Database) {
       const provider = agentProviderSchema.parse(req.params.provider);
       const effort = agentEffortSchema.parse(req.params.effort);
       const config = reset ? null : agentPresetConfigSchema.parse(req.body);
-      if (provider === "vercel" && config && [config.supervisor, ...Object.values(config.specialists)].some(role => !isGatewayModelId(role.modelId))) {
+      if (provider === "vercel" && config && [config.supervisor, ...Object.values(config.specialists)].some(role => role && !isGatewayModelId(role.modelId))) {
         throw new HttpError(400, "invalid_gateway_model", "Vercel AI Gateway models must use provider/model form.");
       }
-      if (provider === "anthropic" && config && [config.supervisor, ...Object.values(config.specialists)].some(role => role.reasoningEffort)) {
+      if (provider === "anthropic" && config && [config.supervisor, ...Object.values(config.specialists)].some(role => role?.reasoningEffort)) {
         throw new HttpError(400, "unsupported_reasoning_effort", "Use provider-default reasoning for Anthropic models.");
       }
       await db.transaction(async tx => {
@@ -154,7 +154,7 @@ export function createAgentPresetsRouter(db: Database) {
       const provider = agentProviderSchema.parse(req.params.provider);
       const effort = agentEffortSchema.parse(req.params.effort);
       const input = z.object({
-        role: z.enum(["supervisor", "source_reviewer", "requirements_reviewer"]),
+        role: z.enum(["supervisor", ...specialistRoleSchema.options]),
         expectedVersion: z.number().int().positive(),
         expectedModelId: z.string().min(1),
         expectedMaxOutputTokens: z.number().int().min(256).max(AGENT_MAX_OUTPUT_TOKENS),
@@ -166,7 +166,7 @@ export function createAgentPresetsRouter(db: Database) {
         const [row] = await tx.select().from(agentPresets).where(and(eq(agentPresets.tenantId, current.tenantId), eq(agentPresets.provider, provider), eq(agentPresets.effort, effort))).for("update");
         const config = row.config ? agentPresetConfigSchema.parse(row.config) : vendorPreset(provider, effort);
         const role = input.role === "supervisor" ? config.supervisor : config.specialists[input.role];
-        if (!isConfiguredPreset(provider, config) || row.version !== input.expectedVersion || role.modelId !== input.expectedModelId || role.maxOutputTokens !== input.expectedMaxOutputTokens || role.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) {
+        if (!role || !isConfiguredPreset(provider, config) || row.version !== input.expectedVersion || role.modelId !== input.expectedModelId || role.maxOutputTokens !== input.expectedMaxOutputTokens || role.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) {
           throw new HttpError(409, "agent_preset_conflict", "The workspace preset changed or cannot be increased. Reopen the action to check its current settings.");
         }
         const previousLimit = role.maxOutputTokens;

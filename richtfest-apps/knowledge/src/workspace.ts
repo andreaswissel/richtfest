@@ -2,7 +2,7 @@ import { repairLegacyRuns } from "./run-recovery";
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ok } from "@richtfest/shared";
+import { ok, soundInsulationTemplateSchema } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
 import {
@@ -55,6 +55,7 @@ const revisionInput = z.object({
   payload: z
     .object({
       kind: z.enum(["table", "checklist", "summary"]),
+      template: soundInsulationTemplateSchema.optional(),
       data: z
         .array(
           z.record(

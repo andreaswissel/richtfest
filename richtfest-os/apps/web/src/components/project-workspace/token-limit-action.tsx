@@ -29,7 +29,10 @@ export function tokenLimitCandidate(run: RecordData) {
   if (
     role !== "supervisor" &&
     role !== "source_reviewer" &&
-    role !== "requirements_reviewer"
+    role !== "requirements_reviewer" &&
+    role !== "sound_insulation" &&
+    role !== "construction_law" &&
+    role !== "cost_optimizer"
   )
     return;
   const parsed = agentPresetSnapshotSchema.safeParse(run.modelPolicy);
@@ -37,7 +40,7 @@ export function tokenLimitCandidate(run: RecordData) {
   const policy = parsed.data;
   const model =
     role === "supervisor" ? policy.supervisor : policy.specialists[role];
-  if (model.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) return;
+  if (!model || model.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) return;
   return { role, policy, model };
 }
 
@@ -123,7 +126,13 @@ function TokenLimitDecision({
             ? "tokenLimitSupervisor"
             : role === "source_reviewer"
               ? "tokenLimitSourceReviewer"
-              : "tokenLimitRequirementsReviewer",
+              : role === "sound_insulation"
+                ? "supervisorSoundInsulation"
+                : role === "construction_law"
+                  ? "supervisorConstructionLaw"
+                  : role === "cost_optimizer"
+                    ? "supervisorCostOptimizer"
+                    : "tokenLimitRequirementsReviewer",
         )}{" "}
         · {model.modelId}
         <br />
