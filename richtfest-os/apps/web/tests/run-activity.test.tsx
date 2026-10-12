@@ -168,6 +168,49 @@ test("verified summary character failure is distinct from output truncation", ()
     ),
   ).toContain("field validation");
 });
+test("report content character limits identify stopped sections without offering token increases", () => {
+  for (const path of [
+    ["content"],
+    ["document", "content"],
+    ["document", "template", "assessment"],
+  ]) {
+    const diagnostics = {
+      errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+      issues: [{ code: "too_big", path, maximum: 12000 }],
+    };
+    const explanation = providerFailureExplanation(diagnostics, t);
+    expect(explanation).toContain("12000 characters");
+    expect(explanation).toContain("no completed report was produced");
+    expect(explanation).toContain("not a token limit");
+    expect(
+      providerFailureExplanation(
+        { ...diagnostics, issues: [{ code: "too_big", path }] },
+        t,
+      ),
+    ).not.toContain("12000");
+    expect(
+      providerFailureExplanation({ ...diagnostics, finishReason: "length" }, t),
+    ).toContain("output length limit");
+  }
+  expect(
+    providerFailureExplanation(
+      {
+        errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+        issues: [{ code: "too_big", path: ["citations"], maximum: 12 }],
+      },
+      t,
+    ),
+  ).toContain("field validation");
+  expect(
+    providerFailureExplanation(
+      {
+        errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+        issues: [{ code: "custom", path: ["complete"] }],
+      },
+      t,
+    ),
+  ).toBe(en.workspaceFailureIncomplete);
+});
 test("malformed and legacy correlation is safe and does not invent numeric limits", () => {
   const id = "550e8400-e29b-41d4-a716-446655440000";
   expect(providerActivityMetadata({ paramsSummary: id }).callId).toBe(id);

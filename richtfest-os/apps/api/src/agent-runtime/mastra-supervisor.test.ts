@@ -7,11 +7,33 @@ import type { AppDeps } from "@richtfest/knowledge/deps";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
-import { agentPresetSnapshotSchema, domainSpecialistRoles } from "@richtfest/shared";
+import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("concept authoring accepts separate outline and section contracts through Mastra", async () => {
+  const id = "exterior-noise-concept";
+  const versionId = crypto.randomUUID();
+  const outline = { id, title: "Außenlärmkonzept", language: "de",
+    project: { name: "Project", number: null, client: null, designer: null, author: null, date: null },
+    sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 88 }] })),
+    attachments: [{ versionId, pageStart: 17, pageEnd: 88, section: "calculationAppendix", label: "Original appendix" }],
+  };
+  const section = { content: `WE31 Kind 1: source-stated 40.5 dB, page 88 [${versionId}].`, citations: [versionId], complete: true };
+  for (const [documentTask, output] of [["outline", outline], ["section", section]] as const) {
+    const request = { ...base, phase: "review" as const, goal: "Create Außenlärmkonzept", modelPolicy: responsePolicy,
+      context: { documentTask, documentTemplate: { id, version: 1 } } };
+    expect(await callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
+    })).toEqual(output);
+    await expect(callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: documentTask === "outline"
+        ? { ...outline, id: "interior-noise-concept" } : { ...section, content: "x".repeat(12001) } }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
+  }
+});
+
 test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
   const versionId = crypto.randomUUID();
   const template = {
@@ -36,6 +58,11 @@ test("sound-insulation synthesis requires the fixed template and renders rather 
   expect(result.document.template).toEqual(template);
   expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
   assertDocumentCitations(result.document, [versionId]);
+  await expect(callMastraSupervisor({ ...request, goal: "Create exterior-noise-concept v1" }, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: review }),
+  })).rejects.toMatchObject({ code: "invalid_provider_output", diagnostics: {
+    issues: [{ code: "custom", path: ["document", "template", "id"] }],
+  } });
   const largeTemplate = { ...template, entities: Array.from({ length: 65 }, () => ({ ...template.entities[0], observations: "x".repeat(1000) })) };
   const largeReview = { ...review, document: { ...review.document, template: largeTemplate } };
   for (const documentMaxCharacters of [1000, 120000]) {
@@ -349,13 +376,14 @@ test("Mastra retains received usage after a transient telemetry write failure", 
   expect(saved[0]).toMatchObject({ inputTokens: 37, outputTokens: 11, totalTokens: 48 });
 });
 test("Mastra truncation and OpenAI schema failures remain retryable without exposing output", async () => {
-  for (const failure of ["truncated", "schema", "summary_limit"] as const) {
+  for (const failure of ["truncated", "complete_length", "schema", "summary_limit"] as const) {
     for (const streaming of [false, true]) {
       const secret = "sk-test-secret";
       const text = failure === "truncated" ? `{"summary":"${secret}`
+        : failure === "complete_length" ? JSON.stringify({ summary: "Valid JSON is still incomplete when stopped by the token cap", rationale: secret, citations: [] })
         : failure === "summary_limit" ? JSON.stringify({ summary: "x".repeat(10001), rationale: secret, citations: [] })
         : JSON.stringify({ summary: secret, rationale: "Invalid citation", citations: ["not-a-uuid"] });
-      const finishReason = failure === "truncated" ? "length" : "stop";
+      const finishReason = failure === "truncated" || failure === "complete_length" ? "length" : "stop";
       const usage = { inputTokens: 12, outputTokens: 50, totalTokens: 62 };
       const model = new MastraLanguageModelV2Mock({
         provider: "openai",
@@ -366,7 +394,9 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
           controller.enqueue({ type: "text-start", id: "output" });
           controller.enqueue({ type: "text-delta", id: "output", delta: text });
           controller.enqueue({ type: "text-end", id: "output" });
-          controller.enqueue({ type: "finish", finishReason, usage });
+          // Exercise the newer provider shape through the V2 mock's older stream type.
+          controller.enqueue({ type: "finish", finishReason: failure === "complete_length"
+            ? { unified: "length", raw: "max_output_tokens" } as unknown as typeof finishReason : finishReason, usage });
           controller.close();
         } }) }),
       });
@@ -386,7 +416,7 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
       });
       expect(error.providerStatus).toBeUndefined();
       expect(error.diagnostics).toMatchObject({
-        errorId: failure === "truncated" ? "STRUCTURED_OUTPUT_TRUNCATED" : "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+        errorId: failure === "truncated" || failure === "complete_length" ? "STRUCTURED_OUTPUT_TRUNCATED" : "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
         // Prefer upstream metadata over Mastra's post-validation "error" reason.
         finishReason,
       });

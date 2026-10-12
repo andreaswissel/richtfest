@@ -20,11 +20,7 @@ export function tokenLimitCandidate(run: RecordData) {
   )
     return;
   const diagnostics = providerActivityMetadata(run.failureEvent).diagnostics;
-  if (
-    diagnostics?.errorId !== "STRUCTURED_OUTPUT_TRUNCATED" ||
-    diagnostics.finishReason !== "length"
-  )
-    return;
+  if (diagnostics?.finishReason !== "length") return;
   const role: unknown = run.failureRole;
   if (
     role !== "supervisor" &&
@@ -40,7 +36,7 @@ export function tokenLimitCandidate(run: RecordData) {
   const policy = parsed.data;
   const model =
     role === "supervisor" ? policy.supervisor : policy.specialists[role];
-  if (!model || model.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS) return;
+  if (!model) return;
   return { role, policy, model };
 }
 
@@ -104,6 +100,15 @@ function TokenLimitDecision({
       void queryClient.invalidateQueries({ queryKey: ["/agent/readiness"] });
     },
   });
+  if (model.maxOutputTokens >= AGENT_MAX_OUTPUT_TOKENS)
+    return (
+      <Callout>
+        {t("tokenLimitMaximum").replace(
+          "{tokens}",
+          model.maxOutputTokens.toLocaleString(),
+        )}
+      </Callout>
+    );
   if (declined)
     return (
       <p className="text-ui-sm text-muted-foreground">

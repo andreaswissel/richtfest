@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, notInArray, or, isNull, lt, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, requestedAcousticConcept, acousticConceptIdSchema, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -17,7 +17,8 @@ import {
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider } from "./usage";
-import { resolveRunSource } from "./source-evidence";
+import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
+import { authorAcousticConcept } from "./acoustic-authoring";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -307,6 +308,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       goal: string,
       context: unknown,
       runId = id,
+      validate?: (output: unknown) => unknown,
     ) => {
       // Retry state lives in the existing durable phase history. A restart must
       // honor the saved deadline and attempt budget, not start a fresh burst.
@@ -373,7 +375,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         try {
           const response = await executeTrackedProvider(d, { ...run, id: runId }, {
             phase, operationId: callId, attemptNumber: attempt, generation: state.generation,
-          }, telemetry => d.executeSupervisor!({
+          }, async telemetry => {
+            const response = await d.executeSupervisor!({
             ...telemetry,
             phase,
             provider: run.provider,
@@ -382,7 +385,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
             onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
-          }));
+            });
+            if (response.status === "completed" && validate) {
+              try { response.output = validate(response.output); }
+              catch (error) {
+                if (!(error instanceof z.ZodError)) throw error;
+                throw Object.assign(new Error("Document output validation failed."), {
+                  providerFailure: true, retryable: true, failureCategory: "validation",
+                  diagnostics: sanitizeProviderDiagnostics({ errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: error.issues }),
+                });
+              }
+            }
+            return response;
+          });
           if (response.status !== "completed") throw conflict("Provider unavailable");
           const completed = await commit(d, run, token, async (tx, current) => {
             await tx.update(supervisorRuns).set({ history: current.history.filter((entry: any) =>
@@ -464,6 +479,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       throw new Error("Provider retry loop ended unexpectedly");
     };
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
+    const plannedTemplate = state.history.findLast((entry: any) => entry.phase === "plan")?.output?.documentTemplate;
+    const conceptId = requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
+      ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
       const availableSourceIds = new Set<string>([
@@ -574,7 +592,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         }
         await tx
           .update(supervisorRuns)
-          .set({ assignments, phase: "specialists" })
+          .set({ assignments, phase: "specialists", history: [...state.history, { phase: "plan", output: plan }] })
           .where(eq(supervisorRuns.runId, id));
         await log(d, tx, run, "supervisor_planned");
       });
@@ -602,7 +620,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const excerpts = await Promise.all(
                 assignment.sourceVersionIds.map(async (versionId) => {
                   await assertActive();
-                  return resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
+                  return conceptId
+                    ? resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
+                    : resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
                 }),
               );
               const resolvedSources = assignment.sourceVersionIds.map(
@@ -680,6 +700,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   sources: batch,
                   unreadableSources,
                   previousFindings: accumulated,
+                  documentTemplate: conceptId ? { id: conceptId, version: 1 } : undefined,
                   sourceCoverage: {
                     batch: index + 1,
                     batchCount: batches.length,
@@ -763,13 +784,31 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       });
       const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
       const review = reviewSchema.parse(
-        await call("review", goal, {
+        conceptId ? await authorAcousticConcept({
+          d, projectId: run.projectId, id: conceptId, goal, limits, maxOutputTokens: policy.supervisor.maxOutputTokens,
+          findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
+            .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output })),
+          sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
+          draft: state.review?.documentDraft,
+          previousReview: state.review?.documentDraft?.previousReview ?? state.review,
+          assertActive,
+          call: (context, validate) => call("review", goal, context, id, validate),
+          checkpoint: async (documentDraft, section, batch, batchCount) => {
+            const saved = await commit(d, run, token, async tx => {
+              await tx.update(supervisorRuns).set({ review: { documentDraft } }).where(eq(supervisorRuns.runId, id));
+              await logWorkProgress(d, tx, run, { runId: id, stage: "reviewing_findings", sources: [],
+                batch, batchCount, summary: `${documentDraft.outline.language === "de" ? "Berichtsabschnitt" : "Report section"}: ${section}` });
+            });
+            if (!saved) throw conflict("Supervisor no longer active");
+          },
+        }) : await call("review", goal, {
           assignments: state.assignments,
           revision: state.revision,
+          previousReview: state.review,
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }),
       );
-      review.document = prepareAgentDocument(review.document, requireSoundInsulation, limits.documentMaxCharacters);
+      review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, limits.documentMaxCharacters);
       await sources(d, run.projectId, review.citations);
       const allowedCitations = (state.assignments as Assignment[]).flatMap(
         (a) => a.output?.citations ?? [],
@@ -941,7 +980,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await assertActive();
         // Independent review retains broad evidence coverage, not just the
         // specialist's relevance selection, but never re-extracts the original.
-        return { versionId, resolution: await resolveRunSource(d, run.projectId, { versionId, pageStart: 1 }, assertActive) };
+        return { versionId, resolution: conceptId
+          ? await resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
+          : await resolveRunSource(d, run.projectId, { versionId, pageStart: 1 }, assertActive) };
       }));
       const readableSourceIds = new Set(resolvedExcerpts.flatMap(({ versionId, resolution }: any) =>
         resolution?.status === "resolved" &&
@@ -953,16 +994,24 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           : [],
       ));
       const unreadableSources = resolvedExcerpts
-        .filter(({ versionId }) => !readableSourceIds.has(versionId))
+        .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId) || (conceptId && resolution?.content?.truncated))
         .map(({ versionId, resolution }: any) => ({ versionId, name: resolution?.source?.name ?? null }));
       const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
       const firstPassReview = state.review;
-      const sourceSlices = chunkSourceVersionIds([...readableSourceIds]);
+      const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId));
+      const sourceSlices = conceptId
+        ? batchSpecialistSources(readableExcerpts.map(({ versionId, resolution }: any) => ({
+          versionId, resolution, text: resolution.content.text, truncated: resolution.content.truncated,
+        }))).map(batch => batch.map(({ versionId, resolution, text, textRange, truncated }) => ({ versionId,
+          resolution: { ...resolution, content: { ...resolution.content, text, textRange, truncated } },
+        })))
+        : chunkSourceVersionIds([...readableSourceIds]).map(ids => readableExcerpts.filter(({ versionId }) => ids.includes(versionId)));
       const inputHash = checkpointHash({ goal, assignments, firstPassReview,
-        resolvedExcerpts, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
+        sourceSlices, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
       for (let index = 0; index < sourceSlices.length; index++) {
-        const sliceIds = sourceSlices[index];
+        const sourceExcerpts = sourceSlices[index]!;
+        const sliceIds = [...new Set(sourceExcerpts.map(({ versionId }) => versionId))];
         const sliceIdSet = new Set(sliceIds);
         const savedSlice = state.history.find((entry: any) => entry.phase === "independent_review_slice"
           && entry.inputHash === inputHash && entry.index === index);
@@ -972,7 +1021,6 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           sliceResults.push({ sourceVersionIds: sliceIds, output });
           continue;
         }
-        const sourceExcerpts = resolvedExcerpts.filter(({ versionId }) => sliceIdSet.has(versionId));
         const workSources = sourceExcerpts.map(({ versionId, resolution }: any) => ({
           versionId, name: resolution.source.name, version: resolution.source.version,
         }));
@@ -1177,6 +1225,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       "supervisor_failed",
     );
     await commit(d, run, token, async (tx) => {
+      if (error instanceof z.ZodError)
+        await log(d, tx, run, "provider_call_failed", phase, JSON.stringify({ runId: id,
+          diagnostics: sanitizeProviderDiagnostics({ errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: error.issues }),
+        }));
       await tx
         .update(agentRuns)
         .set({

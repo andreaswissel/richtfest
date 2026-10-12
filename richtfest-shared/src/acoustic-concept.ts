@@ -1,7 +1,40 @@
 import { z } from "zod";
 
-const section = z.string().trim().min(1).max(6000);
+// Sections are assembled from bounded authoring calls, not one model response.
+const section = z.string().trim().min(1).max(200000);
 const metadata = z.string().trim().min(1).max(300).nullable();
+export const acousticConceptIdSchema = z.enum(["interior-noise-concept", "exterior-noise-concept"]);
+export type AcousticConceptId = z.infer<typeof acousticConceptIdSchema>;
+export const acousticSourceRangeSchema = z.object({
+  versionId: z.string().uuid(),
+  pageStart: z.number().int().positive(),
+  pageEnd: z.number().int().positive(),
+}).strict();
+export const acousticAttachmentSchema = acousticSourceRangeSchema.extend({
+  label: z.string().trim().min(1).max(300),
+  section: z.enum(["planningLaw", "components", "plans", "calculationAppendix"]),
+}).strict();
+export const acousticSectionKeySchema = z.enum([
+  "preliminaryRemarks", "exteriorNoiseAssessment", "planningLaw", "components", "plans",
+  "sourcesAndRevisions", "openIssues", "calculationAppendix", "requirements", "verification",
+  "buildingServices", "heatPumps", "protectionLevels",
+]);
+export function acousticSectionKeys(id: AcousticConceptId) {
+  return ["preliminaryRemarks", ...(id === "exterior-noise-concept"
+    ? ["exteriorNoiseAssessment", "planningLaw", "components", "plans"]
+    : ["requirements", "plans", "components", "verification", "planningLaw", "buildingServices", "heatPumps", "protectionLevels"]),
+    "sourcesAndRevisions", "openIssues", "calculationAppendix"] as z.infer<typeof acousticSectionKeySchema>[];
+}
+
+/** Explicit user selection takes precedence over the model's planning proposal. */
+export function requestedAcousticConcept(goal: string): AcousticConceptId | undefined {
+  const explicit = [...goal.matchAll(/\b(interior-noise-concept|exterior-noise-concept)\b/gi)];
+  if (explicit.length) return explicit.at(-1)![1]!.toLowerCase() as AcousticConceptId;
+  const exterior = /(?:außen|aussen|exterior)[-\s]*(?:lärm|laerm|noise)/i.test(goal);
+  const interior = /(?:innen|interior)[-\s]*(?:lärm|laerm|noise)/i.test(goal);
+  return /konzept|concept|bericht|report/i.test(goal) && exterior !== interior
+    ? exterior ? "exterior-noise-concept" : "interior-noise-concept" : undefined;
+}
 const common = {
   version: z.literal(1),
   language: z.enum(["de", "en"]),
@@ -20,7 +53,27 @@ const common = {
   sourcesAndRevisions: section,
   openIssues: section,
   calculationAppendix: section,
+  attachments: z.array(acousticAttachmentSchema).max(100).optional(),
 };
+
+/** A source/page map, not the report body. Each section is authored separately. */
+export const acousticConceptOutlineSchema = z.object({
+  id: acousticConceptIdSchema,
+  title: z.string().trim().min(1).max(300),
+  language: common.language,
+  project: common.project,
+  sections: z.array(z.object({
+    key: acousticSectionKeySchema,
+    sources: z.array(acousticSourceRangeSchema).max(100),
+  }).strict()).max(13),
+  attachments: z.array(acousticAttachmentSchema).max(100),
+}).strict();
+
+export const acousticSectionOutputSchema = z.object({
+  content: z.string().trim().min(1).max(12000),
+  citations: z.array(z.string().uuid()).max(100),
+  complete: z.boolean(),
+}).strict();
 
 /** Reference-derived authoring formats, not executable calculation templates. */
 export const acousticConceptTemplateSchema = z.discriminatedUnion("id", [
@@ -91,11 +144,19 @@ export function renderAcousticConcept(template: z.infer<typeof acousticConceptTe
     `# ${title}`,
     choose("Vorlage 1 · Entwurf", "Template 1 · Draft"),
     choose(
-      "Quellenbasierter Konzeptentwurf, kein rechnerischer Schallschutznachweis. Es wurde keine Berechnung durchgeführt. Werte aus vorhandenen Nachweisen sind zitierte Quellenangaben, keine durch Richtfest validierten Ergebnisse. Pläne und Berechnungsanlagen werden nur referenziert, nicht erzeugt oder als vollständig beigefügt bestätigt.",
-      "Source-based concept draft, not an engineering verification. No calculation was performed. Values from existing reports are cited source claims, not results validated by Richtfest. Plans and calculation appendices are referenced only, not generated or confirmed as completely attached.",
+      "Quellenbasierter Konzeptentwurf, kein neuer rechnerischer Schallschutznachweis. Es wurde keine Berechnung durchgeführt. Werte aus vorhandenen Nachweisen sind zitierte Quellenangaben, keine durch Richtfest validierten Ergebnisse. Aufgeführte Quellseiten werden im PDF unverändert als ungeprüfte Belege beigefügt; nicht aufgeführte Pläne oder Anlagen sind nicht enthalten. Unterschriften auf Quellseiten sind keine Freigabe dieses Entwurfs.",
+      "Source-based concept draft, not a new engineering verification. No calculation was performed. Values from existing reports are cited source claims, not results validated by Richtfest. Listed source pages are included in the PDF as unchanged, unverified evidence; unlisted plans or appendices are not attached. Signatures on source pages do not approve this draft.",
     ),
     `| ${choose("Projektangabe", "Project information")} | ${choose("Stand", "Value")} |\n| --- | --- |\n${fields.map(([label, value]) => `| ${label} | ${cell(value)} |`).join("\n")}`,
     `## ${choose("Inhaltsverzeichnis", "Contents")}\n\n${sections.map(([heading]) => `- ${heading}`).join("\n")}`,
-    ...sections.map(([heading, text]) => `${heading.startsWith("5.1.") ? "###" : "##"} ${heading}\n\n${body(text)}`),
+    ...sections.map(([heading, text]) => {
+      const key = /Bebauungsplan|Development plan/.test(heading) ? "planningLaw"
+        : /Bauteilaufbauten|Component specifications/.test(heading) ? "components"
+        : /Schallschutzpläne|noise plans/.test(heading) ? "plans"
+        : /Berechnungsnachweise|Calculation evidence/.test(heading) ? "calculationAppendix" : undefined;
+      const attachments = (template.attachments ?? []).filter(a => a.section === key);
+      const register = attachments.map(a => `- ${cell(a.label)} · [${a.versionId}] · ${choose("PDF-Seiten", "PDF pages")} ${a.pageStart}–${a.pageEnd}`).join("\n");
+      return `${heading.startsWith("5.1.") ? "###" : "##"} ${heading}\n\n${body(text)}${register ? `\n\n**${choose("Beigefügte Quellseiten (ungeprüft)", "Attached source pages (unverified)")}**\n\n${register}` : ""}`;
+    }),
   ].join("\n\n");
 }

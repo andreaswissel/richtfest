@@ -81,6 +81,21 @@ integration("workspace returns scoped historical citation names and terminal chi
     expect(extracted.stdout.toString()).not.toContain(source);
     expect((await fetch(`${url}/artifacts/${artifact}`, { headers: { "x-other": "1" } })).status).toBe(404);
     expect((await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`, { headers: { "x-other": "1" } })).status).toBe(404);
+    // Exact saved payload drives attachments; foreign and unavailable sources fail closed.
+    const conceptPayload = (versionId: string) => ({ template: {
+      id: "exterior-noise-concept", version: 1,
+      attachments: [{ versionId, pageStart: 1, pageEnd: 1, label: "Plan", section: "plans" }],
+    } });
+    await pool.query(`update projects_file_versions set mime_type='application/pdf', storage_key=$2 where id in ($1,$3)`, [source, `missing-${crypto.randomUUID()}.pdf`, foreign]);
+    const deps = knowledgeDeps(db, { actor: { id: actor, tenantId: tenant, permissions: new Set(["knowledge:read", "projects:read"]) } } as any);
+    expect(await deps.readSourcePdf!(project, foreign)).toBeNull();
+    expect(await deps.readSourcePdf!(project, crypto.randomUUID())).toBeNull();
+    for (const versionId of [foreign, source]) {
+      await pool.query(`update knowledge_artifact_revisions set payload=$2 where id=$1`, [revision, JSON.stringify(conceptPayload(versionId))]);
+      const failedExport = await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`);
+      expect(failedExport.status).toBe(422);
+      expect(await failedExport.json()).toEqual({ error: "invalid_pdf_attachment" });
+    }
   } finally {
     server.close();
     for (const table of ["os_audit_events", "knowledge_annotations", "knowledge_agent_run_events", "knowledge_agent_runs", "knowledge_messages", "knowledge_conversations", "knowledge_artifact_revisions", "knowledge_artifacts", "projects_file_versions", "projects_files", "projects_projects"])

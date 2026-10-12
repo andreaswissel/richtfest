@@ -58,7 +58,7 @@ test("only confirmed output-token truncation has a direct action, with no initia
         paramsSummary: JSON.stringify({
           diagnostics: {
             errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
-            finishReason: "length",
+            finishReason: "stop",
             issues: [{ code: "too_big", path: ["summary"], maximum: 10000 }],
           },
         }),
@@ -74,15 +74,18 @@ test("only confirmed output-token truncation has a direct action, with no initia
     ).toBe("");
     expect(render({ ...run, failureRole: undefined })).toBe("");
     expect(render({ ...run, status: "running" })).toBe("");
-    expect(
-      render({
-        ...run,
-        modelPolicy: {
-          ...run.modelPolicy,
-          supervisor: { ...model, maxOutputTokens: 128000 },
-        },
-      }),
-    ).toBe("");
+    const maximum = render({
+      ...run,
+      modelPolicy: {
+        ...run.modelPolicy,
+        supervisor: { ...model, maxOutputTokens: 128000 },
+      },
+    });
+    expect(maximum).toContain("128,000");
+    expect(maximum).toContain("already at the workspace maximum");
+    expect(maximum).toContain("no completed report was produced");
+    expect(maximum).toContain("Split the report");
+    expect(maximum).not.toContain("<button");
     expect(
       render({
         ...run,
@@ -120,4 +123,43 @@ test("child roles require a known role and exact length finish reason", () => {
       },
     }),
   ).toBeUndefined();
+});
+test("explicit length allows alternate structured errors, but character and generic schema failures do not", () => {
+  for (const errorId of [
+    "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+    "STRUCTURED_OUTPUT_PARSE_FAILED",
+  ]) {
+    const failureEvent = {
+      paramsSummary: {
+        diagnostics: { errorId, finishReason: "length", object: {} },
+      },
+    };
+    expect(
+      tokenLimitCandidate({ ...run, failureEvent })?.model.maxOutputTokens,
+    ).toBe(3000);
+    expect(
+      tokenLimitCandidate({ ...run, failureEvent, error: "category=timeout" }),
+    ).toBeUndefined();
+  }
+  for (const path of [
+    ["content"],
+    ["document", "content"],
+    ["document", "template", "assessment"],
+    ["citations"],
+  ]) {
+    expect(
+      tokenLimitCandidate({
+        ...run,
+        failureEvent: {
+          paramsSummary: {
+            diagnostics: {
+              errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+              finishReason: "stop",
+              issues: [{ code: "too_big", path, maximum: 12000 }],
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  }
 });

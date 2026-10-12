@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
+import { acousticSectionKeys } from "../richtfest-shared/src/acoustic-concept";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import {
@@ -63,6 +64,108 @@ integration("continued document review receives only its thread's comments and t
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }
+});
+
+integration("acoustic reports preserve late-page results and attachments across checkpoints; limit failures publish no artifact", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const { PDFDocument } = await import("../richtfest-apps/knowledge/node_modules/pdf-lib");
+  const pdf = await PDFDocument.create();
+  for (let page = 1; page <= 3; page++) pdf.addPage().drawText(`Original evidence page ${page}`);
+  const bytes = Buffer.from(await pdf.save());
+  const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
+  try {
+    for (const scenario of ["resume", "review", "tokens", "characters", "placeholder", "incomplete"] as const) {
+      const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
+      const keys = acousticSectionKeys("exterior-noise-concept");
+      let interrupted = false;
+      let runId = "";
+      const d: any = {
+        db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+        validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
+        listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
+        readSourcePdf: async (_: string, id: string) => id === versionId ? bytes : null,
+        resolveSource: async (_: string, input: any) => {
+          const page = input.pageStart ?? 1;
+          return { status: "resolved", source: { versionId, name: "Evidence.pdf", version: 1, mimeType: "application/pdf" }, content: {
+            status: "available", text: `[Page ${page}] ${page === 3 ? "Last room: required 33.2 dB; available 42.1 dB." : `Evidence page ${page}.\n${"Component detail.\n".repeat(400)}`}`,
+            coverage: { pageStart: page, pageEnd: page, totalPages: 3, nextPage: page < 3 ? page + 1 : null },
+            retrieval: { pageNumbers: [page] }, truncated: page < 3,
+          } };
+        },
+        executeSupervisor: async ({ phase, context }: any) => {
+          let output: any;
+          if (phase === "plan") output = { tasks: [{ role: "source_reviewer", goal: "Read report evidence", sourceVersionIds: [versionId] }] };
+          else if (phase === "specialist") {
+            expect(context.sources.map((s: any) => s.text).join("\n")).toContain("Last room: required 33.2 dB");
+            output = { summary: "Three pages: plan page 2, calculation page 3. Last room: required 33.2 dB; available 42.1 dB.", rationale: "Unverified source results", citations: [versionId] };
+          } else if (phase === "independent_review") {
+            expect(context.sourceExcerpts[0].resolution.content.text).toContain("Last room: required 33.2 dB");
+            expect(context.firstPassReview.document.content).toContain("Last room: required 33.2 dB");
+            output = { summary: "Source claims retained, not validated", rationale: "All saved pages read", decision: "accept", citations: [versionId], revisions: [], findings: [] };
+          } else if (context.documentTask === "outline") output = {
+            id: "exterior-noise-concept", title: "Acoustic report", language: "en",
+            project: { name: "Report test", number: null, client: null, designer: null, author: null, date: null },
+            sections: keys.map(key => ({ key, sources: key === "components" ? [{ versionId, pageStart: 1, pageEnd: 3 }] : [] })),
+            attachments: [{ versionId, pageStart: 2, pageEnd: 2, section: "plans", label: "Ground floor" },
+              { versionId, pageStart: 3, pageEnd: 3, section: "calculationAppendix", label: "All calculation pages" }],
+          };
+          else if (context.documentTask === "section") {
+            if (context.section === "components" && scenario === "resume" && !interrupted) {
+              interrupted = true;
+              // Simulate loss of the worker lease, not a user retry/new generation.
+              await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+              throw new Error("Worker disconnected");
+            }
+            if (context.section === "components" && scenario === "tokens") throw Object.assign(new Error("Output stopped"), {
+              providerFailure: true, retryable: false, failureCategory: "validation",
+              diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" },
+            });
+            output = { complete: scenario !== "incomplete", citations: context.sources.length ? [versionId] : [], content:
+              scenario === "characters" ? "Source-grounded detail. ".repeat(60)
+                : scenario === "placeholder" ? "Nicht verwendet."
+                : context.sources.length ? `${context.sources.map((s: any) => s.text).join("\n")} [${versionId}]`
+                : `No further ${context.section} evidence supplied; obtain the missing project input.`,
+            };
+          } else throw new Error("Unexpected document call");
+          return { status: "completed", output };
+        },
+      };
+      try {
+        const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Create exterior-noise-concept v1", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+        runId = run!.id;
+        await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
+          specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: scenario === "review", maxParallel: 2, maxTasks: 4, maxRevisions: 1,
+          executionLimits: { summaryMaxCharacters: 10000, rationaleMaxCharacters: 2000, documentMaxCharacters: scenario === "characters" ? 1000 : 60000, timeoutSeconds: 180 },
+        });
+        for (let step = 0; step < 5; step++) await stepSupervisor(d, runId);
+        const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+        const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+        if (scenario === "resume" || scenario === "review") {
+          expect(interrupted).toBe(scenario === "resume");
+          expect(result!.status).toBe("needs_review");
+          expect(revisions).toHaveLength(1);
+          expect(revisions[0]!.content).toContain("Last room: required 33.2 dB; available 42.1 dB.");
+          expect(revisions[0]!.content.match(/Component detail\./g)).toHaveLength(800);
+          expect(revisions[0]!.content.match(/No further preliminaryRemarks evidence/g)).toHaveLength(1);
+          expect((revisions[0]!.payload as any).template.id).toBe("exterior-noise-concept");
+          expect((revisions[0]!.payload as any).template.attachments.map((a: any) => a.pageStart)).toEqual([2, 3]);
+        } else {
+          expect(result!.status).toBe("failed");
+          expect(revisions).toHaveLength(0);
+          const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, runId));
+          const failure = events.find(e => e.eventType === "provider_call_failed");
+          const diagnostics = JSON.parse(failure!.paramsSummary!).diagnostics;
+          if (scenario === "tokens") expect(diagnostics.finishReason).toBe("length");
+          if (scenario === "characters") expect(diagnostics.issues).toContainEqual({ code: "too_big", path: ["content"], maximum: 1000 });
+          if (scenario === "placeholder") expect(diagnostics.issues[0].path).toEqual(["document", "template", "preliminaryRemarks"]);
+          if (scenario === "incomplete") expect(diagnostics.issues[0].path).toEqual(["complete"]);
+        }
+      } finally {
+        for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+          await db.delete(table).where(eq(table.tenantId, tenantId));
+      }
+    }
+  } finally { await pool.end(); }
 });
 
 for (const templateId of ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const)

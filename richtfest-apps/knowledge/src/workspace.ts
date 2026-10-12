@@ -687,6 +687,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
             version: artifactRevisions.version,
             status: sql<string>`case when ${artifactRevisions.version} = (select max(r.version) from knowledge_artifact_revisions r where r.artifact_id=${artifacts.id} and r.tenant_id=${d.tenantId}) then ${artifacts.status} else 'historical revision' end`,
             sourceVersionIds: artifactRevisions.sourceVersionIds,
+            payload: artifactRevisions.payload,
           })
           .from(artifactRevisions)
           .innerJoin(artifacts, eq(artifactRevisions.artifactId, artifacts.id))
@@ -713,6 +714,8 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           : [];
         const pdf = await artifactPdf({ ...row, sourceVersionIds,
           sources: await d.sourceReferences(row.projectId, sourceVersionIds),
+          template: row.payload?.template,
+          readSourcePdf: d.readSourcePdf,
         });
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Length", String(pdf.length));

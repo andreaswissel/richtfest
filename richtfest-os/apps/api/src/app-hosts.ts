@@ -445,6 +445,23 @@ export const knowledgeDeps = (
         and v.id in (${sql.join([...new Set(versionIds)].map(id => sql`${id}::uuid`), sql`, `)})`);
       return result.rows as { versionId: string; fileName: string; version: number }[];
     },
+    readSourcePdf: async (projectId, versionId) => {
+      const result = await db.execute(sql`select v.storage_key as "storageKey", v.mime_type as "mimeType"
+        from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id
+        where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid
+        and v.status='ready' and v.mime_type='application/pdf' limit 1`);
+      const source = result.rows[0] as { storageKey: string; mimeType: string } | undefined;
+      if (!source) return null;
+      const download = await fileStorage.download(source.storageKey, source.mimeType, "");
+      if (!download) return null;
+      if ("redirectUrl" in download) {
+        const response = await fetch(download.redirectUrl);
+        return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of download.stream) chunks.push(Buffer.from(chunk));
+      return Buffer.concat(chunks);
+    },
     resolveSource: async (projectId, input) => {
       const result = await db.execute(
         sql`select distinct on (f.id) f.id as "fileId", f.name, v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,

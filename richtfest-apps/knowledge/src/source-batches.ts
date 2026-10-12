@@ -3,7 +3,8 @@
 const SOURCE_BYTES_PER_BATCH = 48 * 1024;
 const SOURCES_PER_BATCH = 3;
 
-export function batchSpecialistSources<T extends { text: string; truncated?: boolean }>(sources: T[]) {
+export function batchSpecialistSources<T extends { text: string; truncated?: boolean }>(sources: T[], byteLimit = SOURCE_BYTES_PER_BATCH) {
+  if (!Number.isInteger(byteLimit) || byteLimit < 4) throw new Error("Source batch budget must fit a UTF-8 code point");
   type Slice = T & { extractionTruncated: boolean; textRange: { startByte: number; endByte: number; totalBytes: number } };
   const batches: Slice[][] = [];
   let batch: Slice[] = [];
@@ -17,8 +18,8 @@ export function batchSpecialistSources<T extends { text: string; truncated?: boo
     const bytes = Buffer.from(source.text, "utf8");
     let start = 0;
     while (start < bytes.length) {
-      if (batch.length === SOURCES_PER_BATCH || SOURCE_BYTES_PER_BATCH - used < 4) flush();
-      let end = Math.min(bytes.length, start + SOURCE_BYTES_PER_BATCH - used);
+      if (batch.length === SOURCES_PER_BATCH || byteLimit - used < 4) flush();
+      let end = Math.min(bytes.length, start + byteLimit - used);
       // Never split a UTF-8 code point. Prefer a line boundary when it does not
       // leave more than half the available space unused.
       while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;

@@ -5,7 +5,10 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED"];
   const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
-  const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation"];
+  const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation",
+    "template", "id", "version", "language", "project", "sections", "key", "sources", "attachments", "pageStart", "pageEnd", "complete",
+    "preliminaryRemarks", "exteriorNoiseAssessment", "planningLaw", "components", "plans", "sourcesAndRevisions", "openIssues", "calculationAppendix",
+    "requirements", "verification", "buildingServices", "heatPumps", "protectionLevels", "scope", "measures", "entities"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
   const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error"];
   const rateLimit: Partial<Record<"limitRequests" | "remainingRequests" | "limitTokens" | "remainingTokens" | "resetRequestsMs" | "resetTokensMs", number>> = {};
@@ -29,9 +32,11 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
       ...(issue.validation === "uuid" ? { validation: "uuid" as const } : {}),
     }];
   }) : [];
+  const finishReason = value.finishReason && typeof value.finishReason === "object"
+    ? (value.finishReason as Record<string, unknown>).unified : value.finishReason;
   return {
     ...(ids.includes(value.errorId as string) ? { errorId: value.errorId as string } : {}),
-    ...(finishes.includes(value.finishReason as string) ? { finishReason: value.finishReason as string } : {}),
+    ...(finishes.includes(finishReason as string) ? { finishReason: finishReason as string } : {}),
     ...(providerCodes.includes(value.providerCode as string) ? { providerCode: value.providerCode as string } : {}),
     ...(typeof value.retryAfterMs === "number" && Number.isFinite(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= 1e12
       ? { retryAfterMs: value.retryAfterMs } : {}),
@@ -66,6 +71,8 @@ export type AppDeps = {
   generateConversationTitle?: (input: { message: string }) => Promise<string | null>;
   listProjectSources: (projectId: string) => Promise<ProjectSourceInventory>;
   sourceReferences: (projectId: string, versionIds: string[]) => Promise<SourceReference[]>;
+  /** Exact ready PDF version, scoped to the actor's tenant and project. */
+  readSourcePdf?: (projectId: string, versionId: string) => Promise<Buffer | null>;
   resolveSource: (
     projectId: string,
     input: {

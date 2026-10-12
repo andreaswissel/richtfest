@@ -4,6 +4,8 @@
 
 ## 2026-10-12
 
+- Acoustic concepts now enforce the requested template, read complete saved PDF evidence and write resumable sections. PDF exports include numbered contents and original plan/calculation pages as unverified sources. Token truncation and document-size limits stop incomplete reports and show distinct recovery guidance.
+
 - Project threads now have their own artifact previews, tasks and run links. Open documents and PDFs directly from chat, and review generated documents with persistent passage highlights and revision-specific comments that carry into continuing agent work.
 
 - Missing app files after an update now show a reload prompt instead of crashing the conversation. Unsent text stays accessible, Markdown remains readable as plain text, and reloading requires confirmation. Failed page loads also offer recovery within the app.

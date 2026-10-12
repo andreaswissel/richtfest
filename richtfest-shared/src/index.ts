@@ -2,6 +2,7 @@ export * from "./auth";
 export * from "./response";
 export * from "./agent-policy";
 export * from "./agent-document";
+export * from "./acoustic-concept";
 export * from "./agent-analytics";
 export * from "./agent-output";
 export * from "./agent-progress";

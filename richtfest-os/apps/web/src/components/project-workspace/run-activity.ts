@@ -177,6 +177,46 @@ export function providerFailureExplanation(
     )
   )
     return t("workspaceFailureThrottled");
+  // A length finish reason is authoritative even if a partial object validated.
+  if (diagnostics?.finishReason === "length")
+    return t("workspaceFailureTruncated");
+  if (
+    Array.isArray(diagnostics?.issues) &&
+    diagnostics.issues.some(
+      (issue: RecordData) =>
+        issue.code === "custom" &&
+        Array.isArray(issue.path) &&
+        issue.path.length === 1 &&
+        issue.path[0] === "complete",
+    )
+  )
+    return t("workspaceFailureIncomplete");
+  const content =
+    Array.isArray(diagnostics?.issues) &&
+    diagnostics.issues.find((issue: RecordData) => {
+      if (issue?.code !== "too_big" || !Array.isArray(issue.path)) return false;
+      const path = issue.path;
+      return (
+        (path.length === 1 && path[0] === "content") ||
+        (path.length === 2 &&
+          path[0] === "document" &&
+          path[1] === "content") ||
+        (path.length === 3 &&
+          path[0] === "document" &&
+          path[1] === "template" &&
+          typeof path[2] === "string")
+      );
+    });
+  if (content) {
+    const maximum = content.maximum;
+    const limit =
+      typeof maximum === "number" &&
+      Number.isSafeInteger(maximum) &&
+      maximum > 0
+        ? ` (${maximum} ${t("workspaceFailureCharacters")})`
+        : "";
+    return `${t("workspaceFailureContentLimit")}${limit}. ${t("workspaceFailureContentAction")}`;
+  }
   if (diagnostics?.errorId === "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED") {
     const summary =
       Array.isArray(diagnostics.issues) &&
@@ -200,11 +240,6 @@ export function providerFailureExplanation(
     }
     return t("workspaceFailureSchema");
   }
-  if (
-    diagnostics?.errorId === "STRUCTURED_OUTPUT_TRUNCATED" &&
-    diagnostics.finishReason === "length"
-  )
-    return t("workspaceFailureTruncated");
   return undefined;
 }
 

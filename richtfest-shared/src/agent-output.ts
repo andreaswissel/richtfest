@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentDocumentSchema } from "./agent-document";
+import { acousticConceptIdSchema } from "./acoustic-concept";
 import { agentExecutionLimitsSchema, specialistRoleSchema, type AgentExecutionLimits } from "./agent-policy";
 
 /** The provider and domain validate the same snapshotted response limits. */
@@ -14,7 +15,7 @@ export function agentOutputSchemas(limits: AgentExecutionLimits = agentExecution
     goal: z.string().min(1).max(2000),
   })).max(4);
   return {
-    plan: z.object({ tasks: z.array(z.object({
+    plan: z.object({ documentTemplate: acousticConceptIdSchema.nullish(), tasks: z.array(z.object({
       role: specialistRoleSchema,
       goal: z.string().min(1).max(2000),
       sourceVersionIds: z.array(z.string().uuid()).max(10),

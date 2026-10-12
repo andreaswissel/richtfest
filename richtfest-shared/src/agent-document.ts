@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { sourceEntityInput } from "./source-model";
-import { acousticConceptTemplateSchema, renderAcousticConcept } from "./acoustic-concept";
+import { acousticConceptTemplateSchema, renderAcousticConcept, type AcousticConceptId } from "./acoustic-concept";
 
 /** Proposed source links, not imported BIM objects or approved calculation inputs. */
 export const soundInsulationTemplateSchema = z.object({
@@ -35,12 +35,18 @@ export const agentDocumentSchema = z.object({
 }).strict();
 
 /** Both preview and PDF consume this saved Markdown, never model-chosen headings. */
-export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation = false, maxCharacters = 60000) {
+export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchema> | null | undefined, requireSoundInsulation: boolean | AcousticConceptId = false, maxCharacters = 60000) {
   if (!document?.template) {
     if (requireSoundInsulation) throw new Error("Sound insulation review requires its versioned document template");
     return document;
   }
   const template = acousticDocumentTemplateSchema.parse(document.template);
+  if (typeof requireSoundInsulation === "string" && template.id !== requireSoundInsulation)
+    throw new z.ZodError([{ code: "custom", path: ["document", "template", "id"], message: "The requested template is required." }]);
+  for (const [key, value] of Object.entries(template)) {
+    if (typeof value === "string" && /^(?:nicht verwendet|siehe (?:konzeptdatensatz|nachfolgenden)|not used|see (?:concept dataset|below))(?:[.;\s]|$)/i.test(value))
+      throw new z.ZodError([{ code: "custom", path: ["document", "template", key], message: "Author this section; a placeholder is not a report." }]);
+  }
   const schema = agentDocumentSchema.extend({ content: z.string().trim().min(1).max(maxCharacters) });
   if (template.id !== "sound-insulation-review") {
     return schema.parse({ ...document, content: renderAcousticConcept(template), template });
