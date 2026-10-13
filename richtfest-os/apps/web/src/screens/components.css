@@ -22,6 +22,21 @@
   padding-block: calc(var(--cell) / 1.5);
 }
 
+.components-screen .data-table .linked-row {
+  position: relative;
+}
+
+.components-screen .data-table .row-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.components-screen .data-table .row-link:focus-visible::after {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
 .components-screen .data-table tr:has([aria-current="true"]) {
   background: var(--muted);
 }
