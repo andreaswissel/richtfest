@@ -30,6 +30,9 @@ const permissionLabels = {
   "knowledge:read": "permissionKnowledgeRead",
   "knowledge:write": "permissionKnowledgeWrite",
   "knowledge:approve": "permissionKnowledgeApprove",
+  "components:read": "permissionComponentsRead",
+  "components:import": "permissionComponentsImport",
+  "components:review": "permissionComponentsReview",
   "agent:run": "permissionAgentRun",
   "access:manage": "permissionAccessManage",
 } as const satisfies Record<

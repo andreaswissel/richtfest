@@ -28,12 +28,14 @@ integration("durable retry reuses validated inference and atomic tool receipts; 
     validateUser: async () => true, validateConversation: async () => true, cancelExecution: () => {},
     providerConfigured: async () => true, sourceReferences: async () => [], resolveSource: async () => ({}),
     listProjectSources: async () => ({ sources: [], truncated: false, authority: "unreviewed_source_inventory" }),
+    componentContext: async () => ({ status: "available", items: [], truncated: false }),
     executeProvider: async input => ({ status: "completed", output: await callProvider({ ...input,
       context: { ...(input.context as object), credentialEcho: secret },
       systemInstructions: instructions, includeOpenUI: false,
     }, secret, async (_url, init) => {
       calls++;
       const prompt = JSON.parse(JSON.parse(String(init.body)).input);
+      expect(prompt.context.componentCatalog).toEqual({ status: "available", items: [], truncated: false });
       if (prompt.toolResults.length && failFollowup) return new Response("sensitive upstream failure", { status: 500 });
       const output = prompt.toolResults.length
         ? { summary: "Draft and question saved once.", rationale: "Human review required.", citations: [], tools: [] }

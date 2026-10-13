@@ -84,6 +84,35 @@ const router = createBrowserRouter([
         element: <Customers />,
         loader: prefetch("/crm/customers"),
       },
+      {
+        path: "/components",
+        errorElement: <RouteError />,
+        hydrateFallbackElement: <RouteLoading />,
+        lazy: async () => ({
+          Component: (await import("./screens/components")).Components,
+        }),
+        loader: ({ request }) => {
+          const params = new URL(request.url).searchParams;
+          return prefetch(
+            `/components?${new URLSearchParams({
+              q: params.get("q") || "",
+              category: params.get("category") || "",
+              reviewStatus: params.get("reviewStatus") || "",
+              offset: String(Math.max(0, Number(params.get("offset")) || 0)),
+            })}`,
+          )();
+        },
+      },
+      {
+        path: "/components/:id",
+        errorElement: <RouteError />,
+        hydrateFallbackElement: <RouteLoading />,
+        lazy: async () => ({
+          Component: (await import("./screens/components"))
+            .ComponentDetailScreen,
+        }),
+        loader: ({ params }) => prefetch(`/components/${params.id}`)(),
+      },
       { path: "/team", element: <Team />, loader: prefetch("/access/team") },
       {
         path: "/settings",

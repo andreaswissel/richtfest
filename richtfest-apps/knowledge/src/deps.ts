@@ -79,6 +79,8 @@ export type AppDeps = {
   executeProvider: (input: ProviderRequest) => Promise<ProviderResult>;
   /** Generate a title from the first user message using the active provider. */
   generateConversationTitle?: (input: { message: string }) => Promise<string | null>;
+  /** Tenant-private reviewed supplier references, never project-source citations. */
+  componentContext?: (goal: string) => Promise<unknown>;
   listProjectSources: (projectId: string) => Promise<ProjectSourceInventory>;
   sourceReferences: (projectId: string, versionIds: string[]) => Promise<SourceReference[]>;
   /** Exact ready PDF version, scoped to the actor's tenant and project. */

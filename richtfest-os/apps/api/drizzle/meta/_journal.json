@@ -232,6 +232,20 @@
       "when": 1791894957675,
       "tag": "0032_company_knowledge_library",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791896000000,
+      "tag": "0033_components",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791897000000,
+      "tag": "0034_component_documents",
+      "breakpoints": true
     }
   ]
 }

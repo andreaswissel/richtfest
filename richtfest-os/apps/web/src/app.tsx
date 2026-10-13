@@ -77,42 +77,56 @@ export function App({ initializing = false }: { initializing?: boolean }) {
         </div>
         <div className="nav-label">{t("home")}</div>
         <nav aria-label={t("home")}>
-          {routesManifest.map((r) => (
-            <NavLink
-              key={r.path}
-              end={r.path === "/"}
-              to={r.path}
-              onMouseEnter={() => {
-                if (!user?.id) return;
-                const path =
-                  r.path === "/"
-                    ? "/dashboard"
-                    : r.path === "/knowledge"
-                      ? "/knowledge/library?category=all&status=all&q=&page=0"
-                      : r.path === "/customers"
-                        ? "/crm/customers"
-                        : r.path === "/team"
-                          ? "/access/team"
-                          : r.path === "/settings"
-                            ? "/settings/ai-connections"
-                            : r.path === "/help"
-                              ? "/support"
-                              : r.path;
-                void queryClient.prefetchQuery({
-                  queryKey: [path],
-                  queryFn: () => api(path),
-                });
-              }}
-            >
-              <span className="nav-icon">
-                <r.icon aria-hidden="true" />
-              </span>
-              {t(r.key)}
-              <span className="nav-arrow">
-                <ArrowUpRight aria-hidden="true" size={14} />
-              </span>
-            </NavLink>
-          ))}
+          {routesManifest
+            .filter((r) =>
+              r.path === "/knowledge"
+                ? (session.data?.permissions || user?.permissions)?.includes(
+                    "knowledge:read",
+                  )
+                : r.path === "/components"
+                  ? (session.data?.permissions || user?.permissions)?.includes(
+                      "components:read",
+                    )
+                  : true,
+            )
+            .map((r) => (
+              <NavLink
+                key={r.path}
+                end={r.path === "/"}
+                to={r.path}
+                onMouseEnter={() => {
+                  if (!user?.id) return;
+                  const path =
+                    r.path === "/"
+                      ? "/dashboard"
+                      : r.path === "/knowledge"
+                        ? "/knowledge/library?category=all&status=all&q=&page=0"
+                        : r.path === "/components"
+                          ? "/components?q=&category=&reviewStatus=&offset=0"
+                          : r.path === "/customers"
+                            ? "/crm/customers"
+                            : r.path === "/team"
+                              ? "/access/team"
+                              : r.path === "/settings"
+                                ? "/settings/ai-connections"
+                                : r.path === "/help"
+                                  ? "/support"
+                                  : r.path;
+                  void queryClient.prefetchQuery({
+                    queryKey: [path],
+                    queryFn: () => api(path),
+                  });
+                }}
+              >
+                <span className="nav-icon">
+                  <r.icon aria-hidden="true" />
+                </span>
+                {t(r.key)}
+                <span className="nav-arrow">
+                  <ArrowUpRight aria-hidden="true" size={14} />
+                </span>
+              </NavLink>
+            ))}
           <a
             href={
               import.meta.env.DEV

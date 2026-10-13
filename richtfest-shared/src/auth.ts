@@ -3,6 +3,7 @@ import { z } from "zod";
 export const permissionKey = z.string().regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/);
 export const permissions = [
   "richtfest-os:use", "crm:read", "crm:write", "projects:read", "projects:write",
+  "components:read", "components:import", "components:review",
   "knowledge:read", "knowledge:write", "knowledge:approve", "agent:run", "access:manage"
 ] as const;
 export type PermissionKey = (typeof permissions)[number];

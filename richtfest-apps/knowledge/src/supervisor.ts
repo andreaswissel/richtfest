@@ -348,6 +348,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         ...(context as object),
         acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
+        componentCatalog: await d.componentContext?.(run.goal),
         documentReview: await artifactReviewContext(d, run.conversationId),
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.

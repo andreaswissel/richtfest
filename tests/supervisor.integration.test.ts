@@ -128,13 +128,19 @@ for (const changedEvidence of [false, true]) integration(`${failure} review resu
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
   const versions = Array.from({ length: 4 }, () => crypto.randomUUID());
   const calls: string[] = [];
+  const componentCatalog = { status: "available", truncated: false, items: [{
+    id: crypto.randomUUID(), revisionId: crypto.randomUUID(), reviewStatus: "reviewed",
+    data: { name: "Conditional slab reference", facts: [{ value: 7.5, unit: "m", conditions: "Requires 65 mm topping and temporary support", page: 8 }] },
+  }] };
   let rateLimited = true, evidence = "Original evidence", permitted = true;
   const d: any = { db, tenantId, actorId, supervisorEnabled: true,
     requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
     validateProject: async () => true, validateSourceVersion: async (_p: string, id: string) => versions.includes(id),
+    componentContext: async () => componentCatalog,
     listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId })), truncated: false }),
     resolveSource: async (_p: string, { versionId }: any) => ({ status: "resolved", source: { versionId }, content: { status: "available", text: `${evidence} ${versionId}` } }),
     executeSupervisor: async ({ phase, context }: any) => {
+      expect(context.componentCatalog).toEqual(componentCatalog);
       calls.push(phase === "independent_review" ? `slice-${context.sourceCoverage.slice}` : phase);
       if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Read all sources", sourceVersionIds: versions }] } };
       if (phase === "specialist") return { status: "completed", output: { summary: "Saved findings", rationale: "Evidence", citations: context.sourceVersionIds } };

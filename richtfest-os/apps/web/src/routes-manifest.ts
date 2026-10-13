@@ -1,6 +1,7 @@
 import {
   BookOpen,
   FolderKanban,
+  Boxes,
   CircleHelp,
   LayoutDashboard,
   Settings2,
@@ -18,6 +19,7 @@ export const routesManifest = [
     group: "richtfest-os",
     icon: BookOpen,
   },
+  { path: "/components", key: "components", group: "components", icon: Boxes },
   { path: "/team", key: "team", group: "richtfest-os", icon: UsersRound },
   {
     path: "/settings",
@@ -31,6 +33,8 @@ export const performanceRoutes = [
   "/",
   "/projects",
   "/customers",
+  "/components",
+  "/components/:id",
   "/team",
   "/knowledge",
   "/knowledge/:draftId",

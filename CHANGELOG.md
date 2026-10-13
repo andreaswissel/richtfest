@@ -6,6 +6,8 @@
 
 - Archiving and restoring threads no longer keeps the action busy while the workspace refreshes after a successful save.
 
+- Added a tenant-private Components catalog with four supplier-reference starter records, a compact side inspector, an import dialog, revision history and human catalog review. Full records pair private original supplier PDFs with source-linked facts and review, including exact-page citations and a Facts/Document switch on narrow screens. Explicit matching-PDF uploads preserve revision and review decisions. Agents use only current reviewed matches and retain source conditions and warnings; engineering approval and commercial-offer comparison remain separate.
+
 - Company knowledge can be organized into categories and searched with natural-language questions. Answers include linked source excerpts and review badges; private search history is saved, and categories never change approval or agent assignments. AI search requires a configured provider.
 
 - Shared work now uses compact task rows with expandable instructions, readable review statuses and a single header. Completed and cancelled tasks stay accessible without dominating the list.

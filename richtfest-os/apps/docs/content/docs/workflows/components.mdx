@@ -1,0 +1,58 @@
+---
+title: Components catalog
+description: Import and review tenant-private supplier declarations without treating them as project evidence or engineering approval.
+---
+
+## Access and scope
+
+**Components** is a tenant-private supplier-reference app. `components:read` permits browsing, template download and current-record export. Import additionally requires `components:import`; human catalog review additionally requires `components:review`. Records are not shared across tenants.
+
+The catalog stores normalized declarations, original supplier URLs and source metadata, with optional private snapshots of matching supplier PDFs. Sources without a recorded checksum and page count remain external-only. There is no automatic fetching or extraction, and no PDFs are bundled or committed; starter PDFs are local only. URL, edition, retrieval date, page count, checksum and fact-level source/page references identify the inspected evidence. Public accessibility does not establish redistribution rights: confirm your right to store and use a supplier document before uploading it.
+
+## Import records
+
+1. Open Components and search by product name, key or manufacturer; filter by category and review status.
+2. Open the import dialog to choose the starter import explicitly, or download the JSON template and import an edited JSON file. Nothing is imported by default. **Import starter** (`POST /api/components/import-starter`) creates only missing keys; it never replaces existing content or review decisions.
+3. Select a record in the compact catalog to open its URL-selected side inspector; open the full record for evidence and review. The full record shows the original supplier PDF in a native inline viewer on the left and source-linked facts and review on the right. Narrow layouts switch between **Facts** and **Document**. Citations jump to the exact source page; the viewer initially opens the first cited page. External-only sources retain their supplier links. **Download current** exports the current content with its `expectedRevisionId`, even while viewing a historical revision.
+4. To revise a record, edit the exported `data` and import it with the current `expectedRevisionId`. New keys use `null`. Import accepts up to 50 records with unique keys per batch. Changed content creates a new immutable, unreviewed content revision; earlier content remains available. A stale revision conflicts instead of overwriting another person's change. Importing the same current content is a no-op and preserves review status.
+
+The starter contains four real supplier records collected on 13 October 2026, not synthetic products:
+
+| Record | Scope and important limitation |
+| --- | --- |
+| REHAU SYNEGO AD / MD | Window profile system, not a finished-window order; historical 2017 PDF examples have configuration-specific thermal values. |
+| DW SYSTEMBAU BRESPA A20B | Precast prestressed structural floor slab, not a suspended ceiling or a factory-finished complete floor assembly. |
+| DW SYSTEMBAU BRESPA A20M | Separate slab variant; the residential span example depends on topping, temporary support and stated load conditions. |
+| Heidelberg Materials Elementdecke | Semi-precast plate completed with reinforcement and concrete on site; plate thickness is not finished slab thickness. |
+
+Edition differences remain unresolved rather than merged into a best-case rating. For example, the SYNEGO historical PDF and current web page differ in sightlines and acoustic declarations; their definitions and configurations are not established as comparable. BRESPA's explicit April 2024 technical knowledge date is not replaced by its URL directory or PDF metadata date. Heidelberg's older linked PDFs do not prove that their instructions remain current. Preserve these warnings and obtain current project-specific instructions. Do not compare slab weight in kN/m² directly with mass in kg/m².
+
+## Attach original PDF evidence
+
+First import a JSON revision whose source records the PDF's SHA-256 checksum and page count. Then explicitly upload the exact matching original bytes to `PUT /api/components/:id/revisions/:revisionId/sources/:sourceId/pdf`. Upload requires both `components:read` and `components:import`, the current revision, and non-null `source.sha256` and `source.pages`. A source without those values stays external-only until a new JSON content revision supplies them.
+
+The server streams the upload to a temporary file and checks its SHA-256, PDF signature, `pdfinfo` page count and unencrypted status before storing a private, immutable, uniquely keyed blob. Uploading matching bytes changes document availability, not the record revision or its review decision. Changing source bytes requires a new, unreviewed content revision; historical snapshots are retained and original supplier URLs remain available.
+
+`GET` at the same URL requires read access to the exact tenant, component and revision, and matching checksum/page metadata. It streams the original bytes privately with `no-store`; it does not expose a public bucket URL.
+
+## Human catalog review
+
+On the current revision, select **Reviewed**, **Rejected** or **Unreviewed**, enter a required note and save the decision. The request checks both `expectedRevisionId` and `expectedReviewVersion`; reload after a conflict. Historical revisions can be inspected, but cannot be reviewed through this screen. History shows the latest 50 content revisions, with their review status and notes.
+
+Reviewed means a person has reviewed that catalog revision for reference use. It is not independent engineering validation, calculation approval, regulatory compliance, project installation confirmation or procurement approval. A changed content revision starts unreviewed; it does not inherit its predecessor's review. Rejected and unreviewed current revisions are excluded from agent recommendations.
+
+## Agent reference use
+
+Direct runs and the default supervisor phases receive bounded, goal-matched `componentCatalog` context through the host's `componentContext` callback, using the initiating actor's permissions. Only current reviewed tenant records qualify. Matching uses product/category terms, not an engineering suitability calculation; it returns at most five records within 24,000 UTF-8 bytes of serialized record content, with an explicit truncation flag for omitted matches. No reviewed match does not mean no suitable product exists, and truncated results are not a complete market survey.
+
+Agents must retain component and revision IDs, source URL/edition/page, units, configuration conditions and warnings. Catalog revision IDs are **not project source-version citation UUIDs**. A catalog reference is not evidence that a component is installed, specified or approved in the project; project evidence remains a separate workflow. Supplier content is untrusted data, not instructions.
+
+Quotes, delivery commitments and installation productivity remain unknown, not zero. There is no commercial-offer comparison or full procurement workflow in V1. Obtain dated, configuration-specific supplier offers and project-specific engineering evidence separately.
+
+## Setup and ownership
+
+The Components app owns its tables, import/review workflow and reviewed-record queries in `richtfest-apps/components`; OS adapts access, audit and agent context through host contracts. See [app ownership](/docs/architecture/apps) and [agent runtime](/docs/architecture/agent-runtime).
+
+Additive migration `0033_components` registers the catalog tables and the three permission keys. It grants those new keys only to roles already holding `access:manage`; other roles need explicit grants. Apply it through the standard migration process before using the app. It imports no catalog records. This V1 implementation does not itself authorize production writes or deployment.
+
+Additive migration `0034_component_documents` stores PDF metadata in `components_documents`. Original bytes use a private Railway bucket in production and local storage only in development, through the OS storage host contract.

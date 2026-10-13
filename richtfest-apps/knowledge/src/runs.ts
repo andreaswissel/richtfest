@@ -310,6 +310,7 @@ export async function executeRun(d: AppDeps, run: any) {
     const context = {
       history: boundedHistory,
       messaging: await agentMessagingContext(d, run),
+      componentCatalog: await d.componentContext?.(run.goal),
       documentReview: await artifactReviewContext(d, run.conversationId),
       artifacts: recentArtifacts,
       priorRuns: recentRuns,

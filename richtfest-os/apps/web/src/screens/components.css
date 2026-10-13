@@ -1,0 +1,39 @@
+.components-screen .page {
+  gap: var(--stack);
+}
+
+.components-screen nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--stack) / 2);
+}
+
+.components-screen nav a {
+  height: auto;
+  padding: 0;
+}
+
+.components-screen .section-heading {
+  margin-bottom: calc(var(--stack) / 2);
+}
+
+.components-screen .data-table td {
+  padding-block: calc(var(--cell) / 1.5);
+}
+
+.components-screen .data-table tr:has([aria-current="true"]) {
+  background: var(--muted);
+}
+
+.component-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: calc(var(--stack) / 2);
+  row-gap: calc(var(--stack) / 4);
+}
+
+.component-fact > dd:nth-child(2) {
+  text-align: right;
+}

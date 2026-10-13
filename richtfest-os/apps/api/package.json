@@ -21,6 +21,7 @@
     "@mastra/pg": "1.30.0",
     "@openuidev/lang-core": "^0.3.2",
     "@richtfest/acoustics": "workspace:*",
+    "@richtfest/components": "workspace:*",
     "@richtfest/crm": "workspace:*",
     "@richtfest/knowledge": "workspace:*",
     "@richtfest/projects": "workspace:*",

@@ -20,6 +20,20 @@
         "typescript": "^5.7.2",
       },
     },
+    "richtfest-apps/components": {
+      "name": "@richtfest/components",
+      "version": "0.1.0",
+      "dependencies": {
+        "@richtfest/shared": "workspace:*",
+        "drizzle-orm": "^0.38.4",
+        "express": "^4.21.2",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/express": "^5.0.0",
+        "typescript": "^5.7.2",
+      },
+    },
     "richtfest-apps/crm": {
       "name": "@richtfest/crm",
       "version": "0.1.0",
@@ -109,6 +123,7 @@
         "@mastra/pg": "1.30.0",
         "@openuidev/lang-core": "^0.3.2",
         "@richtfest/acoustics": "workspace:*",
+        "@richtfest/components": "workspace:*",
         "@richtfest/crm": "workspace:*",
         "@richtfest/knowledge": "workspace:*",
         "@richtfest/projects": "workspace:*",
@@ -748,6 +763,8 @@
     "@richtfest/acoustics": ["@richtfest/acoustics@workspace:richtfest-apps/acoustics"],
 
     "@richtfest/api": ["@richtfest/api@workspace:richtfest-os/apps/api"],
+
+    "@richtfest/components": ["@richtfest/components@workspace:richtfest-apps/components"],
 
     "@richtfest/crm": ["@richtfest/crm@workspace:richtfest-apps/crm"],
 
