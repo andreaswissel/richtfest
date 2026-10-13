@@ -556,18 +556,33 @@ export function ArtifactPanel({
       }).slice(1),
     );
   return (
-    <aside className="project-artifacts" aria-label={t("workspaceArtifacts")}>
-      {!(tab === "tasks" && conversationId && !previewOpen) && (
-        <h2 className="thread-panel-heading">
-          {tab === "tasks"
-            ? t("sharedWork")
-            : tab === "runs"
-              ? t("agentThreadList")
-              : tab === "documents"
-                ? t("sources")
-                : t("workspaceArtifacts")}
-        </h2>
-      )}
+    <aside className="project-artifacts" aria-label={t("workspaceThreadResources")}>
+      <nav
+        className="workspace-view-links thread-resource-tabs"
+        aria-label={t("workspaceThreadResources")}
+      >
+        {(
+          [
+            ["artifacts", t("workspaceArtifacts"), artifacts.length],
+            ["tasks", t("sharedWork"), tasks.length],
+            ["runs", t("agentThreadList"), null],
+            ["documents", t("sources"), null],
+          ] as const
+        ).map(([panel, label, count]) => {
+          const next = new URLSearchParams({ panel });
+          if (conversationId) next.set("conversation", conversationId);
+          return (
+            <Link
+              key={panel}
+              to={`?${next}`}
+              aria-current={tab === panel ? "page" : undefined}
+            >
+              {label}
+              {count !== null && <Badge tone="neutral">{count}</Badge>}
+            </Link>
+          );
+        })}
+      </nav>
       {previewOpen ? artifactCards : panelBody}
       <Dialog
         open={previewOpen}

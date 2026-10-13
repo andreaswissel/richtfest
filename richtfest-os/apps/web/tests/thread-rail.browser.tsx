@@ -69,8 +69,6 @@ export async function testThreadArchive() {
         projectId="archive-project"
         selectedId={conversation.id}
         conversations={workspace.data.conversations}
-        artifactCount={0}
-        taskCount={0}
         onCreate={() => {}}
       />
     );

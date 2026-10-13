@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Project resource navigation is back at the top of the right sidebar, with tabs for Artifacts, Shared work, Agents and Sources. The left rail is dedicated to active and archived threads.
+
 - Archiving and restoring threads no longer keeps the action busy while the workspace refreshes after a successful save.
 
 - Added a tenant-private Components catalog with four supplier-reference starter records, a compact side inspector, an import dialog, revision history and human catalog review. Full records pair private original supplier PDFs with source-linked facts and review, including exact-page citations and a Facts/Document switch on narrow screens. Explicit matching-PDF uploads preserve revision and review decisions. Agents use only current reviewed matches and retain source conditions and warnings; engineering approval and commercial-offer comparison remain separate.

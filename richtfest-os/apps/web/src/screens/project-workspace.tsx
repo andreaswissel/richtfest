@@ -216,8 +216,6 @@ export function ProjectWorkspace() {
                 projectId={id!}
                 conversations={conversations}
                 selectedId={selected?.id}
-                artifactCount={threadArtifacts.length}
-                taskCount={threadTasks.length}
                 creating={create.isPending}
                 onCreate={() =>
                   create.mutate({

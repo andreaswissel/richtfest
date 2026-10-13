@@ -6,10 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   MessageSquare,
-  FileText,
-  ListTodo,
-  FolderOpen,
-  Bot,
   PencilLine,
   Plus,
   RotateCcw,
@@ -33,8 +29,6 @@ export function ThreadRail({
   projectId,
   conversations,
   selectedId,
-  artifactCount,
-  taskCount,
   onCreate,
   creating = false,
   onArchived,
@@ -42,8 +36,6 @@ export function ThreadRail({
   projectId: string;
   conversations: RecordData[];
   selectedId?: string;
-  artifactCount: number;
-  taskCount: number;
   onCreate: () => void;
   creating?: boolean;
   onArchived?: (id: string, archived: boolean) => void;
@@ -234,42 +226,6 @@ export function ThreadRail({
             <p className="thread-rail-empty">{t("threadRailEmpty")}</p>
           )}
         </nav>
-        {selectedId && (
-          <nav
-            className="thread-resource-nav"
-            aria-label={t("workspaceThreadResources")}
-          >
-            {(
-              [
-                ["artifacts", t("workspaceArtifacts"), FileText, artifactCount],
-                ["tasks", t("sharedWork"), ListTodo, taskCount],
-                ["runs", t("agentThreadList"), Bot, null],
-                ["documents", t("sources"), FolderOpen, null],
-              ] as const
-            ).map(([panel, label, Icon, count]) => {
-              const next = new URLSearchParams({
-                conversation: selectedId,
-                panel,
-              });
-              return (
-                <Link
-                  key={panel}
-                  to={`?${next}`}
-                  aria-current={
-                    (params.get("panel") || "artifacts") === panel
-                      ? "page"
-                      : undefined
-                  }
-                  onClick={() => setMobileOpen(false)}
-                >
-                  <Icon className="size-icon-sm" aria-hidden="true" />
-                  <span>{label}</span>
-                  {count !== null && <Badge tone="neutral">{count}</Badge>}
-                </Link>
-              );
-            })}
-          </nav>
-        )}
         {archived.length > 0 && (
           <details
             className="thread-rail-archived"

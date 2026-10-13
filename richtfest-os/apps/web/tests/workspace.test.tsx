@@ -354,6 +354,35 @@ describe("workspace records and navigation", () => {
     );
     expect(html).toContain("Review facade");
   });
+  test("detail rail links retain the thread, clear stale selections, and mark the displayed panel", () => {
+    for (const [query, active] of [
+      ["", "artifacts"],
+      ["&panel=tasks&agentRun=old&message=old", "tasks"],
+      ["&panel=runs&sourceVersion=exact&page=3", "documents"],
+    ]) {
+      const html = render(
+        <ArtifactPanel
+          projectId={projectId}
+          conversationId={conversationId}
+          artifacts={[]}
+          tasks={[]}
+          runs={[]}
+          initialFiles={[]}
+        />,
+        `/projects/${projectId}?conversation=${conversationId}${query}`,
+      );
+      const nav = html.match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0] || "";
+      expect(nav).toContain('aria-label="Thread resources"');
+      for (const panel of ["artifacts", "tasks", "runs", "documents"])
+        expect(nav).toContain(
+          `href="/projects/${projectId}?panel=${panel}&amp;conversation=${conversationId}"`,
+        );
+      expect(nav).toContain(
+        `aria-current="page" href="/projects/${projectId}?panel=${active}&amp;conversation=${conversationId}"`,
+      );
+      expect(nav).not.toMatch(/agentRun=|message=|sourceVersion=|page=3/);
+    }
+  });
   test("unconfigured composer shows an actionable alert without claiming a message was saved", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,
