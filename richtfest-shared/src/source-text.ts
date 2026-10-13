@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/** Human-confirmed full export of an exact original revision; not content approval. */
+export type SourcePdfRepresentation = {
+  originalVersionId: string;
+  pdf: { versionId: string; fileId: string; fileName: string; version: number; mimeType: string; downloadUrl: string };
+  confirmedBy: string;
+  confirmedAt: string;
+};
+
 /** Normalized crop coordinates in the displayed page, with a top-left origin. */
 export const sourceVisualRequestSchema = z.object({
   versionId: z.string().uuid(),

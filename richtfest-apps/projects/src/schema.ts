@@ -93,6 +93,15 @@ export const fileVersions = pgTable(
   }),
 );
 
+// Explicit full-export attestation, not engineering/content approval. Versions inherit no pairing.
+export const sourceRepresentations = pgTable("projects_source_representations", {
+  originalVersionId: uuid("original_version_id").primaryKey().references(() => fileVersions.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  pdfVersionId: uuid("pdf_version_id").notNull().references(() => fileVersions.id, { onDelete: "cascade" }),
+  confirmedBy: uuid("confirmed_by").notNull(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const sourceExtractions = pgTable("projects_source_extractions", {
   versionId: uuid("version_id").primaryKey().references(() => fileVersions.id, { onDelete: "cascade" }),
   tenantId: uuid("tenant_id").notNull(),

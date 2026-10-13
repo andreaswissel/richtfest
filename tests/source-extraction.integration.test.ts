@@ -181,7 +181,7 @@ run("upload models are persisted once, IFC bypasses AI, and source claims remain
     await db.insert(projects).values({ id: projectId, tenantId, name: "Model test", createdBy: actorId });
     await db.insert(files).values({ id: ifcFile, tenantId, projectId, name: "declared.ifc", sourceType: "upload", createdBy: actorId });
     await db.insert(fileVersions).values({ id: ifcVersion, tenantId, fileId: ifcFile, version: 1, status: "ready", storageKey: ifcVersion, mimeType: "application/octet-stream", createdBy: actorId });
-    for (const migration of ["0026_source_extraction", "0027_source_model"]) await pool.query(await Bun.file(new URL(`../richtfest-os/apps/api/drizzle/${migration}.sql`, import.meta.url)).text());
+    for (const migration of ["0026_source_extraction", "0027_source_model", "0037_source_representations"]) await pool.query(await Bun.file(new URL(`../richtfest-os/apps/api/drizzle/${migration}.sql`, import.meta.url)).text());
     expect((await db.select().from(sourceModels)).map(row => row.versionId)).toEqual([ifcVersion]);
     originals.set(ifcVersion, Buffer.from(`ISO-10303-21;
 HEADER; FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1'); FILE_NAME('test.ifc','',(),(),'test','test',''); FILE_SCHEMA(('IFC4')); ENDSEC;
@@ -389,6 +389,103 @@ ENDSEC; END-ISO-10303-21;`));
       }
     }
     expect(await runSourceExtraction(d, signal)).toBe(false);
+  } finally {
+    server?.closeAllConnections(); server?.close();
+    await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();
+  }
+}, 30000);
+
+run("Affinity PDF links require confirmation and preserve exact revisions, access and evidence identity", async () => {
+  const admin = createDatabase(process.env.DATABASE_URL!);
+  const namespace = `pairing_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  await admin.pool.query(`create schema ${namespace}`);
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(url.toString());
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  let accessTenant = tenantId, deniedPermission = "", failAudit = false;
+  const audits: string[] = [];
+  let server: ReturnType<ReturnType<typeof express>["listen"]> | undefined;
+  try {
+    await pool.query("create table projects_files (like public.projects_files including all); create table projects_file_versions (like public.projects_file_versions including all); create table projects_projects (like public.projects_projects including all)");
+    await db.insert(projects).values({ id: projectId, tenantId, name: "Pairing test", createdBy: actorId });
+    for (const migration of ["0026_source_extraction", "0027_source_model", "0037_source_representations"])
+      await pool.query(await Bun.file(new URL(`../richtfest-os/apps/api/drizzle/${migration}.sql`, import.meta.url)).text());
+    const source = async (name: string, mimeType: string, scope = projectId, tenant = tenantId, status = "ready") => {
+      const fileId = crypto.randomUUID(), versionId = crypto.randomUUID();
+      await db.insert(files).values({ id: fileId, tenantId: tenant, projectId: scope, name, sourceType: "upload", createdBy: actorId });
+      await db.insert(fileVersions).values({ id: versionId, fileId, tenantId: tenant, version: 1, mimeType, status, storageKey: versionId, createdBy: actorId });
+      return { fileId, versionId };
+    };
+    const original = await source("report.afpub", "application/octet-stream");
+    const pdf = await source("matching-export.pdf", "application/pdf");
+    const replacement = await source("corrected-export.pdf", "application/pdf");
+    const foreign = await source("foreign.pdf", "application/pdf", projectId, crypto.randomUUID());
+    const otherProject = await source("other-project.pdf", "application/pdf", crypto.randomUUID());
+    const pending = await source("pending.pdf", "application/pdf", projectId, tenantId, "pending");
+    const notPdf = await source("deceptive.pdf", "text/plain");
+    await db.insert(sourceExtractions).values({ versionId: pdf.versionId, tenantId });
+    await runSourceExtraction({ db, audit: async () => {}, reportError: () => {}, fileStorage: {
+      read: async () => (async function* () { yield pdfFixture(); })(),
+    } }, new AbortController().signal);
+    const host = knowledgeDeps(db, { actor: { id: actorId, tenantId, permissions: new Set(["projects:read", "knowledge:read"]) } } as any);
+    const originalBefore: any = await host.resolveSource(projectId, { versionId: original.versionId });
+    const app = express(); app.use(express.json());
+    app.use("/api", createRouter(() => ({ db, tenantId: accessTenant, actorId,
+      requirePermission: (permission: string) => { if (permission === deniedPermission) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
+      audit: async (_tx: any, action: string) => { if (failAudit) throw new Error("Audit unavailable"); audits.push(action); },
+    }) as any));
+    app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? (error.name === "ZodError" ? 400 : 500)).json({ message: error.message }));
+    server = app.listen(0);
+    const base = `http://127.0.0.1:${(server.address() as any).port}/api/projects/${projectId}`;
+    const path = `${base}/source-versions/${original.versionId}/pdf-representation`;
+    const send = (body: unknown, method = "PUT", target = path) => fetch(target, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const body = { pdfVersionId: pdf.versionId, expectedPdfVersionId: null, confirmed: true };
+    const getOriginal = async () => (await (await fetch(`${base}/source-versions/${original.versionId}`)).json()).data;
+    expect((await send({ ...body, confirmed: false })).status).toBe(400);
+    for (const permission of ["projects:read", "projects:write"]) {
+      deniedPermission = permission; expect((await send(body)).status).toBe(403);
+    }
+    deniedPermission = "";
+    accessTenant = crypto.randomUUID(); expect((await send(body)).status).toBe(404); accessTenant = tenantId;
+    expect((await send(body, "PUT", path.replace(projectId, crypto.randomUUID()))).status).toBe(404);
+    for (const invalid of [foreign, otherProject, pending, notPdf])
+      expect((await send({ ...body, pdfVersionId: invalid.versionId })).status).toBe(404);
+    expect((await send({ ...body, pdfVersionId: original.versionId })).status).toBe(400);
+    expect((await send(body, "PUT", path.replace(original.versionId, pdf.versionId))).status).toBe(400);
+    failAudit = true; expect((await send(body)).status).toBe(500); failAudit = false;
+    expect((await getOriginal()).pdfRepresentation).toBeNull();
+    const versionsBefore = await db.select().from(fileVersions);
+    expect((await Promise.all([send(body), send(body)])).map(r => r.status).sort()).toEqual([200, 409]);
+    expect((await getOriginal()).pdfRepresentation).toMatchObject({ originalVersionId: original.versionId, pdf: { versionId: pdf.versionId, version: 1 }, confirmedBy: actorId });
+    expect(audits).toEqual(["projects.source.pdf_representation.confirmed"]);
+    expect(await db.select().from(fileVersions)).toEqual(versionsBefore);
+    const resolved: any = await host.resolveSource(projectId, { versionId: original.versionId });
+    expect(resolved.content).toEqual(originalBefore.content); // No silent substitution of PDF evidence.
+    expect(resolved.source.versionId).toBe(original.versionId);
+    const evidence: any = await host.resolveSource(projectId, { versionId: resolved.source.pdfRepresentation.pdf.versionId, pageStart: 8, pageEnd: 8 });
+    expect(evidence.source.versionId).toBe(pdf.versionId);
+    expect(evidence.content.text).toContain("Acoustic target AL24 thickness 240 mm");
+    expect(evidence.authority).toBe("unreviewed_source");
+    const newPdfId = crypto.randomUUID(), newOriginalId = crypto.randomUUID();
+    await db.insert(fileVersions).values({ id: newPdfId, fileId: pdf.fileId, tenantId, version: 2, status: "ready", mimeType: "application/pdf", createdBy: actorId });
+    const inventory = await host.listProjectSources(projectId);
+    expect(inventory.sources.map(s => s.versionId)).toContain(pdf.versionId); // Historical export remains discoverable.
+    expect(inventory.sources.map(s => s.versionId)).toContain(newPdfId);
+    expect((await getOriginal()).pdfRepresentation.pdf.versionId).toBe(pdf.versionId);
+    await db.insert(fileVersions).values({ id: newOriginalId, fileId: original.fileId, tenantId, version: 2, status: "ready", mimeType: "application/octet-stream", createdBy: actorId });
+    const latest = (await (await fetch(`${base}/files`)).json()).data.find((f: any) => f.id === original.fileId);
+    expect(latest).toMatchObject({ versionId: newOriginalId, pdfRepresentation: null });
+    const versions = (await (await fetch(`${base}/files/${original.fileId}/versions`)).json()).data;
+    expect(versions.find((v: any) => v.id === original.versionId).pdfRepresentation.pdf.versionId).toBe(pdf.versionId);
+    expect((await send({ ...body, pdfVersionId: replacement.versionId })).status).toBe(409);
+    expect((await send({ ...body, pdfVersionId: replacement.versionId, expectedPdfVersionId: pdf.versionId })).status).toBe(200);
+    expect((await send({ expectedPdfVersionId: pdf.versionId }, "DELETE")).status).toBe(409);
+    failAudit = true; expect((await send({ expectedPdfVersionId: replacement.versionId }, "DELETE")).status).toBe(500); failAudit = false;
+    expect((await getOriginal()).pdfRepresentation.pdf.versionId).toBe(replacement.versionId);
+    expect((await send({ expectedPdfVersionId: replacement.versionId }, "DELETE")).status).toBe(200);
+    expect((await getOriginal()).pdfRepresentation).toBeNull();
+    expect(audits).toEqual(["projects.source.pdf_representation.confirmed", "projects.source.pdf_representation.confirmed", "projects.source.pdf_representation.removed"]);
   } finally {
     server?.closeAllConnections(); server?.close();
     await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();

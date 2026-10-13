@@ -3,12 +3,13 @@ import crypto from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/shared";
-import { files, fileVersions, projectMembers, projects, sourceExtractions, sourceModels } from "./schema";
+import { files, fileVersions, projectMembers, projects, sourceExtractions, sourceModels, sourceRepresentations } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
 import { createLocationRouter } from "./location-router";
 import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
+import { readPdfRepresentations } from "./source-representations";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -258,8 +259,11 @@ export function createRouter(getDeps: GetDeps) {
     const latest = new Map<string, any>();
     for (const row of rows as any[])
       if (!latest.has(row.file.id)) latest.set(row.file.id, row);
+    const representations = await readPdfRepresentations(d.db, d.tenantId, projectId, [...latest.values()].map(row => row.version.id));
     return [...latest.values()].map((row: any) => ({
       ...row.file,
+      versionId: row.version.id,
+      pdfRepresentation: representations[row.version.id] ?? null,
       version: row.version.version,
       sizeBytes: row.version.sizeBytes,
       mimeType: row.version.mimeType,
@@ -328,6 +332,7 @@ export function createRouter(getDeps: GetDeps) {
             sourceMetadata: row.version.sourceMetadata,
             createdAt: row.version.createdAt,
             authority: "unreviewed_source",
+            pdfRepresentation: (await readPdfRepresentations(d.db, d.tenantId, projectId, [versionId]))[versionId] ?? null,
             downloadUrl: `/api/projects/${projectId}/files/${row.file.id}/versions/${row.version.version}/download`,
           }),
         );
@@ -336,6 +341,53 @@ export function createRouter(getDeps: GetDeps) {
       }
     },
   );
+  const representationPath = "/projects/:projectId/source-versions/:versionId/pdf-representation";
+  const failure = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
+  for (const method of ["put", "delete"] as const) {
+    router[method](representationPath, async (req, res, next) => {
+      try {
+        const d = getDeps(req);
+        d.requirePermission("projects:read");
+        d.requirePermission("projects:write");
+        const projectId = z.string().uuid().parse(req.params.projectId);
+        const versionId = z.string().uuid().parse(req.params.versionId);
+        const input = method === "put"
+          ? z.object({ pdfVersionId: z.string().uuid(), expectedPdfVersionId: z.string().uuid().nullable(), confirmed: z.literal(true) }).strict().parse(req.body)
+          : z.object({ expectedPdfVersionId: z.string().uuid() }).strict().parse(req.body);
+        const result = await d.db.transaction(async (tx: any) => {
+          // Serialize even the first link (where no representation row exists yet).
+          const [original] = await tx.select({ version: fileVersions, file: files }).from(fileVersions)
+            .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId), eq(files.projectId, projectId)))
+            .innerJoin(projects, and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId)))
+            .where(and(eq(fileVersions.id, versionId), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready")))
+            .for("update", { of: fileVersions });
+          if (!original) throw failure(404, "not_found", "Source version not found in project");
+          if (!/\.afpub$/i.test(original.file.name)) throw failure(400, "invalid_input", "Original source must be an .afpub file");
+          const where = and(eq(sourceRepresentations.originalVersionId, versionId), eq(sourceRepresentations.tenantId, d.tenantId));
+          const [current] = await tx.select().from(sourceRepresentations).where(where);
+          if ((current?.pdfVersionId ?? null) !== input.expectedPdfVersionId)
+            throw failure(409, "representation_conflict", "PDF representation changed; reload before confirming");
+          const pdfVersionId = "pdfVersionId" in input ? input.pdfVersionId : input.expectedPdfVersionId;
+          if (pdfVersionId === versionId) throw failure(400, "invalid_input", "A source cannot represent itself");
+          const [target] = await tx.select({ id: fileVersions.id }).from(fileVersions)
+            .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId), eq(files.projectId, projectId)))
+            .where(and(eq(fileVersions.id, pdfVersionId!), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready"), eq(fileVersions.mimeType, "application/pdf")));
+          if (!target) throw failure(404, "not_found", "Ready PDF version not found in project");
+          if (method === "delete") {
+            await tx.delete(sourceRepresentations).where(where);
+          } else {
+            const values = { originalVersionId: versionId, tenantId: d.tenantId, pdfVersionId: pdfVersionId!, confirmedBy: d.actorId, confirmedAt: new Date() };
+            await tx.insert(sourceRepresentations).values(values).onConflictDoUpdate({ target: sourceRepresentations.originalVersionId, set: values });
+          }
+          await d.audit(tx, method === "put" ? "projects.source.pdf_representation.confirmed" : "projects.source.pdf_representation.removed", "file_version", versionId,
+            { projectId, pdfVersionId, previousPdfVersionId: current?.pdfVersionId ?? null,
+              attestation: "matching_full_export_not_engineering_or_content_approval" });
+          return method === "delete" ? null : (await readPdfRepresentations(tx, d.tenantId, projectId, [versionId]))[versionId];
+        });
+        return send(res, 200, ok(result));
+      } catch (e) { return next(e); }
+    });
+  }
   router.post("/projects/:projectId/files", async (req, res, next) => {
     try {
       getDeps(req).requirePermission("projects:write");
@@ -744,20 +796,13 @@ export function createRouter(getDeps: GetDeps) {
             error: { code: "not_found" },
             message: "File not found",
           });
+        const versions = await d.db.select().from(fileVersions)
+          .where(and(eq(fileVersions.fileId, fileId), eq(fileVersions.tenantId, d.tenantId)));
+        const representations = await readPdfRepresentations(d.db, d.tenantId, projectId, versions.map((version: any) => version.id));
         return send(
           res,
           200,
-          ok(
-            await d.db
-              .select()
-              .from(fileVersions)
-              .where(
-                and(
-                  eq(fileVersions.fileId, fileId),
-                  eq(fileVersions.tenantId, d.tenantId),
-                ),
-              ),
-          ),
+          ok(versions.map((version: any) => ({ ...version, pdfRepresentation: representations[version.id] ?? null }))),
         );
       } catch (e) {
         return next(e);

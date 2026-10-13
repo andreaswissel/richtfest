@@ -8,6 +8,7 @@ import { fileStorage } from "./file-storage";
 export { fileStorage } from "./file-storage";
 import { readSourceEvidence } from "@richtfest/projects/source-model";
 import { extractSourceVisual } from "@richtfest/projects/source-text";
+import { readPdfRepresentations } from "@richtfest/projects/source-representations";
 import { sourceVisualRequestSchema } from "@richtfest/shared";
 import { searchReviewedComponents } from "@richtfest/components/queries";
 import { componentsDeps } from "./components-host";
@@ -223,9 +224,21 @@ export const knowledgeDeps = (
         version: number;
         mimeType: string;
       }[];
+      const representations = await readPdfRepresentations(db, actor.tenantId, projectId,
+        rows.slice(0, 100).filter(row => /\.afpub$/i.test(row.name)).map(row => row.versionId));
+      // Include pinned historical PDFs as selectable evidence, not just their
+      // latest revisions. The native source remains a distinct citation target.
+      const sources = [...new Map(rows.slice(0, 100).flatMap(row => {
+        const pdfRepresentation = representations[row.versionId];
+        return pdfRepresentation ? [{ ...row, pdfRepresentation }, {
+          fileId: pdfRepresentation.pdf.fileId, name: pdfRepresentation.pdf.fileName,
+          versionId: pdfRepresentation.pdf.versionId, version: pdfRepresentation.pdf.version,
+          mimeType: pdfRepresentation.pdf.mimeType,
+        }] : [row];
+      }).map(row => [row.versionId, row])).values()];
       return {
-        sources: rows.slice(0, 100),
-        truncated: rows.length > 100,
+        sources: sources.slice(0, 100),
+        truncated: rows.length > 100 || sources.length > 100,
         authority: "unreviewed_source_inventory",
       };
     },
@@ -292,9 +305,11 @@ export const knowledgeDeps = (
       const selected = input.versionId ? rows[0] : latest[0];
       const { storageKey, ...source } = selected;
       const content = await readSourceEvidence(db, actor.tenantId, source.versionId, { ...input, name: source.name, mimeType: source.mimeType ?? "" });
+      const pdfRepresentation = /\.afpub$/i.test(source.name)
+        ? (await readPdfRepresentations(db, actor.tenantId, projectId, [source.versionId]))[source.versionId] ?? null : null;
       return {
         status: "resolved",
-        source,
+        source: { ...source, pdfRepresentation },
         content,
         selection: input.versionId ? "exact_version" : "latest_uploaded",
         authority: "unreviewed_source",

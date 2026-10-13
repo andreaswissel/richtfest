@@ -235,6 +235,7 @@ export type ProjectSourceInventory = {
     versionId: string;
     version: number;
     mimeType: string;
+    pdfRepresentation?: import("@richtfest/shared").SourcePdfRepresentation;
   }[];
   truncated: boolean;
   authority: "unreviewed_source_inventory";

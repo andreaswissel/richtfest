@@ -40,6 +40,18 @@ export function AgentSourcePicker({
           <NativeSelect
             value=""
             onChange={(e) => {
+              if (e.target.value.startsWith("pdf:")) {
+                const original = list(versions.data).find(
+                  (v) => `pdf:${v.id}` === e.target.value,
+                );
+                const pdf = original?.pdfRepresentation?.pdf;
+                if (pdf)
+                  onSelect({
+                    id: pdf.versionId,
+                    label: `${pdf.fileName} · ${pdf.version}`,
+                  });
+                return;
+              }
               const version = list(versions.data).find(
                 (v) => v.id === e.target.value,
               );
@@ -59,6 +71,23 @@ export function AgentSourcePicker({
                 {v.version}
               </option>
             ))}
+            {list(versions.data)
+              .filter(
+                (v) =>
+                  v.pdfRepresentation &&
+                  /\.afpub$/i.test(
+                    list(files.data, "files").find((f) => f.id === fileId)
+                      ?.name || "",
+                  ),
+              )
+              .map((v) => (
+                <option key={`pdf:${v.id}`} value={`pdf:${v.id}`}>
+                  {t("affinityAddPdfEvidence")} ·{" "}
+                  {v.pdfRepresentation.pdf.fileName} · {t("version")}{" "}
+                  {v.pdfRepresentation.pdf.version} (
+                  {t("affinityOriginalRevision")} {v.version})
+                </option>
+              ))}
           </NativeSelect>
         </Field>
       )}

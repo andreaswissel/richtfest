@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Affinity originals can now be linked to a confirmed full PDF export at exact revisions. Agents can select and cite that PDF without confusing it with a cover preview; new revisions never inherit links or approval. Stale historical attempt records were reconciled without deleting run history or inventing missing usage.
+
 - Project agents can inspect exact source pages and crops, index documents in smaller batches, and draft independent report sections in parallel. Failed source processing can be recovered without re-uploading or changing versions, citations or reviews. Processing diagnostics and retry checkpoints preserve clear limits; visual observations remain unreviewed.
 
 - Project agents now default to Suggest: Jev checks the mode on Send, with Chat as the safe fallback for search and questions. Team and Report recommendations require Apply and Send; explicit modes skip the check, and typing never triggers paid inference. Report creation requires a template and selected sources. Opted-in Jev knowledge ranking also works in direct Chat runs.

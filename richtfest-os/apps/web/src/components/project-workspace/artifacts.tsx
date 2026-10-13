@@ -5,6 +5,7 @@ import { api, list, uploadFile, type RecordData } from "../../api";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
+import { AffinityPdfPairing } from "./affinity-pdf-pairing";
 import {
   ArtifactSourceRegister,
   ArtifactExportActions,
@@ -301,6 +302,13 @@ export function ArtifactPanel({
                       {t("workspaceOpenOriginal")} · {version.version}
                     </a>
                   </Button>
+                  {isAffinityPublisher && version.status === "ready" && (
+                    <AffinityPdfPairing
+                      key={version.id}
+                      projectId={projectId}
+                      version={version}
+                    />
+                  )}
                   {isAffinityPublisher ? (
                     <AffinityPublisherPreview
                       key={version.id}
@@ -328,7 +336,7 @@ export function ArtifactPanel({
                   ) : (
                     <Callout>{t("workspaceUnsupportedPreview")}</Callout>
                   )}
-                  <p className="muted text-ui-xs">
+                  <p className="muted text-ui-xs break-all">
                     {t("workspaceUnreviewedSource")} ·{" "}
                     {version.checksum || t("workspaceChecksumUnavailable")}
                   </p>
@@ -556,7 +564,10 @@ export function ArtifactPanel({
       }).slice(1),
     );
   return (
-    <aside className="project-artifacts" aria-label={t("workspaceThreadResources")}>
+    <aside
+      className="project-artifacts"
+      aria-label={t("workspaceThreadResources")}
+    >
       <nav
         className="workspace-view-links thread-resource-tabs"
         aria-label={t("workspaceThreadResources")}
