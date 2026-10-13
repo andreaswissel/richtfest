@@ -1,5 +1,11 @@
-import { useState } from "react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { useState, type ReactNode } from "react";
+import {
+  Link,
+  Navigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { formatProjectAddress } from "@richtfest/shared";
 import { api, list } from "../api";
@@ -94,6 +100,21 @@ export function ProjectWorkspace() {
     t = useT(),
     [params, setParams] = useSearchParams();
   const view = params.get("view") || "workspace";
+  const workspaceNavigation = useOutletContext<
+    { workspaceNavigation: ReactNode } | undefined
+  >()?.workspaceNavigation;
+  const mobilePanel =
+    ["panel", "artifact", "file", "sourceVersion"].some((key) =>
+      params.has(key),
+    ) &&
+    !params.has("agentRun") &&
+    !params.has("message")
+      ? "resources"
+      : "conversation";
+  const resourcesParams = new URLSearchParams(params);
+  resourcesParams.set("panel", params.get("panel") || "artifacts");
+  resourcesParams.delete("agentRun");
+  resourcesParams.delete("message");
   const [editingDetails, setEditingDetails] = useState(false);
   const [initialMessage, setInitialMessage] = useState<string>();
   const [initialMessageDraft, setInitialMessageDraft] = useState("");
@@ -132,6 +153,7 @@ export function ProjectWorkspace() {
   const create = useWrite("/knowledge/conversations", (data) => {
     const next = new URLSearchParams(params);
     next.set("conversation", data.id);
+    next.delete("panel");
     next.delete("message");
     next.delete("agentRun");
     for (const key of ["artifact", "revision", "file", "sourceVersion", "page"])
@@ -150,6 +172,32 @@ export function ProjectWorkspace() {
   const [width, setWidth] = useState(38);
   const details = project.data?.project || project.data || {};
   const title = details.name || t("project");
+  const projectNavigation = (
+    <nav className="workspace-view-links" aria-label={t("projectDetails")}>
+      {[
+        "workspace",
+        "location",
+        "details",
+        "sources",
+        "knowledge",
+        "analytics",
+      ].map((key) => (
+        <Link
+          key={key}
+          aria-current={view === key ? "page" : undefined}
+          to={`/projects/${id}${key === "workspace" ? (selected ? `?conversation=${selected.id}` : "") : `?view=${key}`}`}
+        >
+          {key === "workspace"
+            ? t("workspaceConversation")
+            : key === "location"
+              ? t("locationEditor")
+              : key === "details"
+                ? t("projectDetails")
+                : t(key as "sources")}
+        </Link>
+      ))}
+    </nav>
+  );
   if (view === "sharedWork") {
     const next = new URLSearchParams(params);
     next.delete("view");
@@ -176,30 +224,7 @@ export function ProjectWorkspace() {
           )
         }
       />
-      <nav className="workspace-view-links" aria-label={t("projectDetails")}>
-        {[
-          "workspace",
-          "location",
-          "details",
-          "sources",
-          "knowledge",
-          "analytics",
-        ].map((key) => (
-          <Link
-            key={key}
-            aria-current={view === key ? "page" : undefined}
-            to={`/projects/${id}${key === "workspace" ? "" : `?view=${key}`}`}
-          >
-            {key === "workspace"
-              ? t("workspaceConversation")
-              : key === "location"
-                ? t("locationEditor")
-                : key === "details"
-                  ? t("projectDetails")
-                  : t(key as "sources")}
-          </Link>
-        ))}
-      </nav>
+      {projectNavigation}
       <LoadState query={project} />
       {view === "location" && project.isSuccess && (
         <LocationMode projectId={id!} address={details} />
@@ -214,6 +239,38 @@ export function ProjectWorkspace() {
             <div className="project-thread-layout">
               <ThreadRail
                 projectId={id!}
+                mobileMenu={{
+                  title,
+                  subtitle:
+                    mobilePanel === "resources"
+                      ? t("workspaceResources")
+                      : selected?.title || t("workspaceConversation"),
+                  navigation: (
+                    <>
+                      <section>
+                        <div className="flex items-center justify-between gap-stack">
+                          <h2>{t("project")}</h2>
+                          <Badge>{projectStatusLabel(details.status, t)}</Badge>
+                        </div>
+                        {projectNavigation}
+                        <nav aria-label={t("workspaceResources")}>
+                          <Link
+                            to={`?${resourcesParams}`}
+                            aria-current={
+                              mobilePanel === "resources" ? "page" : undefined
+                            }
+                          >
+                            {t("workspaceResources")}
+                          </Link>
+                        </nav>
+                      </section>
+                      <section>
+                        <h2>{t("home")}</h2>
+                        {workspaceNavigation}
+                      </section>
+                    </>
+                  ),
+                }}
                 conversations={conversations}
                 selectedId={selected?.id}
                 creating={create.isPending}
@@ -256,6 +313,7 @@ export function ProjectWorkspace() {
                   ))}
                 <div
                   className="project-workspace-grid"
+                  data-mobile-panel={mobilePanel}
                   style={{
                     gridTemplateColumns: `minmax(0,${100 - width}fr) 8px minmax(0,${width}fr)`,
                   }}
@@ -318,6 +376,7 @@ export function ProjectWorkspace() {
                         <div className="workspace-composer-shell">
                           <div className="workspace-composer-input">
                             <Textarea
+                              rows={1}
                               value={initialMessageDraft}
                               required
                               disabled={

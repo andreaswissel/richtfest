@@ -27,6 +27,7 @@ export async function testThreadArchive() {
   let save = Promise.resolve();
   let refresh = Promise.resolve();
   let rejectSave = false;
+  let resourcesOpened = false;
   const waitFor = async (condition: () => boolean, message: string) => {
     const deadline = Date.now() + 2000;
     while (!condition()) {
@@ -70,6 +71,19 @@ export async function testThreadArchive() {
         selectedId={conversation.id}
         conversations={workspace.data.conversations}
         onCreate={() => {}}
+        mobileMenu={{
+          title: "Planning project",
+          subtitle: conversation.title,
+          navigation: (
+            <button
+              onClick={() => {
+                resourcesOpened = true;
+              }}
+            >
+              Resources
+            </button>
+          ),
+        }}
       />
     );
   }
@@ -83,7 +97,11 @@ export async function testThreadArchive() {
     flushSync(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <MemoryRouter>
+          <MemoryRouter
+            initialEntries={[
+              "/?panel=documents&sourceVersion=prior&message=old",
+            ]}
+          >
             <Workspace />
           </MemoryRouter>
         </QueryClientProvider>,
@@ -132,7 +150,59 @@ export async function testThreadArchive() {
       throw new Error(
         "Failed save must preserve the active thread and allow retry",
       );
-    return "PASS: archive and restore wait for save, not slow refreshes; failed save preserves thread and permits retry";
+    const trigger = host.querySelector<HTMLButtonElement>(
+      ".workspace-mobile-header button",
+    )!;
+    const menu = () =>
+      document.querySelector<HTMLElement>(".workspace-navigation-dialog");
+    trigger.click();
+    await waitFor(() => Boolean(menu()), "Navigation must open");
+    const thread =
+      menu()!.querySelector<HTMLAnchorElement>(".thread-rail-link")!;
+    if (
+      thread.getAttribute("href") !==
+      "/projects/archive-project?conversation=archive-test"
+    )
+      throw new Error("Mobile thread navigation must preserve real links");
+    menu()!.querySelector<HTMLButtonElement>(".thread-rail-action")!.click();
+    await waitFor(
+      () =>
+        Boolean(document.querySelector('[data-slot="dialog-content"] input')),
+      "Rename must open from navigation",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await waitFor(
+      () => !document.querySelector('[data-slot="dialog-content"] input'),
+      "Escape must close rename",
+    );
+    if (!menu()) throw new Error("Closing rename must retain navigation");
+    thread.click();
+    await waitFor(() => !menu(), "Choosing a thread must close navigation");
+    trigger.click();
+    await waitFor(() => Boolean(menu()), "Navigation must reopen");
+    menu()!
+      .querySelector<HTMLButtonElement>(".workspace-navigation-links button")!
+      .click();
+    await waitFor(() => !menu(), "Choosing Resources must close navigation");
+    if (!resourcesOpened)
+      throw new Error(
+        "Closing navigation must not swallow the resource action",
+      );
+    trigger.click();
+    await waitFor(() => Boolean(menu()), "Navigation must reopen for Escape");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await waitFor(() => !menu(), "Escape must dismiss navigation");
+    await waitFor(
+      () => document.activeElement === trigger,
+      "Escape must restore focus to the hamburger",
+    );
+    return "PASS: archive/restore and failed saves; mobile thread links, nested rename, resource selection, Escape and focus return";
   } finally {
     releaseSave();
     releaseRefresh();

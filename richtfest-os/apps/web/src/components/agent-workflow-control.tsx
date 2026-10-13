@@ -113,9 +113,11 @@ export function AgentWorkflowControl({
   supervisorEnabled,
   steering,
   decision,
+  presentation = "all",
 }: WorkflowContext & {
   onChange: (value: WorkflowSelection) => void;
   decision: ReturnType<typeof useWorkflowDecision>;
+  presentation?: "all" | "settings" | "recommendation";
 }) {
   const t = useT();
   const recommendation =
@@ -128,7 +130,7 @@ export function AgentWorkflowControl({
       supervisorEnabled);
   return (
     <div className="flex flex-wrap items-end gap-stack">
-      {!steering && (
+      {!steering && presentation !== "recommendation" && (
         <Field label={t("agentWorkflowMode")}>
           <Segmented
             items={[
@@ -156,59 +158,72 @@ export function AgentWorkflowControl({
           />
         </Field>
       )}
-      <Button
-        type="button"
-        variant="outline"
-        disabled={steering || !goal.trim() || decision.isPending}
-        onClick={() => void decision.request()}
-      >
-        {t(decision.isPending ? "agentCheckingMode" : "agentSuggestMode")}
-      </Button>
-      {steering ? (
-        <Callout>{t("agentSteeringMode")}</Callout>
-      ) : (
-        <>
-          {value.mode === "suggest" && (
-            <span className="text-ui-xs text-muted-foreground">
-              {t("agentSuggestDefaultHint")}
-            </span>
-          )}
-          {["team", "report"].includes(value.mode) && !supervisorEnabled && (
-            <Callout>{t("agentTeamUnavailable")}</Callout>
-          )}
-          {value.mode === "report" && !sourceVersionIds.length && (
-            <Callout>{t("agentReportAutomaticEvidence")}</Callout>
-          )}
-          {(decision.error || (decision.result && !actionable)) && (
-            <Callout>{t("agentSuggestionUnavailable")}</Callout>
-          )}
-          {actionable && (
-            <Callout>
-              {t("agentSuggestedMode")} ·{" "}
-              {t(
-                recommendation === "chat"
-                  ? "agentModeChat"
-                  : recommendation === "team"
-                    ? "agentModeTeam"
-                    : "agentModeReport",
-              )}{" "}
-              <Button
-                type="button"
-                variant="link"
-                onClick={() =>
-                  onChange(
-                    recommendation === "report"
-                      ? { mode: "report" }
-                      : { mode: recommendation as "chat" | "team" },
-                  )
-                }
-              >
-                {t("agentApplyMode")}
-              </Button>
-            </Callout>
-          )}
-        </>
+      {presentation === "all" && (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={steering || !goal.trim() || decision.isPending}
+          onClick={() => void decision.request()}
+        >
+          {t(decision.isPending ? "agentCheckingMode" : "agentSuggestMode")}
+        </Button>
       )}
+      {presentation !== "settings" &&
+        (steering ? (
+          <Callout>{t("agentSteeringMode")}</Callout>
+        ) : (
+          <>
+            {value.mode === "suggest" && presentation === "all" && (
+              <span className="text-ui-xs text-muted-foreground">
+                {t("agentSuggestDefaultHint")}
+              </span>
+            )}
+            {["team", "report"].includes(value.mode) && !supervisorEnabled && (
+              <Callout>{t("agentTeamUnavailable")}</Callout>
+            )}
+            {value.mode === "report" && !sourceVersionIds.length && (
+              <Callout>{t("agentReportAutomaticEvidence")}</Callout>
+            )}
+            {(decision.error || (decision.result && !actionable)) && (
+              <Callout>{t("agentSuggestionUnavailable")}</Callout>
+            )}
+            {actionable && (
+              <Callout>
+                {t("agentSuggestedMode")} ·{" "}
+                {t(
+                  recommendation === "chat"
+                    ? "agentModeChat"
+                    : recommendation === "team"
+                      ? "agentModeTeam"
+                      : "agentModeReport",
+                )}{" "}
+                <Button
+                  type="button"
+                  variant="link"
+                  onClick={() =>
+                    onChange(
+                      recommendation === "report"
+                        ? { mode: "report" }
+                        : { mode: recommendation as "chat" | "team" },
+                    )
+                  }
+                >
+                  {t("agentApplyMode")}
+                </Button>
+                {presentation === "recommendation" &&
+                  recommendation !== "chat" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => onChange({ mode: "chat" })}
+                    >
+                      {t("agentUseChat")}
+                    </Button>
+                  )}
+              </Callout>
+            )}
+          </>
+        ))}
     </div>
   );
 }

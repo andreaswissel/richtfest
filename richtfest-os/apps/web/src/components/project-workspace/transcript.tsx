@@ -15,6 +15,14 @@ import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+  DialogTrigger,
+} from "../ui/dialog";
 import { AgentEffortControl } from "../agent-effort-control";
 import {
   AgentWorkflowControl,
@@ -29,7 +37,9 @@ import {
   ArrowUpRight,
   Check,
   Copy,
+  Paperclip,
   Search,
+  Settings2,
   Square,
   X,
 } from "lucide-react";
@@ -280,6 +290,7 @@ function Conversation({
     mode: "suggest",
   });
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [attachmentLabels, setAttachmentLabels] = useState<
     Record<string, string>
@@ -440,6 +451,16 @@ function Conversation({
     steering: !!activeSupervisorRun,
   };
   const workflowDecision = useWorkflowDecision(workflowContext);
+  const selectSource = (source: { id: string; label: string }) => {
+    setAttachmentLabels((current) => ({
+      ...current,
+      [source.id]: source.label,
+    }));
+    setAttachments((current) =>
+      current.includes(source.id) ? current : [...current, source.id],
+    );
+    setPickerOpen(false);
+  };
   const [searchOpen, setSearchOpen] = useState(false);
   const [ready, setReady] = useState(false);
   const hydrated = useRef(false),
@@ -745,7 +766,7 @@ function Conversation({
     );
     if (meaningful) reader.current.meaningfulMessageId = meaningful;
     const last = visibility.visibleMessageIds
-      .filter((id) => !id.startsWith("run-"))
+      .filter((id) => persistedMessages.some((message) => message.id === id))
       .at(-1);
     if (following && last) reader.current.lastReadMessageId = last;
     const timer = setTimeout(
@@ -965,7 +986,51 @@ function Conversation({
                   </Message>
                 </MessageScrollerItem>
               ))}
-            {!displayMessages.length && (
+            {(readiness.error ||
+              (readiness.data && !readiness.data.executionAvailable)) && (
+              <MessageScrollerItem messageId="execution-unavailable">
+                <Message>
+                  <MessageContent>
+                    <Callout tone="error">
+                      {readiness.error ? (
+                        readiness.error.message
+                      ) : (
+                        <>
+                          {send.isSuccess && (
+                            <p>{t("workspaceMessageSavedNoReply")}</p>
+                          )}
+                          {t("workspaceNoExecution")}{" "}
+                          <Link
+                            className="underline underline-offset-2"
+                            to="/settings"
+                          >
+                            {t("aiConnections")}
+                          </Link>
+                        </>
+                      )}
+                    </Callout>
+                  </MessageContent>
+                </Message>
+              </MessageScrollerItem>
+            )}
+            {(workflowDecision.result || workflowDecision.error) && (
+              <MessageScrollerItem messageId="workflow-recommendation">
+                <Message>
+                  <MessageContent>
+                    <AgentWorkflowControl
+                      {...workflowContext}
+                      presentation="recommendation"
+                      decision={workflowDecision}
+                      onChange={(next) => {
+                        setWorkflow(next);
+                        composer.current?.focus();
+                      }}
+                    />
+                  </MessageContent>
+                </Message>
+              </MessageScrollerItem>
+            )}
+            {!displayMessages.length && !workflowDecision.result && (
               <Marker>
                 <MarkerContent>{t("noMessages")}</MarkerContent>
               </Marker>
@@ -1008,39 +1073,11 @@ function Conversation({
                 ? await workflowDecision.resolve()
                 : ({ mode: "chat" } as AgentWorkflowRequest);
             if (resolved) send.mutate({ ...submitted, workflow: resolved });
+            else if (composer.current?.isConnected) resumeFollowing();
           }
         }}
       >
         <div className="workspace-composer-shell">
-          <AgentWorkflowControl
-            {...workflowContext}
-            onChange={setWorkflow}
-            decision={workflowDecision}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setPickerOpen(!pickerOpen)}
-          >
-            {t("addSourceVersion")}
-          </Button>
-          {pickerOpen && (
-            <AgentSourcePicker
-              projectId={projectId}
-              onSelect={(source) => {
-                setAttachmentLabels((current) => ({
-                  ...current,
-                  [source.id]: source.label,
-                }));
-                setAttachments((current) =>
-                  current.includes(source.id)
-                    ? current
-                    : [...current, source.id],
-                );
-              }}
-            />
-          )}
           {reply && (
             <div className="workspace-composer-context">
               <span>
@@ -1102,6 +1139,7 @@ function Conversation({
           <div className="workspace-composer-input">
             <Textarea
               ref={composer}
+              rows={1}
               value={draft}
               required
               aria-label={t("message")}
@@ -1127,21 +1165,102 @@ function Conversation({
             />
           </div>
           <div className="workspace-composer-controls">
-            <AgentEffortControl
-              enabled
-              presets={readiness.data?.supervisor?.presets}
-              value={selectedEffort}
-              onChange={setEffort}
-            />
+            <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("addSourceVersion")}
+                  title={t("addSourceVersion")}
+                >
+                  <Paperclip aria-hidden="true" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent
+                aria-describedby={undefined}
+                showCloseButton={false}
+                className="workspace-composer-dialog"
+              >
+                <DialogTitle>{t("addSourceVersion")}</DialogTitle>
+                <AgentSourcePicker
+                  projectId={projectId}
+                  onSelect={selectSource}
+                />
+                <DialogClose asChild>
+                  <Button type="button" variant="outline">
+                    {t("close")}
+                  </Button>
+                </DialogClose>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={optionsOpen} onOpenChange={setOptionsOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size={workflow.mode === "suggest" ? "icon" : "sm"}
+                  aria-label={t("workspaceChatOptions")}
+                  title={t("workspaceChatOptions")}
+                >
+                  <Settings2 aria-hidden="true" />
+                  {workflow.mode !== "suggest" &&
+                    t(
+                      workflow.mode === "chat"
+                        ? "agentModeChat"
+                        : workflow.mode === "team"
+                          ? "agentModeTeam"
+                          : "agentModeReport",
+                    )}
+                </Button>
+              </DialogTrigger>
+              <DialogContent
+                showCloseButton={false}
+                className="workspace-composer-dialog"
+              >
+                <DialogTitle>{t("workspaceChatOptions")}</DialogTitle>
+                <DialogDescription>
+                  {t("agentSuggestDefaultHint")}
+                </DialogDescription>
+                {activeSupervisorRun ? (
+                  <Callout>{t("agentSteeringMode")}</Callout>
+                ) : (
+                  <AgentWorkflowControl
+                    {...workflowContext}
+                    presentation="settings"
+                    decision={workflowDecision}
+                    onChange={setWorkflow}
+                  />
+                )}
+                <AgentEffortControl
+                  enabled
+                  presets={readiness.data?.supervisor?.presets}
+                  value={selectedEffort}
+                  onChange={setEffort}
+                />
+                {workflow.mode === "report" &&
+                  !activeSupervisorRun &&
+                  !attachments.length && (
+                    <Callout>{t("agentReportAutomaticEvidence")}</Callout>
+                  )}
+                <DialogClose asChild>
+                  <Button type="button" variant="outline">
+                    {t("close")}
+                  </Button>
+                </DialogClose>
+              </DialogContent>
+            </Dialog>
             <span
               className={`workspace-composer-status text-ui-xs${save.error ? " workspace-composer-error" : " muted"}`}
               aria-live={save.error ? "assertive" : "polite"}
             >
-              {save.error
-                ? t("workspaceDraftError")
-                : save.isPending
-                  ? t("workspaceSaving")
-                  : ""}
+              {workflowDecision.isPending
+                ? t("agentCheckingMode")
+                : save.error
+                  ? t("workspaceDraftError")
+                  : save.isPending
+                    ? t("workspaceSaving")
+                    : ""}
             </span>
             {activeRun && !draft.trim() ? (
               <Button
@@ -1180,18 +1299,6 @@ function Conversation({
             )}
           </div>
         </div>
-        {readiness.error && (
-          <Callout tone="error">{readiness.error.message}</Callout>
-        )}
-        {readiness.data && !readiness.data.executionAvailable && (
-          <Callout tone="error">
-            {send.isSuccess && <p>{t("workspaceMessageSavedNoReply")}</p>}
-            {t("workspaceNoExecution")}{" "}
-            <Link className="underline underline-offset-2" to="/settings">
-              {t("aiConnections")}
-            </Link>
-          </Callout>
-        )}
         {startRun.error && (
           <Callout tone="error">
             {startRun.error.message}

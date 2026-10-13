@@ -30,7 +30,14 @@ export async function mountWorkflowFixture(kind: "chat" | "goal" = "chat") {
   const readiness = {
     executionAvailable: true,
     provider: "openai",
-    supervisor: { enabled: true, presets: [] },
+    supervisor: {
+      enabled: true,
+      presets: [
+        { effort: "low", configured: true },
+        { effort: "medium", configured: false },
+        { effort: "high", configured: true },
+      ],
+    },
   };
   client.setQueryData(["/agent/readiness"], readiness);
   client.setQueryData([path, "messages"], {
@@ -39,6 +46,7 @@ export async function mountWorkflowFixture(kind: "chat" | "goal" = "chat") {
   });
   const runs: any[] = [];
   const sent: any[] = [];
+  const reads: any[] = [];
   let calls = 0,
     choice = "chat",
     delay = 0,
@@ -74,7 +82,11 @@ export async function mountWorkflowFixture(kind: "chat" | "goal" = "chat") {
       }
       return Response.json({ data: { items: sent, nextCursor: null } });
     }
-    if (url === `/api${path}/read`) return Response.json({ data: {} });
+    if (url === `/api${path}/read`) {
+      const state = JSON.parse(String(options?.body));
+      reads.push(state);
+      return Response.json({ data: state });
+    }
     if (url === "/api/knowledge/runs") {
       const run = JSON.parse(String(options?.body));
       runs.push(run);
@@ -118,13 +130,30 @@ export async function mountWorkflowFixture(kind: "chat" | "goal" = "chat") {
   }
   const scope = () =>
     kind === "goal"
-      ? document.querySelector<HTMLElement>('[role="dialog"]')!
+      ? document.querySelector<HTMLElement>('[data-slot="dialog-content"]')!
       : host;
+  const options = async (open: boolean) => {
+    if (kind !== "chat") return scope();
+    if (open)
+      host
+        .querySelector<HTMLButtonElement>('[aria-label="Chat options"]')!
+        .click();
+    else
+      document
+        .querySelector<HTMLButtonElement>(
+          '.workspace-composer-dialog [data-slot="dialog-close"]',
+        )!
+        .click();
+    await settle();
+    return document.querySelector<HTMLElement>(".workspace-composer-dialog")!;
+  };
   return {
     host,
     runs,
     sent,
+    reads,
     scope,
+    options,
     calls: () => calls,
     response: (next: string, ms = 0, error = false) => {
       choice = next;
@@ -141,10 +170,12 @@ export async function mountWorkflowFixture(kind: "chat" | "goal" = "chat") {
       await settle();
     },
     async mode(value: string) {
-      [...scope().querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+      const controls = await options(true);
+      [...controls.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
         .find((b) => b.textContent === value)!
         .click();
       await settle();
+      if (kind === "chat") await options(false);
     },
     async submit() {
       scope().querySelector("form")!.requestSubmit();
@@ -178,11 +209,30 @@ export async function testWorkflowDefault() {
     ] as const) {
       const f = await mountWorkflowFixture(kind);
       try {
+        if (kind === "chat") {
+          assert(
+            !f.scope().querySelector('[role="radio"]'),
+            "Default composer must hide mode controls",
+          );
+          assert(
+            !f.scope().querySelector("select"),
+            "Default composer must hide effort controls",
+          );
+        }
+        const controls = await f.options(true);
         assert(
-          f.scope().querySelector('[role="radio"][aria-checked="true"]')
+          controls.querySelector('[role="radio"][aria-checked="true"]')
             ?.textContent === "Suggest",
           `${kind}: Suggest must default`,
         );
+        if (kind === "chat") {
+          assert(
+            controls.querySelector<HTMLSelectElement>("select")?.value ===
+              "low",
+            "Use the first configured effort when Medium is unavailable",
+          );
+          await f.options(false);
+        }
         await f.fill("Find acoustic references");
         assert(f.calls() === 0, "Typing must not classify");
         f.response(
@@ -227,6 +277,22 @@ export async function testWorkflowDefault() {
             ...f.scope().querySelectorAll<HTMLButtonElement>("button"),
           ].find((b) => b.textContent === "Apply mode");
           assert(apply, "Escalation must offer Apply");
+          if (kind === "chat")
+            assert(
+              apply!.closest(".project-transcript"),
+              "Recommendation must appear in the conversation, not composer",
+            );
+          if (kind === "chat") {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            assert(
+              f.reads.length > 0 &&
+                f.reads.every(
+                  (state) =>
+                    !state.lastReadMessageId && !state.meaningfulMessageId,
+                ),
+              "An unsent suggestion must never become a saved message/reader target",
+            );
+          }
           apply!.click();
           await settle();
           assert(f.runs.length === 0, "Apply must not start execution");
@@ -237,10 +303,18 @@ export async function testWorkflowDefault() {
               "Explicit confirmation must use Team",
             );
           } else {
+            if (kind === "chat") {
+              assert(
+                !document.querySelector(".workspace-composer-dialog"),
+                "Report approval must not force template or source settings",
+              );
+            }
             await f.submit();
             assert(
-              f.runs.length === 1 && f.runs[0].workflow.mode === "report" &&
-                !f.runs[0].workflow.reportTemplate && f.runs[0].sourceVersionIds.length === 0,
+              f.runs.length === 1 &&
+                f.runs[0].workflow.mode === "report" &&
+                !f.runs[0].workflow.reportTemplate &&
+                f.runs[0].sourceVersionIds.length === 0,
               "Report must request automatic evidence and format selection",
             );
           }
@@ -259,5 +333,25 @@ export async function testWorkflowDefault() {
       }
     }
   }
-  return "PASS: 16 composer/modal scenarios; default, explicit override, confirmation, fallback, stale drafts and close fencing";
+  const f = await mountWorkflowFixture();
+  try {
+    await f.fill("Investigate the project");
+    f.response("team");
+    await f.submit();
+    const useChat = [
+      ...f.host.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Use Chat instead");
+    assert(useChat, "Team suggestion must offer a Chat alternative");
+    useChat!.click();
+    await settle();
+    assert(f.runs.length === 0, "Choosing Chat must not execute before Send");
+    await f.submit();
+    assert(
+      f.runs.length === 1 && f.runs[0].workflow.mode === "chat",
+      "Declining escalation must submit as Chat",
+    );
+  } finally {
+    await f.close();
+  }
+  return "PASS: 17 composer/modal scenarios; compact defaults, inline recommendations, explicit override, confirmation, Chat alternative, fallback, stale drafts and close fencing";
 }

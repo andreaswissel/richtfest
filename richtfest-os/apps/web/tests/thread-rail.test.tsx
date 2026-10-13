@@ -39,9 +39,8 @@ test("rail keeps thread navigation, clears document selection, and exposes rever
   expect(html).toContain("Restore thread");
   expect(html).toContain("New thread");
   expect(html).not.toContain("sourceVersion=revision");
-  expect(html).toContain(
-    'href="/projects/p?panel=documents&amp;conversation=archived"',
-  );
+  expect(html).toContain('href="/projects/p?conversation=archived"');
+  expect(html).not.toContain("panel=documents");
   expect(html).not.toContain("Thread resources");
   expect(html).not.toContain("panel=tasks");
   expect(html).toContain('class="thread-rail-archived" open=""');

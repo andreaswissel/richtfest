@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProjectOpenUI, {
   library,
@@ -16,6 +16,7 @@ import { isPositiveFeedback } from "../src/components/project-workspace/richtfes
 import MarkdownContent from "../src/components/chat-markdown-content";
 import { ArtifactSourceRegister } from "../src/components/project-workspace/artifact-export";
 import { ProjectAnalytics } from "../src/components/project-workspace/analytics";
+import { ProjectWorkspace } from "../src/screens/project-workspace";
 import { formatSourceCitations } from "@richtfest/shared";
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 const conversationId = "550e8400-e29b-41d4-a716-446655440001";
@@ -169,6 +170,24 @@ describe("registered OpenUI boundary", () => {
   });
 });
 describe("workspace records and navigation", () => {
+  test("mobile deep links show resources, while thread and message targets show conversation", () => {
+    for (const [query, panel] of [
+      ["", "conversation"],
+      ["?panel=tasks", "resources"],
+      ["?artifact=report&revision=exact", "resources"],
+      ["?sourceVersion=exact&page=3", "resources"],
+      ["?panel=artifacts&message=target", "conversation"],
+      ["?panel=runs&agentRun=target", "conversation"],
+    ]) {
+      const html = render(
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectWorkspace />} />
+        </Routes>,
+        `/projects/${projectId}${query}`,
+      );
+      expect(html).toContain(`data-mobile-panel="${panel}"`);
+    }
+  });
   test("celebration recognizes short positive feedback in English and German", () => {
     for (const message of [
       "nice, that worked",
@@ -467,7 +486,7 @@ describe("workspace records and navigation", () => {
     expect(html).toContain(`agentRun=${runId}`);
     expect(html).not.toContain("No messages yet.");
   });
-  test("composer uses the first configured effort when medium is unavailable", () => {
+  test("composer keeps configured effort behind chat options", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,
       `/projects/${projectId}`,
@@ -486,8 +505,9 @@ describe("workspace records and navigation", () => {
         },
       },
     );
-    expect(html).toContain('value="low"');
-    expect(html).toContain("Preset effort");
+    expect(html).toContain('aria-label="Chat options"');
+    expect(html).not.toContain("Preset effort");
+    expect(html).not.toContain('role="radio"');
   });
   test("composer keeps provider selection in Settings", () => {
     const html = render(
@@ -509,11 +529,11 @@ describe("workspace records and navigation", () => {
     expect(html).not.toContain("OpenAI");
     expect(html).not.toContain("Anthropic");
     expect(html).not.toContain("Vercel AI Gateway");
-    expect(html).toContain("Preset effort");
+    expect(html).toContain('aria-label="Chat options"');
     expect(html).not.toContain('role="alert"');
     expect(html).not.toContain("Agent replies are unavailable");
   });
-  test("composer shows configured effort levels when optional supervisor is disabled", () => {
+  test("composer keeps chat options available when optional supervisor is disabled", () => {
     const html = render(
       <Transcript projectId={projectId} conversationId={conversationId} />,
       `/projects/${projectId}`,
@@ -530,7 +550,7 @@ describe("workspace records and navigation", () => {
         },
       },
     );
-    expect(html).toContain("Preset effort");
-    expect(html).toContain('value="medium"');
+    expect(html).toContain('aria-label="Chat options"');
+    expect(html).not.toContain("Preset effort");
   });
 });

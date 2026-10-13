@@ -57,6 +57,108 @@ export function App({ initializing = false }: { initializing?: boolean }) {
   )
     return <Login />;
   const user = sessionUser;
+  const workspaceNavigation = (
+    <>
+      <nav aria-label={t("home")}>
+        {routesManifest
+          .filter((r) =>
+            r.path === "/knowledge"
+              ? (session.data?.permissions || user?.permissions)?.includes(
+                  "knowledge:read",
+                )
+              : r.path === "/components"
+                ? (session.data?.permissions || user?.permissions)?.includes(
+                    "components:read",
+                  )
+                : true,
+          )
+          .map((r) => (
+            <NavLink
+              key={r.path}
+              end={r.path === "/"}
+              to={r.path}
+              onMouseEnter={() => {
+                if (!user?.id) return;
+                const path =
+                  r.path === "/"
+                    ? "/dashboard"
+                    : r.path === "/knowledge"
+                      ? "/knowledge/library?category=all&status=all&q=&page=0"
+                      : r.path === "/components"
+                        ? "/components?q=&category=&reviewStatus=&offset=0"
+                        : r.path === "/customers"
+                          ? "/crm/customers"
+                          : r.path === "/team"
+                            ? "/access/team"
+                            : r.path === "/settings"
+                              ? "/settings/ai-connections"
+                              : r.path === "/help"
+                                ? "/support"
+                                : r.path;
+                void queryClient.prefetchQuery({
+                  queryKey: [path],
+                  queryFn: () => api(path),
+                });
+              }}
+            >
+              <span className="nav-icon">
+                <r.icon aria-hidden="true" />
+              </span>
+              {t(r.key)}
+              <span className="nav-arrow">
+                <ArrowUpRight aria-hidden="true" size={14} />
+              </span>
+            </NavLink>
+          ))}
+        <a
+          href={
+            import.meta.env.DEV
+              ? `${location.protocol}//${location.hostname}:3000/docs/`
+              : "/docs/"
+          }
+        >
+          <span className="nav-icon">
+            <BookOpen aria-hidden="true" />
+          </span>
+          {t("docs")}
+          <span className="nav-arrow">
+            <ArrowUpRight aria-hidden="true" size={14} />
+          </span>
+        </a>
+      </nav>
+      <div className="sidebar-bottom">
+        {user?.id && <AppUpdateButton />}
+        {user?.id && (
+          <div className="user-row">
+            <Link
+              to="/settings/security"
+              className="flex min-w-0 items-center gap-2 text-inherit no-underline"
+            >
+              <span className="avatar">{user?.name?.slice(0, 1) || "R"}</span>
+              <span>
+                <strong>{user?.name}</strong>
+                <small>{user?.email}</small>
+              </span>
+            </Link>
+            <Button
+              variant="ghost"
+              size="icon"
+              title={t("signOut")}
+              aria-label={t("signOut")}
+              onClick={async () => {
+                const client = await getAuthClient();
+                authResult(await client.signOut());
+                queryClient.clear();
+                location.reload();
+              }}
+            >
+              <LogOut aria-hidden="true" size={16} />
+            </Button>
+          </div>
+        )}
+      </div>
+    </>
+  );
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -76,104 +178,7 @@ export function App({ initializing = false }: { initializing?: boolean }) {
           </div>
         </div>
         <div className="nav-label">{t("home")}</div>
-        <nav aria-label={t("home")}>
-          {routesManifest
-            .filter((r) =>
-              r.path === "/knowledge"
-                ? (session.data?.permissions || user?.permissions)?.includes(
-                    "knowledge:read",
-                  )
-                : r.path === "/components"
-                  ? (session.data?.permissions || user?.permissions)?.includes(
-                      "components:read",
-                    )
-                  : true,
-            )
-            .map((r) => (
-              <NavLink
-                key={r.path}
-                end={r.path === "/"}
-                to={r.path}
-                onMouseEnter={() => {
-                  if (!user?.id) return;
-                  const path =
-                    r.path === "/"
-                      ? "/dashboard"
-                      : r.path === "/knowledge"
-                        ? "/knowledge/library?category=all&status=all&q=&page=0"
-                        : r.path === "/components"
-                          ? "/components?q=&category=&reviewStatus=&offset=0"
-                          : r.path === "/customers"
-                            ? "/crm/customers"
-                            : r.path === "/team"
-                              ? "/access/team"
-                              : r.path === "/settings"
-                                ? "/settings/ai-connections"
-                                : r.path === "/help"
-                                  ? "/support"
-                                  : r.path;
-                  void queryClient.prefetchQuery({
-                    queryKey: [path],
-                    queryFn: () => api(path),
-                  });
-                }}
-              >
-                <span className="nav-icon">
-                  <r.icon aria-hidden="true" />
-                </span>
-                {t(r.key)}
-                <span className="nav-arrow">
-                  <ArrowUpRight aria-hidden="true" size={14} />
-                </span>
-              </NavLink>
-            ))}
-          <a
-            href={
-              import.meta.env.DEV
-                ? `${location.protocol}//${location.hostname}:3000/docs/`
-                : "/docs/"
-            }
-          >
-            <span className="nav-icon">
-              <BookOpen aria-hidden="true" />
-            </span>
-            {t("docs")}
-            <span className="nav-arrow">
-              <ArrowUpRight aria-hidden="true" size={14} />
-            </span>
-          </a>
-        </nav>
-        <div className="sidebar-bottom">
-          {user?.id && <AppUpdateButton />}
-          {user?.id && (
-            <div className="user-row">
-              <Link
-                to="/settings/security"
-                className="flex min-w-0 items-center gap-2 text-inherit no-underline"
-              >
-                <span className="avatar">{user?.name?.slice(0, 1) || "R"}</span>
-                <span>
-                  <strong>{user?.name}</strong>
-                  <small>{user?.email}</small>
-                </span>
-              </Link>
-              <Button
-                variant="ghost"
-                size="icon"
-                title={t("signOut")}
-                aria-label={t("signOut")}
-                onClick={async () => {
-                  const client = await getAuthClient();
-                  authResult(await client.signOut());
-                  queryClient.clear();
-                  location.reload();
-                }}
-              >
-                <LogOut aria-hidden="true" size={16} />
-              </Button>
-            </div>
-          )}
-        </div>
+        {workspaceNavigation}
       </aside>
       <div className="main-shell">
         <div className="topbar">
@@ -206,7 +211,7 @@ export function App({ initializing = false }: { initializing?: boolean }) {
               </div>
             </Page>
           ) : (
-            <Outlet />
+            <Outlet context={{ workspaceNavigation }} />
           )}
         </main>
       </div>

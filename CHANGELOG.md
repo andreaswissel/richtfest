@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Project chat now has a compact composer with attachments and optional effort/mode settings. Recommendations appear in the conversation and still require Apply then Send for Team or Report. Mobile chat puts threads, project sections, resources and workspace navigation into one hamburger menu, leaving room for the conversation. Agent execution is unchanged.
+
 - Agent calls now stop waiting when their deadline expires or cancellation is requested, even if the provider stream stays open. Deferred visual reads are recorded and continued within the existing revision allowance without redoing completed findings; any remaining inspection gaps stay explicit instead of being called unreadable sources.
 
 ## 2026-10-13

@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ChevronDown,
   ChevronRight,
+  Menu,
   MessageSquare,
   PencilLine,
   Plus,
   RotateCcw,
+  X,
 } from "lucide-react";
 import { api, type RecordData } from "../../api";
 import { useT } from "../../i18n";
@@ -22,6 +24,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
+  DialogClose,
 } from "../ui/dialog";
 import "./thread-rail.css";
 
@@ -32,6 +36,7 @@ export function ThreadRail({
   onCreate,
   creating = false,
   onArchived,
+  mobileMenu,
 }: {
   projectId: string;
   conversations: RecordData[];
@@ -39,11 +44,21 @@ export function ThreadRail({
   onCreate: () => void;
   creating?: boolean;
   onArchived?: (id: string, archived: boolean) => void;
+  mobileMenu?: { title: string; subtitle: string; navigation: ReactNode };
 }) {
   const t = useT();
   const queryClient = useQueryClient();
   const [params] = useSearchParams();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 850px)");
+    const closeOnDesktop = () => {
+      if (!media.matches) setMenuOpen(false);
+    };
+    media.addEventListener("change", closeOnDesktop);
+    return () => media.removeEventListener("change", closeOnDesktop);
+  }, []);
   const [editing, setEditing] = useState<RecordData | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const archive = useMutation({
@@ -117,6 +132,7 @@ export function ThreadRail({
     const next = new URLSearchParams(params);
     next.set("conversation", id);
     next.delete("view");
+    next.delete("panel");
     next.delete("agentRun");
     next.delete("message");
     for (const key of ["artifact", "revision", "file", "sourceVersion", "page"])
@@ -139,7 +155,10 @@ export function ThreadRail({
           title={titleFor(conversation)}
           to={hrefFor(conversation.id)}
           aria-current={isSelected ? "page" : undefined}
-          onClick={() => setMobileOpen(false)}
+          onClick={() => {
+            setMobileOpen(false);
+            setMenuOpen(false);
+          }}
         >
           <span className="thread-rail-title">{titleFor(conversation)}</span>
           {conversation.unreadCount > 0 && (
@@ -187,8 +206,110 @@ export function ThreadRail({
       </div>
     );
   };
+  const threadList = (
+    <>
+      <div className="thread-rail-header">
+        <h2>{t("sharedWorkThreads")}</h2>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          disabled={creating}
+          aria-label={t("threadRailNew")}
+          title={t("threadRailNew")}
+          onClick={() => {
+            onCreate();
+            setMenuOpen(false);
+            setMobileOpen(false);
+          }}
+        >
+          <Plus aria-hidden="true" />
+        </Button>
+      </div>
+      <nav className="thread-rail-list" aria-label={t("sharedWorkThreads")}>
+        {active.map(row)}
+        {!active.length && (
+          <p className="thread-rail-empty">{t("threadRailEmpty")}</p>
+        )}
+      </nav>
+      {archived.length > 0 && (
+        <details
+          className="thread-rail-archived"
+          open={
+            archived.some((conversation) => conversation.id === selectedId) ||
+            undefined
+          }
+        >
+          <summary>
+            <span>{t("sharedWorkArchived")}</span>
+            <Badge tone="neutral">{archived.length}</Badge>
+          </summary>
+          <nav
+            className="thread-rail-list"
+            aria-label={t("sharedWorkArchived")}
+          >
+            {archived.map(row)}
+          </nav>
+        </details>
+      )}
+      {archive.error && <Callout tone="error">{archive.error.message}</Callout>}
+    </>
+  );
   return (
-    <aside className="thread-rail" aria-label={t("sharedWorkThreads")}>
+    <aside
+      className={`thread-rail${mobileMenu ? " has-mobile-menu" : ""}`}
+      aria-label={t("sharedWorkThreads")}
+    >
+      {mobileMenu && (
+        <Dialog open={menuOpen} onOpenChange={setMenuOpen}>
+          <div className="workspace-mobile-header">
+            <DialogTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("workspaceOpenNavigation")}
+                title={t("workspaceOpenNavigation")}
+              >
+                <Menu aria-hidden="true" />
+              </Button>
+            </DialogTrigger>
+            <div className="workspace-mobile-context">
+              <strong title={mobileMenu.title}>{mobileMenu.title}</strong>
+              <span title={mobileMenu.subtitle}>{mobileMenu.subtitle}</span>
+            </div>
+          </div>
+          <DialogContent
+            className="workspace-navigation-dialog"
+            showCloseButton={false}
+            aria-describedby={undefined}
+          >
+            <DialogHeader>
+              <DialogTitle>{mobileMenu.title}</DialogTitle>
+              <DialogClose asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("close")}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              </DialogClose>
+            </DialogHeader>
+            <div className="workspace-navigation-threads">{threadList}</div>
+            <div
+              className="workspace-navigation-links"
+              onClick={(event) => {
+                if ((event.target as HTMLElement).closest("a,button"))
+                  setMenuOpen(false);
+              }}
+            >
+              {mobileMenu.navigation}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
       <Button
         type="button"
         variant="outline"
@@ -206,49 +327,7 @@ export function ThreadRail({
         )}
       </Button>
       <div className={`thread-rail-content${mobileOpen ? " is-open" : ""}`}>
-        <div className="thread-rail-header">
-          <h2>{t("sharedWorkThreads")}</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={creating}
-            aria-label={t("threadRailNew")}
-            title={t("threadRailNew")}
-            onClick={onCreate}
-          >
-            <Plus aria-hidden="true" />
-          </Button>
-        </div>
-        <nav className="thread-rail-list" aria-label={t("sharedWorkThreads")}>
-          {active.map(row)}
-          {!active.length && (
-            <p className="thread-rail-empty">{t("threadRailEmpty")}</p>
-          )}
-        </nav>
-        {archived.length > 0 && (
-          <details
-            className="thread-rail-archived"
-            open={
-              archived.some((conversation) => conversation.id === selectedId) ||
-              undefined
-            }
-          >
-            <summary>
-              <span>{t("sharedWorkArchived")}</span>
-              <Badge tone="neutral">{archived.length}</Badge>
-            </summary>
-            <nav
-              className="thread-rail-list"
-              aria-label={t("sharedWorkArchived")}
-            >
-              {archived.map(row)}
-            </nav>
-          </details>
-        )}
-        {archive.error && (
-          <Callout tone="error">{archive.error.message}</Callout>
-        )}
+        {threadList}
       </div>
       <Dialog
         open={Boolean(editing)}
