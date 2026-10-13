@@ -247,7 +247,7 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
     : ""}`;
   const prompt = serializeProviderInput({ goal: input.goal, context: input.context });
   const inputByteBudget = modelConfig && agentModelInputByteBudget(input.provider, modelConfig.modelId, modelConfig.maxOutputTokens);
-  if (authoringTask?.documentTask === "section" && inputByteBudget !== undefined
+  if ((input.phase === "specialist" || authoringTask?.documentTask === "section") && inputByteBudget !== undefined
     && Buffer.byteLength(instructions + prompt + JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema))), "utf8") > inputByteBudget)
     throw Object.assign(safeProviderError(false, undefined, "validation"), { diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   const agent = new Agent({

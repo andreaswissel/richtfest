@@ -12,7 +12,7 @@ import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
-test("section context budgets reserve output, recognize vendor IDs and reject oversized prompts before inference", async () => {
+test("section and specialist context budgets reserve output and reject oversized prompts before inference", async () => {
   expect(agentModelInputByteBudget("openai", "gpt-6-astra", 8000)).toBe(832000);
   expect(agentModelInputByteBudget("vercel", "openai/gpt-6.1-sol", 128000)).toBe(712000);
   expect(agentModelInputByteBudget("openai", "gpt-4.1-mini-2025-04-14", 8000)).toBe(830060);
@@ -22,15 +22,16 @@ test("section context budgets reserve output, recognize vendor IDs and reject ov
     expect(agentModelInputByteBudget(provider, modelId, 8000)).toBeUndefined();
   const content = "Source-backed report section, pending specialist review.";
   let prepared = 0;
-  for (const length of [20000, 840000]) {
-    const response = callMastraSupervisor({ ...base, phase: "review", modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 8000, maxSteps: 1 },
-      context: { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 }, sources: [{ text: "x".repeat(length) }] },
+  for (const phase of ["review", "specialist"] as const) for (const length of [20000, 840000]) {
+    const output = phase === "review" ? { content, citations: [], complete: true } : { summary: content, rationale: "", citations: [] };
+    const response = callMastraSupervisor({ ...base, phase, modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 8000, maxSteps: 1 },
+      context: { ...(phase === "review" ? { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 } } : { role: "source_reviewer" }), sources: [{ text: "x".repeat(length) }] },
       onPrepared: async () => { prepared++; return undefined; },
-    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { content, citations: [], complete: true } }) });
-    if (length === 20000) expect(await response).toEqual({ content, citations: [], complete: true });
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }) });
+    if (length === 20000) expect(await response).toEqual(output);
     else await expect(response).rejects.toMatchObject({ retryable: false, diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   }
-  expect(prepared).toBe(1);
+  expect(prepared).toBe(2);
 });
 
 test("concept authoring accepts separate outline and section contracts through Mastra", async () => {

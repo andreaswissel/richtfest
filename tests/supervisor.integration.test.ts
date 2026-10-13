@@ -237,12 +237,16 @@ integration(`retrying a ${failure} specialist preserves its successful sibling`,
   }
 });
 
-integration("large specialist assignments preserve every UTF-8 source slice and resume checkpointed findings", async () => {
+for (const batching of ["unknown-model", "model-aware", "saved-legacy"] as const) integration(`large specialist assignments preserve every UTF-8 source slice and resume checkpointed findings: ${batching}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const model = { ...config, modelId: batching === "unknown-model" ? "test-model" : "gpt-6-luna" };
+  const selectedPolicy = { ...policy, specialists: { source_reviewer: model, requirements_reviewer: model } };
   // Oversized multi-byte text, a nearly full batch, several tiny files and an
   // unreadable file exercise byte and file-count boundaries independently.
-  const evidence = ["A".repeat(49151) + "🧱ß", "ä🧱\n".repeat(9000),
+  const evidence = [batching === "model-aware"
+    ? Array.from({ length: 5 }, (_, i) => `[Page ${i + 1}]\n${"A".repeat(250000)}🧱ß\n`).join("")
+    : "A".repeat(49151) + "🧱ß", "ä🧱\n".repeat(9000),
     "First requirement", "Second requirement", "Third requirement", "Fourth requirement",
     "Fifth requirement", "Last requirement", null].map((text, index) => ({
       versionId: crypto.randomUUID(), name: `Source ${index + 1}`, text,
@@ -263,6 +267,7 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
       if (input.phase === "plan") return { status: "completed", output: { tasks: [
         { role: "requirements_reviewer", goal: "Read every source", sourceVersionIds: evidence.map(source => source.versionId) },
       ] } };
+      expect(input.modelPolicy.specialists.requirements_reviewer.maxOutputTokens).toBe(1024);
       const context = input.context;
       const liveEvents = await db.select().from(agentRunEvents).where(and(
         eq(agentRunEvents.runId, input.runId), eq(agentRunEvents.eventType, "work_progress"),
@@ -297,8 +302,12 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
   try {
     const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Batched evidence", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
     runId = run!.id;
-    await createSupervisor(d, db, run, "medium", policy);
+    await createSupervisor(d, db, run, "medium", selectedPolicy);
     await stepSupervisor(d, runId);
+    if (batching === "saved-legacy") {
+      const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, runId));
+    }
     await stepSupervisor(d, runId);
     const [checkpoint] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
     expect(checkpoint!.phase).toBe("specialists");
@@ -306,11 +315,17 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
     await stepSupervisor(d, runId);
     const [completed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
     expect(completed!.phase).toBe("review");
-    expect(accepted.length).toBeGreaterThan(3);
+    if (batching === "model-aware") {
+      expect(accepted).toHaveLength(3);
+      expect(accepted.some(context => context.sources.length > 3)).toBe(true);
+    } else expect(accepted.length).toBeGreaterThan(3);
     expect(accepted.map(item => item.sourceCoverage.batch)).toEqual(accepted.map((_, index) => index + 1));
     for (const [index, context] of accepted.entries()) {
-      expect(context.sources.length).toBeLessThanOrEqual(3);
-      expect(context.sources.reduce((sum: number, source: any) => sum + Buffer.byteLength(source.text), 0)).toBeLessThanOrEqual(49152);
+      if (batching === "model-aware") expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(838976);
+      else {
+        expect(context.sources.length).toBeLessThanOrEqual(3);
+        expect(context.sources.reduce((sum: number, source: any) => sum + Buffer.byteLength(source.text), 0)).toBeLessThanOrEqual(49152);
+      }
       expect(context.unreadableSources).toEqual([{ name: "Source 9", reason: "Export required" }]);
       expect(context.sourceVersionIds).not.toContain(evidence[8]!.versionId);
       if (index) expect(context.previousFindings.summary).toBe(`Accumulated through batch ${index}`);
@@ -357,8 +372,12 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
       ? d.executeSupervisor!(input)
       : { status: "completed", output: { summary: "Unsupported future citation", rationale: "", citations: [evidence[7]!.versionId] } } };
     const [invalid] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Reject unread evidence", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
-    await createSupervisor(invalidDeps, db, invalid, "medium", policy);
+    await createSupervisor(invalidDeps, db, invalid, "medium", selectedPolicy);
     await stepSupervisor(invalidDeps, invalid!.id);
+    if (batching === "saved-legacy") {
+      const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, invalid!.id));
+      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, invalid!.id));
+    }
     await stepSupervisor(invalidDeps, invalid!.id);
     const [rejected] = await db.select().from(agentRuns).where(eq(agentRuns.id, invalid!.id));
     expect(rejected!.status).toBe("failed");
@@ -371,6 +390,93 @@ integration("large specialist assignments preserve every UTF-8 source slice and 
     await pool.end();
   }
 });
+for (const outcome of ["complete", "failure", "cancel"] as const) integration(`specialist slots refill immediately and settle safely: ${outcome}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const gates = new Map<string, { resolve: () => void; reject: () => void }>();
+  const calls: string[] = [];
+  let active = 0, peak = 0, releaseAll = false;
+  let pending: Promise<void> | undefined;
+  const waitFor = async (condition: () => boolean | Promise<boolean>) => {
+    for (let i = 0; i < 300; i++) {
+      if (await condition()) return;
+      await Bun.sleep(10);
+    }
+    throw new Error("Expected specialist progress was not reached");
+  };
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, providerConfigured: async () => false,
+    listProjectSources: async () => ({ sources: [], truncated: false }),
+    executeSupervisor: async ({ phase, goal }: any) => {
+      if (phase === "plan") return { status: "completed", output: { tasks: ["Slow", "Fast", "Next", "Last"].map(goal => ({ role: "source_reviewer", goal, sourceVersionIds: [] })) } };
+      calls.push(goal);
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        if (!releaseAll) await new Promise<void>((resolve, reject) => gates.set(goal, { resolve,
+          reject: () => reject(Object.assign(new Error("Deadline exceeded"), { code: "timeout", providerFailure: true, retryable: false })),
+        }));
+        return { status: "completed", output: { summary: `Saved ${goal}`, rationale: "", citations: [] } };
+      } finally { active--; }
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Refill specialist slots", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    const id = run!.id;
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, id);
+    pending = stepSupervisor(d, id);
+    await waitFor(() => gates.size === 2);
+    gates.get("Fast")!.resolve();
+    // The third assignment must begin while the first is still blocked.
+    await waitFor(() => gates.has("Next"));
+    expect(calls.slice(0, 2).sort()).toEqual(["Fast", "Slow"]);
+    expect(calls.slice(2)).toEqual(["Next"]);
+    expect(active).toBe(2);
+    if (outcome === "failure") {
+      gates.get("Next")!.reject();
+      await waitFor(async () => (await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, id))).some(event => event.eventType === "provider_call_failed"));
+      await Bun.sleep(20);
+      const [draining] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+      expect(draining!.status).toBe("running");
+      const [lease] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, id));
+      expect(lease!.leaseToken).not.toBeNull();
+    } else if (outcome === "cancel") {
+      await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, id));
+    }
+    releaseAll = true;
+    for (const gate of gates.values()) gate.resolve();
+    await pending;
+    expect(active).toBe(0);
+    expect(peak).toBe(2);
+    if (outcome !== "complete") {
+      expect(calls).not.toContain("Last");
+      const [stopped] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+      expect(stopped!.status).toBe(outcome === "failure" ? "failed" : "cancelled");
+      if (outcome === "failure") expect(stopped!.error).toContain("category=timeout");
+      const beforeRetry = calls.length;
+      const response = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${id}/retry`, { method: "POST" });
+      expect(response.status).toBe(201);
+      await stepSupervisor(d, id);
+      expect(calls.slice(beforeRetry)).not.toContain("Fast");
+      if (outcome === "failure") expect(calls.slice(beforeRetry).sort()).toEqual(["Last", "Next"]);
+      else expect(calls.slice(beforeRetry).sort()).toEqual(["Last", "Next", "Slow"]);
+    }
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, id));
+    expect(state!.phase).toBe("review");
+    expect((state!.assignments as any[]).map(a => a.output.summary)).toEqual(["Saved Slow", "Saved Fast", "Saved Next", "Saved Last"]);
+  } finally {
+    releaseAll = true;
+    for (const gate of gates.values()) gate.resolve();
+    await pending;
+    server.close();
+    for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+}, 10000);
+
 integration("specialist timeouts stop unchanged retries and preserve completed siblings", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();

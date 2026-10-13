@@ -4,7 +4,7 @@ import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
-import { batchSpecialistSources } from "./source-batches";
+import { batchSectionSources, batchSpecialistSources } from "./source-batches";
 import {
   agentRuns,
   agentRunEvents,
@@ -54,9 +54,12 @@ export type Assignment = {
   role: string;
   goal: string;
   sourceVersionIds: string[];
+  // Absent on historical assignments: their saved batch identities stay unchanged.
+  sourceInputByteBudget?: number;
   output?: z.infer<typeof specialistOutput>;
   sourceProgress?: {
     inputHash: string;
+    byteLimit?: number;
     completedBatches: number;
     output: z.infer<typeof specialistOutput>;
   };
@@ -593,7 +596,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               requestedBy: d.actorId,
             })
             .returning();
-          assignments.push({ ...item, taskId: task.id, runId: child.id });
+          const model = policy.specialists[item.role]!;
+          assignments.push({ ...item, taskId: task.id, runId: child.id,
+            sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
+          });
         }
         await tx
           .update(supervisorRuns)
@@ -605,11 +611,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const pending = (state.assignments as Assignment[]).filter(
         (a) => !a.output,
       );
-      for (let start = 0; start < pending.length; start += policy.maxParallel)
-        await Promise.all(
-          pending
-            .slice(start, start + policy.maxParallel)
-            .map(async (assignment) => {
+      let nextAssignment = 0;
+      let stopped = false;
+      let failure: unknown;
+      await Promise.allSettled(Array.from({ length: Math.min(policy.maxParallel, pending.length) }, async () => {
+        try {
+          while (!stopped && nextAssignment < pending.length) {
+              const assignment = pending[nextAssignment++]!;
               const claimed = await commit(d, run, token, async (tx) => {
                 await tx
                   .update(agentRuns)
@@ -679,7 +687,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   extractionNotes: excerpt.content.reason,
                 }),
               );
-              const batches = batchSpecialistSources(specialistSources);
+              // Reserve the maximum accumulated findings (including JSON escaping),
+              // variable context and instructions/schema before packing whole pages.
+              // Persist the chosen limit with progress so retries never repack saved work.
+              const byteLimit = assignment.sourceInputByteBudget === undefined ? undefined : assignment.sourceProgress?.byteLimit
+                ?? assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
+                  - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
+                    sourceVersionIds: assignment.sourceVersionIds,
+                    documentReview: await artifactReviewContext(d, run.conversationId),
+                    profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
+                    budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
+                  }), "utf8");
+              if (byteLimit !== undefined && byteLimit < 1024) throw conflict("Specialist context exceeds the model input budget");
+              const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources) : batchSectionSources(specialistSources, byteLimit);
               // Checkpoints can only be reused for the same goal and extracted
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
@@ -688,10 +708,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
               let accumulated = progress?.output;
               for (let index = progress?.completedBatches ?? 0; index < batches.length; index++) {
+                if (stopped) throw new Error("Specialist work stopped after a sibling failure.");
                 const batch = batches[index]!;
                 const batchIds = [...new Set(batch.map(source => source.versionId))];
                 const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
-                const workSources = batch.map(({ versionId, name, version }) => ({ versionId, name, version }));
+                const workSources = [...new Map(batch.map(({ versionId, name, version }) => [versionId, { versionId, name, version }])).values()];
                 const started = await commit(d, run, token, async (tx) => {
                   await logWorkProgress(d, tx, run, {
                     runId: assignment.runId, stage: "reading_sources", sources: workSources,
@@ -722,7 +743,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const saved = await commit(d, run, token, async (tx, current) => {
                   await tx.update(supervisorRuns).set({
                     assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
-                      ? { ...a, sourceProgress: { inputHash, completedBatches: index + 1, output } } : a),
+                      ? { ...a, sourceProgress: { inputHash, byteLimit, completedBatches: index + 1, output } } : a),
                     history: [...current.history, {
                       phase: "specialist_batch", runId: assignment.runId, revision: current.revision,
                       batch: index + 1, batchCount: batches.length, sourceVersionIds: batchIds, output,
@@ -772,8 +793,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   .where(eq(tasks.id, assignment.taskId));
                 await log(d, tx, run, "specialist_completed");
               });
-            }),
-        );
+          }
+        } catch (error) {
+          if (!stopped) failure = error;
+          stopped = true;
+        }
+      }));
+      // Let in-flight calls save valid results before releasing the lease. Never
+      // start another assignment/batch after the first terminal failure.
+      if (stopped) throw failure;
       await commit(d, run, token, async (tx) => {
         await tx
           .update(supervisorRuns)

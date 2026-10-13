@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Specialist source reviews now use larger, model-aware batches and fill available parallel slots immediately instead of waiting for the slowest specialist. Retries preserve saved findings and historical batch layouts; output limits and review safeguards remain unchanged.
+
 - Downloaded reports now carry Richtfest branding on generated pages, with clear revision and review status. Imported plans and calculation pages keep their original artwork and unverified-source labels. Existing reports can be downloaded again without rerunning the agent.
 
 - Acoustic reports now use larger, model-aware source batches and parallel drafting instead of many tiny sequential requests. New outlines avoid duplicate page coverage, incomplete large batches fall back to smaller saved pieces, and retries preserve completed work. Output-token limits and review safeguards remain unchanged.
