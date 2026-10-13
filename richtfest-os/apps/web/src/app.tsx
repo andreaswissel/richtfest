@@ -87,15 +87,17 @@ export function App({ initializing = false }: { initializing?: boolean }) {
                 const path =
                   r.path === "/"
                     ? "/dashboard"
-                    : r.path === "/customers"
-                      ? "/crm/customers"
-                      : r.path === "/team"
-                        ? "/access/team"
-                        : r.path === "/settings"
-                          ? "/settings/ai-connections"
-                          : r.path === "/help"
-                            ? "/support"
-                            : r.path;
+                    : r.path === "/knowledge"
+                      ? "/knowledge/drafts?scope=company"
+                      : r.path === "/customers"
+                        ? "/crm/customers"
+                        : r.path === "/team"
+                          ? "/access/team"
+                          : r.path === "/settings"
+                            ? "/settings/ai-connections"
+                            : r.path === "/help"
+                              ? "/support"
+                              : r.path;
                 void queryClient.prefetchQuery({
                   queryKey: [path],
                   queryFn: () => api(path),

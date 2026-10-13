@@ -19,6 +19,14 @@ OpenUI uses a generated registry shared by the provider prompt, server parser an
 
 Administrators with both `knowledge:read` and `access:manage` can configure the existing supervisor and reviewer profiles in Settings → Agents. Changes are workspace-scoped and audited; only approved company-wide knowledge can be assigned. Routing phrases influence planning as hints and confer no authority. Each durable supervisor run preserves its own configuration and reference-content snapshot. See [Agent profiles](/docs/architecture/agent-runtime#agent-profiles) for configuration and the fixed safety boundaries.
 
+## Review company knowledge
+
+Open **Company knowledge** in the navigation to review shared, company-wide entries. The default **Awaiting review** filter shows unapproved drafts; switch to **Approved** or **All**, or search by title. Project-specific knowledge remains in its project's Knowledge view. Pending-review links on the overview open the corresponding company entry or project knowledge view.
+
+Open an entry to read its full formatted content, source references and caveats. Entries have stable links that can be shared with colleagues in the same workspace. Company imports may contain filenames and checksums in their text; those references are not uploaded originals or linked file revisions. Check the underlying evidence before approval.
+
+After reading, choose **Approve knowledge** and confirm. Reading requires `knowledge:read`; only users with `knowledge:approve` see the approval action, and the server enforces that permission. Approval is recorded with the reviewer and time. It makes the entry eligible for explicit assignment under Settings → Agents; it neither assigns it automatically nor certifies an engineering calculation. No bulk approval occurs when importing or opening an entry.
+
 ## Activity without clutter
 
 Contextual activity is a filtered view of the audit record. A project shows relevant project events; a knowledge item shows its drafting and review history. Broader audit inspection supports filtering and pagination for permitted users.

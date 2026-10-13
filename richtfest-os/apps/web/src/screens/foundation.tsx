@@ -121,6 +121,7 @@ export function Dashboard() {
               <WorkList
                 items={list(data.pendingDrafts || data.pendingReview)}
                 empty={t("noReview")}
+                knowledge
               />
             </Section>
           </div>
@@ -135,11 +136,28 @@ export function Dashboard() {
     </Page>
   );
 }
-function WorkList({ items, empty }: { items: RecordData[]; empty: string }) {
+function WorkList({
+  items,
+  empty,
+  knowledge = false,
+}: {
+  items: RecordData[];
+  empty: string;
+  knowledge?: boolean;
+}) {
   return items.length ? (
     <div className="work-list">
       {items.map((item, i) => (
-        <Link key={item.id || i} to={`/projects/${item.projectId}`}>
+        <Link
+          key={item.id || i}
+          to={
+            knowledge
+              ? item.projectId
+                ? `/projects/${item.projectId}?view=knowledge`
+                : `/knowledge/${item.id}`
+              : `/projects/${item.projectId}`
+          }
+        >
           <span>{item.title || item.name || item.message}</span>
           <span>↗</span>
         </Link>

@@ -609,19 +609,46 @@ describe("accepted API workflow (PostgreSQL)", () => {
             item.id === draft.body.data.id && item.status === "approved",
         ),
       ).toBe(true);
+      const company = await request("/api/knowledge/drafts", {
+        method: "POST", body: JSON.stringify({ title: "Company procedure", body: "## Evidence\n\nCheck the source before approval." }),
+      }, cookie);
+      expect(company.response.status).toBe(201);
+      const companyPath = `/api/knowledge/drafts/${company.body.data.id}`;
+      const companyList = await request("/api/knowledge/drafts?scope=company", {}, cookie);
+      expect(companyList.response.status).toBe(200);
+      expect(companyList.body.data.find((row: any) => row.id === company.body.data.id)).toMatchObject({ title: "Company procedure", status: "draft" });
+      expect(companyList.body.data.some((row: any) => row.id === draft.body.data.id)).toBe(false);
+      expect(companyList.body.data.every((row: any) => !("body" in row))).toBe(true);
+      expect((await request(`${companyPath}`, {}, cookie)).body.data).toMatchObject({ body: company.body.data.body, projectId: null, canApprove: true });
+      expect((await request(`/api/knowledge/drafts?scope=company&projectId=${project.body.data.id}`, {}, cookie)).response.status).toBe(400);
+      expect((await request(`/api/knowledge/drafts?projectId=${project.body.data.id}`, {}, cookie)).body.data.some((row: any) => row.id === company.body.data.id)).toBe(false);
+      expect((await request(`${companyPath}/approve`, { method: "POST", body: "{}" }, cookie)).response.status).toBe(200);
+      expect((await request(companyPath, {}, cookie)).body.data.status).toBe("approved");
+      expect((await request("/api/knowledge/drafts?scope=company", {}, cookie)).body.data.find((row: any) => row.id === company.body.data.id).status).toBe("approved");
+      expect((await pool.query("select id from os_audit_events where action = 'knowledge.draft.approved' and entity_id = $1", [company.body.data.id])).rows).toHaveLength(1);
       const outsiderCookie = await login("outsider@other.local");
       await pool.query("insert into os_role_permissions (role_id, permission) select r.id, 'richtfest-os:use' from os_roles r join os_tenants t on t.id = r.tenant_id where t.name = 'Outsider' on conflict do nothing");
       expect((await request(customerPath, { method: "PATCH", body: JSON.stringify({ name: "Forbidden" }) }, outsiderCookie)).response.status).toBe(403);
-      // Give the other tenant CRM access to test isolation independently of permissions.
-      await pool.query("insert into os_role_permissions (role_id, permission) select r.id, p.key from os_roles r join os_tenants t on t.id = r.tenant_id cross join os_permissions p where t.name = 'Outsider' and p.key in ('crm:read', 'crm:write') on conflict do nothing");
+      // Give the other tenant read/write access to test isolation independently of permissions.
+      await pool.query("insert into os_role_permissions (role_id, permission) select r.id, p.key from os_roles r join os_tenants t on t.id = r.tenant_id cross join os_permissions p where t.name = 'Outsider' and p.key in ('crm:read', 'crm:write', 'knowledge:read', 'knowledge:write') on conflict do nothing");
       try {
+        expect((await request(companyPath, {}, outsiderCookie)).response.status).toBe(404);
+        expect((await request("/api/knowledge/drafts?scope=company", {}, outsiderCookie)).body.data.some((row: any) => row.id === company.body.data.id)).toBe(false);
+        const outsiderDraft = await request("/api/knowledge/drafts", {
+          method: "POST", body: JSON.stringify({ title: "Other company", body: "Not shared across tenants." }),
+        }, outsiderCookie);
+        expect(outsiderDraft.response.status).toBe(201);
+        const outsiderDraftPath = `/api/knowledge/drafts/${outsiderDraft.body.data.id}`;
+        expect((await request(outsiderDraftPath, {}, outsiderCookie)).body.data.canApprove).toBe(false);
+        expect((await request(`${outsiderDraftPath}/approve`, { method: "POST", body: "{}" }, outsiderCookie)).response.status).toBe(403);
+        expect((await request(outsiderDraftPath, {}, cookie)).response.status).toBe(404);
         expect((await request(customerPath, { method: "PATCH", body: JSON.stringify({ name: "Wrong tenant" }) }, outsiderCookie)).response.status).toBe(404);
         const otherCustomers = await request("/api/crm/customers", {}, outsiderCookie);
         expect(otherCustomers.response.status).toBe(200);
         expect(otherCustomers.body.data.some((row: any) => row.id === customer.body.data.id)).toBe(false);
         expect((await request("/api/crm/customers", {}, cookie)).body.data.find((row: any) => row.id === customer.body.data.id).name).toBe(customerDetails.name);
       } finally {
-        await pool.query("delete from os_role_permissions where role_id in (select r.id from os_roles r join os_tenants t on t.id = r.tenant_id where t.name = 'Outsider') and permission in ('crm:read', 'crm:write', 'richtfest-os:use')");
+        await pool.query("delete from os_role_permissions where role_id in (select r.id from os_roles r join os_tenants t on t.id = r.tenant_id where t.name = 'Outsider') and permission in ('crm:read', 'crm:write', 'knowledge:read', 'knowledge:write', 'richtfest-os:use')");
       }
       const outsiderProject = await request(
         `/api/projects/${project.body.data.id}`,

@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   FolderKanban,
   CircleHelp,
   LayoutDashboard,
@@ -11,6 +12,12 @@ export const routesManifest = [
   { path: "/", key: "overview", group: "richtfest-os", icon: LayoutDashboard },
   { path: "/projects", key: "projects", group: "projects", icon: FolderKanban },
   { path: "/customers", key: "customers", group: "crm", icon: UserRound },
+  {
+    path: "/knowledge",
+    key: "companyKnowledge",
+    group: "richtfest-os",
+    icon: BookOpen,
+  },
   { path: "/team", key: "team", group: "richtfest-os", icon: UsersRound },
   {
     path: "/settings",
@@ -25,6 +32,8 @@ export const performanceRoutes = [
   "/projects",
   "/customers",
   "/team",
+  "/knowledge",
+  "/knowledge/:draftId",
   "/projects/:id",
   "/projects/:id?view=location",
   "/projects/:id?view=analytics",

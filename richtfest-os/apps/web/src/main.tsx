@@ -43,6 +43,19 @@ const router = createBrowserRouter([
       },
       { path: "/", element: <Dashboard />, loader: prefetch("/dashboard") },
       {
+        path: "/knowledge/:draftId?",
+        lazy: async () => ({
+          Component: (await import("./screens/company-knowledge"))
+            .CompanyKnowledge,
+        }),
+        loader: ({ params }) =>
+          prefetch(
+            params.draftId
+              ? `/knowledge/drafts/${params.draftId}`
+              : "/knowledge/drafts?scope=company",
+          )(),
+      },
+      {
         path: "/projects",
         element: <Projects />,
         loader: prefetch("/projects"),

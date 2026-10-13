@@ -1,6 +1,6 @@
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import {
@@ -274,14 +274,22 @@ export function createRouter(getDeps: GetDeps) {
     try {
       const d = getDeps(req);
       d.requirePermission("knowledge:read");
-      const { projectId } = z
-        .object({ projectId: z.string().uuid().optional() })
+      const { projectId, scope } = z
+        .object({ projectId: z.string().uuid().optional(), scope: z.literal("company").optional() })
+        .refine((input) => !(input.projectId && input.scope), "Choose project or company scope")
         .parse(req.query);
       if (projectId && !(await d.validateProject(projectId)))
         throw Object.assign(new Error("Project not found"), {
           status: 404,
           code: "not_found",
         });
+      if (scope === "company") {
+        const rows = await d.db.select({
+          id: drafts.id, title: drafts.title, status: drafts.status, createdAt: drafts.createdAt,
+        }).from(drafts).where(and(eq(drafts.tenantId, d.tenantId), isNull(drafts.projectId)))
+          .orderBy(desc(drafts.createdAt), drafts.id);
+        return send(res, 200, ok(rows));
+      }
       const rows = await d.db
         .select()
         .from(drafts)
@@ -295,6 +303,22 @@ export function createRouter(getDeps: GetDeps) {
         )
         .orderBy(desc(drafts.createdAt));
       return send(res, 200, ok(rows));
+    } catch (e) {
+      return next(e);
+    }
+  });
+  router.get("/drafts/:draftId", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("knowledge:read");
+      const draftId = z.string().uuid().parse(req.params.draftId);
+      const [draft] = await d.db.select().from(drafts)
+        .where(and(eq(drafts.id, draftId), eq(drafts.tenantId, d.tenantId)));
+      if (!draft || (draft.projectId && !(await d.validateProject(draft.projectId))))
+        throw missing("Knowledge draft not found");
+      let canApprove = true;
+      try { d.requirePermission("knowledge:approve"); } catch { canApprove = false; }
+      return send(res, 200, ok({ ...draft, canApprove }));
     } catch (e) {
       return next(e);
     }
