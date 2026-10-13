@@ -50,6 +50,23 @@ export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
 });
 export type AgentPresetSnapshot = z.infer<typeof agentPresetSnapshotSchema>;
 
+/** Conservative UTF-8 input budget, not a tokenizer count. Unknown IDs stay unknown.
+ * Verified 2026-10-13: developers.openai.com/api/docs/models and
+ * platform.claude.com/docs/en/models/overview. No opt-in context extensions.
+ */
+export function agentModelInputByteBudget(provider: AgentProvider, modelId: string, maxOutputTokens: number): number | undefined {
+  const model = provider === "vercel" ? modelId.split("/")[1] : modelId;
+  const vendor = provider === "vercel" ? modelId.split("/")[0] : provider;
+  if (!model || (provider === "vercel" && modelId.split("/").length !== 2)) return;
+  const context = vendor === "openai"
+    ? /^gpt-(?:6-(?:astra|sol|luna)|6\.1-sol)(?:-\d{4}-\d{2}-\d{2})?$/.test(model) ? 1_050_000
+      : /^gpt-4\.1(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?$/.test(model) ? 1_047_576 : undefined
+    : vendor === "anthropic" && /^claude-(?:fable-5-1|opus-5-5|sonnet-5-5|haiku-5-5)$/.test(model) ? 1_000_000 : undefined;
+  // Budget one byte per token conservatively, reserving 20% for tokenizer/wire
+  // overhead plus the full configured output budget (including reasoning).
+  return context === undefined ? undefined : Math.max(0, Math.floor(context * 0.8) - maxOutputTokens);
+}
+
 /** Optional human evaluation, independent of approval; omitted scores are unknown. */
 export const agentRunEvaluationSchema = z.object({
   correctness: z.number().int().min(1).max(5).optional(),

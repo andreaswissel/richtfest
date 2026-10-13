@@ -7,11 +7,32 @@ import type { AppDeps } from "@richtfest/knowledge/deps";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
-import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles } from "@richtfest/shared";
+import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("section context budgets reserve output, recognize vendor IDs and reject oversized prompts before inference", async () => {
+  expect(agentModelInputByteBudget("openai", "gpt-6-astra", 8000)).toBe(832000);
+  expect(agentModelInputByteBudget("vercel", "openai/gpt-6.1-sol", 128000)).toBe(712000);
+  expect(agentModelInputByteBudget("openai", "gpt-4.1-mini-2025-04-14", 8000)).toBe(830060);
+  expect(agentModelInputByteBudget("anthropic", "claude-sonnet-5-5", 8000)).toBe(792000);
+  for (const [provider, modelId] of [["openai", "unknown"], ["openai", "gpt-6-astra-custom"], ["anthropic", "gpt-6-astra"],
+    ["vercel", "other/gpt-6-astra"], ["vercel", "gpt-6-astra"], ["vercel", "openai/gpt-6-astra/extra"]] as const)
+    expect(agentModelInputByteBudget(provider, modelId, 8000)).toBeUndefined();
+  const content = "Source-backed report section, pending specialist review.";
+  let prepared = 0;
+  for (const length of [20000, 840000]) {
+    const response = callMastraSupervisor({ ...base, phase: "review", modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 8000, maxSteps: 1 },
+      context: { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 }, sources: [{ text: "x".repeat(length) }] },
+      onPrepared: async () => { prepared++; return undefined; },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { content, citations: [], complete: true } }) });
+    if (length === 20000) expect(await response).toEqual({ content, citations: [], complete: true });
+    else await expect(response).rejects.toMatchObject({ retryable: false, diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
+  }
+  expect(prepared).toBe(1);
+});
+
 test("concept authoring accepts separate outline and section contracts through Mastra", async () => {
   const id = "exterior-noise-concept";
   const versionId = crypto.randomUUID();

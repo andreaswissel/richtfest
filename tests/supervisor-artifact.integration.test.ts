@@ -246,6 +246,175 @@ integration("acoustic reports preserve oversized sections and resume old charact
   } finally { await pool.end(); }
 }, 15000);
 
+for (const scenario of ["serial", "parallel", "failure", "cancel", "context", "context_multi", "context_incomplete", "context_truncated", "context_resume"] as const) integration(
+  `acoustic drafting preserves ordered evidence and bounded, resumable work: ${scenario}`, async () => {
+    const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+    const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
+    const longContext = scenario.startsWith("context");
+    const model = { modelId: longContext ? "gpt-6-astra" : "test-model", maxOutputTokens: 2048, maxSteps: 1 };
+    const maxParallel = scenario === "serial" ? 1 : 3;
+    const pages = Array.from({ length: 8 }, (_, index) => `[Page ${index + 1}] ${String(index + 1).repeat(scenario === "context_multi" ? 120000 : 2490)}`);
+    const gates = new Map<number, { resolve: () => void; reject: () => void }>();
+    const calls: number[] = [];
+    const pieceCalls: { batch: number; parentBatch?: number }[] = [];
+    let active = 0, peak = 0, interrupted = false;
+    let pending: Promise<void> | undefined;
+    const waitFor = async (condition: () => Promise<boolean> | boolean) => {
+      for (let attempt = 0; attempt < 300; attempt++) {
+        if (await condition()) return;
+        await Bun.sleep(10);
+      }
+      throw new Error("Expected drafting milestone was not reached");
+    };
+    const d: any = {
+      db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
+      validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
+      providerConfigured: async () => false,
+      listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
+      resolveSource: async (_: string, input: any) => {
+        const pageStart = input.pageStart, pageEnd = input.pageEnd;
+        return { status: "resolved", source: { versionId, name: "Evidence.pdf", version: 1 }, content: {
+          status: "available", text: pages.slice(pageStart - 1, pageEnd).join("\n"),
+          coverage: { pageStart, pageEnd, totalPages: 8, nextPage: null, truncated: false },
+          retrieval: { pageNumbers: Array.from({ length: pageEnd - pageStart + 1 }, (_, i) => pageStart + i) },
+        } };
+      },
+      executeSupervisor: async ({ context, onSummaryDelta, modelPolicy }: any) => {
+        expect(modelPolicy.supervisor.maxOutputTokens).toBe(2048);
+        if (longContext && context.documentTask === "section") {
+          expect(Buffer.byteLength(JSON.stringify(context), "utf8")).toBeLessThan(837952);
+          if (scenario === "context_multi") for (const source of context.sources) expect(pages).toContain(source.text.trimEnd());
+        }
+        // No per-piece stream may alter the shared conversational summary.
+        if (onSummaryDelta) await onSummaryDelta("MIXED PIECE STREAM");
+        if (context.documentTask === "outline") return { status: "completed", output: {
+          id: "exterior-noise-concept", title: "Ordered acoustic report", language: "en",
+          project: { name: "Parallel test", number: null, client: null, designer: null, author: null, date: null },
+          sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key, sources: key === "components"
+            ? [{ versionId, pageStart: 4, pageEnd: 8 }, { versionId, pageStart: 1, pageEnd: 4 }, { versionId, pageStart: 3, pageEnd: 5 }]
+            : key === "plans" ? [{ versionId, pageStart: 1, pageEnd: 1 }, { versionId, pageStart: 8, pageEnd: 8 }] : [] })),
+          attachments: [],
+        } };
+        if (context.section === "components") {
+          calls.push(context.batch);
+          pieceCalls.push({ batch: context.batch, parentBatch: context.parentBatch });
+          active++;
+          peak = Math.max(peak, active);
+          try {
+            if (longContext && context.splitOnTruncation && !["context", "context_multi"].includes(scenario)) {
+              if (scenario === "context_truncated") throw Object.assign(new Error("Truncated output"), { providerFailure: true, retryable: true,
+                failureCategory: "validation", diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" } });
+              return { status: "completed", output: { complete: false, content: "Output budget too small for complete evidence.", citations: [] } };
+            }
+            if (scenario === "context_resume" && context.parentBatch && context.batch === 2 && !interrupted) {
+              interrupted = true;
+              throw Object.assign(new Error("Timed out"), { code: "timeout", providerFailure: true, retryable: false });
+            }
+            if (!longContext && !interrupted && maxParallel > 1) await new Promise<void>((resolve, reject) => gates.set(context.batch, {
+              resolve, reject: () => reject(Object.assign(new Error("Timed out"), { code: "timeout", providerFailure: true, retryable: false })),
+            }));
+          } finally { active--; }
+        }
+        return { status: "completed", output: { complete: true, citations: context.sources.length ? [versionId] : [],
+          content: context.sources.length ? context.sources.map((source: any) => source.text).join("")
+            : `No ${context.section} evidence supplied; request the missing input.`,
+        } };
+      },
+    };
+    const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+    try {
+      const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Create exterior-noise-concept", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+      const id = run!.id;
+      await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
+        specialists: { source_reviewer: model, requirements_reviewer: model }, maxParallel, maxTasks: 4, maxRevisions: 1 });
+      await db.update(supervisorRuns).set({ phase: "review", assignments: [{ role: "source_reviewer", sourceVersionIds: [versionId],
+        runId: crypto.randomUUID(), taskId: crypto.randomUUID(), output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, id));
+      const savedParts = async () => {
+        const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, id));
+        return (state!.review as any).documentDraft?.sections.components?.parts ?? [];
+      };
+      pending = stepSupervisor(d, id);
+      if (!longContext && maxParallel > 1) {
+        await waitFor(() => gates.size === 3);
+        expect([...calls].sort()).toEqual([1, 2, 3]);
+        if (scenario === "failure") {
+          gates.get(2)!.reject();
+          await waitFor(async () => (await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, id))).some(event => event.eventType === "provider_call_failed"));
+          // The failed worker must stop scheduling, but let healthy siblings save.
+          await Bun.sleep(20);
+        }
+        gates.get(3)!.resolve();
+        await waitFor(async () => Boolean((await savedParts())[2]));
+        expect((await savedParts()).slice(0, 2)).toEqual([null, null]);
+        if (scenario === "cancel") {
+          await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, id));
+        }
+        interrupted = true;
+        for (const gate of gates.values()) gate.resolve();
+      }
+      await pending;
+      expect(active).toBe(0);
+      expect(peak).toBe(longContext ? 1 : maxParallel);
+      if (scenario === "context_resume") {
+        const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+        expect(failed!.status).toBe("failed");
+        expect(await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId))).toHaveLength(0);
+        const response = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${id}/retry`, { method: "POST" });
+        expect(response.status).toBe(201);
+        const previousCalls = pieceCalls.length;
+        await stepSupervisor(d, id);
+        expect(pieceCalls.slice(previousCalls).every(call => call.parentBatch === 1 && call.batch > 1)).toBe(true);
+      }
+      if (scenario === "failure" || scenario === "cancel") {
+        expect(await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId))).toHaveLength(0);
+        const [stopped] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+        expect(stopped!.status).toBe(scenario === "failure" ? "failed" : "cancelled");
+        const parts = await savedParts();
+        expect(parts[2]).toBeTruthy();
+        expect(parts[1]).toBeNull();
+        if (scenario === "failure") {
+          expect(parts[0]).toBeTruthy();
+          expect(calls).toHaveLength(3);
+        } else expect(parts[0]).toBeNull();
+        const previousCalls = calls.length;
+        const response = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${id}/retry`, { method: "POST" });
+        expect(response.status).toBe(201);
+        await stepSupervisor(d, id);
+        expect(calls.slice(previousCalls)).not.toContain(3);
+        if (scenario === "failure") expect(calls.slice(previousCalls)).not.toContain(1);
+      }
+      const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, id));
+      expect(result!.status).toBe("needs_review");
+      const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+      expect(revisions).toHaveLength(1);
+      const template = (revisions[0]!.payload as any).template;
+      // Whitespace between pieces is harmless; no page may be repeated, lost or reordered.
+      expect(template.components.replace(/\s/g, "")).toBe(pages.join("").replace(/\s/g, ""));
+      expect(template.plans.replace(/\s/g, "")).toBe((pages[0]! + pages[7]!).replace(/\s/g, ""));
+      expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
+      if (longContext) {
+        // One initial section call, never an unchanged retry after truncation.
+        expect(pieceCalls.filter(call => !call.parentBatch).map(call => call.batch).sort()).toEqual(scenario === "context_multi" ? [1, 2] : [1]);
+        if (scenario === "context" || scenario === "context_multi") expect(calls).toHaveLength(scenario === "context_multi" ? 2 : 1);
+        else expect(pieceCalls.some(call => call.parentBatch === 1)).toBe(true);
+      } else {
+        // Each 2.5 KB page ends at a preferred line boundary within the 4 KB budget.
+        expect(new Set(calls).size).toBe(8);
+      }
+      const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, id));
+      expect(events.filter(event => event.eventType === "output_progress")).toHaveLength(0);
+    } finally {
+      interrupted = true;
+      for (const gate of gates.values()) gate.resolve();
+      await pending;
+      server.close();
+      for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns])
+        await db.delete(table).where(eq(table.tenantId, tenantId));
+      await pool.end();
+    }
+  }, 10000,
+);
+
 for (const templateId of ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const)
 for (const independentReviewEnabled of [false, true]) integration(
   `${templateId} delegation preserves revision-linked template data (independent review: ${independentReviewEnabled})`,

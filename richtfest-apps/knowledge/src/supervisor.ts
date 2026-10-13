@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, notInArray, or, isNull, lt, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, requestedAcousticConcept, acousticConceptIdSchema, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, requestedAcousticConcept, acousticConceptIdSchema, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits, agentModelInputByteBudget } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -316,6 +316,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const sameGeneration = checkpoint?.generation === state.generation;
       const callId = sameGeneration ? checkpoint.callId : crypto.randomUUID();
       failurePhase = phase;
+      // Section/outline responses have no summary. Concurrent pieces must not
+      // reset or write the single conversational summary stream.
+      const streamSummary = phase === "review" && !(context as { documentTask?: string }).documentTask;
       await assertActive();
       const started = await commit(d, run, token, async (tx) => {
         await log(d, tx, run, "provider_call_started", phase, callId);
@@ -323,6 +326,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       if (!started) throw conflict("Supervisor no longer active");
       if (sameGeneration && checkpoint.terminal) throw Object.assign(new Error("Supervisor model execution failed."), {
         failurePhase: phase, failureCategory: checkpoint.failureCategory, providerStatus: checkpoint.providerStatus,
+        diagnostics: sanitizeProviderDiagnostics(checkpoint.diagnostics),
       });
       // A deliberate resume gets a new attempt budget, but never skips a
       // provider cooldown that is still in effect.
@@ -366,7 +370,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         if (retryDeadline && Date.now() >= retryDeadline) throw Object.assign(new Error("Provider recovery window expired."), {
           failurePhase: phase, failureCategory: "provider", providerStatus: 429,
         });
-        if (phase === "review") {
+        if (streamSummary) {
           partialOutput = "";
           lastCheckpoint = 0;
           await onSummaryDelta("");
@@ -383,7 +387,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             goal,
             context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
-            onSummaryDelta: phase === "review" ? onSummaryDelta : undefined,
+            onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
             });
             if (response.status === "completed" && validate) {
               try { response.output = validate(response.output); }
@@ -427,8 +431,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             rateLimited && rateLimit?.remainingRequests === 0 ? rateLimit.resetRequestsMs ?? 0 : 0,
             rateLimited && rateLimit?.remainingTokens === 0 ? rateLimit.resetTokensMs ?? 0 : 0);
           const cooldownExceedsBudget = rateLimited ? Date.now() + delayMs >= retryDeadline! : delayMs > 300000;
+          const splitTruncatedSection = phase === "review" && (context as { splitOnTruncation?: boolean }).splitOnTruncation === true
+            && (diagnostics.finishReason === "length" || diagnostics.errorId === "STRUCTURED_OUTPUT_TRUNCATED");
           const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
-            && !quotaFailure && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
+            && !splitTruncatedSection && !quotaFailure && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
           retryAt = Date.now() + delayMs;
           const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics, providerStatus: providerFailureStatus,
             ...(shouldRetry ? { delayMs, retryAt } : {}), recoveryExhausted: cooldownExceedsBudget });
@@ -471,7 +477,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           });
           // Carry only this call's sanitized metadata: parallel siblings cannot overwrite it.
           throw Object.assign(new Error("Supervisor model execution failed."), {
-            failurePhase: phase, failureCategory, providerStatus: providerFailureStatus,
+            failurePhase: phase, failureCategory, providerStatus: providerFailureStatus, diagnostics,
           });
         }
       }
@@ -802,6 +808,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const review = validateReview(
         conceptId ? await authorAcousticConcept({
           d, projectId: run.projectId, id: conceptId, goal, limits, maxOutputTokens: policy.supervisor.maxOutputTokens,
+          maxParallel: policy.maxParallel,
+          inputByteBudget: agentModelInputByteBudget(run.provider, policy.supervisor.modelId, policy.supervisor.maxOutputTokens),
+          contextOverhead: {
+            documentReview: await artifactReviewContext(d, run.conversationId),
+            profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
+            budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
+          },
           findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
             .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output })),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
@@ -813,7 +826,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             const saved = await commit(d, run, token, async tx => {
               await tx.update(supervisorRuns).set({ review: { documentDraft } }).where(eq(supervisorRuns.runId, id));
               await logWorkProgress(d, tx, run, { runId: id, stage: "reviewing_findings", sources: [],
-                batch, batchCount, summary: `${documentDraft.outline.language === "de" ? "Berichtsabschnitt" : "Report section"}: ${section}` });
+                ...(batch ? { batch, batchCount } : {}),
+                summary: `${documentDraft.outline.language === "de" ? "Berichtsabschnitt" : "Report section"}: ${section}` });
             });
             if (!saved) throw conflict("Supervisor no longer active");
           },

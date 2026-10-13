@@ -3,7 +3,7 @@ import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference
 /** Only these structural facts may cross the provider/event boundary. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED"];
+  const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED", "CONTEXT_BUDGET_EXCEEDED"];
   const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
   const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation",
     "template", "id", "version", "language", "project", "sections", "key", "sources", "attachments", "pageStart", "pageEnd", "complete",

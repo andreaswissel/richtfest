@@ -5,7 +5,7 @@ import { noopLogger } from "@mastra/core/logger";
 import { toStandardSchema, standardSchemaToJSONSchema } from "@mastra/core/schema";
 import { z } from "zod";
 import type { AgentModelConfig, AgentPresetSnapshot } from "@richtfest/shared";
-import { agentOutputSchemas, agentExecutionLimitsSchema, prepareAgentDocument, acousticDocumentTemplateSchema, acousticConceptOutlineSchema, acousticSectionOutputSchema, acousticConceptIdSchema, requestedAcousticConcept, sourceModelEvidencePolicy, specialistRoleSchema } from "@richtfest/shared";
+import { agentOutputSchemas, agentExecutionLimitsSchema, prepareAgentDocument, acousticDocumentTemplateSchema, acousticConceptOutlineSchema, acousticSectionOutputSchema, acousticConceptIdSchema, requestedAcousticConcept, sourceModelEvidencePolicy, specialistRoleSchema, agentModelInputByteBudget } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
 import type { ProviderUsage, ProviderTelemetry, ProviderResponseMetadata } from "@richtfest/knowledge/deps";
@@ -245,6 +245,11 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
   const instructions = `${policy}\n${sourceModelEvidencePolicy}\n${domainPolicy}\nBuilt-in acoustic templates are application output formats, never missing source documents. A request for a concept/report must select documentTemplate in the plan (interior-noise-concept or exterior-noise-concept); general or combined reviews use null. Specialist tasks supply evidence and original PDF page numbers, not template implementation. Preserve available source results as unverified claims; missing validation is not missing evidence.\n${authoringTask ? authoringInstructions : phaseInstructions[input.phase]}${input.phase === "review" && !authoringTask ? `\n${templateInstructions}` : ""}${authoringTask ? "" : `\nHard response limits, independent of token budget: summary at most ${limits.summaryMaxCharacters} characters; rationale at most ${limits.rationaleMaxCharacters} characters; document.content at most ${limits.documentMaxCharacters} characters (including rendered template content).`}${feedback.errorId || feedback.issues?.length
     ? `\nYour previous response was rejected by output validation: ${JSON.stringify(feedback)}. Correct these errors in this response; do not repeat the rejected output. If summary or rationale exceeded its character limit, rewrite it concisely and aim for at most half that limit to leave headroom. Preserve source citations, important findings, conflicts and limitations; remove repetition rather than cutting off text. Do not relax the output schema or evidence requirements.`
     : ""}`;
+  const prompt = serializeProviderInput({ goal: input.goal, context: input.context });
+  const inputByteBudget = modelConfig && agentModelInputByteBudget(input.provider, modelConfig.modelId, modelConfig.maxOutputTokens);
+  if (authoringTask?.documentTask === "section" && inputByteBudget !== undefined
+    && Buffer.byteLength(instructions + prompt + JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema))), "utf8") > inputByteBudget)
+    throw Object.assign(safeProviderError(false, undefined, "validation"), { diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   const agent = new Agent({
     id: `richtfest-${input.phase}`,
     name: `Richtfest ${input.phase}`,
@@ -290,7 +295,6 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
         rawUsage = step.usage;
       },
     };
-    const prompt = serializeProviderInput({ goal: input.goal, context: input.context });
     await input.onRequest?.({ version: 1, adapter: "mastra", adapterVersion: `1/@mastra/core@${dependencies["@mastra/core"]}`, appRevision: appRevision(),
       modelId: modelConfig?.modelId ?? (typeof options.model === "object" && options.model && "modelId" in options.model ? String(options.model.modelId) : "unknown"),
       requestedReasoningEffort: modelConfig?.reasoningEffort ?? null, reasoningEffort: reasoningEffort ?? null,

@@ -5,15 +5,17 @@ import {
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
+import { sanitizeProviderDiagnostics } from "./deps";
 import { resolveCompleteRunSource } from "./source-evidence";
-import { batchSpecialistSources } from "./source-batches";
+import { batchSectionSources, batchSpecialistSources } from "./source-batches";
 
 type Outline = z.infer<typeof acousticConceptOutlineSchema>;
 type Part = z.infer<typeof acousticSectionOutputSchema>;
 export type AcousticDraft = {
   inputHash: string;
   outline: Outline;
-  sections: Record<string, { inputHash: string; parts: Part[] }>;
+  inputByteBudget?: number;
+  sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]> }>;
   previousReview?: unknown;
 };
 
@@ -21,6 +23,8 @@ export type AcousticDraft = {
 export async function authorAcousticConcept(input: {
   d: AppDeps; projectId: string; id: AcousticConceptId; goal: string;
   findings: unknown; sourceVersionIds: string[]; limits: AgentExecutionLimits; maxOutputTokens: number;
+  maxParallel: number;
+  inputByteBudget?: number; contextOverhead?: unknown;
   previousReview?: unknown; draft?: AcousticDraft;
   assertActive: () => Promise<unknown>;
   call: (context: Record<string, unknown>, validate: (output: unknown) => unknown) => Promise<unknown>;
@@ -49,7 +53,20 @@ export async function authorAcousticConcept(input: {
       documentTask: "outline", documentTemplate: { id, version: 1 }, sectionKeys: keys,
       findings: input.findings, sourceVersionIds: input.sourceVersionIds, previousReview: input.previousReview,
     }, value => outlineSchema.parse(value)));
-    draft = { inputHash, outline, sections: {}, previousReview: input.previousReview };
+    // Normalize new outlines only: old drafts retain their batch identities on retry.
+    for (const section of outline.sections) {
+      const ranges: typeof section.sources = [];
+      for (const versionId of new Set(section.sources.map(range => range.versionId))) {
+        for (const range of section.sources.filter(range => range.versionId === versionId).sort((a, b) => a.pageStart - b.pageStart)) {
+          const previous = ranges.at(-1);
+          if (previous?.versionId === versionId && range.pageStart <= previous.pageEnd + 1)
+            previous.pageEnd = Math.max(previous.pageEnd, range.pageEnd);
+          else ranges.push({ ...range });
+        }
+      }
+      section.sources = ranges;
+    }
+    draft = { inputHash, outline, sections: {}, previousReview: input.previousReview, inputByteBudget: input.inputByteBudget };
     await input.checkpoint(draft, "outline", 1, 1);
   }
   const { outline } = draft;
@@ -67,47 +84,112 @@ export async function authorAcousticConcept(input: {
   }
   const bodies: Record<string, string> = {};
   const citations = new Set(outline.attachments.map(a => a.versionId));
+  const resolvedRanges = new Map<string, Awaited<ReturnType<typeof resolveCompleteRunSource>>>();
   for (const key of keys) {
     await input.assertActive();
     const definition = outline.sections.find(section => section.key === key)!;
     const evidence = [];
     for (const range of definition.sources) {
-      const source = await resolveCompleteRunSource(d, projectId, range, input.assertActive);
+      const rangeKey = `${range.versionId}:${range.pageStart}:${range.pageEnd}`;
+      const source = resolvedRanges.get(rangeKey) ?? await resolveCompleteRunSource(d, projectId, range, input.assertActive);
       if (source?.status !== "resolved" || source.source?.versionId !== range.versionId || source.content?.status !== "available")
         invalid(["sections"], "The selected source range has no readable evidence.");
       if (source.content.coverage && (source.content.coverage.pageEnd < range.pageEnd || source.content.coverage.truncated))
         invalid(["sections"], "The selected source page range is incomplete.");
+      resolvedRanges.set(rangeKey, source);
       evidence.push({ versionId: range.versionId, name: source.source.name, version: source.source.version,
         text: String(source.content.text), coverage: source.content.coverage, retrieval: source.content.retrieval,
         extractionNotes: source.content.reason });
     }
-    // Scale input pieces down for small presets; never raise cost/token settings silently.
-    const batches = batchSpecialistSources(evidence, Math.max(1024, Math.min(16000, input.maxOutputTokens * 2)));
+    const sectionContext = {
+      documentTask: "section", documentTemplate: { id, version: 1 }, section: key,
+      project: outline.project, language: outline.language,
+      attachments: outline.attachments.filter(a => a.section === key), previousReview: draft.previousReview,
+    };
+    // Reserve instructions/schema space plus the actual variable context. A byte
+    // budget is conservative, not an assumed four-characters-per-token ratio.
+    const byteLimit = draft.inputByteBudget === undefined ? undefined : draft.sections[key]?.byteLimit
+      ?? draft.inputByteBudget - 16384 - Buffer.byteLength(JSON.stringify({ goal: input.goal,
+        contextOverhead: input.contextOverhead, ...sectionContext, sourceVersionIds: definition.sources.map(range => range.versionId),
+        batch: 1000000, batchCount: 1000000, splitOnTruncation: true }), "utf8");
+    if (byteLimit !== undefined && byteLimit < 1024) invalid(["sections"], "Report context exceeds the model input budget.");
+    // Historical/unknown-model drafts keep their exact batching and retry contract.
+    const legacyLimit = Math.max(1024, Math.min(16000, input.maxOutputTokens * 2));
+    const batches = byteLimit === undefined ? batchSpecialistSources(evidence, legacyLimit) : batchSectionSources(evidence, byteLimit);
     const sectionHash = hash(batches);
-    const progress = draft.sections[key]?.inputHash === sectionHash ? draft.sections[key]! : { inputHash: sectionHash, parts: [] };
+    const progress: AcousticDraft["sections"][string] = draft.sections[key]?.inputHash === sectionHash
+      ? draft.sections[key]! : { inputHash: sectionHash, parts: [], byteLimit };
     draft.sections[key] = progress;
-    for (let index = progress.parts.length; index < batches.length; index++) {
-      const batch = batches[index]!;
+    let nextIndex = 0;
+    let stopped = false;
+    let failure: unknown;
+    let checkpoint = Promise.resolve();
+    const save = (update: () => void) => {
+      checkpoint = checkpoint.then(async () => {
+        update();
+        await input.checkpoint(draft, key, progress.parts.filter(Boolean).length, batches.length);
+      });
+      return checkpoint;
+    };
+    const requestPart = async (batch: typeof batches[number], batchNumber: number, batchCount: number, splitOnTruncation: boolean, parentBatch?: number) => {
       const allowed = new Set(batch.map(source => source.versionId));
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
-        if (!part.complete) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
+        if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
         const inline = part.content.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [];
         if (part.citations.some(v => !allowed.has(v)) || inline.some(v => !part.citations.includes(v)))
           ctx.addIssue({ code: "custom", path: ["citations"], message: "Cite only source versions supplied in this piece." });
       });
-      const part = partSchema.parse(await input.call({
-        documentTask: "section", documentTemplate: { id, version: 1 }, section: key,
-        project: outline.project, language: outline.language, sources: batch,
-        sourceVersionIds: [...allowed], batch: index + 1, batchCount: batches.length,
-        attachments: outline.attachments.filter(a => a.section === key),
-        previousReview: draft.previousReview,
+      return partSchema.parse(await input.call({
+        ...sectionContext, sources: batch, sourceVersionIds: [...allowed], batch: batchNumber, batchCount,
+        ...(byteLimit === undefined ? {} : { splitOnTruncation, parentBatch }),
       }, value => partSchema.parse(value)));
-      progress.parts.push(part);
-      // Keep complete pieces even when they exceed the soft writing target.
-      await input.checkpoint(draft, key, index + 1, batches.length);
-    }
-    bodies[key] = progress.parts.map(part => part.content).join("\n\n");
-    for (const part of progress.parts) for (const citation of part.citations) citations.add(citation);
+    };
+    const writePiece = async (index: number) => {
+      const batch = batches[index]!;
+      let part: Part | undefined;
+      if (!progress.fallbacks?.[index]) {
+        try { part = await requestPart(batch, index + 1, batches.length, byteLimit !== undefined); }
+        catch (error) {
+          const metadata = error as { failureCategory?: string; diagnostics?: unknown };
+          const diagnostics = sanitizeProviderDiagnostics(metadata?.diagnostics);
+          if (byteLimit === undefined || metadata?.failureCategory !== "validation"
+            || (diagnostics.finishReason !== "length" && diagnostics.errorId !== "STRUCTURED_OUTPUT_TRUNCATED")) throw error;
+        }
+      }
+      if (!part?.complete) {
+        const smaller = batchSpecialistSources(batch.map(source => ({ ...source, truncated: source.extractionTruncated })), legacyLimit);
+        if (smaller.length < 2) invalid(["complete"], "The section piece is incomplete within its configured output budget.");
+        if (!progress.fallbacks?.[index]) await save(() => { (progress.fallbacks ??= {})[index] = []; });
+        const parts = progress.fallbacks![index]!;
+        // Keep successful fallback pieces across cancellation/restart. Each root
+        // worker owns its fallback sequence, preserving the shared parallel cap.
+        for (let i = parts.length; i < smaller.length; i++) {
+          if (stopped) throw new Error("Section drafting stopped after a sibling failure.");
+          const completed = await requestPart(smaller[i]!, i + 1, smaller.length, false, index + 1);
+          await save(() => { parts.push(completed); });
+        }
+        part = { content: parts.map(piece => piece.content).join("\n\n"), citations: [...new Set(parts.flatMap(piece => piece.citations))], complete: true };
+      }
+      // Serialize draft mutations and writes, but not provider calls. JSON nulls
+      // preserve holes when later pieces finish first; old prefix arrays still work.
+      await save(() => { progress.parts[index] = part!; });
+    };
+    await Promise.allSettled(Array.from({ length: Math.min(input.maxParallel, batches.length) }, async () => {
+      try {
+        while (!stopped && nextIndex < batches.length) {
+          const index = nextIndex++;
+          if (!progress.parts[index]) await writePiece(index);
+        }
+      } catch (error) {
+        if (!stopped) failure = error;
+        stopped = true;
+        throw error;
+      }
+    }));
+    // Drain in-flight siblings before releasing the lease or failing the run.
+    if (stopped) throw failure;
+    bodies[key] = progress.parts.map(part => part!.content).join("\n\n");
+    for (const part of progress.parts) for (const citation of part!.citations) citations.add(citation);
   }
   const template = acousticConceptTemplateSchema.parse({ id, version: 1, language: outline.language,
     project: outline.project, attachments: outline.attachments, ...bodies });
