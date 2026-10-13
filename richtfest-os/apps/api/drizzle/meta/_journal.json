@@ -225,6 +225,13 @@
       "when": 1791870000000,
       "tag": "0031_agent_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791894957675,
+      "tag": "0032_company_knowledge_library",
+      "breakpoints": true
     }
   ]
 }

@@ -48,12 +48,15 @@ const router = createBrowserRouter([
           Component: (await import("./screens/company-knowledge"))
             .CompanyKnowledge,
         }),
-        loader: ({ params }) =>
-          prefetch(
+        loader: ({ params, request }) => {
+          const search = new URL(request.url).searchParams;
+          const ask = search.get("view") === "ask";
+          return prefetch(
             params.draftId
               ? `/knowledge/drafts/${params.draftId}`
-              : "/knowledge/drafts?scope=company",
-          )(),
+              : `/knowledge/library?${new URLSearchParams({ category: search.get("category") || "all", status: search.get("status") || "all", q: ask ? "" : search.get("q") || "", page: ask ? "0" : String(Math.max(0, Number(search.get("page")) || 0)) })}`,
+          )();
+        },
       },
       {
         path: "/projects",

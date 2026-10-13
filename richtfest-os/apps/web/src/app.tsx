@@ -88,7 +88,7 @@ export function App({ initializing = false }: { initializing?: boolean }) {
                   r.path === "/"
                     ? "/dashboard"
                     : r.path === "/knowledge"
-                      ? "/knowledge/drafts?scope=company"
+                      ? "/knowledge/library?category=all&status=all&q=&page=0"
                       : r.path === "/customers"
                         ? "/crm/customers"
                         : r.path === "/team"

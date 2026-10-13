@@ -21,11 +21,23 @@ Administrators with both `knowledge:read` and `access:manage` can configure the 
 
 ## Review company knowledge
 
-Open **Company knowledge** in the navigation to review shared, company-wide entries. The default **Awaiting review** filter shows unapproved drafts; switch to **Approved** or **All**, or search by title. Project-specific knowledge remains in its project's Knowledge view. Pending-review links on the overview open the corresponding company entry or project knowledge view.
+Open **Company knowledge** in the navigation to browse shared, company-wide entries. **Browse** defaults to **All** review statuses; switch to **Approved** or **Awaiting review**, or search by title. Lists are paginated with 25 entries per page. Project-specific knowledge remains in its project's Knowledge view. Pending-review links on the overview open the corresponding company entry or project knowledge view.
+
+The category rail scopes both **Browse** and **Ask knowledge**. Existing entries start **Unfiled**. Users with `knowledge:write` can create and rename one-level categories and move selected entries, including back to Unfiled. Category names are unique within the workspace, ignoring case. Selection is limited to the current page and clears when filters or pages change. Moves are atomic and audited; they do not change content, approval or agent-profile assignments. Categories are organization, not separate access boundaries.
 
 Open an entry to read its full formatted content, source references and caveats. Entries have stable links that can be shared with colleagues in the same workspace. Company imports may contain filenames and checksums in their text; those references are not uploaded originals or linked file revisions. Check the underlying evidence before approval.
 
 After reading, choose **Approve knowledge** and confirm. Reading requires `knowledge:read`; only users with `knowledge:approve` see the approval action, and the server enforces that permission. Approval is recorded with the reviewer and time. It makes the entry eligible for explicit assignment under Settings → Agents; it neither assigns it automatically nor certifies an engineering calculation. No bulk approval occurs when importing or opening an entry.
+
+## Ask company knowledge
+
+**Ask knowledge** accepts natural-language questions within the selected category and review status. Execution requires `knowledge:read`, `agent:run`, a configured active provider connection and its low-complexity supervisor preset. It uses the explicit workspace provider selection and that provider's personal credential before its workspace credential. Without a connection or preset, search is unavailable rather than simulated.
+
+The model expands the question into up to eight German/English terms. PostgreSQL full-text search retrieves at most eight company entries from this workspace; project knowledge is excluded. Each entry supplies at most 4,000 characters of matching source windows. A second tool-free model call answers only from those excerpts. Each call is capped at the lower of the configured preset limit and 2,500 output tokens. This is bounded retrieval, not an exhaustive document review or a deterministic calculation.
+
+Answers display linked source excerpts and their review status at search time. The server rejects unknown entry IDs and quotes that are not exact substrings of the supplied source windows. Exact quotes verify provenance, not the correctness of the model's interpretation or whether they support every claim. Check current content and caveats before use. Broaden filters or rephrase when no supported answer is found.
+
+Questions, filters, answers, source-body hashes, citation snapshots, usage and execution status are persisted in Postgres. Recent searches are private to the initiating user within the workspace, not shared conversation records. Search start and completion/failure are audited. Failed or interrupted calls are not automatically retried; running records older than three minutes appear interrupted until a terminal result arrives. A new search is an explicit new provider request. Neither search nor category changes approve knowledge or assign it to agent profiles.
 
 ## Activity without clutter
 

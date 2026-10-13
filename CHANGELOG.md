@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Company knowledge can be organized into categories and searched with natural-language questions. Answers include linked source excerpts and review badges; private search history is saved, and categories never change approval or agent assignments. AI search requires a configured provider.
+
 - Shared work now uses compact task rows with expandable instructions, readable review statuses and a single header. Completed and cancelled tasks stay accessible without dominating the list.
 
 - Chat scrollbars now blend into light and dark themes instead of showing a bright track in dark mode.

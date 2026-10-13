@@ -131,6 +131,8 @@ export type ProviderRequest = {
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
   maxOutputTokens?: number;
   executionLimits?: AgentExecutionLimits;
+  systemInstructions?: string;
+  includeOpenUI?: boolean;
   goal: string;
   context: unknown;
   image?: { mediaType: "image/jpeg"; data: string };

@@ -9,6 +9,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 export const conversations = pgTable("knowledge_conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
@@ -52,10 +53,33 @@ export const tasks = pgTable("knowledge_tasks", {
     .defaultNow()
     .notNull(),
 });
+export const knowledgeCategories = pgTable("knowledge_categories", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  name: text("name").notNull(),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ name: uniqueIndex("knowledge_categories_tenant_name").on(table.tenantId, sql`lower(${table.name})`) }));
+export const knowledgeSearches = pgTable("knowledge_searches", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  createdBy: uuid("created_by").notNull(),
+  question: text("question").notNull(),
+  filters: jsonb("filters").notNull(),
+  status: text("status").notNull().default("running"),
+  provider: text("provider").notNull(),
+  answer: text("answer"),
+  citations: jsonb("citations").notNull().default([]),
+  usage: jsonb("usage").notNull().default([]),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => ({ history: index("knowledge_searches_actor_history").on(table.tenantId, table.createdBy, table.createdAt) }));
 export const drafts = pgTable("knowledge_drafts", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   projectId: uuid("project_id"),
+  categoryId: uuid("category_id").references(() => knowledgeCategories.id),
   title: text("title").notNull(),
   body: text("body").notNull(),
   sourceRefs: jsonb("source_refs").notNull().default([]),
@@ -66,7 +90,9 @@ export const drafts = pgTable("knowledge_drafts", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
-});
+}, (table) => ({
+  companySearch: index("knowledge_drafts_company_search").using("gin", sql`to_tsvector('german'::regconfig, ${table.title} || ' ' || ${table.body})`).where(sql`${table.projectId} is null`),
+}));
 export const agentRuns = pgTable("knowledge_agent_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

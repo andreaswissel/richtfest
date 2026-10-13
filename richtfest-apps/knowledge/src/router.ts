@@ -16,6 +16,7 @@ import type { AppDeps } from "./deps";
 import { agentProfilesRouter } from "./agent-profiles";
 import { runsRouter } from "./runs";
 import { reviewsRouter } from "./reviews";
+import { companyLibraryRouter } from "./company-library";
 import { conversation, missing } from "./workspace";
 import { workspaceRouter } from "./workspace";
 import { attachUsageSummaries } from "./usage";
@@ -59,6 +60,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(workspaceRouter(getDeps));
   router.use(runsRouter(getDeps));
   router.use(reviewsRouter(getDeps));
+  router.use(companyLibraryRouter(getDeps));
   router.get("/conversations", async (req, res, next) => {
     try {
       const d = getDeps(req);
