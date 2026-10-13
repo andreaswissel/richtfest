@@ -2,7 +2,7 @@
 
 ## 2026-10-13
 
-- Project resource tabs now have comfortable horizontal padding in both Dense and Normal display modes.
+- Project resource tabs now have comfortable horizontal padding in both Dense and Normal display modes. Workspace tabs keep a consistent font weight so switching tabs no longer shifts neighboring labels.
 
 - Added opt-in TypeSafe Jev summary routing and supervised company-knowledge reranking, with safe fallbacks, explicit credential setup and tracked usage. Reviews and approvals remain unchanged; neither option promises lower total cost.
 
