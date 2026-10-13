@@ -8,6 +8,7 @@ import {
   primaryKey,
   index,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 export const conversations = pgTable("knowledge_conversations", {
@@ -65,6 +66,7 @@ export const knowledgeSearches = pgTable("knowledge_searches", {
   tenantId: uuid("tenant_id").notNull(),
   createdBy: uuid("created_by").notNull(),
   question: text("question").notNull(),
+  parentSearchId: uuid("parent_search_id").references((): AnyPgColumn => knowledgeSearches.id),
   filters: jsonb("filters").notNull(),
   status: text("status").notNull().default("running"),
   provider: text("provider").notNull(),
@@ -74,13 +76,19 @@ export const knowledgeSearches = pgTable("knowledge_searches", {
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
-}, (table) => ({ history: index("knowledge_searches_actor_history").on(table.tenantId, table.createdBy, table.createdAt) }));
+}, (table) => ({
+  history: index("knowledge_searches_actor_history").on(table.tenantId, table.createdBy, table.createdAt),
+  parent: index("knowledge_searches_parent").on(table.parentSearchId),
+}));
 export const drafts = pgTable("knowledge_drafts", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   projectId: uuid("project_id"),
   categoryId: uuid("category_id").references(() => knowledgeCategories.id),
   title: text("title").notNull(),
+  displayTitle: text("display_title"),
+  sourceLabel: text("source_label"),
+  chapter: text("chapter"),
   body: text("body").notNull(),
   sourceRefs: jsonb("source_refs").notNull().default([]),
   status: text("status").notNull().default("draft"),

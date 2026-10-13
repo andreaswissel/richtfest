@@ -50,11 +50,15 @@ const router = createBrowserRouter([
         }),
         loader: ({ params, request }) => {
           const search = new URL(request.url).searchParams;
-          const ask = search.get("view") === "ask";
+          if (!params.draftId) {
+            prefetch("/knowledge/searches")();
+            const searchId = search.get("searchId");
+            if (searchId) prefetch(`/knowledge/searches/${searchId}`)();
+          }
           return prefetch(
             params.draftId
               ? `/knowledge/drafts/${params.draftId}`
-              : `/knowledge/library?${new URLSearchParams({ category: search.get("category") || "all", status: search.get("status") || "all", q: ask ? "" : search.get("q") || "", page: ask ? "0" : String(Math.max(0, Number(search.get("page")) || 0)) })}`,
+              : `/knowledge/library?${new URLSearchParams({ category: search.get("category") || "all", status: search.get("status") || "all", q: search.get("q") || "", page: String(Math.max(0, Number(search.get("page")) || 0)) })}`,
           )();
         },
       },

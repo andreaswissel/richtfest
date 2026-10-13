@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
-
 ## 2026-10-13
+
+- Company knowledge now opens with a question bar and follow-up chat. Its compact library groups source and chapter beneath each title, keeps selection actions in a floating bar, and supports confirmed, audited bulk approval. A controlled organization pass can categorize the imported Baukosten training entries without changing their original content or approvals.
 
 - Agent reviews now group evidence by model capacity instead of small file batches and avoid duplicate report input, reducing repeated work and cost. Retries preserve completed reviews and unresolved findings.
 

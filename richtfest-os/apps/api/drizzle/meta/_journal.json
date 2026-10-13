@@ -246,6 +246,13 @@
       "when": 1791897000000,
       "tag": "0034_component_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791900000000,
+      "tag": "0035_company_knowledge_conversations",
+      "breakpoints": true
     }
   ]
 }

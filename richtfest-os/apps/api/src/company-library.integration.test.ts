@@ -3,6 +3,7 @@ import express from "express";
 import { sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { companyLibraryRouter } from "../../../../richtfest-apps/knowledge/src/company-library";
+import { organizeCompanyImports } from "../../../../richtfest-apps/knowledge/src/company-imports";
 import type { AppDeps, ProviderRequest } from "@richtfest/knowledge/deps";
 import { createDatabase } from "./db/client";
 
@@ -27,6 +28,7 @@ const local =
     let mode = "valid",
       configured = true,
       presetConfigured = true;
+    let failApprovalAudit = false;
     const calls: ProviderRequest[] = [];
     const usage = {
       provider: "openai" as const,
@@ -58,6 +60,8 @@ const local =
               _type: string,
               id: string,
             ) => {
+              if (failApprovalAudit && action === "knowledge.draft.approved")
+                throw new Error("Audit unavailable");
               await tx.execute(
                 sql`insert into test_audit values (${action}, ${id})`,
               );
@@ -169,6 +173,14 @@ const local =
         await Bun.file(
           new URL(
             "../drizzle/0032_company_knowledge_library.sql",
+            import.meta.url,
+          ),
+        ).text(),
+      );
+      await pool.query(
+        await Bun.file(
+          new URL(
+            "../drizzle/0035_company_knowledge_conversations.sql",
             import.meta.url,
           ),
         ).text(),
@@ -327,7 +339,10 @@ const local =
       ]);
       expect(saved.usage).toEqual([usage, usage]);
       expect(saved.filters).toEqual({ category: cat.id, status: "approved" });
-      expect((await request(`/searches/${saved.id}`)).body.data).toEqual(saved);
+      expect((await request(`/searches/${saved.id}`)).body.data).toEqual({
+        ...saved,
+        turns: [saved],
+      });
       expect((await request("/searches")).body.data.items[0].filters).toEqual(
         saved.filters,
       );
@@ -420,6 +435,421 @@ const local =
           )
         ).rows[0].count,
       ).toBe(7);
+      mode = "valid";
+      const metadata = {
+        displayTitle: " Fire doors ",
+        sourceLabel: " Handbook ",
+        chapter: " Chapter 2 ",
+      };
+      const edit = await request(
+        `/drafts/${approved}/library`,
+        "PATCH",
+        metadata,
+      );
+      expect(edit.status).toBe(200);
+      expect(edit.body.data).toMatchObject({
+        title: "Wartung",
+        body: longBody,
+        status: "approved",
+        approvedBy: actor,
+        displayTitle: "Fire doors",
+        sourceLabel: "Handbook",
+        chapter: "Chapter 2",
+      });
+      expect(
+        (await request("/library?status=approved&q=fire")).body.data.items[0],
+      ).toMatchObject({
+        id: approved,
+        displayTitle: "Fire doors",
+        sourceLabel: "Handbook",
+        chapter: "Chapter 2",
+      });
+      expect(
+        (await request("/library?status=approved&q=Wartung")).body.data.total,
+      ).toBe(1);
+      await request(`/drafts/${approved}/library`, "PATCH", metadata);
+      expect(
+        (
+          await pool.query(
+            "select count(*)::int as n from test_audit where action='knowledge.library_updated'",
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      const afterMetadata = (
+        await pool.query("select * from knowledge_drafts where id=$1", [
+          approved,
+        ])
+      ).rows[0];
+      expect(afterMetadata).toEqual({
+        ...before,
+        category_id: cat.id,
+        display_title: "Fire doors",
+        source_label: "Handbook",
+        chapter: "Chapter 2",
+      });
+      for (const id of [foreign, project])
+        expect(
+          (await request(`/drafts/${id}/library`, "PATCH", metadata)).status,
+        ).toBe(404);
+      for (const permission of ["knowledge:read", "knowledge:write"])
+        expect(
+          (
+            await request(`/drafts/${approved}/library`, "PATCH", metadata, {
+              "x-deny": permission,
+            })
+          ).status,
+        ).toBe(403);
+      for (const invalid of [
+        { displayTitle: " " },
+        { chapter: "x".repeat(301) },
+        { body: "Overwrite" },
+        { categoryId: "bad" },
+      ])
+        expect(
+          (await request(`/drafts/${approved}/library`, "PATCH", invalid))
+            .status,
+        ).toBe(400);
+      expect(
+        (
+          await request(`/drafts/${approved}/library`, "PATCH", {
+            categoryId: foreignCat,
+          })
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await request(`/drafts/${draft}/library`, "PATCH", {
+            displayTitle: null,
+            sourceLabel: null,
+            chapter: null,
+            categoryId: cat.id,
+          })
+        ).status,
+      ).toBe(200);
+
+      const root = (await request("/searches", "POST", searchInput)).body.data;
+      const follow = (
+        id: string,
+        extra = {},
+        headers: Record<string, string> = {},
+      ) =>
+        request(
+          "/searches",
+          "POST",
+          { question: "And what about this?", parentSearchId: id, ...extra },
+          headers,
+        );
+      for (const headers of [
+        { "x-actor": "other" },
+        { "x-tenant": "other" },
+      ] as Record<string, string>[])
+        expect((await follow(root.id, {}, headers)).status).toBe(404);
+      expect((await follow(crypto.randomUUID())).status).toBe(404);
+      expect((await follow("invalid")).status).toBe(400);
+      expect((await follow(root.id, { category: "all" })).status).toBe(400);
+      expect((await follow(root.id, { status: "draft" })).status).toBe(400);
+      const child = (await follow(root.id)).body.data;
+      expect(child).toMatchObject({
+        parentSearchId: root.id,
+        filters: root.filters,
+        status: "completed",
+      });
+      for (const call of calls.slice(-2))
+        expect((call.context as any).conversation.turns).toEqual([
+          { question: root.question, answer: root.answer },
+        ]);
+      expect((calls.at(-1)!.context as any).entries[0]).toMatchObject({
+        displayTitle: "Fire doors",
+        sourceLabel: "Handbook",
+        chapter: "Chapter 2",
+      });
+      expect((await request(`/searches/${child.id}`)).body.data.turns).toEqual([
+        root,
+        child,
+      ]);
+      expect(
+        (await request("/searches")).body.data.items.some(
+          (r: any) => r.id === root.id,
+        ),
+      ).toBe(false);
+      expect((await follow(root.id)).status).toBe(409);
+      expect((await follow(saved.id)).status).toBe(409); // Effective interruption, no persisted status mutation.
+      await pool.query(
+        "update knowledge_searches set status='running' where id=$1",
+        [child.id],
+      );
+      expect((await follow(child.id)).status).toBe(409);
+      await pool.query(
+        "update knowledge_searches set status='failed',answer=null where id=$1",
+        [child.id],
+      );
+      let leaf = (await follow(child.id)).body.data;
+      expect(leaf.status).toBe("completed");
+      // Scope validation covers every ancestor, not only the selected parent.
+      await pool.query(
+        "update knowledge_searches set created_by=$1 where id=$2",
+        [outsider, root.id],
+      );
+      expect((await follow(leaf.id)).status).toBe(404);
+      expect((await request(`/searches/${leaf.id}`)).status).toBe(404);
+      await pool.query(
+        "update knowledge_searches set created_by=$1,tenant_id=$2 where id=$3",
+        [actor, other, root.id],
+      );
+      expect((await follow(leaf.id)).status).toBe(404);
+      await pool.query(
+        "update knowledge_searches set tenant_id=$1 where id=$2",
+        [tenant, root.id],
+      );
+      for (let i = 3; i < 20; i++) {
+        await pool.query(
+          "update knowledge_searches set answer=$1,question=$2 where id=$3",
+          ["a".repeat(10000), "q".repeat(1000), leaf.id],
+        );
+        leaf = (await follow(leaf.id)).body.data;
+        expect(leaf.status).toBe("completed");
+        for (const call of calls.slice(-2)) {
+          const context = (call.context as any).conversation;
+          expect(context.trust).toBe("UNTRUSTED");
+          expect(context.previousAnswersAreEvidence).toBe(false);
+          expect(context.turns.length).toBeLessThanOrEqual(6);
+          expect(
+            context.turns.reduce(
+              (n: number, t: any) => n + t.question.length + t.answer.length,
+              0,
+            ),
+          ).toBeLessThanOrEqual(12000);
+          expect(call.systemInstructions?.toLowerCase()).toContain(
+            "previous answers",
+          );
+        }
+      }
+      expect(
+        (await request(`/searches/${leaf.id}`)).body.data.turns.length,
+      ).toBe(20);
+      expect((await follow(leaf.id)).status).toBe(409);
+      expect(
+        (await request("/searches")).body.data.items.length,
+      ).toBeLessThanOrEqual(10);
+      // Follow-up evidence cannot be supplied by previous answers.
+      mode = "quote";
+      const failedRoot = (await request("/searches", "POST", searchInput)).body
+        .data;
+      expect((await follow(failedRoot.id)).body.data.status).toBe("failed");
+      mode = "valid";
+      const concurrentRoot = (await request("/searches", "POST", searchInput))
+        .body.data;
+      const concurrent = await Promise.all([
+        follow(concurrentRoot.id),
+        follow(concurrentRoot.id),
+      ]);
+      expect(concurrent.map((r) => r.status).sort()).toEqual([201, 409]);
+      expect(
+        (
+          await pool.query(
+            "select count(*)::int as n from knowledge_searches where parent_search_id=$1",
+            [concurrentRoot.id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      expect(
+        (
+          await pool.query("select * from knowledge_drafts where id=$1", [
+            approved,
+          ])
+        ).rows[0],
+      ).toEqual(afterMetadata);
+
+      const marker =
+        "<!-- richtfest-import:baukosten-2026-10-12:fixture -->\nPreserved source";
+      const importedTitle =
+        "Baukostenoptimierer · Kandidaten · Honorar · Teil 2/3";
+      const imported = await insert(importedTitle, marker, "approved");
+      const umlaut = await insert(
+        "Baukostenoptimierer · Kernhebel · Huelle",
+        marker,
+      );
+      const caseStudy = await insert(
+        "Baukostenoptimierer · Fall G-2 · Giersstraße 20, Berlin",
+        marker,
+      );
+      const glossary = await insert("Baukostenoptimierer · Glossar", marker);
+      const overrides = await insert(importedTitle, marker);
+      await request(`/drafts/${overrides}/library`, "PATCH", {
+        displayTitle: "Human title",
+      });
+      const untouched = [
+        overrides,
+        await insert(importedTitle, "No provenance marker"),
+        await insert(importedTitle, marker, "draft", other),
+        await insert(
+          importedTitle,
+          marker,
+          "draft",
+          tenant,
+          crypto.randomUUID(),
+        ),
+        await insert("Baukostenoptimierer · Unbekannt · Honorar", marker),
+      ];
+      const snapshot = (ids: string[]) =>
+        pool
+          .query(
+            "select * from knowledge_drafts where id=any($1::uuid[]) order by id",
+            [ids],
+          )
+          .then((r) => r.rows);
+      const originals = await snapshot([imported, ...untouched]);
+      const deps = {
+        db,
+        tenantId: tenant,
+        actorId: actor,
+        requirePermission() {},
+        audit: async (tx: any, action: string, _type: string, id: string) => {
+          await tx.execute(
+            sql`insert into test_audit values (${action}, ${id})`,
+          );
+        },
+      };
+      const plan = await organizeCompanyImports(deps);
+      expect(plan.changes).toHaveLength(4);
+      expect(plan.changes.find((c) => c.id === imported)).toEqual({
+        id: imported,
+        originalTitle: importedTitle,
+        category: "Honorar",
+        displayTitle: "Kandidaten",
+        sourceLabel: "Baukostenoptimierer",
+        chapter: "Teil 2/3",
+      });
+      expect(plan.changes.find((c) => c.id === umlaut)?.category).toBe("Hülle");
+      expect(plan.changes.find((c) => c.id === caseStudy)).toMatchObject({
+        category: "Fallstudien",
+        displayTitle: "Giersstraße 20, Berlin",
+        chapter: "Fall G-2",
+      });
+      expect(plan.changes.find((c) => c.id === glossary)?.category).toBe(
+        "Glossar",
+      );
+      expect(await snapshot([imported, ...untouched])).toEqual(originals);
+      const auditCount = async () =>
+        (await pool.query("select count(*)::int as n from test_audit")).rows[0]
+          .n;
+      const auditBefore = await auditCount();
+      expect((await organizeCompanyImports(deps, true)).changes).toEqual(
+        plan.changes,
+      );
+      expect(await snapshot(untouched)).toEqual(
+        originals.filter((r) => r.id !== imported),
+      );
+      const organized = (await snapshot([imported]))[0];
+      const {
+        category_id,
+        display_title,
+        source_label,
+        chapter,
+        ...preserved
+      } = organized;
+      expect({
+        ...preserved,
+        category_id: null,
+        display_title: null,
+        source_label: null,
+        chapter: null,
+      }).toEqual(originals.find((r) => r.id === imported));
+      expect(
+        (
+          await request("/library?status=all&q=Kandidaten")
+        ).body.data.items.find((r: any) => r.id === imported),
+      ).toMatchObject({
+        displayTitle: "Kandidaten",
+        sourceLabel: "Baukostenoptimierer",
+        chapter: "Teil 2/3",
+      });
+      expect(await auditCount()).toBe(auditBefore + 8); // Four categories and four records.
+      expect((await organizeCompanyImports(deps, true)).changes).toEqual([]);
+      expect(await auditCount()).toBe(auditBefore + 8);
+      await expect(
+        organizeCompanyImports(
+          {
+            ...deps,
+            requirePermission() {
+              throw new Error("Forbidden");
+            },
+          },
+          true,
+        ),
+      ).rejects.toThrow("Forbidden");
+      const reviewBefore = await snapshot([
+        imported,
+        umlaut,
+        glossary,
+        caseStudy,
+      ]);
+      const approveMany = (draftIds: string[], headers = {}) =>
+        request("/drafts/approve", "POST", { draftIds }, headers);
+      for (const permission of ["knowledge:read", "knowledge:approve"]) {
+        expect(
+          (await approveMany([umlaut], { "x-deny": permission })).status,
+        ).toBe(403);
+      }
+      expect(
+        (
+          await request("/library", "GET", undefined, {
+            "x-deny": "knowledge:approve",
+          })
+        ).body.data.canApprove,
+      ).toBe(false);
+      for (const invalid of [foreign, project, crypto.randomUUID()])
+        expect((await approveMany([umlaut, invalid])).status).toBe(404);
+      expect((await approveMany([])).status).toBe(400);
+      expect((await approveMany(Array(101).fill(umlaut))).status).toBe(400);
+      expect(await snapshot([imported, umlaut, glossary, caseStudy])).toEqual(
+        reviewBefore,
+      );
+      failApprovalAudit = true;
+      expect((await approveMany([umlaut, glossary])).status).toBe(500);
+      expect(await snapshot([imported, umlaut, glossary, caseStudy])).toEqual(
+        reviewBefore,
+      );
+      failApprovalAudit = false;
+      const reviewed = await approveMany([imported, umlaut, umlaut, glossary], {
+        "x-deny": "knowledge:write",
+      });
+      expect(reviewed.status).toBe(200); // Review does not require category-edit permission.
+      expect([...reviewed.body.data.changed].sort()).toEqual(
+        [umlaut, glossary].sort(),
+      );
+      const reviewAfter = await snapshot([
+        imported,
+        umlaut,
+        glossary,
+        caseStudy,
+      ]);
+      for (const row of reviewAfter) {
+        const old = reviewBefore.find((r) => r.id === row.id);
+        if ([umlaut, glossary].includes(row.id)) {
+          expect(row).toEqual({
+            ...old,
+            status: "approved",
+            approved_by: actor,
+            approved_at: row.approved_at,
+          });
+          expect(row.approved_at).toBeInstanceOf(Date);
+        } else expect(row).toEqual(old);
+      }
+      const approvalAudits = async () =>
+        (
+          await pool.query(
+            "select id from test_audit where action='knowledge.draft.approved' order by id",
+          )
+        ).rows.map((r) => r.id);
+      expect(await approvalAudits()).toEqual([umlaut, glossary].sort());
+      expect(
+        (await approveMany([imported, umlaut, glossary])).body.data.changed,
+      ).toEqual([]);
+      expect(await approvalAudits()).toEqual([umlaut, glossary].sort());
+      expect(await snapshot([imported, umlaut, glossary, caseStudy])).toEqual(
+        reviewAfter,
+      );
     } finally {
       server.close();
       await pool.end();
