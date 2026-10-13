@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Agents can discover company-knowledge categories, search within a folder or unfiled entries, and retain category, source and chapter labels alongside approved references. Search stays private and approval-aware without embeddings or extra AI search calls.
+
 - Agent messages now explicitly support “no reply target” in strict provider responses, avoiding forced reply IDs for new messages while preserving reply validation and duplicate-delivery protection.
 
 - Company knowledge now opens with a question bar and follow-up chat. Its compact library groups source and chapter beneath each title, keeps selection actions in a floating bar, and supports confirmed, audited bulk approval. A controlled organization pass can categorize the imported Baukosten training entries without changing their original content or approvals.

@@ -278,7 +278,7 @@ ${companyKnowledgePolicy}`;
   })])),
     ...(input.phase === "specialist" && input.searchCompanyKnowledge && (modelConfig?.maxSteps ?? 1) >= 2 ? {
       search_company_knowledge: createTool({ id: "search_company_knowledge",
-      description: "Search approved company reference excerpts with short subject terms. Not project evidence. Up to two distinct searches per assignment; use supplied receipts rather than repeating reads.",
+      description: "Search approved company reference excerpts with short subject terms and an optional category ID from context.companyKnowledgeCategories (_none for unfiled; null/all/omitted for all categories). Results include category, source and chapter labels. Not project evidence. Up to two distinct terms/category searches per assignment; reuse supplied receipts.",
       inputSchema: companyKnowledgeSearchSchema,
       outputSchema: companyKnowledgeReceiptSchema,
       execute: async (data, context) => {
@@ -290,7 +290,7 @@ ${companyKnowledgePolicy}`;
     }) } : {}),
   };
   if (tools.search_company_knowledge) {
-    toolManifest.push({ name: "search_company_knowledge", version: 1, description: tools.search_company_knowledge.description,
+    toolManifest.push({ name: "search_company_knowledge", version: 2, description: tools.search_company_knowledge.description,
       inputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(companyKnowledgeSearchSchema)),
     });
   }

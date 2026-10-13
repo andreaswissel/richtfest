@@ -97,12 +97,14 @@ export async function retrieveCompanyEntries(d: AppDeps, f: z.infer<typeof filte
   maxEntries = 8, maxCharsPerEntry = 4000, db = d.db) {
   const termQueries = terms.map(term => sql`plainto_tsquery('german', ${term})`);
   const query = sql`(${sql.join(termQueries, sql` || `)})`;
-  const result = await db.execute(sql`select ${drafts.id} as id, ${drafts.title} as title, ${drafts.displayTitle} as display_title, ${drafts.sourceLabel} as source_label, ${drafts.chapter} as chapter, ${drafts.status} as status, ${drafts.body} as body,
+  const result = await db.execute(sql`select ${drafts.id} as id, ${drafts.title} as title, ${drafts.displayTitle} as display_title, ${drafts.sourceLabel} as source_label, ${drafts.chapter} as chapter, ${drafts.categoryId} as category_id, ${categories.name} as category_name, ${drafts.status} as status, ${drafts.body} as body,
     ts_headline('german', ${drafts.body}, ${query}, 'StartSel=__RF_MATCH_START__,StopSel=__RF_MATCH_END__,MaxWords=180,MinWords=20,MaxFragments=4,FragmentDelimiter=|||') as excerpt
-    from ${drafts} where ${conditions(d, f)} and to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}) @@ ${query}
+    from ${drafts} left join ${categories} on ${categories.id} = ${drafts.categoryId} and ${categories.tenantId} = ${drafts.tenantId}
+    where ${conditions(d, f)} and to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}) @@ ${query}
     order by ts_rank(to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}), ${query}) desc, ${drafts.createdAt} desc, ${drafts.id} desc limit ${maxEntries}`);
   const entries = result.rows.map((r: any) => ({
     id: r.id, title: r.title, status: r.status,
+    categoryId: r.category_id, categoryName: r.category_name,
     displayTitle: r.display_title, sourceLabel: r.source_label, chapter: r.chapter,
     // Headline may omit boundary punctuation; recover exact source windows.
     excerpt: r.excerpt.replaceAll("__RF_MATCH_START__", "").replaceAll("__RF_MATCH_END__", "")

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
-import { searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
+import { companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import {
   supervisorRuns,
   agentRuns,
@@ -312,6 +312,7 @@ export async function executeRun(d: AppDeps, run: any) {
     const context = {
       history: boundedHistory,
       messaging: await agentMessagingContext(d, run),
+      companyKnowledgeCategories: await companyKnowledgeCategories(d),
       componentCatalog: await d.componentContext?.(run.goal),
       documentReview: await artifactReviewContext(d, run.conversationId),
       artifacts: recentArtifacts,

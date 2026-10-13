@@ -5,8 +5,9 @@ import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 import { executeRun, validateTool, assertEvidenceCitations } from "../richtfest-apps/knowledge/src/runs";
 import { createSupervisor, stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
+import { companyKnowledgeCategories, searchCompanyKnowledge } from "../richtfest-apps/knowledge/src/company-knowledge";
 import { drafts, agentRuns, supervisorRuns, agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEvents,
-  tasks, messages, artifacts, artifactRevisions } from "../richtfest-apps/knowledge/src/schema";
+  tasks, messages, artifacts, artifactRevisions, knowledgeCategories } from "../richtfest-apps/knowledge/src/schema";
 
 const url = process.env.DATABASE_URL;
 const integration = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname) ? test : test.skip;
@@ -16,12 +17,18 @@ async function fixture() {
   connection.searchParams.set("application_name", applicationName);
   const { db, pool } = createDatabase(connection.href);
   const tenantId = crypto.randomUUID(), otherTenant = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const categories = await db.insert(knowledgeCategories).values([
+    { tenantId, name: "Schallschutz", createdBy: actorId },
+    { tenantId, name: "Vergabe", createdBy: actorId },
+    { tenantId: otherTenant, name: "Secret category", createdBy: actorId },
+  ]).returning();
   const body = "Schallschutz: Mindestanforderungen sind kein vereinbarter erhöhter Schutz. Ausgabe 2022, Seite 17. Keine Projektprüfung.";
   const rows = await db.insert(drafts).values([
-    { tenantId, title: "Approved acoustics reference", body, status: "approved", createdBy: actorId, approvedBy: actorId, approvedAt: new Date() },
-    { tenantId, title: "Draft must stay private", body, status: "draft", createdBy: actorId },
-    { tenantId, projectId, title: "Project draft is not company knowledge", body, status: "approved", createdBy: actorId },
-    { tenantId: otherTenant, title: "Other tenant", body, status: "approved", createdBy: actorId },
+    { tenantId, title: "Approved acoustics reference", body, status: "approved", createdBy: actorId, approvedBy: actorId, approvedAt: new Date(),
+      categoryId: categories[0]!.id, displayTitle: "Protection targets", sourceLabel: "Acoustic reference 2022", chapter: "Chapter 3, page 17" },
+    { tenantId, title: "Draft must stay private", body, status: "draft", createdBy: actorId, categoryId: categories[0]!.id },
+    { tenantId, projectId, title: "Project draft is not company knowledge", body, status: "approved", createdBy: actorId, categoryId: categories[0]!.id },
+    { tenantId: otherTenant, title: "Other tenant", body, status: "approved", createdBy: actorId, categoryId: categories[2]!.id },
   ]).returning();
   let permitted = true;
   const audits: string[] = [];
@@ -38,11 +45,11 @@ async function fixture() {
     provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID(), checkpointVersion: 1 }).returning())[0]!;
   const cleanup = async () => {
     for (const tenant of [tenantId, otherTenant])
-      for (const table of [agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEvents, supervisorRuns, messages, artifactRevisions, artifacts, tasks, agentRuns, drafts])
+      for (const table of [agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEvents, supervisorRuns, messages, artifactRevisions, artifacts, tasks, agentRuns, drafts, knowledgeCategories])
         await db.delete(table).where(eq(table.tenantId, tenant));
     await pool.end();
   };
-  return { db, pool, applicationName, d, body, rows, createRun, cleanup, audits, deny: () => { permitted = false; } };
+  return { db, pool, applicationName, d, body, rows, categories, createRun, cleanup, audits, deny: () => { permitted = false; } };
 }
 
 integration("direct company retrieval is approved-only, scoped, audited and re-read on retry", async () => {
@@ -63,6 +70,8 @@ integration("direct company retrieval is approved-only, scoped, audited and re-r
     await executeRun(d, run);
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run.id)))[0]!.status).toBe("failed");
     expect(results[0].entries).toEqual([{ id: rows[0]!.id, title: rows[0]!.title, status: "approved", excerpt: body,
+      categoryId: f.categories[0]!.id, categoryName: "Schallschutz", displayTitle: "Protection targets",
+      sourceLabel: "Acoustic reference 2022", chapter: "Chapter 3, page 17",
       bodyHash: createHash("sha256").update(body).digest("hex") }]);
     expect(results[0].coverage.limited).toBe(true);
     expect(() => assertEvidenceCitations({ citations: [rows[0]!.id] }, new Set())).toThrow("not supplied");
@@ -100,6 +109,68 @@ integration("direct company retrieval is approved-only, scoped, audited and re-r
   } finally { await f.cleanup(); }
 });
 
+integration("agents discover tenant categories and filter matching content without broadening scope", async () => {
+  const f = await fixture();
+  const { db, d, categories, rows } = f;
+  try {
+    const otherMatches = await db.insert(drafts).values([
+      { tenantId: d.tenantId, title: "Tender", body: f.body, status: "approved", categoryId: categories[1]!.id, createdBy: d.actorId },
+      { tenantId: d.tenantId, title: "Unfiled", body: f.body, status: "approved", createdBy: d.actorId },
+    ]).returning();
+    const responses: any[] = [];
+    d.executeProvider = async input => {
+      const directory = (input.context as any).companyKnowledgeCategories;
+      expect(directory).toEqual({ categories: categories.slice(0, 2).map(({ id, name }) => ({ id, name })), truncated: false });
+      if (!input.toolResults?.length) return { status: "completed", output: { summary: "Search category", rationale: "", citations: [],
+        tools: [{ name: "search_company_knowledge", input: { terms: ["Mindestanforderungen"], category: directory.categories[0].id } }] } };
+      responses.push((input.toolResults[0] as any).result);
+      return { status: "completed", output: { summary: "Reviewed guidance", rationale: "", citations: [], tools: [] } };
+    };
+    const run = await f.createRun();
+    await executeRun(d, run);
+    expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run.id)))[0]!.status).toBe("needs_review");
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({ category: categories[0]!.id, entries: [{ id: rows[0]!.id, categoryName: "Schallschutz" }] });
+    const terms = ["Mindestanforderungen"];
+    for (const category of [undefined, null, "all"]) {
+      const result = await searchCompanyKnowledge(d, { terms, category });
+      expect(result.category).toBeUndefined();
+      expect(result.entries.map(e => e.id).sort()).toEqual([rows[0]!.id, ...otherMatches.map(e => e.id)].sort());
+    }
+    expect((await searchCompanyKnowledge(d, { terms, category: "_none" })).entries.map(e => e.id)).toEqual([otherMatches[1]!.id]);
+    expect((await searchCompanyKnowledge(d, { terms, category: categories[1]!.id })).entries.map(e => e.id)).toEqual([otherMatches[0]!.id]);
+    for (const category of [categories[2]!.id, crypto.randomUUID()])
+      expect(await searchCompanyKnowledge(d, { terms, category })).toMatchObject({ status: "no_matches", category, entries: [] });
+    expect(() => validateTool("search_company_knowledge", { terms, category: "Schallschutz" })).toThrow();
+    // Escaping-heavy imported text/labels must not crowd project evidence out
+    // of the model context; retained excerpts must still be exact source text.
+    const largeBody = ("Budgetprobe " + "\u0001".repeat(12) + " ").repeat(80);
+    await db.insert(drafts).values(Array.from({ length: 4 }, (_, i) => ({
+      tenantId: d.tenantId, createdBy: d.actorId, status: "approved", body: largeBody,
+      title: "\u0001".repeat(299) + i, displayTitle: "\u0001".repeat(300),
+      sourceLabel: "\u0001".repeat(300), chapter: "\u0001".repeat(300),
+    })));
+    const boundedSearch = await searchCompanyKnowledge(d, { terms: ["Budgetprobe"] });
+    expect(Buffer.byteLength(JSON.stringify(boundedSearch), "utf8")).toBeLessThanOrEqual(48000);
+    expect(boundedSearch.entries.length).toBeGreaterThan(0);
+    expect(boundedSearch.entries.length).toBeLessThan(4);
+    expect(boundedSearch.entries.every(e => largeBody.includes(e.excerpt) && e.excerpt.includes("Budgetprobe"))).toBe(true);
+    await db.insert(knowledgeCategories).values(Array.from({ length: 99 }, (_, i) => ({ tenantId: d.tenantId, name: `Extra ${i}`, createdBy: d.actorId })));
+    const bounded = await companyKnowledgeCategories(d);
+    expect(bounded!.categories).toHaveLength(100);
+    expect(bounded!.truncated).toBe(true);
+    expect(bounded!.categories.some(c => c.id === categories[2]!.id)).toBe(false);
+    await db.insert(knowledgeCategories).values(Array.from({ length: 100 }, (_, i) => ({ tenantId: d.tenantId, name: "\u0001".repeat(90) + i, createdBy: d.actorId })));
+    const byteBounded = await companyKnowledgeCategories(d);
+    expect(byteBounded!.truncated).toBe(true);
+    expect(byteBounded!.categories.length).toBeLessThan(100);
+    expect(Buffer.byteLength(JSON.stringify(byteBounded), "utf8")).toBeLessThanOrEqual(8192);
+    f.deny();
+    expect(await companyKnowledgeCategories(d)).toBeUndefined();
+    await expect(searchCompanyKnowledge(d, { terms, category: categories[0]!.id })).rejects.toThrow("Forbidden");
+  } finally { await f.cleanup(); }
+});
+
 integration("specialist knowledge receipts reach synthesis and independent review; changed references cannot resume", async () => {
   const f = await fixture();
   const { db, d, rows } = f;
@@ -115,15 +186,24 @@ integration("specialist knowledge receipts reach synthesis and independent revie
     if (input.phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Schallschutz", sourceVersionIds: [versionId] }] } };
     if (input.phase === "specialist") {
       expect(input.searchCompanyKnowledge).toBeDefined();
-      const result = await input.searchCompanyKnowledge!({ terms: ["Schallschutz"] });
+      const category = context.companyKnowledgeCategories.categories.find((c: any) => c.name === "Schallschutz").id;
+      const result = await input.searchCompanyKnowledge!({ terms: ["Schallschutz"], category });
       receipt = result.status === "already_retrieved" ? context.companyKnowledge.find((r: any) => r.receiptId === result.receiptId) : result;
       expect(receipt.entries[0].id).toBe(rows[0]!.id);
-      expect(await input.searchCompanyKnowledge!({ terms: ["Schallschutz"] })).toMatchObject({ status: "already_retrieved", receiptId: receipt.receiptId, entries: [] });
+      expect(receipt.entries[0]).toMatchObject({ categoryId: category, categoryName: "Schallschutz", sourceLabel: "Acoustic reference 2022", chapter: "Chapter 3, page 17" });
+      expect(await input.searchCompanyKnowledge!({ terms: ["Schallschutz"], category })).toMatchObject({ status: "already_retrieved", receiptId: receipt.receiptId, entries: [] });
       if (interruptOnce) {
         interruptOnce = false;
         throw Object.assign(new Error("Interrupted after saved retrieval"), { providerFailure: true, retryable: true, providerStatus: 503 });
       }
-      expect(await input.searchCompanyKnowledge!({ terms: ["Quantenbanane"] })).toMatchObject({ status: "no_matches", entries: [] });
+      // Identical terms with a different scope must consume the second slot,
+      // while strict-provider null/all and the old omitted form deduplicate.
+      const unfiltered = await input.searchCompanyKnowledge!({ terms: ["Schallschutz"] });
+      expect(unfiltered.status).toBe("matched");
+      expect(unfiltered.receiptId).not.toBe(receipt.receiptId);
+      for (const category of [null, "all"])
+        expect(await input.searchCompanyKnowledge!(validateTool("search_company_knowledge", { terms: ["Schallschutz"], category }) as any))
+          .toMatchObject({ status: "already_retrieved", receiptId: unfiltered.receiptId, entries: [] });
       expect(await input.searchCompanyKnowledge!({ terms: ["Brandschutz"] })).toMatchObject({ status: "limit_reached", entries: [] });
       return { status: "completed", output: { summary: "Approved acoustics reference distinguishes minimum and agreed protection; project target remains open.", rationale: "Company guidance, not project evidence.", citations: [versionId] } };
     }
@@ -149,15 +229,19 @@ integration("specialist knowledge receipts reach synthesis and independent revie
     const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id));
     expect((state!.assignments as any[])[0].companyKnowledge[0]).toEqual(receipt);
     expect((state!.history as any[]).find(h => h.phase === "specialist_batch").companyKnowledge[0]).toEqual(receipt);
+    // Reorganizing approved content does not revoke the saved reference.
+    await db.update(drafts).set({ categoryId: f.categories[1]!.id, sourceLabel: "Reorganized reference" }).where(eq(drafts.id, rows[0]!.id));
     await stepSupervisor(d, run.id);
     await stepSupervisor(d, run.id);
     expect(received.map(r => r.phase)).toEqual(["review", "independent_review"]);
     expect(received.every(r => r.receipts[0].entries[0].id === rows[0]!.id)).toBe(true);
+    expect(received.every(r => r.receipts[0].entries[0].categoryName === "Schallschutz" && r.receipts[0].category === f.categories[0]!.id)).toBe(true);
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run.id)))[0]!.status).toBe("needs_review");
     const [document] = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, d.tenantId));
     expect(document!.content).toContain("Approved acoustics reference");
     expect(document!.content).not.toContain(rows[0]!.id);
 
+    await db.update(drafts).set({ categoryId: f.categories[0]!.id, sourceLabel: "Acoustic reference 2022" }).where(eq(drafts.id, rows[0]!.id));
     const stale = await start();
     await db.update(drafts).set({ body: "Schallschutz: changed after specialist retrieval" }).where(eq(drafts.id, rows[0]!.id));
     await stepSupervisor(d, stale.id);

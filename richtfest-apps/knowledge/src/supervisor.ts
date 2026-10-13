@@ -24,7 +24,7 @@ import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt } from "@richtfest/shared";
-import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
+import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -353,6 +353,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
+        companyKnowledgeCategories: phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
+          ? await companyKnowledgeCategories(d) : undefined,
         acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         componentCatalog: await d.componentContext?.(run.goal),
@@ -393,7 +395,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             const known = assignment.companyKnowledge ?? [];
             // Full-text reads must not hold the shared checkpoint lock. This
             // snapshot only avoids redundant work; commit rechecks the budget.
-            const candidate = known.length < 2 && !known.some(r => stepHash({ terms: r.terms }) === inputHash)
+            const candidate = known.length < 2 && !known.some(r => stepHash({ terms: r.terms, category: r.category }) === inputHash)
               ? await searchCompanyKnowledge(d, input) : undefined;
             let receipt: CompanyKnowledgeReceipt | undefined;
             const saved = await commit(d, run, token, async (tx, current) => {
@@ -401,7 +403,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const assignment = (current.assignments as Assignment[]).find(a => a.runId === runId);
               if (!assignment) throw conflict("Knowledge specialist unavailable");
               const receipts = assignment.companyKnowledge ?? [];
-              const matching = receipts.find(r => stepHash({ terms: r.terms }) === inputHash);
+              const matching = receipts.find(r => stepHash({ terms: r.terms, category: r.category }) === inputHash);
               if (matching) {
                 await assertCompanyKnowledgeCurrent(d, [matching], tx);
                 // Already present in this attempt's context or a preceding tool

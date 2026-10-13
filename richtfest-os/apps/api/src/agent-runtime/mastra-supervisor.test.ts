@@ -15,20 +15,24 @@ import { calculateAcoustics } from "@richtfest/acoustics";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
 test("all configured specialist roles can retrieve company knowledge through Mastra without turning it into source citations", async () => {
+  const categoryId = crypto.randomUUID();
   const receipt = { receiptId: crypto.randomUUID(), status: "matched" as const, terms: ["Schallschutz"],
     entries: [{ id: crypto.randomUUID(), title: "Acoustic reference", status: "approved" as const,
+      categoryId, categoryName: "Schallschutz", displayTitle: "Protection targets", sourceLabel: "Reference 2022", chapter: "Page 17",
       excerpt: "Minimum requirements differ from agreed protection.", bodyHash: "a".repeat(64) }],
     coverage: { limited: true as const, maxEntries: 4 as const, maxCharsPerEntry: 2000 as const },
   };
   for (const role of ["source_reviewer", "requirements_reviewer", "sound_insulation", "construction_law", "cost_optimizer"]) {
     let round = 0;
+    const category = role === "source_reviewer" ? categoryId : null;
     const model = new MastraLanguageModelV2Mock({ doStream: async options => {
       const search = round++ === 0;
       const received = options.prompt.filter(message => message.role === "tool").flatMap(message => message.content)
         .flatMap(part => part.type === "tool-result" && part.output.type === "json" ? [part.output.value as any] : []);
+      if (!search) expect(received[0].entries[0]).toMatchObject({ categoryId, categoryName: "Schallschutz", sourceLabel: "Reference 2022", chapter: "Page 17" });
       return { stream: new ReadableStream({ start(controller) {
         controller.enqueue({ type: "stream-start", warnings: [] });
-        if (search) controller.enqueue({ type: "tool-call", toolCallId: "knowledge-1", toolName: "search_company_knowledge", input: JSON.stringify({ terms: ["Schallschutz"] }) });
+        if (search) controller.enqueue({ type: "tool-call", toolCallId: "knowledge-1", toolName: "search_company_knowledge", input: JSON.stringify({ terms: ["Schallschutz"], category }) });
         else {
           controller.enqueue({ type: "text-start", id: "result" });
           controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify({ summary: `${received[0].entries[0].title}: ${received[0].entries[0].excerpt}`, rationale: "General reference, not project evidence.", citations: [] }) });
@@ -40,7 +44,7 @@ test("all configured specialist roles can retrieve company knowledge through Mas
     } });
     const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role },
       modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 },
-      searchCompanyKnowledge: async () => receipt,
+      searchCompanyKnowledge: async input => { expect(input).toEqual({ terms: ["Schallschutz"], category: category ?? undefined }); return receipt; },
     }, "test-key", { model });
     expect(result).toMatchObject({ summary: "Acoustic reference: Minimum requirements differ from agreed protection.", citations: [] });
   }
