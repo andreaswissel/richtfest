@@ -57,7 +57,7 @@ export function ThreadRail({
   const archive = useMutation({
     mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
       api(`/knowledge/conversations/${id}/archive`, { archived }, "PATCH"),
-    onSuccess: async (data, variables) => {
+    onSuccess: (data, variables) => {
       queryClient.setQueryData(
         [`/knowledge/workspaces/${projectId}`],
         (old: RecordData | undefined) => {
@@ -79,14 +79,12 @@ export function ThreadRail({
         },
       );
       onArchived?.(variables.id, variables.archived);
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: [`/knowledge/workspaces/${projectId}`],
-        }),
-        queryClient.invalidateQueries({
-          queryKey: [`/knowledge/conversations?projectId=${projectId}`],
-        }),
-      ]);
+      void queryClient.invalidateQueries({
+        queryKey: [`/knowledge/workspaces/${projectId}`],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [`/knowledge/conversations?projectId=${projectId}`],
+      });
     },
   });
   const rename = useMutation({

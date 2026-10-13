@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Archiving and restoring threads no longer keeps the action busy while the workspace refreshes after a successful save.
+
 - Company knowledge can be organized into categories and searched with natural-language questions. Answers include linked source excerpts and review badges; private search history is saved, and categories never change approval or agent assignments. AI search requires a configured provider.
 
 - Shared work now uses compact task rows with expandable instructions, readable review statuses and a single header. Completed and cancelled tasks stay accessible without dominating the list.
