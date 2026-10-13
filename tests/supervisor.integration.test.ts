@@ -1328,6 +1328,8 @@ integration("failed specialist attempts persist bounded diagnostics and usage ex
         diagnostics: {
           errorId: attempts === 1 ? "STRUCTURED_OUTPUT_TRUNCATED" : "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
           finishReason: attempts === 1 ? "length" : "error",
+          providerCode: "invalid_json_schema", providerType: "invalid_request_error", providerParam: "text.format.schema",
+          providerRequestId: "req_diagnostic_123", providerMessage: "Invalid schema: required is missing. sk-secret",
           raw: "sk-secret", stack: "sk-secret",
           issues: [{ code: "too_big", path: ["summary"], maximum: 10000, message: "sk-secret", value: "sk-secret" }, { code: "invalid_type", path: ["sk-secret"] }],
         },
@@ -1350,6 +1352,9 @@ integration("failed specialist attempts persist bounded diagnostics and usage ex
     expect(metadata.every(value => value.runId === children[0]!.id)).toBe(true);
     expect(metadata[0].diagnostics.errorId).toBe("STRUCTURED_OUTPUT_TRUNCATED");
     expect(metadata[2].diagnostics.errorId).toBe("STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED");
+    expect(metadata[2].diagnostics).toMatchObject({ providerCode: "invalid_json_schema", providerType: "invalid_request_error",
+      providerParam: "text.format.schema", providerRequestId: "req_diagnostic_123",
+      providerMessage: "Invalid schema: required is missing. [redacted]" });
     expect(metadata[2].diagnostics.issues).toEqual([{ code: "too_big", path: ["summary"], maximum: 10000 }]);
     expect(JSON.stringify(events)).not.toContain("sk-secret");
     const usage = await db.select().from(agentRunUsage).where(eq(agentRunUsage.runId, children[0]!.id));
@@ -1373,6 +1378,9 @@ integration("failed specialist attempts persist bounded diagnostics and usage ex
       expect(step.output).toEqual({ failure: { category: "validation", providerStatus: null, diagnostics: event.diagnostics } });
     }
     expect(JSON.stringify(steps)).not.toContain("sk-secret");
+    const attemptEvents = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, children[0]!.id));
+    expect(attemptEvents.filter(event => event.eventType === "provider_attempt_failed").map(event => JSON.parse(event.paramsSummary!).diagnostics.providerRequestId))
+      .toEqual(["req_diagnostic_123", "req_diagnostic_123", "req_diagnostic_123"]);
   } finally {
     await db.delete(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId));
     await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));

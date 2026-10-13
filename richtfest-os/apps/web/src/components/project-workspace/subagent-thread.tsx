@@ -706,6 +706,7 @@ export function SubagentThread({
                                     [
                                       "provider_call_failed",
                                       "provider_call_retrying",
+                                      "provider_attempt_failed",
                                     ].includes(event.eventType) &&
                                     metadata.callId === attempt.operationId &&
                                     metadata.attempt ===

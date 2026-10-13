@@ -215,7 +215,7 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
   const events = await d.db.select().from(agentRunEvents).where(and(
     eq(agentRunEvents.tenantId, d.tenantId),
     inArray(agentRunEvents.runId, failed.map(run => run.id)),
-    eq(agentRunEvents.eventType, "provider_call_failed"),
+    inArray(agentRunEvents.eventType, ["provider_call_failed", "provider_attempt_failed"]),
   )).orderBy(desc(agentRunEvents.createdAt));
   const parsed = events.flatMap((event: any) => {
     try {
@@ -237,6 +237,7 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
     return { ...run, failureRole: owner?.specialistRole ?? "supervisor", failureEvent: {
       eventType: "provider_call_failed", resultSummary: phase ?? match.event.resultSummary?.split(";")[0],
       paramsSummary: JSON.stringify({ runId: owner.id, callId: match.metadata.callId, attempt: match.metadata.attempt,
+        providerStatus: match.metadata.providerStatus,
         diagnostics: sanitizeProviderDiagnostics(match.metadata.diagnostics) }),
     } };
   });

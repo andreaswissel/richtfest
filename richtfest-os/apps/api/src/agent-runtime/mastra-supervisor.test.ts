@@ -632,7 +632,7 @@ test("provider 429 diagnostics distinguish quota from throttling without retaini
     const model = new MastraLanguageModelV2Mock({ doStream: async () => {
       invocations++;
       throw Object.assign(new Error("secret exception message"), { statusCode: 429, isRetryable: true,
-        responseBody: JSON.stringify({ error: { code: providerCode, message: "secret request body" } }),
+        responseBody: JSON.stringify({ error: { code: providerCode, message: "Request capacity exhausted." }, input: "secret request body" }),
         responseHeaders: { "Retry-After": "72", "authorization": "secret key",
           "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "0",
           "x-ratelimit-reset-requests": "1m2.5s", "x-ratelimit-remaining-tokens": "secret header" },
@@ -648,6 +648,28 @@ test("provider 429 diagnostics distinguish quota from throttling without retaini
     expect(JSON.stringify(error)).not.toContain("secret");
     expect(error.cause).toBeUndefined();
     expect(invocations).toBe(1);
+  }
+});
+test("supervisor preserves nested provider rejection reasons and auth request IDs without SDK payloads", async () => {
+  const key = "opaque-private-provider-key";
+  for (const status of [400, 401]) {
+    const model = new MastraLanguageModelV2Mock({ doStream: async () => {
+      throw Object.assign(new Error("Wrapper contains private SDK request"), { cause: Object.assign(new Error(key), {
+        statusCode: status,
+        responseBody: JSON.stringify({ error: { type: "invalid_request_error", code: status === 400 ? "invalid_function_parameters" : "invalid_api_key",
+          param: "tools[4].parameters", message: `Invalid schema: anyOf branches share a first key. ${key} private project excerpt` },
+          input: "private SDK request" }),
+        responseHeaders: { "x-request-id": "req_schema_123", authorization: `Bearer ${key}` },
+      }) });
+    } });
+    const error: any = await callMastraSupervisor({ ...base, phase: "specialist", context: { excerpt: "private project excerpt" } }, key, { model }).catch(error => error);
+    expect(error).toMatchObject({ providerStatus: status, retryable: false, diagnostics: {
+      providerCode: status === 400 ? "invalid_function_parameters" : "invalid_api_key", providerType: "invalid_request_error",
+      providerParam: "tools[4].parameters", providerRequestId: "req_schema_123",
+      providerMessage: "Invalid schema: anyOf branches share a first key. [redacted] [redacted]",
+    } });
+    for (const secret of [key, "private project excerpt", "private SDK request"]) expect(JSON.stringify(error)).not.toContain(secret);
+    expect(error.cause).toBeUndefined();
   }
 });
 test("real Mastra agent returns a valid focused plan", async () => {

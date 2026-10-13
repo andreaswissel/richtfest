@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { AppDeps, ProviderUsage } from "@richtfest/knowledge/deps";
 import { appRevision, metadataHash } from "./provider-metadata";
+import { providerErrorDiagnostics, readProviderError } from "./provider-errors";
+import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 
 export type DecisionInput = Parameters<NonNullable<AppDeps["executeDecision"]>>[0];
 export const decisionPricingVersion = "typesafe-jev-1.13.0-2026-10-13";
@@ -54,8 +56,8 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
             headers: { "content-type": "application/json", authorization: `Bearer ${parsedApiKey}` }, body });
         if (!response.ok) {
           category = "provider";
-          await response.body?.cancel();
-          throw failure(category);
+          throw Object.assign(failure(category), { providerStatus: response.status,
+            diagnostics: await readProviderError(response, apiKey, { state: input.state, questions: input.questions }) });
         }
         return response.json();
       })().then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
@@ -84,7 +86,12 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
     }
     await input.onResponse?.({ modelId: model, responseId: null, finishReason: "stop" });
     return { status: "completed" as const, output, usage };
-  } catch {
-    throw failure(options.signal?.aborted ? "cancelled" : timeout.aborted ? "timeout" : category);
+  } catch (error) {
+    const value = error as { providerStatus?: number; diagnostics?: unknown } | null;
+    throw Object.assign(failure(options.signal?.aborted ? "cancelled" : timeout.aborted ? "timeout" : category), {
+      providerStatus: value?.providerStatus,
+      diagnostics: { ...sanitizeProviderDiagnostics(value?.diagnostics),
+        ...providerErrorDiagnostics(error, apiKey, { state: input.state, questions: input.questions }) },
+    });
   }
 }

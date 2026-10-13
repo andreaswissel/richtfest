@@ -1,6 +1,15 @@
 import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt } from "@richtfest/shared";
 
-/** Only these structural facts may cross the provider/event boundary. */
+/** Defense in depth; adapters also remove the actual credential and known input text. */
+export function redactProviderDiagnosticText(text: string) {
+  return text.replace(/\bsk-[a-zA-Z0-9_.*-]+/g, "[redacted]")
+    .replace(/Bearer\s+[^\s"']+/gi, "Bearer [redacted]")
+    .replace(/\b(api[_ -]?key|authorization|password|secret|access[_ -]?token)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[redacted]")
+    .replace(/https?:\/\/[^\s<>"']+/gi, "[URL omitted]")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ");
+}
+
+/** Bounded diagnostic fields only, never complete exceptions, bodies or headers. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED", "CONTEXT_BUDGET_EXCEEDED", "SOURCE_CITATION_OUT_OF_SCOPE"];
@@ -11,7 +20,16 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     "preliminaryRemarks", "exteriorNoiseAssessment", "planningLaw", "components", "plans", "sourcesAndRevisions", "openIssues", "calculationAppendix",
     "requirements", "verification", "buildingServices", "heatPumps", "protectionLevels", "scope", "measures", "entities"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
-  const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error"];
+  const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error",
+    "invalid_request_error", "invalid_function_parameters", "invalid_json_schema", "unsupported_parameter", "unsupported_value",
+    "invalid_value", "missing_required_parameter", "context_length_exceeded", "model_not_found", "invalid_api_key",
+    "authentication_error", "permission_error", "permission_denied", "not_found_error", "request_too_large", "api_error", "server_error"];
+  const textField = (key: string, limit: number) => typeof value[key] === "string"
+    ? redactProviderDiagnosticText(value[key] as string).slice(0, limit).trim() : undefined;
+  const providerMessage = textField("providerMessage", 2000);
+  const providerParam = textField("providerParam", 200);
+  const providerRequestId = textField("providerRequestId", 200);
+  const transportCodes = ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_SOCKET"];
   const rateLimit: Partial<Record<"limitRequests" | "remainingRequests" | "limitTokens" | "remainingTokens" | "resetRequestsMs" | "resetTokensMs", number>> = {};
   if (value.rateLimit && typeof value.rateLimit === "object") {
     for (const key of ["limitRequests", "remainingRequests", "limitTokens", "remainingTokens", "resetRequestsMs", "resetTokensMs"] as const) {
@@ -45,6 +63,11 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     ...(rejectedCitations.length ? { rejectedCitations } : {}),
     ...(finishes.includes(finishReason as string) ? { finishReason: finishReason as string } : {}),
     ...(providerCodes.includes(value.providerCode as string) ? { providerCode: value.providerCode as string } : {}),
+    ...(providerCodes.includes(value.providerType as string) ? { providerType: value.providerType as string } : {}),
+    ...(providerMessage ? { providerMessage } : {}),
+    ...(providerParam && /^[a-zA-Z][\w.[\]-]*$/.test(providerParam) ? { providerParam } : {}),
+    ...(providerRequestId && /^[a-zA-Z0-9_-]{1,200}$/.test(providerRequestId) ? { providerRequestId } : {}),
+    ...(transportCodes.includes(value.transportCode as string) ? { transportCode: value.transportCode as string } : {}),
     ...(typeof value.retryAfterMs === "number" && Number.isFinite(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= 1e12
       ? { retryAfterMs: value.retryAfterMs } : {}),
     ...(Object.keys(rateLimit).length ? { rateLimit } : {}),

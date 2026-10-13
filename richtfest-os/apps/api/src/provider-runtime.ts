@@ -11,6 +11,8 @@ import { withProviderCredential } from "./ai-connections";
 import { env } from "./env";
 import { estimateCostUsd } from "./model-pricing";
 import { appRevision, metadataHash, serializeProviderInput } from "./provider-metadata";
+import { providerErrorDiagnostics, readProviderError } from "./provider-errors";
+import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 export type ProviderFetch = (
   url: string,
   init: RequestInit,
@@ -176,9 +178,10 @@ export async function callProvider(
         ),
       },
     );
-    // Never copy upstream error bodies: they may echo headers, keys, or user content.
+    // Extract redacted error fields only; never retain the complete upstream body.
     if (!response.ok)
-      throw Object.assign(new Error(`Provider request failed (HTTP ${response.status})`), { providerStatus: response.status, failureCategory: "provider", code: "provider_error" });
+      throw Object.assign(new Error(`Provider request failed (HTTP ${response.status})`), { providerStatus: response.status, failureCategory: "provider", code: "provider_error",
+        diagnostics: await readProviderError(response, key, { goal: input.goal, context: input.context, toolResults: input.toolResults, instructions: effectiveInstructions }) });
     let text = "";
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
       if (!response.body) throw new Error("Provider stream is missing");
@@ -212,7 +215,9 @@ export async function callProvider(
             finishReason = event.delta?.stop_reason ?? finishReason;
           }
           if (event.type === "error" || event.type === "response.failed")
-            throw new Error("Provider stream failed");
+            throw Object.assign(new Error("Provider stream failed"), { code: "provider_error", failureCategory: "provider",
+              diagnostics: providerErrorDiagnostics({ data: event.response ?? event, responseHeaders: response.headers }, key,
+                { goal: input.goal, context: input.context, toolResults: input.toolResults, instructions: effectiveInstructions }) });
           const delta = isOpenAi
             ? event.type === "response.output_text.delta"
               ? event.delta
@@ -283,6 +288,10 @@ export async function callProvider(
     await reportUsage().catch(() => undefined);
     if (signal.aborted && !controller.signal.aborted)
       throw Object.assign(new Error("Provider call exceeded its configured timeout."), { code: "timeout", failureCategory: "timeout" });
+    if (error && typeof error === "object") Object.assign(error, {
+      diagnostics: { ...sanitizeProviderDiagnostics((error as { diagnostics?: unknown }).diagnostics),
+        ...providerErrorDiagnostics(error, key, { goal: input.goal, context: input.context, toolResults: input.toolResults }) },
+    });
     throw error;
   } finally {
     if (input.runId && controllers.get(input.runId) === controller)
@@ -311,10 +320,10 @@ export async function executeProvider(
       ? { status: "unconfigured" }
       : { status: "completed", output, usage };
   } catch (error) {
-    const value = error as { code?: string; name?: string; providerStatus?: number; failureCategory?: string };
+    const value = error as { code?: string; name?: string; providerStatus?: number; failureCategory?: string; diagnostics?: unknown };
     throw Object.assign(new Error(
       "Provider execution failed. Check the selected connection and retry.",
-    ), { providerFailure: true, providerStatus: value.providerStatus,
+    ), { providerFailure: true, providerStatus: value.providerStatus, diagnostics: sanitizeProviderDiagnostics(value.diagnostics),
       code: value.code === "timeout" || value.name === "TimeoutError" ? "timeout" : value.name === "AbortError" ? "cancelled" : value.code === "invalid_provider_output" ? value.code : "provider_error",
       failureCategory: value.code === "timeout" || value.name === "TimeoutError" ? "timeout" : value.failureCategory === "validation" ? "validation" : "provider" });
   }

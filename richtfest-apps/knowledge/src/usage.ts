@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDeps, ProviderResult, ProviderTelemetry, ProviderUsage } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
-import { agentRunAttempts, agentRuns, agentRunUsage } from "./schema";
+import { agentRunAttempts, agentRunEvents, agentRuns, agentRunUsage } from "./schema";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { classifyRunFailure } from "./run-reasons";
 
@@ -121,6 +121,13 @@ export async function executeTrackedProvider(
         attemptId: attempt.id, inputHash: inputHash || stepHash({ settings }),
         input: { ...prepared, settings }, output, status, reusedFromStepId,
       });
+      if (failureCategory && status !== "cancelled") await tx.insert(agentRunEvents).values({
+        tenantId: d.tenantId, runId: run.id, eventType: "provider_attempt_failed",
+        paramsSummary: JSON.stringify({ runId: run.id, callId: attempt.operationId, attempt: attempt.attemptNumber,
+          attemptId: attempt.id, providerStatus,
+          diagnostics: sanitizeProviderDiagnostics((output as { failure?: { diagnostics?: unknown } })?.failure?.diagnostics) }),
+        resultSummary: invocation.phase,
+      });
     });
   try {
     const result = await execute({
@@ -161,8 +168,15 @@ export async function executeTrackedProvider(
     // when the adapter failed before preparing a prompt; never the rejected body.
     const diagnostics = { ...sanitizeProviderDiagnostics({ finishReason: response?.finishReason }),
       ...sanitizeProviderDiagnostics(metadata?.diagnostics) };
+    const failureLog = { tenantId: d.tenantId, runId: run.id, attemptId: attempt.id, operationId: attempt.operationId,
+      phase: invocation.phase, attempt: attempt.attemptNumber, provider: run.provider, modelId: settings?.modelId,
+      category, providerStatus: status, diagnostics };
+    if (!cancelled) console.error(JSON.stringify({ event: "agent_provider_failure", ...failureLog }));
     await finish(cancelled ? "cancelled" : "failed", category, status,
-      { failure: { category, providerStatus: status, diagnostics } }).catch(() => undefined);
+      { failure: { category, providerStatus: status, diagnostics } }).catch(() => {
+        // Keep the original error and correlation IDs even during a database outage.
+        console.error(JSON.stringify({ event: "agent_failure_persistence_failed", ...failureLog }));
+      });
     throw error;
   }
 }

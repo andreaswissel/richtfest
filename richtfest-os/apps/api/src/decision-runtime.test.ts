@@ -91,6 +91,18 @@ test("HTTP, envelope, JSON and transport errors never expose raw secrets or retr
   }
 });
 
+test("Jev HTTP failures retain the reason and request ID even when routing falls back", async () => {
+  const error = await callDecisionModel(input, apiKey, { fetch: async () => Response.json({
+    error: { code: "insufficient_quota", message: `Account credits exhausted. ${apiKey} private-source` },
+  }, { status: 402, headers: { "x-request-id": "req_jev_123" } }) }).catch(error => error);
+  expect(error).toMatchObject({ providerStatus: 402, failureCategory: "provider", diagnostics: {
+    providerCode: "insufficient_quota", providerRequestId: "req_jev_123",
+    providerMessage: "Account credits exhausted. [redacted] [redacted]",
+  } });
+  expect(JSON.stringify(error)).not.toContain(apiKey);
+  expect(JSON.stringify(error)).not.toContain("private-source");
+});
+
 test("cancellation and 1500ms deadline bound a fetch that ignores abort", async () => {
   const controller = new AbortController();
   controller.abort(new Error(apiKey));

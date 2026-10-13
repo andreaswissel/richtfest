@@ -11,6 +11,7 @@ import { acousticEditorialOutputSchema, acousticEditorialCheckSchema } from "@ri
 import { agentOutputSchemas, agentExecutionLimitsSchema, prepareAgentDocument, acousticDocumentTemplateSchema, acousticConceptOutlineSchema, acousticSectionOutputSchema, acousticConceptIdSchema, requestedAcousticConcept, sourceModelEvidencePolicy, specialistRoleSchema, agentModelInputByteBudget } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
+import { providerErrorDiagnostics } from "../provider-errors";
 import type { ProviderUsage, ProviderTelemetry, ProviderResponseMetadata } from "@richtfest/knowledge/deps";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 import { estimateCostUsd } from "../model-pricing";
@@ -435,12 +436,13 @@ ${companyKnowledgePolicy}`;
     }
     if (deadlineSignal.aborted) throw Object.assign(safeProviderError(false), { code: "timeout", failureCategory: "timeout", timedOut: true });
     const metadata = providerFailureMetadata(error);
+    const providerDiagnostics = providerErrorDiagnostics(error, apiKey, { goal: input.goal, context: input.context, instructions });
     throw Object.assign(safeProviderError(
       inferenceCompleted ? metadata.category === "validation" : metadata.retryable,
       metadata.status,
       metadata.category,
       metadata.retryAfterMs,
-    ), { diagnostics: sanitizeProviderDiagnostics({ ...safeDiagnostics, ...metadata.diagnostics }) });
+    ), { diagnostics: sanitizeProviderDiagnostics({ ...safeDiagnostics, ...metadata.diagnostics, ...providerDiagnostics }) });
   } finally {
     if (failed) await input.onResponse?.(responseMetadata).catch(() => undefined);
     else await input.onResponse?.(responseMetadata);

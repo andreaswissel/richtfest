@@ -267,6 +267,15 @@ export function providerActivityExplanation(
     /;\s*HTTP 429(?:;|$)/.test(event.resultSummary ?? "")
       ? t("workspaceFailureRateLimit")
       : undefined);
+  const diagnostics = metadata.diagnostics;
+  const details = [
+    metadata.providerStatus ? `HTTP ${metadata.providerStatus}` : undefined,
+    diagnostics?.providerMessage ? `${t("workspaceProviderReason")}: ${diagnostics.providerMessage}` : undefined,
+    diagnostics?.providerCode || diagnostics?.providerType || diagnostics?.transportCode,
+    diagnostics?.providerParam ? `${t("workspaceProviderParameter")}: ${diagnostics.providerParam}` : undefined,
+    diagnostics?.providerRequestId ? `${t("workspaceProviderRequestId")}: ${diagnostics.providerRequestId}` : undefined,
+  ].filter(Boolean).join(" · ");
+  explanation = [explanation, details].filter(Boolean).join(" · ") || undefined;
   if (!explanation) return undefined;
   if (metadata.delayMs !== undefined)
     explanation += ` ${t("workspaceRetryDelay")}: ${Math.ceil(metadata.delayMs / 1000)} ${t("workspaceRetrySeconds")}.`;
@@ -300,7 +309,7 @@ export function terminalProviderFailure(
   if (/(?:^|;)\s*category=timeout(?:;|$)/.test(reason)) return undefined;
   const phase = /(?:^|;)\s*phase=([a-z_]+)/.exec(reason)?.[1];
   const candidates = events.filter((event) => {
-    if (event.eventType !== "provider_call_failed") return false;
+    if (!["provider_call_failed", "provider_attempt_failed"].includes(event.eventType)) return false;
     const metadata = providerActivityMetadata(event);
     const attempt = attempts.find(
       (item) =>
@@ -330,6 +339,7 @@ const activityLabels = {
   provider_call_completed: "workspaceActivityProviderCallCompleted",
   provider_call_retrying: "workspaceActivityProviderCallRetrying",
   provider_call_failed: "workspaceActivityProviderCallFailed",
+  provider_attempt_failed: "workspaceActivityProviderCallFailed",
   resumed: "workspaceActivityResumed",
   supervisor_planned: "workspaceActivityPlanned",
   specialist_completed: "workspaceActivitySpecialistCompleted",

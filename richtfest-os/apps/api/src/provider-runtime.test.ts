@@ -16,6 +16,33 @@ const output = {
     type: "draft" as const,
   },
 };
+test("direct HTTP and streaming errors preserve provider reasons, not credentials or echoed input", async () => {
+  const key = "opaque-connection-token";
+  const error = { type: "invalid_request_error", code: "invalid_json_schema", param: "text.format.schema",
+    message: `Invalid schema: required must include every property. ${key} confidential document excerpt` };
+  for (const provider of ["openai", "anthropic", "vercel"] as const) for (const streaming of [false, true]) {
+    const failure: any = await callProvider({ provider, modelId: "test-model", goal: "Review", context: { excerpt: "confidential document excerpt" } }, key,
+      async () => streaming ? new Response(`data: ${JSON.stringify({ type: "error", error })}\n\n`,
+        { headers: { "content-type": "text/event-stream", "request-id": "req_stream_123" } })
+        : Response.json({ error, input: "private raw input" }, { status: 400, headers: { "x-request-id": "req_http_123" } }))
+      .catch(error => error);
+    expect(failure.diagnostics).toMatchObject({ providerCode: "invalid_json_schema", providerType: "invalid_request_error",
+      providerMessage: "Invalid schema: required must include every property. [redacted] [redacted]",
+      providerParam: "text.format.schema", providerRequestId: streaming ? "req_stream_123" : "req_http_123" });
+    if (!streaming) expect(failure.providerStatus).toBe(400);
+    for (const secret of [key, "confidential document excerpt", "private raw input"]) expect(JSON.stringify(failure)).not.toContain(secret);
+  }
+});
+test("malformed, oversized and stalled provider errors preserve HTTP status without dumping bodies", async () => {
+  for (const body of ["<html>private proxy response</html>", JSON.stringify({ error: { message: "x".repeat(66000) } }),
+    new ReadableStream({ start() {} })]) {
+    const failure = await callProvider({ provider: "openai", goal: "Review", context: {} }, "test-key",
+      async () => new Response(body, { status: 502, headers: { "x-request-id": "req_proxy_123" } })).catch(error => error);
+    expect(failure).toMatchObject({ providerStatus: 502, diagnostics: { providerRequestId: "req_proxy_123",
+      providerMessage: "The provider supplied no readable structured error message." } });
+    expect(JSON.stringify(failure)).not.toContain("private proxy response");
+  }
+});
 test("configured direct response limits preserve large drafts and enforce the selected caps", async () => {
   const executionLimits = { summaryMaxCharacters: 15000, rationaleMaxCharacters: 3000, documentMaxCharacters: 150000, timeoutSeconds: 180 };
   const large = { ...output, summary: "s".repeat(15000), rationale: "r".repeat(3000), artifact: { ...output.artifact, content: '"'.repeat(150000) } };
