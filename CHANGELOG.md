@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Project resource tabs now have comfortable horizontal padding in both Dense and Normal display modes.
+
 - Added opt-in TypeSafe Jev summary routing and supervised company-knowledge reranking, with safe fallbacks, explicit credential setup and tracked usage. Reviews and approvals remain unchanged; neither option promises lower total cost.
 
 - Acoustic concepts now consolidate the assembled report and separately check that evidence is preserved before optional source review and publication. Progress shows both stages; retries retain saved edits and checks without changing calculation appendices or original attachments.

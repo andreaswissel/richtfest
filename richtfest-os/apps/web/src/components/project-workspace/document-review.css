@@ -9,7 +9,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 0.35rem;
-  padding-inline: 0.25rem;
+  padding-inline: calc(var(--stack) * 0.75);
   font-size: var(--ui-sm);
   white-space: nowrap;
 }
