@@ -25,6 +25,7 @@ import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInp
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
+import { classifyRun, decisionRoutingVersion } from "./decision-routing";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -396,7 +397,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             // Full-text reads must not hold the shared checkpoint lock. This
             // snapshot only avoids redundant work; commit rechecks the budget.
             const candidate = known.length < 2 && !known.some(r => stepHash({ terms: r.terms, category: r.category }) === inputHash)
-              ? await searchCompanyKnowledge(d, input) : undefined;
+              ? await searchCompanyKnowledge(d, input, d.db, false, policy.knowledgeRerankingEnabled
+                ? { runId, correlationId: run.correlationId, goal: assignment.goal, generation: state.generation, signal }
+                : undefined) : undefined;
             let receipt: CompanyKnowledgeReceipt | undefined;
             const saved = await commit(d, run, token, async (tx, current) => {
               signal?.throwIfAborted();
@@ -626,6 +629,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const plannedTemplate = state.history.findLast((entry: any) => entry.phase === "plan")?.output?.documentTemplate;
     const conceptId = requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
       ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
+    const readCompleteSources = !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
       const availableSourceIds = new Set<string>([
@@ -661,7 +665,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               ),
             )
             .orderBy(desc(messages.createdAt), desc(messages.id))
-            .limit(20)
+            .limit(21)
         : [];
       const recentArtifacts = await d.db
         .select({
@@ -680,28 +684,84 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         )
         .orderBy(desc(artifacts.createdAt))
         .limit(20);
-      const plan = supervisorPlan.parse(
-        await call("plan", goal, {
-          projectId: run.projectId,
-          sourceVersionIds: run.sourceVersionIds,
-          sourceInventory,
-          history: history
-            .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) }))
-            .reverse(),
-          artifacts: recentArtifacts,
-        }, id, raw => {
-          const parsed = supervisorPlan.parse(raw);
-          if (parsed.tasks.length > policy.maxTasks) throw conflict("Plan exceeds effort task budget");
-          assertConfiguredAssignments(parsed, policy);
-          if (parsed.tasks.some(task => task.sourceVersionIds.some(v => !availableSourceIds.has(v))))
-            throw conflict("Assignment exceeds source scope");
-          return parsed;
-        }),
-      );
+      const planContext = {
+        projectId: run.projectId,
+        sourceVersionIds: run.sourceVersionIds,
+        sourceInventory,
+        history: history.slice(0, 20)
+          .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) })).reverse(),
+        artifacts: recentArtifacts,
+      };
+      let fastSummary = false;
+      const routing = policy.decisionRouting;
+      if (routing && routing.mode !== "off") {
+        // Do not bypass custom workspace planning instructions, artifact workflows,
+        // annotations, steering or context that was clipped out of the classifier.
+        let blocked = conceptId || run.intent === "calculation" ? "engineering_workflow"
+          : state.steering ? "human_steering"
+          : state.profileSnapshot?.some((p: ProfileSnapshot) => p.version > 0) ? "workspace_guidance"
+          : recentArtifacts.length ? "existing_artifacts"
+          : !run.sourceVersionIds.length || run.sourceVersionIds.length > 10 ? "source_selection"
+          : goal.length > 2000 || history.length > 20 || history.some((m: any) => m.body.length > 1000) ? "context_limit"
+          : history.some((m: any) => m.annotation?.sourceVersionId || m.annotation?.artifactRevisionId) ? "annotation_context"
+          : null;
+        const decisionState = { goal, selectedSourceCount: run.sourceVersionIds.length,
+          history: planContext.history.map((m: any) => ({ body: m.body, actorKind: m.actorKind })) };
+        if (Buffer.byteLength(JSON.stringify(decisionState), "utf8") > 16000) blocked = "context_limit";
+        const inputHash = checkpointHash({ version: decisionRoutingVersion, decisionState,
+          sourceVersionIds: run.sourceVersionIds, generation: state.generation, routing, blocked });
+        const saved = state.history.findLast((entry: any) => entry.phase === "decision" && entry.inputHash === inputHash);
+        await assertActive();
+        // Validate before sending any context to another provider, including shadow mode.
+        await sources(d, run.projectId, run.sourceVersionIds);
+        const decision = saved?.output ?? (blocked
+          ? { version: decisionRoutingVersion, outcome: "ineligible", eligible: false, elapsedMs: 0 }
+          : await classifyRun(d, run, { state: decisionState, minConfidence: routing.minConfidence, generation: state.generation }));
+        await assertActive();
+        if (decision.eligible && !blocked) {
+          for (const versionId of run.sourceVersionIds) {
+            // This preflight never waits on extraction; an unavailable source keeps
+            // the normal planner. The specialist will read complete saved pages.
+            const source: any = await d.resolveSource(run.projectId, { versionId, pageStart: 1, pageEnd: 1 }).catch(() => null);
+            await assertActive();
+            if (source?.status !== "resolved" || source.source?.versionId !== versionId
+              || source.content?.status !== "available" || !source.content.text?.trim()) {
+              blocked = "source_unavailable";
+              break;
+            }
+          }
+        }
+        fastSummary = routing.mode === "enabled" && decision.eligible && !blocked;
+        const output = { ...decision, mode: routing.mode, minConfidence: routing.minConfidence,
+          blocked, selectedRoute: fastSummary ? "selected_source_summary" : "supervisor" };
+        const checkpointed = await commit(d, run, token, async (tx, current) => {
+          await tx.update(supervisorRuns).set({ history: [
+            ...current.history.filter((entry: any) => entry.phase !== "decision" || entry.inputHash !== inputHash),
+            { phase: "decision", inputHash, generation: state.generation, output },
+          ] }).where(eq(supervisorRuns.runId, id));
+          await log(d, tx, run, "decision_routed", output.selectedRoute, JSON.stringify(output));
+        });
+        if (!checkpointed) throw conflict("Supervisor no longer active");
+      }
+      const plan = supervisorPlan.parse(fastSummary ? {
+        tasks: [{ role: "source_reviewer", goal, sourceVersionIds: [...new Set(run.sourceVersionIds)] }],
+      } : await call("plan", goal, planContext, id, raw => {
+        const parsed = supervisorPlan.parse(raw);
+        if (parsed.tasks.length > policy.maxTasks) throw conflict("Plan exceeds effort task budget");
+        assertConfiguredAssignments(parsed, policy);
+        if (parsed.tasks.some(task => task.sourceVersionIds.some(v => !availableSourceIds.has(v))))
+          throw conflict("Assignment exceeds source scope");
+        return parsed;
+      }));
+      if (plan.tasks.length > policy.maxTasks)
+        throw conflict("Plan exceeds effort task budget");
+      assertConfiguredAssignments(plan, policy);
       for (const task of plan.tasks) {
+        if (task.sourceVersionIds.some(v => !availableSourceIds.has(v)))
+          throw conflict("Assignment exceeds source scope");
         await sources(d, run.projectId, task.sourceVersionIds);
       }
-      await commit(d, run, token, async (tx) => {
+      await commit(d, run, token, async (tx, current) => {
         const assignments: Assignment[] = [];
         for (const item of plan.tasks) {
           const [task] = await tx
@@ -741,7 +801,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         }
         await tx
           .update(supervisorRuns)
-          .set({ assignments, phase: "specialists", history: [...state.history, { phase: "plan", output: plan }] })
+          .set({ assignments, phase: "specialists", history: [...current.history,
+            { phase: "plan", output: plan, strategy: fastSummary ? "selected_source_summary" : "supervisor" }] })
           .where(eq(supervisorRuns.runId, id));
         await log(d, tx, run, "supervisor_planned");
       });
@@ -771,7 +832,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const excerpts = await Promise.all(
                 assignment.sourceVersionIds.map(async (versionId) => {
                   await assertActive();
-                  return conceptId
+                  return readCompleteSources
                     ? resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
                     : resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
                 }),
@@ -1194,7 +1255,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await assertActive();
         // Independent review retains broad evidence coverage, not just the
         // specialist's relevance selection, but never re-extracts the original.
-        return { versionId, resolution: conceptId
+        return { versionId, resolution: readCompleteSources
           ? await resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
           : await resolveRunSource(d, run.projectId, { versionId, pageStart: 1 }, assertActive) };
       }));
@@ -1208,7 +1269,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           : [],
       ));
       const unreadableSources = resolvedExcerpts
-        .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId) || (conceptId && resolution?.content?.truncated))
+        .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId) || (readCompleteSources && resolution?.content?.truncated))
         .map(({ versionId, resolution }: any) => ({ versionId, name: resolution?.source?.name ?? null }));
       const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
       const firstPassReview = state.review;
@@ -1216,7 +1277,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
       // Reuse old completed slices, but repack their unfinished evidence. Deploying
       // a better batching strategy must not buy already-reviewed evidence again.
-      const legacySlices = !state.history.some((entry: any) => entry.phase === "independent_review_slice") ? [] : conceptId
+      const legacySlices = !state.history.some((entry: any) => entry.phase === "independent_review_slice") ? [] : readCompleteSources
         ? batchSpecialistSources(readableExcerpts.map(({ versionId, resolution }: any) => ({
           versionId, resolution, text: resolution.content.text, truncated: resolution.content.truncated,
         }))).map(batch => batch.map(({ versionId, resolution, text, textRange, truncated }) => ({ versionId,

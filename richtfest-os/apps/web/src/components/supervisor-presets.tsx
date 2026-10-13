@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   AGENT_MAX_OUTPUT_TOKENS,
+  agentDecisionRoutingSchema,
   agentExecutionLimitsSchema,
 } from "@richtfest/shared";
 import { api, list, type RecordData } from "../api";
@@ -90,6 +91,14 @@ export function SupervisorPresets({
       body.executionLimits = agentExecutionLimitsSchema.parse(
         body.executionLimits || {},
       );
+      if (body.decisionRouting !== undefined) {
+        const routing = agentDecisionRoutingSchema.safeParse(
+          body.decisionRouting,
+        );
+        if (!routing.success) throw new Error(t("decisionRoutingInvalid"));
+        body.decisionRouting = routing.data;
+      }
+      body.knowledgeRerankingEnabled = body.knowledgeRerankingEnabled === true;
       body.specialists = Object.fromEntries(
         Object.entries(body.specialists || {}).filter(
           ([, config]) => config != null,
@@ -155,6 +164,11 @@ export function SupervisorPresets({
     activeDraft.executionLimits || agentExecutionLimitsSchema.parse({});
   const validLimits =
     agentExecutionLimitsSchema.safeParse(executionLimits).success;
+  const routing = activeDraft.decisionRouting || {
+    mode: "off",
+    minConfidence: 0.99,
+  };
+  const validRouting = agentDecisionRoutingSchema.safeParse(routing).success;
   const modelCatalog = modelsQuery.data as
     { models?: ProviderModel[] } | undefined;
   const readOnly = data.canManage !== true || save.isPending || reset.isPending;
@@ -417,6 +431,69 @@ export function SupervisorPresets({
           <Callout tone="error">{t("supervisorLimitsInvalid")}</Callout>
         )}
       </fieldset>
+      <fieldset className="flex min-w-0 flex-col gap-stack" disabled={readOnly}>
+        <legend className="text-ui font-medium mb-stack">
+          {t("decisionRoutingTitle")}
+        </legend>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-stack">
+          <Field label={t("decisionRoutingMode")}>
+            <NativeSelect
+              value={routing.mode}
+              disabled={readOnly}
+              onChange={(event) =>
+                updateConfig(["decisionRouting"], {
+                  ...routing,
+                  mode: event.target.value,
+                })
+              }
+            >
+              <option value="off">{t("decisionRoutingOff")}</option>
+              <option value="shadow">{t("decisionRoutingShadow")}</option>
+              <option value="enabled">{t("decisionRoutingEnabled")}</option>
+            </NativeSelect>
+          </Field>
+          <Field label={t("decisionRoutingConfidence")}>
+            <Input
+              type="number"
+              min="0.9"
+              max="1"
+              step="0.01"
+              disabled={readOnly || routing.mode === "off"}
+              value={routing.minConfidence}
+              aria-invalid={!validRouting}
+              onChange={(event) =>
+                updateConfig(["decisionRouting"], {
+                  ...routing,
+                  minConfidence:
+                    event.target.value === "" ? "" : Number(event.target.value),
+                })
+              }
+            />
+          </Field>
+        </div>
+        <p className="text-ui-sm text-muted-foreground">
+          {t("decisionRoutingBehavior")}
+        </p>
+        <Callout>{t("decisionRoutingEvaluation")}</Callout>
+        {!validRouting && (
+          <Callout tone="error">{t("decisionRoutingInvalid")}</Callout>
+        )}
+      </fieldset>
+      <fieldset disabled={readOnly}>
+        <Field
+          label={t("knowledgeRerankingLabel")}
+          hint={t("knowledgeRerankingHint")}
+        >
+          <Switch
+            aria-label={t("knowledgeRerankingLabel")}
+            disabled={readOnly}
+            checked={activeDraft.knowledgeRerankingEnabled === true}
+            onCheckedChange={(value) =>
+              updateConfig(["knowledgeRerankingEnabled"], value)
+            }
+          />
+        </Field>
+      </fieldset>
       {(save.error || reset.error) && (
         <Callout tone="error">{(save.error || reset.error)?.message}</Callout>
       )}
@@ -435,7 +512,7 @@ export function SupervisorPresets({
           {t("resetSupervisorPreset")}
         </Button>
         <Button
-          disabled={readOnly || !validLimits}
+          disabled={readOnly || !validLimits || !validRouting}
           onClick={() => save.mutate()}
         >
           {t("saveSupervisorPreset")}

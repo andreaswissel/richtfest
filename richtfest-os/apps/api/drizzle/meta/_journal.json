@@ -253,6 +253,13 @@
       "when": 1791900000000,
       "tag": "0035_company_knowledge_conversations",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791900000001,
+      "tag": "0036_decision_connections",
+      "breakpoints": true
     }
   ]
 }

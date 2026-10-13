@@ -16,11 +16,14 @@ import {
 import { LoadState } from "./foundation";
 import {
   canEditConnection,
+  connectionProviderIds,
   getSelectedProvider,
+  isConnectionProviderId,
   isProviderId,
   providerIds,
   providerLabel,
   type ConnectionsState,
+  type ConnectionProviderId,
   type ProviderId,
 } from "../connection-policy";
 import { SettingsNavigation } from "../components/settings-navigation";
@@ -29,7 +32,7 @@ export function Settings() {
   const t = useT();
   const query = useApi("/settings/ai-connections");
   const [scope, setScope] = useState("personal");
-  const [provider, setProvider] = useState<ProviderId>("openai");
+  const [provider, setProvider] = useState<ConnectionProviderId>("openai");
   const [activeProvider, setActiveProvider] = useState<ProviderId>("openai");
   const [key, setKey] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -44,12 +47,13 @@ export function Settings() {
       ? selected?.personal?.configured
       : selected?.workspace?.configured;
   const mutation = useMutation({
-    mutationFn: ({ remove = false }: { remove?: boolean }) =>
-      api(
+    mutationFn: ({ remove = false }: { remove?: boolean }) => {
+      return api(
         `/settings/ai-connections/${provider}/${scope}`,
         remove ? {} : { apiKey: key },
         remove ? "DELETE" : "PUT",
-      ),
+      );
+    },
     onSuccess: () => {
       setKey("");
       setConfirmRemove(false);
@@ -93,7 +97,7 @@ export function Settings() {
   ]);
   const change = (type: "scope" | "provider", value: string) => {
     if (type === "scope") setScope(value);
-    else if (isProviderId(value)) setProvider(value);
+    else if (isConnectionProviderId(value)) setProvider(value);
     setKey("");
     setSaved(false);
     setConfirmRemove(false);
@@ -113,7 +117,7 @@ export function Settings() {
           {!encryptionReady && <Callout>{t("encryptionMissing")}</Callout>}
           <Section title={t("connectionStatus")}>
             <div className="provider-status-list">
-              {providerIds.map((id) => {
+              {connectionProviderIds.map((id) => {
                 const row = providers.find((p) => p.provider === id);
                 const source = row?.effectiveSource;
                 return (
@@ -132,8 +136,19 @@ export function Settings() {
                         ? t("personal")
                         : source === "workspace"
                           ? t("workspaceScope")
-                          : t("noCredential")}
+                          : source === "server"
+                            ? t("serverCredential")
+                            : t("noCredential")}
                     </span>
+                    {id === "typesafe" && (
+                      <span className="text-ui-sm text-muted-foreground">
+                        {t(
+                          row?.server?.configured === true
+                            ? "serverCredentialAvailable"
+                            : "serverCredentialUnavailable",
+                        )}
+                      </span>
+                    )}
                     {activeProvider === id && (
                       <Badge tone="success">{t("activeProvider")}</Badge>
                     )}
@@ -141,6 +156,9 @@ export function Settings() {
                 );
               })}
             </div>
+            <p className="text-ui-sm text-muted-foreground">
+              {t("credentialPrecedence")}
+            </p>
           </Section>
           <Section title={t("activeProvider")}>
             <div className="connection-form">
@@ -202,9 +220,13 @@ export function Settings() {
                     { value: "openai", label: "OpenAI" },
                     { value: "anthropic", label: "Anthropic" },
                     { value: "vercel", label: "Vercel AI Gateway" },
+                    { value: "typesafe", label: providerLabel("typesafe") },
                   ]}
                 />
               </Field>
+              {provider === "typesafe" && (
+                <Callout>{t("typesafeDataHandling")}</Callout>
+              )}
               {scope === "workspace" && data.canManageWorkspace !== true && (
                 <Callout>{t("workspaceAdminOnly")}</Callout>
               )}

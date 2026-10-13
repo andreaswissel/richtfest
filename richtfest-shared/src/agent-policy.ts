@@ -25,6 +25,11 @@ export type AgentModelConfig = z.infer<typeof agentModelConfigSchema>;
 export const domainSpecialistRoles = ["sound_insulation", "construction_law", "cost_optimizer"] as const;
 export const specialistRoleSchema = z.enum(["source_reviewer", "requirements_reviewer", ...domainSpecialistRoles]);
 export type SpecialistRole = z.infer<typeof specialistRoleSchema>;
+export const agentDecisionRoutingSchema = z.object({
+  mode: z.enum(["off", "shadow", "enabled"]).default("off"),
+  minConfidence: z.number().min(0.9).max(1).default(0.99),
+}).strict();
+export type AgentDecisionRouting = z.infer<typeof agentDecisionRoutingSchema>;
 export const agentPresetConfigSchema = z.object({
   supervisor: agentModelConfigSchema,
   specialists: z.object({
@@ -36,6 +41,9 @@ export const agentPresetConfigSchema = z.object({
   }).strict(),
   // Opt-in to a fresh reviewer pass after the supervisor's own evidence review.
   independentReviewEnabled: z.boolean().default(false),
+  // Missing on older snapshots means off; never change an in-flight run's policy.
+  decisionRouting: agentDecisionRoutingSchema.optional(),
+  knowledgeRerankingEnabled: z.boolean().default(false),
   executionLimits: agentExecutionLimitsSchema.default({}),
   maxParallel: z.number().int().min(1).max(3),
   maxTasks: z.number().int().min(1).max(4),

@@ -323,6 +323,7 @@ export function terminalProviderFailure(
 
 const activityLabels = {
   work_progress: "workspaceActivityStep",
+  decision_routed: "decisionRoutingPlannerRetained",
   started: "workspaceActivityRunStarted",
   supervisor_started: "workspaceActivityStarted",
   provider_call_started: "workspaceActivityProviderCallStarted",
@@ -362,12 +363,15 @@ const toolLabels = {
 type ActivityTranslationKey =
   | (typeof activityLabels)[keyof typeof activityLabels]
   | (typeof toolLabels)[keyof typeof toolLabels]
+  | "decisionRoutingSummarySelected"
   | "workspaceActivityTimedOut"
   | "workspaceFailureRateLimit";
 
 export function runActivityLabel(
   event: RecordData,
 ): ActivityTranslationKey | undefined {
+  if (event.eventType === "decision_routed")
+    return event.resultSummary === "selected_source_summary" ? "decisionRoutingSummarySelected" : "decisionRoutingPlannerRetained";
   if (
     ["failed", "supervisor_failed"].includes(event.eventType) &&
     typeof event.paramsSummary === "string" &&

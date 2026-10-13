@@ -1,11 +1,44 @@
 import { describe, expect, test } from "bun:test";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { createApp } from "../richtfest-os/apps/api/src/server";
+import { withProviderCredential } from "../richtfest-os/apps/api/src/ai-connections";
+import { env } from "../richtfest-os/apps/api/src/env";
 import { fileStorage } from "../richtfest-os/apps/api/src/app-hosts";
 import { startSourceExtractionWorker } from "../richtfest-apps/projects/src/source-extraction";
 
 const databaseUrl = process.env.DATABASE_URL;
 const run = databaseUrl ? test : test.skip;
+
+test("TypeSafe server fallback requires no encryption but never overrides an invalid scoped credential", async () => {
+  const previousServerKey = env.TYPESAFE_API_KEY;
+  const previousEncryptionKey = env.AI_CONNECTION_ENCRYPTION_KEY;
+  let rows: any[] = [];
+  const db = { select: () => ({ from: () => ({ where: async () => rows }) }) } as any;
+  let uses = 0;
+  const use = async (key: string) => { uses++; return key; };
+  try {
+    env.TYPESAFE_API_KEY = "typesafe-server-fixture";
+    env.AI_CONNECTION_ENCRYPTION_KEY = undefined;
+    expect(await withProviderCredential(db, "tenant", "user", "typesafe", use)).toBe("typesafe-server-fixture");
+    expect(await withProviderCredential(db, "tenant", "user", "openai", use)).toBeNull();
+    rows = [{ userId: "another-user" }];
+    expect(await withProviderCredential(db, "tenant", "user", "typesafe", use)).toBe("typesafe-server-fixture");
+    for (const userId of ["user", null]) {
+      rows = [{ userId, ciphertext: "invalid", iv: "invalid", authTag: "invalid" }];
+      await expect(withProviderCredential(db, "tenant", "user", "typesafe", use)).rejects.toThrow();
+      env.AI_CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
+      await expect(withProviderCredential(db, "tenant", "user", "typesafe", use)).rejects.toThrow();
+      env.AI_CONNECTION_ENCRYPTION_KEY = undefined;
+    }
+    expect(uses).toBe(2);
+    rows = [];
+    env.TYPESAFE_API_KEY = undefined;
+    expect(await withProviderCredential(db, "tenant", "user", "typesafe", use)).toBeNull();
+  } finally {
+    env.TYPESAFE_API_KEY = previousServerKey;
+    env.AI_CONNECTION_ENCRYPTION_KEY = previousEncryptionKey;
+  }
+});
 
 run("account settings remain readable for older sessions and password enrollment requires fresh verification", async () => {
   const { db, pool } = createDatabase(databaseUrl!);
@@ -737,7 +770,57 @@ describe("accepted API workflow (PostgreSQL)", () => {
         cookie,
       );
       expect(settingsBefore.response.status).toBe(200);
+      expect(settingsBefore.body.data.providers.some((p: any) => p.provider === "typesafe")).toBe(true);
+      for (const provider of settingsBefore.body.data.providers)
+        expect(provider.server).toEqual({ configured: provider.provider === "typesafe" && Boolean(env.TYPESAFE_API_KEY) });
       if (process.env.AI_CONNECTION_ENCRYPTION_KEY) {
+        const decisionWorkspace = { apiKey: "typesafe-test-workspace-secret" };
+        const decisionPersonal = { apiKey: "typesafe-test-personal-secret" };
+        const saveDecision = (scope: string, value: unknown, session = cookie) => request(
+          `/api/settings/ai-connections/typesafe/${scope}`,
+          { method: "PUT", body: JSON.stringify(value) }, session);
+        for (const apiKey of [undefined, "short", " ", "a".repeat(501)])
+          expect((await saveDecision("workspace", { apiKey })).response.status).toBe(400);
+        expect((await saveDecision("workspace", decisionWorkspace, outsiderCookie)).response.status).toBe(403);
+        expect((await saveDecision("workspace", decisionWorkspace)).response.status).toBe(200);
+        expect((await saveDecision("personal", { apiKey: ` ${decisionPersonal.apiKey} ` }, lucaCookie)).response.status).toBe(200);
+        expect((await request("/api/agent/settings", {
+          method: "PUT", body: JSON.stringify({ provider: "typesafe" }),
+        }, cookie)).response.status).toBe(400);
+        const decisionSettings = await request("/api/settings/ai-connections", {}, lucaCookie);
+        expect(decisionSettings.body.data.providers.find((p: any) => p.provider === "typesafe")).toMatchObject({
+          personal: { configured: true }, workspace: { configured: true }, effectiveSource: "personal",
+          server: { configured: Boolean(env.TYPESAFE_API_KEY) },
+        });
+        await pool.query("insert into os_role_permissions (role_id, permission) select r.id, 'richtfest-os:use' from os_roles r join os_tenants t on t.id=r.tenant_id where t.name='Outsider' on conflict do nothing");
+        try {
+          const outsiderDecision = await request("/api/settings/ai-connections", {}, outsiderCookie);
+          expect(outsiderDecision.response.status).toBe(200);
+          expect(outsiderDecision.body.data.providers.find((p: any) => p.provider === "typesafe")).toMatchObject({
+            personal: { configured: false }, workspace: { configured: false },
+            server: { configured: Boolean(env.TYPESAFE_API_KEY) }, effectiveSource: env.TYPESAFE_API_KEY ? "server" : null,
+          });
+        } finally {
+          await pool.query("delete from os_role_permissions where role_id in (select r.id from os_roles r join os_tenants t on t.id=r.tenant_id where t.name='Outsider') and permission='richtfest-os:use'");
+        }
+        for (const value of [decisionWorkspace.apiKey, decisionPersonal.apiKey, env.TYPESAFE_API_KEY].filter(Boolean))
+          expect(JSON.stringify(decisionSettings.body)).not.toContain(value!);
+        const storedDecision = await pool.query("select c.tenant_id, c.user_id, c.ciphertext, c.iv, c.auth_tag from os_ai_connections c join os_users u on u.id=c.user_id where c.provider='typesafe' and u.email=$1", ["luca@richtfest.local"]);
+        const personalDecision = storedDecision.rows.find((row: any) => row.user_id !== null);
+        expect(personalDecision).toBeDefined();
+        expect(JSON.stringify(storedDecision.rows)).not.toContain(decisionPersonal.apiKey);
+        const useDecision = (userId: string) => withProviderCredential(db, personalDecision.tenant_id, userId, "typesafe", async value => value);
+        expect(await useDecision(personalDecision.user_id)).toBe(decisionPersonal.apiKey);
+        expect(await useDecision(crypto.randomUUID())).toBe(decisionWorkspace.apiKey);
+        await expect(withProviderCredential(db, personalDecision.tenant_id, personalDecision.user_id, "typesafe",
+          async () => { throw new Error("Scoped credential rejected"); })).rejects.toThrow("Scoped credential rejected");
+        expect((await request("/api/settings/ai-connections/typesafe/personal", { method: "DELETE" }, lucaCookie)).response.status).toBe(200);
+        expect(await useDecision(personalDecision.user_id)).toBe(decisionWorkspace.apiKey);
+        expect((await request("/api/settings/ai-connections/typesafe/workspace", { method: "DELETE" }, cookie)).response.status).toBe(200);
+        expect(await useDecision(personalDecision.user_id)).toBe(env.TYPESAFE_API_KEY ?? null);
+        const decisionRemoved = await request("/api/settings/ai-connections", {}, lucaCookie);
+        expect(decisionRemoved.body.data.providers.find((p: any) => p.provider === "typesafe").effectiveSource)
+          .toBe(env.TYPESAFE_API_KEY ? "server" : null);
         const workspace = await request(
           "/api/settings/ai-connections/openai/workspace",
           {

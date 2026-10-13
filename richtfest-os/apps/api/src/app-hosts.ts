@@ -154,6 +154,13 @@ export const knowledgeDeps = (
     supervisorEnabled: env.AGENT_SUPERVISOR_ENABLED,
     resolveSupervisorPreset: (effort, provider) => resolveAgentPreset(db, actor.tenantId, effort, provider),
     resolveActiveProvider: () => getActiveProvider(db, actor.tenantId),
+    executeDecision: async (input) => {
+      const { callDecisionModel } = await import("./decision-runtime");
+      const result = await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, signal =>
+        withProviderCredential(db, actor.tenantId, actor.id, "typesafe",
+          key => callDecisionModel(input, key, { signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal, fetch: providerFetch })));
+      return result ?? { status: "unconfigured" as const };
+    },
     generateConversationTitle: async ({ message }) => {
       try {
         const provider = await getActiveProvider(db, actor.tenantId);

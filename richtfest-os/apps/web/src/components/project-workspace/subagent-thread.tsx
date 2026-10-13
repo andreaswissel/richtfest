@@ -358,6 +358,7 @@ function activeProviderCalls(events: RecordData[]) {
 const phaseTranslationKeys = {
   direct: "workspaceRunPhaseProvider",
   tool_followup: "workspaceRunPhaseToolExecution",
+  decision: "decisionRoutingTitle",
   plan: "agentRunPhasePlan",
   specialist: "agentRunPhaseSpecialists",
   specialists: "agentRunPhaseSpecialists",

@@ -37,6 +37,7 @@ export function vendorPreset(provider: Provider, effort: AgentEffort): AgentPres
     supervisor: model(supervisorModel ?? ""),
     specialists: { source_reviewer: model(specialistModel ?? ""), requirements_reviewer: model(specialistModel ?? "") },
     independentReviewEnabled: false,
+    knowledgeRerankingEnabled: false,
     executionLimits: agentExecutionLimitsSchema.parse({}),
     maxParallel: limits.maxParallel, maxTasks: limits.maxTasks, maxRevisions: limits.maxRevisions,
   };

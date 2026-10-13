@@ -52,6 +52,86 @@ async function fixture() {
   return { db, pool, applicationName, d, body, rows, categories, createRun, cleanup, audits, deny: () => { permitted = false; } };
 }
 
+integration("supervised Jev reranking is opt-in, bounded and falls back without widening evidence access", async () => {
+  const f = await fixture();
+  const { db, d } = f;
+  const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 4 };
+  let behavior = "rank", exported = 0;
+  let targetId = "";
+  const results: any[] = [];
+  try {
+    const extra = await db.insert(drafts).values(Array.from({ length: 13 }, (_, i) => ({
+      tenantId: d.tenantId, createdBy: d.actorId, title: `Schallschutz reference ${i}`, status: "approved",
+      categoryId: f.categories[1]!.id,
+      body: "Schallschutz guidance. ".repeat(200), createdAt: new Date(1700000000000 + i * 1000),
+    }))).returning();
+    // Newer equal-rank entries in another folder would displace every candidate
+    // if reranking accidentally broadened the requested category.
+    await db.insert(drafts).values(Array.from({ length: 13 }, (_, i) => ({
+      tenantId: d.tenantId, createdBy: d.actorId, title: `Schallschutz reference ${i}`, status: "approved",
+      categoryId: f.categories[0]!.id, body: "Schallschutz guidance. ".repeat(200),
+    })));
+    const search = { terms: ["Schallschutz"], category: f.categories[1]!.id };
+    // The least recent of the top twelve is outside the ordinary top four.
+    targetId = extra[1]!.id;
+    const baseline = await searchCompanyKnowledge(d, search);
+    expect(baseline.entries.map(e => e.id)).not.toContain(targetId);
+    d.executeDecision = async input => {
+      exported++;
+      const state = input.state as any;
+      expect(state.candidates).toHaveLength(12);
+      expect(state.candidates.every((e: any) => extra.some(r => r.id === e.id))).toBe(true);
+      expect(state.candidates.every((e: any) => e.excerpt.length <= 2000)).toBe(true);
+      expect(state.goal).toBe("Check relevant Schallschutz guidance");
+      if (behavior === "failure") throw new Error("private upstream body");
+      if (behavior === "withdraw") await db.update(drafts).set({ status: "draft" }).where(eq(drafts.id, targetId));
+      return { status: "completed", usage: { provider: "typesafe", modelId: "jev-1.13.0", inputTokens: 1000,
+        outputTokens: 30, totalTokens: 1030, cachedInputTokens: null, reasoningTokens: null, estimatedCostUsd: 0.000042 },
+        output: { model: "jev-1.13.0", answers: Object.fromEntries(state.candidates.map((e: any) => {
+          const relevant = e.id === targetId;
+          return [behavior === "invented" && relevant ? crypto.randomUUID() : e.id, { type: "choice",
+            choice: relevant ? "relevant" : "irrelevant", confidence: behavior === "uncertain" ? 0.89 : 1,
+            probabilities: { relevant: relevant ? 1 : 0, irrelevant: relevant ? 0 : 1, uncertain: 0 } }];
+        })) } };
+    };
+    d.executeSupervisor = async input => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Check relevant Schallschutz guidance", sourceVersionIds: [] },
+      ] } };
+      const receipt = await input.searchCompanyKnowledge!(search);
+      results.push(receipt);
+      expect(receipt.category).toBe(search.category);
+      expect(receipt.entries.every(e => e.categoryId === search.category)).toBe(true);
+      expect(await input.searchCompanyKnowledge!(search)).toMatchObject({ status: "already_retrieved", entries: [] });
+      return { status: "completed", output: { summary: "Guidance only", rationale: "Not project evidence", citations: [] } };
+    };
+    for (const scenario of ["off", "rank", "uncertain", "failure", "invented", "withdraw"]) {
+      behavior = scenario;
+      const run = await f.createRun();
+      await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", source: "vendor", version: 1,
+        supervisor: model, specialists: { source_reviewer: model, requirements_reviewer: model }, maxParallel: 1, maxTasks: 2,
+        maxRevisions: 0, knowledgeRerankingEnabled: scenario !== "off" });
+      await stepSupervisor(d, run.id);
+      const before = results.length;
+      await stepSupervisor(d, run.id);
+      if (scenario === "withdraw") {
+        expect(results).toHaveLength(before);
+        expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run.id)))[0]!.status).toBe("failed");
+      } else if (scenario === "rank") {
+        expect(results.at(-1).entries.map((e: any) => e.id)).toEqual([targetId, ...baseline.entries.slice(0, 3).map(e => e.id)]);
+      } else expect(results.at(-1).entries).toEqual(baseline.entries);
+    }
+    expect(exported).toBe(5); // off and duplicate receipts never call Jev
+    expect((await db.select().from(agentRunUsage).where(eq(agentRunUsage.tenantId, d.tenantId))).length).toBe(4);
+    const controller = new AbortController(); controller.abort();
+    await expect(searchCompanyKnowledge(d, { terms: ["Schallschutz"] }, db, false,
+      { runId: "unused", correlationId: "unused", goal: "irrelevant", generation: 0, signal: controller.signal })).rejects.toThrow();
+    f.deny();
+    await expect(searchCompanyKnowledge(d, { terms: ["Schallschutz"] })).rejects.toThrow("Forbidden");
+    expect(exported).toBe(5);
+  } finally { await f.cleanup(); }
+});
+
 integration("direct company retrieval is approved-only, scoped, audited and re-read on retry", async () => {
   const f = await fixture();
   const { db, d, rows, body } = f;

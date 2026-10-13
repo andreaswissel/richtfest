@@ -5,6 +5,8 @@ import type { AppDeps } from "./deps";
 import { drafts, knowledgeCategories } from "./schema";
 import { retrieveCompanyEntries } from "./company-library";
 import { conflict } from "./workspace";
+import { executeTrackedProvider } from "./usage";
+import { knowledgeRelevanceQuestions, knowledgeRerankingVersion, rankCompanyKnowledge } from "./knowledge-reranking";
 
 // Two <=48 KB results, an <=8 KiB category directory, plus receipt IDs and
 // tool schema. Keep the existing reserve instead of shrinking source batches.
@@ -25,13 +27,38 @@ export async function companyKnowledgeCategories(d: AppDeps) {
   return directory;
 }
 
-export async function searchCompanyKnowledge(d: AppDeps, raw: unknown, db = d.db, limitReached = false) {
+export async function searchCompanyKnowledge(d: AppDeps, raw: unknown, db = d.db, limitReached = false,
+  rerank?: { runId: string; correlationId: string; goal: string; generation: number; signal?: AbortSignal },
+) {
   d.requirePermission("knowledge:read");
+  rerank?.signal?.throwIfAborted();
   const { terms, category } = companyKnowledgeSearchSchema.parse(raw);
-  const entries = limitReached ? [] : (await retrieveCompanyEntries(d, { category: category ?? "all", status: "approved" }, terms, 4, 2000, db)).entries
+  const canRerank = !!rerank && !!d.executeDecision && !limitReached && rerank.goal.length <= 2000;
+  let entries = limitReached ? [] : (await retrieveCompanyEntries(d, { category: category ?? "all", status: "approved" }, terms, canRerank ? 12 : 4, 2000, db)).entries
     .map((entry: any) => ({ ...entry, categoryName: entry.categoryName?.slice(0, 100) ?? null,
       displayTitle: entry.displayTitle?.slice(0, 300) ?? null, sourceLabel: entry.sourceLabel?.slice(0, 300) ?? null,
       chapter: entry.chapter?.slice(0, 300) ?? null }));
+  if (canRerank && entries.length > 4) {
+    // Check authorization again immediately before exporting approved excerpts.
+    // This function is only called outside the supervisor checkpoint transaction.
+    await assertCompanyKnowledgeCurrent(d, [{ entries }], db);
+    rerank!.signal?.throwIfAborted();
+    try {
+      const result = await executeTrackedProvider(d, { id: rerank!.runId, correlationId: rerank!.correlationId, provider: "typesafe" },
+        { phase: "knowledge_rerank", generation: rerank!.generation }, telemetry => d.executeDecision!({
+          ...telemetry, runId: rerank!.runId, signal: rerank!.signal,
+          state: { version: knowledgeRerankingVersion, goal: rerank!.goal, terms,
+            candidates: entries.map(({ id, title, excerpt }: CompanyKnowledgeReceipt["entries"][number]) => ({ id, title, excerpt })) },
+          questions: knowledgeRelevanceQuestions(entries),
+        }));
+      if (result.status === "completed") entries = rankCompanyKnowledge(entries, result.output).entries;
+    } catch {
+      // Failed/invalid decisions keep the identical deterministic top four.
+      // Attempts and any reported usage remain in the run ledger.
+    }
+    rerank!.signal?.throwIfAborted();
+  }
+  entries = entries.slice(0, 4);
   const result = companyKnowledgeResultSchema.parse({ terms, category, entries,
     status: limitReached ? "limit_reached" : entries.length ? "matched" : "no_matches",
     coverage: { limited: true, maxEntries: 4, maxCharsPerEntry: 2000 },

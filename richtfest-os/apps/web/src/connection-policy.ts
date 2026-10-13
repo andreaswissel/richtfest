@@ -2,11 +2,25 @@ export type ProviderId = "openai" | "anthropic" | "vercel";
 
 export const providerIds: ProviderId[] = ["openai", "anthropic", "vercel"];
 
+export type ConnectionProviderId = ProviderId | "typesafe";
+export const connectionProviderIds: ConnectionProviderId[] = [
+  ...providerIds,
+  "typesafe",
+];
+export function isConnectionProviderId(
+  value: unknown,
+): value is ConnectionProviderId {
+  return (
+    typeof value === "string" &&
+    connectionProviderIds.includes(value as ConnectionProviderId)
+  );
+}
 export type ProviderConnection = {
-  provider: ProviderId;
+  provider: ConnectionProviderId;
   personal: { configured: boolean; updatedAt?: string | null };
   workspace: { configured: boolean; updatedAt?: string | null };
-  effectiveSource: "personal" | "workspace" | null;
+  server: { configured: boolean };
+  effectiveSource: "personal" | "workspace" | "server" | null;
 };
 export type ConnectionsState = {
   encryptionConfigured: boolean;
@@ -37,6 +51,7 @@ export function getSelectedProvider(state?: ConnectionsState): ProviderId {
 }
 
 export function providerLabel(value: unknown) {
+  if (value === "typesafe") return "TypeSafe (Jev)";
   if (value === "anthropic") return "Anthropic";
   if (value === "vercel") return "Vercel AI Gateway";
   return "OpenAI";

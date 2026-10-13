@@ -9,7 +9,7 @@ import { env } from "./env";
 import { HttpError } from "./middleware/auth";
 import { recordAudit } from "./audit";
 
-const providers = agentProviderSchema;
+const providers = z.enum([...agentProviderSchema.options, "typesafe"]);
 const input = z.object({ apiKey: z.string().trim().min(10).max(500) });
 const send = (res: any, status: number, body: any) =>
   res.status(status).json(body);
@@ -78,8 +78,10 @@ export const createAiConnectionsRouter = (db: Database) => {
         const workspace = rows.find(
           (r) => r.provider === provider && r.userId === null,
         );
+        const serverConfigured = provider === "typesafe" && Boolean(env.TYPESAFE_API_KEY);
         return {
           provider,
+          server: { configured: serverConfigured },
           workspace: {
             configured: Boolean(workspace),
             updatedAt: workspace?.updatedAt?.toISOString() ?? null,
@@ -92,7 +94,7 @@ export const createAiConnectionsRouter = (db: Database) => {
             ? "personal"
             : workspace
               ? "workspace"
-              : null,
+              : serverConfigured ? "server" : null,
         };
       });
       return send(
@@ -119,7 +121,7 @@ export const createAiConnectionsRouter = (db: Database) => {
     try {
       const a = actor(req);
       if (!a.permissions.has("access:manage")) throw new HttpError(403, "forbidden", "Workspace administration access is required.");
-      const provider = providers.parse(req.body?.provider);
+      const provider = agentProviderSchema.parse(req.body?.provider);
       const saved = await db.transaction(async (tx: any) => {
         const [row] = await tx.insert(osAgentSettings).values({ tenantId: a.tenantId, provider, updatedBy: a.id })
           .onConflictDoUpdate({ target: osAgentSettings.tenantId, set: { provider, updatedBy: a.id, updatedAt: new Date() } }).returning();
@@ -141,8 +143,7 @@ export const createAiConnectionsRouter = (db: Database) => {
             "forbidden",
             "Workspace AI connections require access:manage",
           );
-        const { apiKey } = input.parse(req.body);
-        const sealed = seal(apiKey);
+        const sealed = seal(input.parse(req.body).apiKey);
         const userId = scope === "personal" ? a.id : null;
         const row = await db.transaction(async (tx: any) => {
           const existing = await tx
@@ -295,10 +296,10 @@ export async function withProviderCredential<T>(
   db: Database,
   tenantId: string,
   userId: string,
-  provider: AgentProvider,
+  provider: AgentProvider | "typesafe",
   use: (key: string) => Promise<T>,
 ): Promise<T | null> {
-  if (!isEncryptionConfigured()) return null;
+  if (provider !== "typesafe" && !isEncryptionConfigured()) return null;
   const rows = await db
     .select()
     .from(aiConnections)
@@ -311,7 +312,14 @@ export async function withProviderCredential<T>(
   const row =
     rows.find((r) => r.userId === userId) ??
     rows.find((r) => r.userId === null);
-  if (!row) return null;
+  if (!row) return provider === "typesafe" && env.TYPESAFE_API_KEY
+    ? use(env.TYPESAFE_API_KEY) : null;
+  // A scoped credential is authoritative: encryption/validation failures must
+  // not silently switch to a different user's/workspace/server credential.
+  if (!isEncryptionConfigured()) {
+    if (provider === "typesafe") keyMaterial();
+    return null;
+  }
   const decipher = crypto.createDecipheriv(
     "aes-256-gcm",
     keyMaterial(),

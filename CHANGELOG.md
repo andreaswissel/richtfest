@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Added opt-in TypeSafe Jev summary routing and supervised company-knowledge reranking, with safe fallbacks, explicit credential setup and tracked usage. Reviews and approvals remain unchanged; neither option promises lower total cost.
+
 - Acoustic concepts now consolidate the assembled report and separately check that evidence is preserved before optional source review and publication. Progress shows both stages; retries retain saved edits and checks without changing calculation appendices or original attachments.
 
 - Agents can discover company-knowledge categories, search within a folder or unfiled entries, and retain category, source and chapter labels alongside approved references. Search stays private and approval-aware without embeddings or extra AI search calls.

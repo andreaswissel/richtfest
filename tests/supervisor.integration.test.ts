@@ -41,6 +41,121 @@ const policy = {
   maxRevisions: 2,
 };
 
+for (const scenario of ["off", "shadow", "enabled", "uncertain", "broader", "unconfigured", "failure", "malformed", "unreadable", "custom_guidance", "long_context", "cancel", "recover", "foreign_source"] as const)
+integration(`decision routing preserves review and fallback: ${scenario}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  let decisionCalls = 0, recover = scenario === "recover";
+  const usage = { provider: "openai" as const, modelId: "test-model", inputTokens: 1000, outputTokens: 100,
+    totalTokens: 1100, cachedInputTokens: 0, reasoningTokens: 0, estimatedCostUsd: 0.01 };
+  const goal = scenario === "long_context" ? "Summarize. ".repeat(250) : "Fasse ausschließlich das ausgewählte Dokument zusammen.";
+  const d: any = { db, tenantId, actorId, requirePermission: () => {}, audit: async () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async (_p: string, id: string) => scenario !== "foreign_source" && id === versionId,
+    listProjectSources: async () => ({ sources: [{ versionId }], truncated: false }),
+    resolveSource: async (_p: string, input: any) => {
+      const page = input.pageStart ?? 1;
+      return { status: "resolved", source: { versionId, name: "Selected.pdf", version: 1 }, content: {
+        status: scenario === "unreadable" ? "unsupported" : "available",
+        text: page === 1 ? "First page evidence." : "Essential second page evidence.",
+        truncated: page === 1,
+        coverage: { pageStart: page, pageEnd: page, totalPages: 2, truncated: page === 1, nextPage: page === 1 ? 2 : null },
+        retrieval: { mode: "pages", pageNumbers: [page] },
+      } };
+    },
+    executeDecision: async ({ runId, state }: any) => {
+      decisionCalls++;
+      expect(state.goal).toBe(goal);
+      expect(JSON.stringify(state)).not.toContain("First page evidence");
+      if (scenario === "cancel") await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, runId));
+      if (scenario === "failure") throw new Error("secret provider body");
+      if (scenario === "unconfigured") return { status: "unconfigured" };
+      return { status: "completed", usage: { ...usage, provider: "typesafe", modelId: "jev-1.13.0", estimatedCostUsd: 0.000038 },
+        output: scenario === "malformed" ? { answers: "secret" } : { model: "jev-1.13.0", answers: {
+          workflow: { type: "choice", choice: "summarize_sources", confidence: scenario === "uncertain" ? 0.989 : 0.99,
+            probabilities: { summarize_sources: 0.99, source_question: 0.004, supervisor: 0.004, uncertain: 0.002 } },
+          scope: { type: "choice", choice: scenario === "broader" ? "broader" : "self_contained", confidence: 0.995,
+            probabilities: scenario === "broader" ? { self_contained: 0.003, broader: 0.995, uncertain: 0.002 }
+              : { self_contained: 0.995, broader: 0.003, uncertain: 0.002 } },
+        } } };
+    },
+    executeSupervisor: async ({ phase, context, runId }: any) => {
+      if (phase === "plan") {
+        if (recover) {
+          // Simulate losing the worker lease after the decision checkpoint.
+          await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+          throw new Error("worker lease lost");
+        }
+        return { status: "completed", usage, output: { tasks: [
+          { role: "requirements_reviewer", goal: "Normal planner assignment", sourceVersionIds: [versionId] },
+        ] } };
+      }
+      if (phase === "specialist") return { status: "completed", usage, output: {
+        summary: context.sources.map((s: any) => s.text).join("\n") || "Missing source", rationale: "Fixture evidence", citations: context.sourceVersionIds,
+      } };
+      if (phase === "independent_review") return { status: "completed", usage, output: {
+        summary: "Independent review complete", rationale: "Reviewed", citations: [versionId], decision: "accept", revisions: [], findings: [],
+      } };
+      return { status: "completed", usage, output: { decision: "accept", summary: "Summary awaiting human approval", rationale: "Reviewed",
+        citations: [versionId], revisions: [], document: { title: "Selected source summary", content: "Reviewed draft" } } };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal, sourceVersionIds: [versionId],
+      provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    const mode = scenario === "off" ? "off" : scenario === "shadow" || scenario === "recover" ? "shadow" : "enabled";
+    await createSupervisor(d, db, run, "medium", { ...policy, independentReviewEnabled: true,
+      decisionRouting: { mode, minConfidence: 0.99 } });
+    if (scenario === "custom_guidance") await db.update(supervisorRuns).set({ profileSnapshot: [{ key: "supervisor", version: 1 }] })
+      .where(eq(supervisorRuns.runId, run!.id));
+    await stepSupervisor(d, run!.id);
+    if (scenario === "recover") {
+      recover = false;
+      await db.update(agentRuns).set({ status: "queued" }).where(eq(agentRuns.id, run!.id));
+      await stepSupervisor(d, run!.id);
+    }
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    if (scenario === "cancel" || scenario === "foreign_source") {
+      expect(parent!.status).toBe(scenario === "cancel" ? "cancelled" : "failed");
+      expect(state!.assignments).toEqual([]);
+      if (scenario === "foreign_source") expect(decisionCalls).toBe(0);
+      return;
+    }
+    const assignment = (state!.assignments as any[])[0];
+    expect(assignment.sourceVersionIds).toEqual([versionId]);
+    expect(assignment.role).toBe(scenario === "enabled" ? "source_reviewer" : "requirements_reviewer");
+    expect(assignment.goal).toBe(scenario === "enabled" ? goal : "Normal planner assignment");
+    expect(decisionCalls).toBe(["off", "custom_guidance", "long_context"].includes(scenario) ? 0 : 1);
+    if (scenario !== "off") {
+      const decision = (state!.history as any[]).find(e => e.phase === "decision")?.output;
+      expect(decision.selectedRoute).toBe(scenario === "enabled" ? "selected_source_summary" : "supervisor");
+      expect(JSON.stringify(decision)).not.toContain("secret");
+    }
+    if (scenario === "enabled" || scenario === "off") {
+      await stepSupervisor(d, run!.id); // specialist
+      const [specialists] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      if (scenario === "enabled") expect((specialists!.assignments as any[])[0].output.summary).toContain("Essential second page evidence");
+      await stepSupervisor(d, run!.id); // review
+      const [review] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      expect(review!.phase).toBe("independent_review");
+      await stepSupervisor(d, run!.id);
+      const [completed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+      expect(completed!.status).toBe("needs_review");
+      const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
+      expect(attempts.filter(a => a.phase === "plan")).toHaveLength(scenario === "enabled" ? 0 : 1);
+      expect(attempts.filter(a => a.phase === "review")).toHaveLength(1);
+      expect(attempts.filter(a => a.phase === "independent_review")).toHaveLength(1);
+      const costs = await db.select().from(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
+      expect(costs.reduce((sum, r) => sum + Number(r.estimatedCostUsd), 0)).toBe(scenario === "enabled" ? 30038 : 40000);
+    }
+  } finally {
+    for (const table of [artifactRevisions, artifacts, messages, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
 for (const outcome of ["recover", "exhaust", "cancel", "quota", "long_cooldown"] as const) integration(
   `429 recovery is durable, bounded and cancellable: ${outcome}`, async () => {
     const { db, pool } = createDatabase(process.env.DATABASE_URL!);

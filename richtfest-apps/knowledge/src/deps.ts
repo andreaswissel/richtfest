@@ -55,6 +55,12 @@ export type AppDeps = {
   db: any;
   supervisorEnabled?: boolean;
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
+  executeDecision?: (input: {
+    runId: string;
+    signal?: AbortSignal;
+    state: unknown;
+    questions: Record<string, { type: "choice"; instructions: string; criteria: Record<string, string> }>;
+  } & ProviderTelemetry) => Promise<ProviderResult>;
   resolveSupervisorPreset?: (
     effort: "low" | "medium" | "high" | "ultra",
     provider: AgentProvider,
@@ -150,7 +156,7 @@ export type ProviderRequest = {
 /** Allowlisted metadata only: never headers, credentials, raw prompts or SDK errors. */
 export type ProviderExecutionSettings = {
   version: 1;
-  adapter: "direct" | "mastra";
+  adapter: "direct" | "mastra" | "decision";
   adapterVersion: string;
   appRevision: string | null;
   modelId: string;
@@ -180,7 +186,7 @@ export type ProviderTelemetry = {
   onPrepared?: (input: { version: 1; instructions: string; prompt: string; outputSchema?: unknown; tools?: unknown }) => Promise<{ output: unknown } | undefined>;
 };
 export type ProviderUsage = {
-  provider: AgentProvider;
+  provider: AgentProvider | "typesafe";
   modelId: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
