@@ -56,10 +56,15 @@ integration("agent messages are scoped, atomic, retry-safe, reply-linked and liv
   try {
     const before = (await db.select().from(agentRuns).where(eq(agentRuns.id, recipient!.id)))[0];
     const input = { recipientRunId: recipient!.id, body: "Which glazing revision should we use?" };
-    const [first, retry] = await Promise.all([send(sender!, input, "exchange:1"), send(sender!, input, "exchange:1")]);
+    const [first, retry] = await Promise.all([
+      send(sender!, { ...input, replyToMessageId: null }, "exchange:1"), send(sender!, input, "exchange:1"),
+    ]);
     expect(retry).toEqual(first);
     expect(await runThreadMessages(d, sender!)).toHaveLength(1);
     expect(await runThreadMessages(d, recipient!)).toHaveLength(1);
+    const original = (await db.select().from(messages).where(eq(messages.id, first.senderMessageId)))[0]!;
+    expect(original.parentMessageId).toBeNull();
+    expect(original.agentMessage).not.toHaveProperty("replyToMessageId");
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, recipient!.id)))[0]).toEqual(before);
     const context = await agentMessagingContext(d, recipient!);
     expect(context.inbox).toMatchObject([{ id: first.recipientMessageId, body: input.body, sender: { runId: sender!.id } }]);

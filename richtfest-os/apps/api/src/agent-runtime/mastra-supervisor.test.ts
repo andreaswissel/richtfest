@@ -510,6 +510,39 @@ test("Mastra retains received usage after a transient telemetry write failure", 
   expect(saved).toHaveLength(1);
   expect(saved[0]).toMatchObject({ inputTokens: 37, outputTokens: 11, totalTokens: 48 });
 });
+test("OpenAI agent messages allow no reply target without accepting malformed reply IDs", async () => {
+  const recipientRunId = crypto.randomUUID(), originalMessageId = crypto.randomUUID();
+  for (const replyToMessageId of [null, undefined, originalMessageId, "", "not-a-uuid"]) {
+    let wireReplySchema: any;
+    const output = { summary: "Source conflict identified.", rationale: "Needs clarification.", citations: [],
+      messages: [{ recipientRunId, body: "Which source revision is authoritative?", replyToMessageId }] };
+    const model = new MastraLanguageModelV2Mock({ provider: "openai.responses", modelId: "gpt-6-luna",
+      doStream: async options => {
+        const schema = options.responseFormat?.type === "json" ? options.responseFormat.schema as any : undefined;
+        wireReplySchema = schema?.properties.messages.items.properties.replyToMessageId;
+        return { stream: new ReadableStream({ start(controller) {
+          controller.enqueue({ type: "text-start", id: "output" });
+          controller.enqueue({ type: "text-delta", id: "output", delta: JSON.stringify(output) });
+          controller.enqueue({ type: "text-end", id: "output" });
+          controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+          controller.close();
+        } }) };
+      },
+    });
+    const result = await callMastraSupervisor({ ...base, phase: "specialist", context: {
+      messaging: { recipients: [{ runId: recipientRunId }], inbox: [], remainingMessages: 12 },
+    } }, "test-key", { model }).then(output => ({ output }), error => ({ error }));
+    // Check the actual model-facing contract: a local parser accepting null is not enough.
+    expect(wireReplySchema.anyOf).toEqual(expect.arrayContaining([{ type: "null" }, expect.objectContaining({ type: "string" })]));
+    if (replyToMessageId === "" || replyToMessageId === "not-a-uuid") {
+      expect(result).toMatchObject({ error: { retryable: true, failureCategory: "validation", diagnostics: {
+        issues: [{ code: "invalid_string", path: ["messages", 0, "replyToMessageId"], validation: "uuid" }],
+      } } });
+    } else {
+      expect(result).toEqual({ output: { ...output, messages: [{ ...output.messages[0], replyToMessageId: replyToMessageId ?? undefined }] } });
+    }
+  }
+});
 test("Mastra truncation and OpenAI schema failures remain retryable without exposing output", async () => {
   for (const failure of ["truncated", "complete_length", "schema", "summary_limit"] as const) {
     for (const streaming of [false, true]) {
