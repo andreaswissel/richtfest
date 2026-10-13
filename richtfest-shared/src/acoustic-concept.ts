@@ -76,6 +76,17 @@ export const acousticSectionOutputSchema = z.object({
   complete: z.boolean(),
 }).strict();
 
+/** The editor owns prose, not metadata, source PDFs or the calculation appendix. */
+export const acousticEditorialOutputSchema = z.object({
+  sections: z.array(z.object({ key: acousticSectionKeySchema, content: section }).strict()).max(12),
+  complete: z.boolean(),
+}).strict();
+
+export const acousticEditorialCheckSchema = z.object({
+  preserved: z.boolean().describe("True only if the edit retains all substantive evidence and uncertainty without new claims or calculations."),
+  issues: z.array(z.string().trim().min(1).max(2000)).max(100),
+}).strict();
+
 /** Reference-derived authoring formats, not executable calculation templates. */
 export const acousticConceptTemplateSchema = z.discriminatedUnion("id", [
   z.object({

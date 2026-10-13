@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "../src/locales/en.json";
+import de from "../src/locales/de.json";
 import {
+  currentRunTasks,
+  workProgressMetadata,
   providerActivityMetadata,
   providerFailureExplanation,
   terminalProviderFailure,
@@ -24,6 +27,43 @@ const event = (runId = "own", extra = diagnostics) => ({
     attempt: 3,
     diagnostics: extra,
   }),
+});
+test("editorial progress uses localized stages without section summaries or batches, preserving section progress", () => {
+  const run = {
+    id: "550e8400-e29b-41d4-a716-446655440000",
+    isSupervisor: true,
+    status: "running",
+  };
+  const progress = (stage: string, extra = {}) => ({
+    id: stage,
+    eventType: "work_progress",
+    paramsSummary: JSON.stringify({ runId: run.id, stage, sources: [], ...extra }),
+  });
+  const section = progress("reviewing_findings", {
+    batch: 2, batchCount: 3, summary: "Report section: assessment",
+  });
+  for (const [stage, key] of [
+    ["editing_document", "workspaceWorkEditingDocument"],
+    ["checking_editorial", "workspaceWorkCheckingEditorial"],
+  ] as const) {
+    const update = progress(stage);
+    expect(workProgressMetadata(update)?.stage).toBe(stage);
+    for (const locale of [en, de]) {
+      const translate = (key: keyof typeof en) => locale[key];
+      const [task] = currentRunTasks(run, [], translate, [section, update]);
+      expect(task.text).toBe(locale[key]);
+      expect(task.summary).toBeUndefined();
+      expect(task.hasProgress).toBe(true);
+      expect(task.text).not.toContain(stage);
+      expect(task.text).not.toContain(locale.workspaceWorkBatch);
+    }
+    const html = renderToStaticMarkup(<RunActivityFeed active run={run} events={[section, update]} />);
+    expect(html.split("<details")[0]).toContain(en[key]);
+    expect(html.split("<details")[0]).not.toContain("Report section");
+  }
+  const [task] = currentRunTasks(run, [], t, [section]);
+  expect(task.text).toBe(`${en.workspaceWorkReviewing} · Batch 2/3`);
+  expect(task.summary).toBe("Report section: assessment");
 });
 test("activity history is collapsed while the current assignment and latest update stay visible", () => {
   const html = renderToStaticMarkup(
@@ -167,6 +207,11 @@ test("verified summary character failure is distinct from output truncation", ()
       t,
     ),
   ).toContain("field validation");
+  for (const locale of [en, de]) {
+    expect(providerFailureExplanation({ errorId: diagnostics.errorId,
+      issues: [{ code: "custom", path: ["editorial"] }],
+    }, key => locale[key])).toBe(locale.workspaceFailureEditorial);
+  }
 });
 test("report content character limits identify stopped sections without offering token increases", () => {
   for (const path of [

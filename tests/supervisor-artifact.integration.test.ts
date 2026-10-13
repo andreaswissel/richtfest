@@ -28,6 +28,195 @@ import {
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 
+function unchangedEditorial(context: any) {
+  if (context.documentTask === "editorial") return {
+    sections: context.sectionKeys.map((key: string) => ({ key, content: context.original[key] })), complete: true,
+  };
+  if (context.documentTask === "editorial_check") return { preserved: true, issues: [] };
+}
+
+for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const)
+test(`${id} editorial context and checkpoint resume preserve original section pieces`, async () => {
+  const versionId = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  const previousReview = { summary: "Keep uncertainty visible" };
+  const calls: string[] = [];
+  let draft: any, original: any;
+  const input = {
+    d: { resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" },
+      content: { status: "available", text: "Synthetic evidence", truncated: false } }) } as any,
+    projectId: crypto.randomUUID(), id, goal: `Create ${id}`, findings: [], sourceVersionIds: [versionId],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1, previousReview,
+    assertActive: async () => {}, checkpoint: async (saved: any) => { draft = structuredClone(saved); },
+    call: async (context: any) => {
+      calls.push(context.documentTask);
+      if (context.documentTask === "outline") return { id, title: "Checkpoint report", language: "en", project: fixture.project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
+      if (context.documentTask === "section") return { complete: true, citations: [versionId], content: (fixture as any)[context.section] };
+      expect(context.previousReview).toEqual(previousReview);
+      expect(context.sectionKeys).toEqual(acousticSectionKeys(id).filter(key => key !== "calculationAppendix"));
+      expect(context.original).toEqual({ ...fixture, attachments: [] });
+      original = context.original;
+      if (context.documentTask === "editorial") return unchangedEditorial(context);
+      expect(context.edited).toEqual(context.original);
+      if (calls.filter(task => task === "editorial_check").length === 1) throw new Error("Checker disconnected");
+      return { preserved: true, issues: [] };
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow("Checker disconnected");
+  const pieces = structuredClone(draft.sections);
+  expect(draft.editorial.candidate.complete).toBe(true);
+  expect(draft.editorial.check).toBeUndefined();
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(result.document.template).toEqual(original);
+  expect(draft.sections).toEqual(pieces);
+  expect(calls.filter(task => task === "outline")).toHaveLength(1);
+  expect(calls.filter(task => task === "section")).toHaveLength(acousticSectionKeys(id).length);
+  expect(calls.filter(task => task === "editorial")).toHaveLength(1);
+  expect(calls.filter(task => task === "editorial_check")).toHaveLength(2);
+  const unedited = { ...structuredClone(draft), editorial: undefined };
+  await expect(authorAcousticConcept({ ...input, draft: unedited, call: async (context: any) => {
+    expect(context.documentTask).toBe("editorial");
+    return { complete: true, sections: context.sectionKeys.map((key: string) => ({
+      key, content: context.original[key].replaceAll(versionId, "removed source"),
+    })) };
+  } })).rejects.toThrow("Preserve source references");
+  expect(draft.sections).toEqual(pieces);
+});
+
+for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const)
+for (const scenario of ["edited", "timeout", "rejected", "malformed", "incomplete", "missing_key", "duplicate_key", "appendix", "citation"] as const)
+integration(`${id} editorial publication gate: ${scenario}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
+  const { PDFDocument } = await import("../richtfest-apps/knowledge/node_modules/pdf-lib");
+  const pdf = await PDFDocument.create(); pdf.addPage().drawText("Unchanged synthetic calculation evidence");
+  const bytes = Buffer.from(await pdf.save());
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  const evidence = `Room A-17: required 33.2 dB; available 42.1 dB. Room B-93: required 48.7 dB; available 39.4 dB. Source claims unverified [${versionId}].`;
+  const wrongAssociation = evidence.replace("33.2", "48.7").replace("42.1", "39.4");
+  const attachments = [{ versionId, pageStart: 1, pageEnd: 1, section: "calculationAppendix", label: "Original calculation sheet" }];
+  const model = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 1 };
+  const calls: string[] = [];
+  let original: any, originalPieces: any, runId = "", independentCalls = 0;
+  const rejected = { preserved: false, issues: ["Room A-17 values were replaced by Room B-93 values."] };
+  const d: any = {
+    db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
+    providerConfigured: async () => false, validateProject: async () => true,
+    validateSourceVersion: async (_: string, sourceId: string) => sourceId === versionId,
+    readSourcePdf: async () => bytes,
+    resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence.pdf", version: 1 },
+      content: { status: "available", text: evidence, truncated: false } }),
+    executeSupervisor: async ({ phase, context }: any) => {
+      const task = context.documentTask ?? phase; calls.push(task);
+      if (phase === "independent_review") {
+        independentCalls++;
+        expect(context.firstPassReview.document.content).toContain(evidence);
+        expect(context.firstPassReview.document.content.match(/Room A-17:/g)).toHaveLength(1);
+        expect(context.firstPassReview.document.content).not.toContain(wrongAssociation);
+        expect(await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId))).toHaveLength(0);
+        return { status: "completed", output: { summary: "Edited report independently checked", rationale: "Unverified claims retained", decision: "accept", citations: [versionId], revisions: [], findings: [] } };
+      }
+      let output: any;
+      if (task === "outline") output = { id, title: "Editorial report", language: "en", project: fixture.project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments };
+      else if (task === "section") output = { complete: true, citations: [versionId],
+        content: context.section === "components" ? `${evidence}\n\n${evidence}` : (fixture as any)[context.section] };
+      else if (task === "editorial") {
+        original = structuredClone(context.original);
+        expect(context.sectionKeys).toEqual(acousticSectionKeys(id).filter(key => key !== "calculationAppendix"));
+        expect(original.components).toBe(`${evidence}\n\n${evidence}`);
+        expect(original.attachments).toEqual(attachments);
+        expect(original.calculationAppendix).toBe(fixture.calculationAppendix);
+        const editNumber = calls.filter(call => call === "editorial").length;
+        if (scenario === "rejected" && editNumber === 2) expect(context.feedback).toEqual(rejected);
+        else expect(context.feedback).toBeUndefined();
+        output = unchangedEditorial(context);
+        output.sections.find((s: any) => s.key === "components").content = scenario === "rejected" && editNumber === 1 ? wrongAssociation : evidence;
+        if (scenario === "malformed") output = { sections: "not an array", complete: true };
+        if (scenario === "incomplete") output.complete = false;
+        if (scenario === "missing_key") output.sections.pop();
+        if (scenario === "duplicate_key") output.sections[1] = output.sections[0];
+        if (scenario === "appendix") output.sections.push({ key: "calculationAppendix", content: "Replaced calculation evidence" });
+        if (scenario === "citation") output.sections.find((s: any) => s.key === "components").content += ` Unknown source [${crypto.randomUUID()}].`;
+      } else if (task === "editorial_check") {
+        expect(context.original).toEqual(original);
+        const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+        const draft = (saved!.review as any).documentDraft;
+        originalPieces ??= structuredClone(draft.sections);
+        expect(draft.sections).toEqual(originalPieces);
+        expect(draft.sections.components.parts.map((p: any) => p.content).join("\n\n")).toBe(`${evidence}\n\n${evidence}`);
+        expect(draft.editorial.candidate).toBeDefined();
+        for (const key of ["project", "language", "id", "version", "attachments", "calculationAppendix"])
+          expect(context.edited[key]).toEqual(original[key]);
+        if (scenario === "timeout" && calls.filter(call => call === "editorial_check").length === 1)
+          throw Object.assign(new Error("Checker timed out"), { code: "timeout", providerFailure: true, retryable: false });
+        output = scenario === "rejected" && calls.filter(call => call === "editorial_check").length === 1 ? rejected : { preserved: true, issues: [] };
+      } else throw new Error(`Unexpected call ${task}`);
+      return { status: "completed", output };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: `Create ${id}`, provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    runId = run!.id;
+    await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
+      specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: true, maxParallel: 1, maxTasks: 4, maxRevisions: 1 });
+    await db.update(supervisorRuns).set({ phase: "review", assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, runId));
+    await stepSupervisor(d, runId);
+    expect(calls).toContain("editorial");
+    if (scenario !== "edited") {
+      const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+      expect(failed!.status).toBe("failed");
+      expect(independentCalls).toBe(0);
+      expect(await db.select().from(artifacts).where(eq(artifacts.runId, runId))).toHaveLength(0);
+      expect(await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId))).toHaveLength(0);
+      if (scenario === "rejected") {
+        const events = await db.select().from(agentRunEvents).where(eq(agentRunEvents.runId, runId));
+        const failure = events.filter(event => event.eventType === "provider_call_failed").at(-1)!;
+        expect(JSON.parse(failure.paramsSummary!).diagnostics.issues).toEqual([{ code: "custom", path: ["editorial"] }]);
+        expect(failure.paramsSummary).not.toContain(rejected.issues[0]!);
+      }
+    }
+    if (scenario === "timeout" || scenario === "rejected") {
+      const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+      const draft = (saved!.review as any).documentDraft;
+      expect(draft.editorial.candidate.sections.find((s: any) => s.key === "components").content).toBe(scenario === "timeout" ? evidence : wrongAssociation);
+      expect(draft.editorial.check).toEqual(scenario === "timeout" ? undefined : rejected);
+      const pieces = structuredClone(draft.sections);
+      const response = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${runId}/retry`, { method: "POST" });
+      expect(response.status).toBe(201);
+      expect((await response.json()).data.id).toBe(runId);
+      const [resumed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+      expect((resumed!.review as any).documentDraft.sections).toEqual(pieces);
+      await stepSupervisor(d, runId);
+      expect(calls.filter(call => call === "outline")).toHaveLength(1);
+      expect(calls.filter(call => call === "section")).toHaveLength(acousticSectionKeys(id).length);
+      expect(calls.filter(call => call === "editorial")).toHaveLength(scenario === "timeout" ? 1 : 2);
+      expect(calls.filter(call => call === "editorial_check")).toHaveLength(2);
+    }
+    if (["edited", "timeout", "rejected"].includes(scenario)) {
+      for (let step = 0; step < 3; step++) await stepSupervisor(d, runId);
+      expect(independentCalls).toBe(1);
+      expect(calls.indexOf("independent_review")).toBeGreaterThan(calls.lastIndexOf("editorial_check"));
+      const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
+      expect(result!.status).toBe("needs_review");
+      const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+      expect(revisions).toHaveLength(1);
+      expect((revisions[0]!.payload as any).template).toEqual({ ...original, components: evidence });
+      expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
+      expect(revisions[0]!.content.match(/Room A-17:/g)).toHaveLength(1);
+      await stepSupervisor(d, runId);
+      expect(await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId))).toHaveLength(1);
+    } else expect(calls).not.toContain("editorial_check");
+  } finally {
+    server.close();
+    for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+}, 10000);
+
 test("concept appendices can cite saved arithmetic inputs without treating receipt IDs as sources", async () => {
   const versionId = crypto.randomUUID();
   const receipt = { ...calculateAcoustics({ method: "sum_sound_levels", receiver: "North facade", weighting: "A", period: "Day", uncorrelatedSources: true,
@@ -47,6 +236,8 @@ test("concept appendices can cite saved arithmetic inputs without treating recei
       assertActive: async () => {}, checkpoint: async () => {},
       call: async context => {
         expect(context.companyKnowledge).toEqual([knowledge]);
+        const editorial = unchangedEditorial(context);
+        if (editorial) return editorial;
         if (context.documentTask === "outline") return { id: "exterior-noise-concept", title: "Acoustic arithmetic", language: "en",
           project: { name: "Synthetic project", number: null, client: null, designer: null, author: null, date: null },
           sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key, sources: [] })), attachments: [],
@@ -143,6 +334,8 @@ integration("acoustic reports preserve oversized sections and resume old charact
         },
         executeSupervisor: async ({ phase, context }: any) => {
           calls.push(context.documentTask === "section" ? context.section : context.documentTask ?? phase);
+          const editorial = unchangedEditorial(context);
+          if (editorial) return { status: "completed", output: editorial };
           let output: any;
           if (phase === "plan") output = { tasks: [{ role: "source_reviewer", goal: "Read report evidence", sourceVersionIds: [versionId] }] };
           else if (phase === "specialist") {
@@ -323,6 +516,8 @@ for (const scenario of ["serial", "parallel", "failure", "cancel", "context", "c
       },
       executeSupervisor: async ({ context, onSummaryDelta, modelPolicy }: any) => {
         expect(modelPolicy.supervisor.maxOutputTokens).toBe(2048);
+        const editorial = unchangedEditorial(context);
+        if (editorial) return { status: "completed", output: editorial };
         if (longContext && context.documentTask === "section") {
           expect(Buffer.byteLength(JSON.stringify(context), "utf8")).toBeLessThan(837952);
           if (scenario === "context_multi") for (const source of context.sources) expect(pages).toContain(source.text.trimEnd());

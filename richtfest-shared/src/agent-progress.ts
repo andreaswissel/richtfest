@@ -6,6 +6,7 @@ export const agentWorkProgressSchema = z.object({
   stage: z.enum([
     "resolving_sources", "reading_sources", "source_findings",
     "reviewing_findings", "independent_review", "revision_requested",
+    "editing_document", "checking_editorial",
   ]),
   // Independent review can cover all four assignments of ten versions at once.
   sources: z.array(z.object({

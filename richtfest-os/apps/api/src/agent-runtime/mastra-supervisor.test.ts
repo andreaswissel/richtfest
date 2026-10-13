@@ -118,7 +118,7 @@ test("acoustic tools are absent for other roles and insufficient model steps", a
   }
 });
 
-test("section, specialist and independent review context budgets reject oversized prompts before inference", async () => {
+test("authoring, editorial and source-review context budgets reject oversized prompts before inference", async () => {
   expect(agentModelInputByteBudget("openai", "gpt-6-astra", 8000)).toBe(832000);
   expect(agentModelInputByteBudget("vercel", "openai/gpt-6.1-sol", 128000)).toBe(712000);
   expect(agentModelInputByteBudget("openai", "gpt-4.1-mini-2025-04-14", 8000)).toBe(830060);
@@ -128,20 +128,23 @@ test("section, specialist and independent review context budgets reject oversize
     expect(agentModelInputByteBudget(provider, modelId, 8000)).toBeUndefined();
   const content = "Source-backed report section, pending specialist review.";
   let prepared = 0;
-  for (const phase of ["review", "specialist", "independent_review"] as const) for (const length of [20000, 840000]) {
-    const output = phase === "review" ? { content, citations: [], complete: true }
+  for (const task of ["section", "editorial", "editorial_check", "specialist", "independent_review"] as const) for (const length of [20000, 840000]) {
+    const phase = task === "specialist" || task === "independent_review" ? task : "review";
+    const output = task === "editorial" ? { sections: [{ key: "components", content }], complete: true }
+      : task === "editorial_check" ? { preserved: true, issues: [] }
+      : phase === "review" ? { content, citations: [], complete: true }
       : { summary: content, rationale: "", citations: [], ...(phase === "independent_review" ? { decision: "accept", findings: [], revisions: [] } : {}) };
     const response = callMastraSupervisor({ ...base, phase, modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 8000, maxSteps: 1 },
-      context: { ...(phase === "review" ? { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 } } : { role: "source_reviewer" }), sources: [{ text: "x".repeat(length) }] },
+      context: { ...(phase === "review" ? { documentTask: task, documentTemplate: { id: "exterior-noise-concept", version: 1 } } : { role: "source_reviewer" }), original: { content: "x".repeat(length) } },
       onPrepared: async () => { prepared++; return undefined; },
     }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }) });
     if (length === 20000) expect(await response).toEqual(output);
     else await expect(response).rejects.toMatchObject({ retryable: false, diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   }
-  expect(prepared).toBe(3);
+  expect(prepared).toBe(5);
 });
 
-test("concept authoring accepts separate outline and section contracts through Mastra", async () => {
+test("concept authoring accepts outline, section, editorial and preservation contracts through Mastra", async () => {
   const id = "exterior-noise-concept";
   const versionId = crypto.randomUUID();
   const outline = { id, title: "Außenlärmkonzept", language: "de",
@@ -151,15 +154,21 @@ test("concept authoring accepts separate outline and section contracts through M
   };
   const section = { content: `${"Source-backed detail. ".repeat(650)}WE31 Kind 1: source-stated 40.5 dB, page 88 [${versionId}].`, citations: [versionId], complete: true };
   expect(section.content.length).toBeGreaterThan(12000);
-  for (const [documentTask, output] of [["outline", outline], ["section", section]] as const) {
+  const editorial = { sections: [{ key: "components", content: section.content }], complete: true };
+  const check = { preserved: false, issues: ["Room WE31 lost its unverified status."] };
+  for (const [documentTask, output, invalid] of [
+    ["outline", outline, { ...outline, id: "interior-noise-concept" }],
+    ["section", section, { ...section, content: " " }],
+    ["editorial", editorial, { ...editorial, sections: [{ key: "components", content: " " }] }],
+    ["editorial_check", check, { preserved: "yes", issues: [] }],
+  ] as const) {
     const request = { ...base, phase: "review" as const, goal: "Create Außenlärmkonzept", modelPolicy: responsePolicy,
       context: { documentTask, documentTemplate: { id, version: 1 } } };
     expect(await callMastraSupervisor(request, "test-key", {
       model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
     })).toEqual(output);
     await expect(callMastraSupervisor(request, "test-key", {
-      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: documentTask === "outline"
-        ? { ...outline, id: "interior-noise-concept" } : { ...section, content: " " } }),
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: invalid }),
     })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
   }
 });

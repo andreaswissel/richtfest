@@ -1013,9 +1013,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           checkpoint: async (documentDraft, section, batch, batchCount) => {
             const saved = await commit(d, run, token, async tx => {
               await tx.update(supervisorRuns).set({ review: { documentDraft } }).where(eq(supervisorRuns.runId, id));
-              await logWorkProgress(d, tx, run, { runId: id, stage: "reviewing_findings", sources: [],
-                ...(batch ? { batch, batchCount } : {}),
-                summary: `${documentDraft.outline.language === "de" ? "Berichtsabschnitt" : "Report section"}: ${section}` });
+              const editorialStage = section === "editing_document" || section === "checking_editorial" ? section : undefined;
+              await logWorkProgress(d, tx, run, { runId: id, stage: editorialStage ?? "reviewing_findings", sources: [],
+                ...(!editorialStage ? {
+                  ...(batch ? { batch, batchCount } : {}),
+                  summary: `${documentDraft.outline.language === "de" ? "Berichtsabschnitt" : "Report section"}: ${section}`,
+                } : {}) });
             });
             if (!saved) throw conflict("Supervisor no longer active");
           },

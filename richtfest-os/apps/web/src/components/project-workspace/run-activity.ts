@@ -96,6 +96,8 @@ export function workProgressDescription(
     reviewing_findings: "workspaceWorkReviewing",
     independent_review: "workspaceWorkIndependent",
     revision_requested: "workspaceWorkRevision",
+    editing_document: "workspaceWorkEditingDocument",
+    checking_editorial: "workspaceWorkCheckingEditorial",
   } as const;
   return [
     t(labels[work.stage]),
@@ -180,6 +182,17 @@ export function providerFailureExplanation(
   // A length finish reason is authoritative even if a partial object validated.
   if (diagnostics?.finishReason === "length")
     return t("workspaceFailureTruncated");
+  if (
+    Array.isArray(diagnostics?.issues) &&
+    diagnostics.issues.some(
+      (issue: RecordData) =>
+        issue.code === "custom" &&
+        Array.isArray(issue.path) &&
+        issue.path.length === 1 &&
+        issue.path[0] === "editorial",
+    )
+  )
+    return t("workspaceFailureEditorial");
   if (
     Array.isArray(diagnostics?.issues) &&
     diagnostics.issues.some(

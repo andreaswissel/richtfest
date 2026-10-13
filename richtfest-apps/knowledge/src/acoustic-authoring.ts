@@ -4,6 +4,7 @@ import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
   acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
+  acousticEditorialOutputSchema, acousticEditorialCheckSchema,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -18,6 +19,12 @@ export type AcousticDraft = {
   inputByteBudget?: number;
   sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]> }>;
   previousReview?: unknown;
+  editorial?: {
+    inputHash: string;
+    candidate?: z.infer<typeof acousticEditorialOutputSchema>;
+    check?: z.infer<typeof acousticEditorialCheckSchema>;
+    feedback?: z.infer<typeof acousticEditorialCheckSchema>;
+  };
 };
 
 /** Durable section authoring: source pages/annexes never consume output tokens. */
@@ -208,7 +215,61 @@ export async function authorAcousticConcept(input: {
   }
   const template = acousticConceptTemplateSchema.parse({ id, version: 1, language: outline.language,
     project: outline.project, attachments: outline.attachments, ...bodies });
-  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template }, id, null)!;
+  // Validate the source draft before editing; an editor must not conceal invalid
+  // section output. Keep the original pieces unchanged for review and recovery.
+  prepareAgentDocument({ title: outline.title, content: "Rendered from template", template }, id, null);
+  const editableKeys = keys.filter(key => key !== "calculationAppendix");
+  const editorialContext = {
+    documentTemplate: { id, version: 1 }, sectionKeys: editableKeys, original: template,
+    previousReview: draft.previousReview,
+    ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
+  };
+  const editorialHash = hash(editorialContext);
+  if (draft.editorial?.inputHash !== editorialHash) draft.editorial = { inputHash: editorialHash };
+  const editorial = draft.editorial;
+  // A rejected edit is never published. An explicit retry may regenerate it
+  // with feedback, while a timeout during checking reuses the saved candidate.
+  if (editorial.check && (!editorial.check.preserved || editorial.check.issues.length)) {
+    editorial.feedback = editorial.check;
+    delete editorial.candidate;
+    delete editorial.check;
+  }
+  const inlineIds = (value: unknown) => new Set(JSON.stringify(value).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? []);
+  const originalReferences = inlineIds(template);
+  const editSchema = acousticEditorialOutputSchema.superRefine((edit, ctx) => {
+    if (!edit.complete) ctx.addIssue({ code: "custom", path: ["complete"], message: "The editorial pass is incomplete; no report can be published." });
+    if (edit.sections.length !== editableKeys.length || editableKeys.some(key => edit.sections.filter(s => s.key === key).length !== 1))
+      ctx.addIssue({ code: "custom", path: ["sections"], message: "Edit every requested section exactly once; the calculation appendix is immutable." });
+    const edited = { ...template, ...Object.fromEntries(edit.sections.map(s => [s.key, s.content])) };
+    const references = inlineIds(edited);
+    if ([...originalReferences].some(ref => !references.has(ref)) || [...references].some(ref => !originalReferences.has(ref) && !citations.has(ref)))
+      ctx.addIssue({ code: "custom", path: ["sections"], message: "Preserve source references without introducing unknown identifiers." });
+    prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: edited }, id, null);
+  });
+  await input.assertActive();
+  if (!editorial.candidate) {
+    await input.checkpoint(draft, "editing_document", 0, 0);
+    editorial.candidate = editSchema.parse(await input.call({
+      ...editorialContext, documentTask: "editorial", feedback: editorial.feedback,
+    }, value => editSchema.parse(value)));
+    await input.checkpoint(draft, "editing_document", 0, 0);
+  }
+  const candidate = editSchema.parse(editorial.candidate);
+  const edited = acousticConceptTemplateSchema.parse({ ...template, ...Object.fromEntries(candidate.sections.map(s => [s.key, s.content])) });
+  await input.assertActive();
+  if (!editorial.check) {
+    await input.checkpoint(draft, "checking_editorial", 0, 0);
+    // Separate, fresh model call. A negative verdict is valid output, not a
+    // schema error to retry until the reviewer happens to return approval.
+    editorial.check = acousticEditorialCheckSchema.parse(await input.call({
+      ...editorialContext, documentTask: "editorial_check", edited,
+    }, value => acousticEditorialCheckSchema.parse(value)));
+    await input.checkpoint(draft, "checking_editorial", 0, 0);
+  }
+  if (!editorial.check.preserved || editorial.check.issues.length)
+    invalid(["editorial"], "The editorial preservation check found changed or missing evidence. Retry to revise the edit using the saved feedback.");
+  await input.assertActive();
+  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: edited }, id, null)!;
   return {
     document, citations: [...citations], decision: "accept" as const, revisions: [],
     summary: outline.language === "de" ? "Konzeptentwurf mit Quellenbelegen erstellt. Fachliche Prüfung und Freigabe stehen aus."

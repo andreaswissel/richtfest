@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Acoustic concepts now consolidate the assembled report and separately check that evidence is preserved before optional source review and publication. Progress shows both stages; retries retain saved edits and checks without changing calculation appendices or original attachments.
+
 - Agents can discover company-knowledge categories, search within a folder or unfiled entries, and retain category, source and chapter labels alongside approved references. Search stays private and approval-aware without embeddings or extra AI search calls.
 
 - Agent messages now explicitly support “no reply target” in strict provider responses, avoiding forced reply IDs for new messages while preserving reply validation and duplicate-delivery protection.

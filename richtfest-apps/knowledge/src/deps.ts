@@ -7,7 +7,7 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
   const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation",
     "messages", "recipientRunId", "body", "replyToMessageId",
-    "template", "id", "version", "language", "project", "sections", "key", "sources", "attachments", "pageStart", "pageEnd", "complete",
+    "template", "id", "version", "language", "project", "sections", "key", "sources", "attachments", "pageStart", "pageEnd", "complete", "editorial",
     "preliminaryRemarks", "exteriorNoiseAssessment", "planningLaw", "components", "plans", "sourcesAndRevisions", "openIssues", "calculationAppendix",
     "requirements", "verification", "buildingServices", "heatPumps", "protectionLevels", "scope", "measures", "entities"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
