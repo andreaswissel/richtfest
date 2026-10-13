@@ -1,5 +1,8 @@
 {
   "agentWorkflowMode": "Modus",
+  "agentModeSuggest": "Vorschlagen",
+  "agentCheckingMode": "Modus wird geprüft…",
+  "agentSuggestDefaultHint": "Jev prüft beim Senden. Team und Bericht erst übernehmen, dann senden. Bei Unklarheit wird Chat verwendet.",
   "agentModeChat": "Chat",
   "agentModeTeam": "Team",
   "agentModeReport": "Bericht",

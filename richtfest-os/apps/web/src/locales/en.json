@@ -1,5 +1,8 @@
 {
   "agentWorkflowMode": "Mode",
+  "agentModeSuggest": "Suggest",
+  "agentCheckingMode": "Checking mode…",
+  "agentSuggestDefaultHint": "Jev checks on send. Team and Report need Apply, then Send. Unclear requests use Chat.",
   "agentModeChat": "Chat",
   "agentModeTeam": "Team",
   "agentModeReport": "Report",

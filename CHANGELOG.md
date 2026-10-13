@@ -4,7 +4,7 @@
 
 - Project agents can inspect exact source pages and crops, index documents in smaller batches, and draft independent report sections in parallel. Failed source processing can be recovered without re-uploading or changing versions, citations or reviews. Processing diagnostics and retry checkpoints preserve clear limits; visual observations remain unreviewed.
 
-- Project agents now default to Chat for search and questions, with explicit Team and Report modes for delegated work and structured documents. On-demand Jev mode suggestions require Apply and never start work; report creation requires a template and selected sources. Opted-in Jev knowledge ranking also works in direct Chat runs.
+- Project agents now default to Suggest: Jev checks the mode on Send, with Chat as the safe fallback for search and questions. Team and Report recommendations require Apply and Send; explicit modes skip the check, and typing never triggers paid inference. Report creation requires a template and selected sources. Opted-in Jev knowledge ranking also works in direct Chat runs.
 
 - Main and specialist chats now follow new output at the bottom, preserve your place while reading or selecting transcript text, and resume following with Latest. Unrelated text selections and keypresses no longer pause the chat.
 

@@ -5,8 +5,12 @@ import { useApi, useWrite } from "../query";
 import { list, type RecordData } from "../api";
 import { useT } from "../i18n";
 import { AgentEffortControl } from "./agent-effort-control";
-import { AgentWorkflowControl, workflowReady } from "./agent-workflow-control";
-import type { AgentWorkflow } from "@richtfest/shared";
+import {
+  AgentWorkflowControl,
+  workflowReady,
+  useWorkflowDecision,
+  type WorkflowSelection,
+} from "./agent-workflow-control";
 import { AgentRunMetrics, isAgentRunActive } from "./agent-run-metrics";
 import { Section } from "./layout";
 import { Textarea } from "./ui/input";
@@ -28,13 +32,25 @@ export function AgentRuns({
 }) {
   const t = useT();
   const [effort, setEffort] = useState("medium");
-  const [workflow, setWorkflow] = useState<AgentWorkflow>({ mode: "chat" });
+  const [workflow, setWorkflow] = useState<WorkflowSelection>({
+    mode: "suggest",
+  });
   const [goal, setGoal] = useState("");
   const [open, setOpen] = useState(false);
   const [fileId, setFileId] = useState("");
   const [sources, setSources] = useState<{ id: string; label: string }[]>([]);
   const readiness = useApi("/agent/readiness");
   const supervisor = readiness.data?.supervisor;
+  const workflowContext = {
+    projectId,
+    conversationId,
+    goal,
+    sourceVersionIds: sources.map((s) => s.id),
+    value: workflow,
+    supervisorEnabled: !!supervisor?.enabled,
+    active: open,
+  };
+  const workflowDecision = useWorkflowDecision(workflowContext);
   const files = useApi(`/projects/${projectId}/files`, open);
   const versions = useApi(
     `/projects/${projectId}/files/${fileId}/versions`,
@@ -43,6 +59,7 @@ export function AgentRuns({
   const create = useWrite("/knowledge/runs", () => {
     setOpen(false);
     setSources([]);
+    setWorkflow({ mode: "suggest" });
   });
   return (
     <Section
@@ -74,7 +91,7 @@ export function AgentRuns({
         <Modal title={t("assignAgentGoal")} onClose={() => setOpen(false)}>
           <Form
             label={t("assignAgentGoal")}
-            pending={create.isPending}
+            pending={create.isPending || workflowDecision.isPending}
             disabled={
               !workflowReady(
                 workflow,
@@ -83,9 +100,10 @@ export function AgentRuns({
               )
             }
             error={create.error}
-            onSubmit={(form) => {
+            onSubmit={async (form) => {
               if (
                 create.isPending ||
+                workflowDecision.isPending ||
                 !workflowReady(
                   workflow,
                   sources.map((s) => s.id),
@@ -93,14 +111,15 @@ export function AgentRuns({
                 )
               )
                 return;
-              create.mutate({
+              const submitted = {
                 projectId,
                 conversationId,
                 effort,
-                workflow,
                 goal: form.get("goal"),
                 sourceVersionIds: sources.map((s) => s.id),
-              });
+              };
+              const resolved = await workflowDecision.resolve();
+              if (resolved) create.mutate({ ...submitted, workflow: resolved });
             }}
           >
             <Callout>{t("agentGoalHint")}</Callout>
@@ -124,13 +143,9 @@ export function AgentRuns({
               />
             </Field>
             <AgentWorkflowControl
-              projectId={projectId}
-              conversationId={conversationId}
-              goal={goal}
-              sourceVersionIds={sources.map((s) => s.id)}
-              value={workflow}
+              {...workflowContext}
               onChange={setWorkflow}
-              supervisorEnabled={!!supervisor?.enabled}
+              decision={workflowDecision}
             />
             <AgentEffortControl
               enabled={supervisor?.enabled}

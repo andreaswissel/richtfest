@@ -16,7 +16,12 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
 import { AgentEffortControl } from "../agent-effort-control";
-import { AgentWorkflowControl, workflowReady } from "../agent-workflow-control";
+import {
+  AgentWorkflowControl,
+  workflowReady,
+  useWorkflowDecision,
+  type WorkflowSelection,
+} from "../agent-workflow-control";
 import { AgentSourcePicker } from "../agent-source-picker";
 import type { AgentWorkflow } from "@richtfest/shared";
 import {
@@ -271,7 +276,9 @@ function Conversation({
   useAgentMessageEvents(conversationId);
   const richtfest = useRichtfestCelebration();
   const [effort, setEffort] = useState("medium");
-  const [workflow, setWorkflow] = useState<AgentWorkflow>({ mode: "chat" });
+  const [workflow, setWorkflow] = useState<WorkflowSelection>({
+    mode: "suggest",
+  });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [attachmentLabels, setAttachmentLabels] = useState<
@@ -423,6 +430,16 @@ function Conversation({
     ),
     [search, setSearch] = useState(""),
     [reply, setReply] = useState<string>();
+  const workflowContext = {
+    projectId,
+    conversationId,
+    goal: draft,
+    sourceVersionIds: attachments,
+    value: workflow,
+    supervisorEnabled: !!readiness.data?.supervisor?.enabled,
+    steering: !!activeSupervisorRun,
+  };
+  const workflowDecision = useWorkflowDecision(workflowContext);
   const [searchOpen, setSearchOpen] = useState(false);
   const [ready, setReady] = useState(false);
   const hydrated = useRef(false),
@@ -569,7 +586,7 @@ function Conversation({
         setReply(undefined);
         setWorkflow((current) =>
           JSON.stringify(current) === JSON.stringify(submitted.workflow)
-            ? { mode: "chat" }
+            ? { mode: "suggest" }
             : current,
         );
       }
@@ -608,11 +625,18 @@ function Conversation({
     )
       return;
     initialMessageSubmitted.current = true;
-    send.mutate({
-      body: initialMessage,
-      sourceVersionIds: [],
-      workflow: { mode: "chat" },
-      effort: selectedEffort,
+    void (
+      readiness.data?.executionAvailable && !isPositiveFeedback(initialMessage)
+        ? workflowDecision.resolve()
+        : Promise.resolve({ mode: "chat" } as AgentWorkflow)
+    ).then((resolved) => {
+      if (resolved)
+        send.mutate({
+          body: initialMessage,
+          sourceVersionIds: [],
+          workflow: resolved,
+          effort: selectedEffort,
+        });
     });
     onInitialMessageSent?.();
   }, [initialMessage, ready, readiness.isFetched, messages.length]);
@@ -620,7 +644,8 @@ function Conversation({
     if (query.data && !hydrated.current) {
       hydrated.current = true;
       reader.current = initial || {};
-      if (!draftDirty.current) setDraft(initial?.composerDraft || "");
+      if (!draftDirty.current)
+        setDraft(initial?.composerDraft || initialMessage || "");
     }
   }, [query.data]);
   useEffect(
@@ -957,38 +982,40 @@ function Conversation({
       />
       <form
         className="workspace-composer"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
           if (
             draft.trim() &&
             !send.isPending &&
+            !workflowDecision.isPending &&
             (activeSupervisorRun ||
               workflowReady(
                 workflow,
                 attachments,
                 !!readiness.data?.supervisor?.enabled,
               ))
-          )
-            send.mutate({
+          ) {
+            const submitted = {
               body: draft,
               parentMessageId: reply,
               sourceVersionIds: attachments,
-              workflow,
               effort: selectedEffort,
               steeringRunId: activeSupervisorRun?.id,
-            });
+            };
+            const resolved =
+              readiness.data?.executionAvailable &&
+              (attachments.length > 0 || !isPositiveFeedback(draft))
+                ? await workflowDecision.resolve()
+                : ({ mode: "chat" } as AgentWorkflow);
+            if (resolved) send.mutate({ ...submitted, workflow: resolved });
+          }
         }}
       >
         <div className="workspace-composer-shell">
           <AgentWorkflowControl
-            projectId={projectId}
-            conversationId={conversationId}
-            goal={draft}
-            sourceVersionIds={attachments}
-            value={workflow}
+            {...workflowContext}
             onChange={setWorkflow}
-            supervisorEnabled={!!readiness.data?.supervisor?.enabled}
-            steering={!!activeSupervisorRun}
+            decision={workflowDecision}
           />
           <Button
             type="button"
@@ -1139,6 +1166,7 @@ function Conversation({
                 title={t("workspaceUiSendShortcut")}
                 disabled={
                   send.isPending ||
+                  workflowDecision.isPending ||
                   !draft.trim() ||
                   (!activeSupervisorRun &&
                     !workflowReady(
