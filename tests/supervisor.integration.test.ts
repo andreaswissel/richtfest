@@ -307,7 +307,7 @@ integration("acoustic tools retain scoped, repeatable receipts through failure, 
     await stepSupervisor(d, run!.id);
     expect(calculations).toBe(4);
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
-    const initialSteps = await db.select().from(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId));
+    const initialSteps = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
     expect(initialSteps).toHaveLength(4);
     const step = initialSteps[0]!;
     const detail = await fetch(`${base}/runs/${step.runId}/steps/${step.id}`);
@@ -339,7 +339,7 @@ integration("acoustic tools retain scoped, repeatable receipts through failure, 
     await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, run!.id));
     await expect(captured(input)).rejects.toThrow("no longer active");
     expect(calculations).toBe(8);
-    expect(await db.select().from(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId))).toHaveLength(8);
+    expect(await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")))).toHaveLength(8);
   } finally {
     server.close();
     for (const table of [artifactRevisions, artifacts, agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
@@ -497,6 +497,79 @@ for (const batching of ["unknown-model", "model-aware", "saved-legacy"] as const
     expect((rejectedState!.assignments as any[])[0].output).toBeUndefined();
   } finally {
     for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+for (const outcome of ["recover", "exhaust"] as const) integration(`invalid specialist citations recover without losing saved batches and retain failure evidence: ${outcome}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const evidence = Array.from({ length: 5 }, (_, index) => ({ versionId: crypto.randomUUID(), name: `Source ${index + 1}` }));
+  let firstBatchCalls = 0, secondBatchCalls = 0;
+  const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: evidence, truncated: false }),
+    resolveSource: async (_project: string, input: { versionId: string }) => ({ status: "resolved",
+      source: evidence.find(source => source.versionId === input.versionId),
+      content: input.versionId === evidence[4]!.versionId ? { status: "unsupported", reason: "Unreadable" }
+        : { status: "available", text: "Source evidence", truncated: false },
+    }),
+    executeSupervisor: async (input: any) => {
+      if (input.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "requirements_reviewer", goal: "Inspect every source", sourceVersionIds: evidence.map(source => source.versionId) },
+      ] } };
+      const context = input.context;
+      await input.onPrepared({ version: 1, instructions: "Read only supplied evidence", prompt: JSON.stringify(context) });
+      await input.onResponse({ modelId: "test-model", responseId: null, finishReason: "stop" });
+      if (context.sourceCoverage.batch === 1) {
+        firstBatchCalls++;
+        return { status: "completed", output: { summary: "Saved first batch", rationale: "", citations: context.sourceVersionIds } };
+      }
+      secondBatchCalls++;
+      expect(context.previousFindings.summary).toBe("Saved first batch");
+      if (secondBatchCalls > 1) expect(context.outputValidationFeedback).toMatchObject({
+        errorId: "SOURCE_CITATION_OUT_OF_SCOPE", rejectedCitations: [evidence[4]!.versionId],
+      });
+      if (outcome === "exhaust" || secondBatchCalls === 1) return { status: "completed", output: {
+        summary: "REJECTED_OUTPUT_MUST_NOT_BE_RETAINED", rationale: "", citations: [evidence[4]!.versionId],
+      } };
+      return { status: "completed", output: { summary: "All readable evidence reviewed", rationale: "Source 5 remains unreadable",
+        citations: [...context.previousFindings.citations, ...context.sourceVersionIds] } };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Citation recovery",
+      provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const assignment = (state!.assignments as any[])[0];
+    expect(firstBatchCalls).toBe(1);
+    expect(secondBatchCalls).toBe(outcome === "recover" ? 2 : 3);
+    if (outcome === "recover") {
+      expect(state!.phase).toBe("review");
+      expect(assignment.output.citations).toEqual(evidence.slice(0, 4).map(source => source.versionId));
+      expect(assignment.output.summary).toBe("All readable evidence reviewed");
+    } else {
+      const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+      expect(failed!.status).toBe("failed");
+      expect(assignment.sourceProgress.completedBatches).toBe(1);
+      expect(assignment.sourceProgress.output.summary).toBe("Saved first batch");
+      expect(assignment.output).toBeUndefined();
+    }
+    const steps = await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, assignment.runId));
+    const failures = steps.filter(step => step.status === "failed");
+    expect(failures).toHaveLength(outcome === "recover" ? 1 : 3);
+    for (const step of failures) expect(step.output).toMatchObject({ failure: { category: "validation", diagnostics: {
+      errorId: "SOURCE_CITATION_OUT_OF_SCOPE", finishReason: "stop", rejectedCitations: [evidence[4]!.versionId],
+      issues: [{ code: "custom", path: ["citations", 0] }],
+    } } });
+    const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, assignment.runId));
+    expect(attempts.filter(attempt => attempt.status === "failed").every(attempt => attempt.failureCategory === "validation")).toBe(true);
+    expect(JSON.stringify({ steps, state })).not.toContain("REJECTED_OUTPUT_MUST_NOT_BE_RETAINED");
+  } finally {
+    for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }
@@ -1089,7 +1162,19 @@ integration("failed specialist attempts persist bounded diagnostics and usage ex
       expect(attempt?.status).toBe("failed");
       expect(usage.filter(row => row.attemptId === attempt?.id)).toHaveLength(1);
     }
+    // Failures before onPrepared still get a safe, inspectable ledger entry.
+    const steps = await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, children[0]!.id));
+    expect(steps).toHaveLength(3);
+    for (const step of steps) {
+      const attempt = tracked.find(row => row.id === step.attemptId)!;
+      const event = metadata.find(value => value.attempt === attempt.attemptNumber);
+      expect(step.status).toBe("failed");
+      expect(step.input).toEqual({});
+      expect(step.output).toEqual({ failure: { category: "validation", providerStatus: null, diagnostics: event.diagnostics } });
+    }
+    expect(JSON.stringify(steps)).not.toContain("sk-secret");
   } finally {
+    await db.delete(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId));
     await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
     await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
     await db.delete(agentRunEvents).where(eq(agentRunEvents.tenantId, tenantId));

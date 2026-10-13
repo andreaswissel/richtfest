@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Specialist agents now retry invalid source citations with targeted correction feedback while preserving completed work. Failed calls retain safe, inspectable diagnostic records, including rejected source identifiers, without saving raw provider errors or rejected text.
+
 - Team administrators can create and edit workspace roles, choose their permissions and assign them to members or invitations. Changes apply to everyone with that role, with audit history and protection against removing the last administrator.
 
 - Account settings no longer hide password setup when an older session needs renewed sign-in. Session management now shows a clear sign-in prompt, and authentication errors return usable messages instead of server errors.

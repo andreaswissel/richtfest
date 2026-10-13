@@ -330,7 +330,7 @@ test("configured ten-second timeout aborts real Mastra and retains timeout class
   expect(error).toMatchObject({ code: "timeout", failureCategory: "timeout", timedOut: true, retryable: false });
 }, 20000);
 
-test.skipIf(!process.env.DATABASE_URL)("supervisor repairs a rejected summary through Mastra without retrying a successful sibling", async () => {
+for (const failure of ["summary", "citation"] as const) test.skipIf(!process.env.DATABASE_URL)(`supervisor repairs a rejected ${failure} through Mastra without retrying a successful sibling`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
   const modelConfig = { modelId: "test-model", maxSteps: 1, maxOutputTokens: 32000 };
@@ -347,12 +347,14 @@ test.skipIf(!process.env.DATABASE_URL)("supervisor repairs a rejected summary th
       const output = await callMastraSupervisor({ ...input, modelConfig }, "test-key", {
         model: new MastraLanguageModelV2Mock({ doStream: async options => {
           const instructions = options.prompt.filter(message => message.role === "system").map(message => message.content).join("\n");
-          const corrected = instructions.includes('"code":"too_big","path":["summary"],"maximum":10000')
-            && instructions.includes("rewrite it concisely");
+          const corrected = failure === "summary"
+            ? instructions.includes('"code":"too_big","path":["summary"],"maximum":10000') && instructions.includes("rewrite it concisely")
+            : instructions.includes('"errorId":"SOURCE_CITATION_OUT_OF_SCOPE"') && instructions.includes("Recheck the claims behind rejected references");
           const summary = input.goal === "Check sources" ? "Sources inspected; coverage gaps remain explicit."
             : corrected ? "Requirements identified; missing dimensions still require confirmation."
-            : "Overlong requirements. ".repeat(600);
-          const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations: [] });
+            : failure === "summary" ? "Overlong requirements. ".repeat(600) : "Unsupported reference";
+          const citations = failure === "citation" && input.goal !== "Check sources" && !corrected ? [crypto.randomUUID()] : [];
+          const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations });
           return { stream: new ReadableStream({ start(controller) {
             controller.enqueue({ type: "text-start", id: "output" });
             controller.enqueue({ type: "text-delta", id: "output", delta: text });
@@ -520,13 +522,20 @@ test("Mastra truncation and OpenAI schema failures remain retryable without expo
   }
 });
 test("diagnostics exclude unknown paths, messages, values and unbounded numeric limits", () => {
-  expect(sanitizeProviderDiagnostics({ errorId: "secret", finishReason: "secret", message: "sk-secret", issues: [
+  const versionId = crypto.randomUUID();
+  expect(sanitizeProviderDiagnostics({ errorId: "secret", finishReason: "secret", message: "sk-secret", rejectedCitations: [versionId], issues: [
     { code: "too_big", path: ["summary"], maximum: 10000, message: "sk-secret", value: "sk-secret" },
     { code: "invalid_type", path: ["sk-secret"] },
     { code: "invalid_type", path: ["citations", 101] },
     { code: "sk-secret", path: [] },
     { code: "too_small", path: ["tasks"], minimum: Infinity },
   ] })).toEqual({ issues: [{ code: "too_big", path: ["summary"], maximum: 10000 }, { code: "too_small", path: ["tasks"] }] });
+  expect(sanitizeProviderDiagnostics({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE",
+    rejectedCitations: [versionId, "sk-secret", { id: versionId }, `${versionId}\nsecret`],
+  })).toEqual({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE", rejectedCitations: [versionId] });
+  expect(sanitizeProviderDiagnostics({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE",
+    rejectedCitations: Array(101).fill(versionId),
+  }).rejectedCitations).toHaveLength(100);
 });
 
 test("provider 429 diagnostics distinguish quota from throttling without retaining bodies or arbitrary headers", async () => {

@@ -801,8 +801,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   },
                 }, assignment.runId, raw => {
                   const parsed = schemas.specialist.parse(raw);
-                  if (parsed.citations.some(versionId => !allowedCitations.has(versionId)))
-                    throw conflict("Citation has no readable source text in this batch or prior findings");
+                  const rejected = parsed.citations.flatMap((versionId, index) => allowedCitations.has(versionId) ? [] : [{ versionId, index }]);
+                  if (rejected.length) throw Object.assign(new Error("Specialist citation validation failed."), {
+                    providerFailure: true, retryable: true, failureCategory: "validation",
+                    diagnostics: sanitizeProviderDiagnostics({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE",
+                      rejectedCitations: rejected.map(citation => citation.versionId),
+                      issues: rejected.map(citation => ({ code: "custom", path: ["citations", citation.index] })),
+                    }),
+                  });
                   return parsed;
                 }));
                 const output = { ...result, citations: [...new Set([...(accumulated?.citations ?? []), ...result.citations])] };

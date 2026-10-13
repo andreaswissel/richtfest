@@ -1,7 +1,9 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDeps, ProviderResult, ProviderTelemetry, ProviderUsage } from "./deps";
+import { sanitizeProviderDiagnostics } from "./deps";
 import { agentRunAttempts, agentRuns, agentRunUsage } from "./schema";
 import { recordStep, savedStep, stepHash } from "./run-steps";
+import { classifyRunFailure } from "./run-reasons";
 
 export function summarizeUsageRows(rows: any[]) {
   const sum = (key: string) => rows.length > 0 && rows.every((row) => row[key] !== null && row[key] !== undefined)
@@ -94,6 +96,7 @@ export async function executeTrackedProvider(
   let usageRecorded = false;
   let usageReported = false;
   let settings: Parameters<NonNullable<ProviderTelemetry["onRequest"]>>[0] | undefined;
+  let response: Parameters<NonNullable<ProviderTelemetry["onResponse"]>>[0] | undefined;
   let prepared: Parameters<NonNullable<ProviderTelemetry["onPrepared"]>>[0] | undefined;
   let inputHash = "";
   let reusedFromStepId: string | undefined;
@@ -113,15 +116,16 @@ export async function executeTrackedProvider(
       await d.auditRun(tx, "knowledge.agent_run.attempt_finished", "agent_run_attempt", attempt.id, run.id, run.correlationId, {
         status, failureCategory, providerStatus, usageStatus: reusedFromStepId ? "not_applicable" : usageReported ? "reported" : "missing",
       });
-      if (prepared) await recordStep(d, tx, run, {
+      if (prepared || failureCategory) await recordStep(d, tx, run, {
         kind: "model", stepKey: invocation.phase, generation: invocation.generation ?? 0,
-        attemptId: attempt.id, inputHash, input: { ...prepared, settings }, output, status, reusedFromStepId,
+        attemptId: attempt.id, inputHash: inputHash || stepHash({ settings }),
+        input: { ...prepared, settings }, output, status, reusedFromStepId,
       });
     });
   try {
     const result = await execute({
       onRequest: async (value) => { settings = value; await d.db.update(agentRunAttempts).set({ settings }).where(where); },
-      onResponse: async (response) => { await d.db.update(agentRunAttempts).set({ response }).where(where); },
+      onResponse: async (value) => { response = value; await d.db.update(agentRunAttempts).set({ response }).where(where); },
       onUsage,
       onPrepared: async (input) => {
         await invocation.assertActive?.();
@@ -146,14 +150,19 @@ export async function executeTrackedProvider(
     return result;
   } catch (error) {
     // Never persist exception messages or objects, including nested SDK errors.
-    const metadata = error as { code?: unknown; failureCategory?: unknown; providerStatus?: unknown } | null;
+    const metadata = error as { code?: unknown; failureCategory?: unknown; providerStatus?: unknown; diagnostics?: unknown } | null;
     const cancelled = metadata?.code === "cancelled";
     const category = cancelled ? "cancellation" : metadata?.code === "timeout" ? "timeout" :
       ["provider", "validation", "permission", "timeout"].includes(String(metadata?.failureCategory))
-        ? String(metadata?.failureCategory) : "execution";
+        ? String(metadata?.failureCategory) : classifyRunFailure(error, "execution");
     const status = typeof metadata?.providerStatus === "number" && Number.isInteger(metadata.providerStatus)
       && metadata.providerStatus >= 100 && metadata.providerStatus <= 599 ? metadata.providerStatus : null;
-    await finish(cancelled ? "cancelled" : "failed", category, status).catch(() => undefined);
+    // A failed step is never reusable. Retain structural failure evidence even
+    // when the adapter failed before preparing a prompt; never the rejected body.
+    const diagnostics = { ...sanitizeProviderDiagnostics({ finishReason: response?.finishReason }),
+      ...sanitizeProviderDiagnostics(metadata?.diagnostics) };
+    await finish(cancelled ? "cancelled" : "failed", category, status,
+      { failure: { category, providerStatus: status, diagnostics } }).catch(() => undefined);
     throw error;
   }
 }

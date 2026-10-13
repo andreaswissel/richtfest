@@ -3,7 +3,7 @@ import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference
 /** Only these structural facts may cross the provider/event boundary. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED", "CONTEXT_BUDGET_EXCEEDED"];
+  const ids = ["STRUCTURED_OUTPUT_TRUNCATED", "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", "STRUCTURED_OUTPUT_OBJECT_UNDEFINED", "OBJECT_UNDEFINED", "CONTEXT_BUDGET_EXCEEDED", "SOURCE_CITATION_OUT_OF_SCOPE"];
   const finishes = ["stop", "length", "content-filter", "tool-calls", "error", "other", "unknown"];
   const keys = ["tasks", "role", "goal", "sourceVersionIds", "summary", "rationale", "document", "content", "title", "citations", "decision", "revisions", "taskId", "findings", "severity", "issue", "recommendation",
     "messages", "recipientRunId", "body", "replyToMessageId",
@@ -35,8 +35,14 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   }) : [];
   const finishReason = value.finishReason && typeof value.finishReason === "object"
     ? (value.finishReason as Record<string, unknown>).unified : value.finishReason;
+  // Keep the exact rejected identifiers, never arbitrary response text. Other
+  // failures cannot attach citation payloads to their diagnostics.
+  const rejectedCitations = value.errorId === "SOURCE_CITATION_OUT_OF_SCOPE" && Array.isArray(value.rejectedCitations)
+    ? value.rejectedCitations.slice(0, 100).filter((id): id is string => typeof id === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) : [];
   return {
     ...(ids.includes(value.errorId as string) ? { errorId: value.errorId as string } : {}),
+    ...(rejectedCitations.length ? { rejectedCitations } : {}),
     ...(finishes.includes(finishReason as string) ? { finishReason: finishReason as string } : {}),
     ...(providerCodes.includes(value.providerCode as string) ? { providerCode: value.providerCode as string } : {}),
     ...(typeof value.retryAfterMs === "number" && Number.isFinite(value.retryAfterMs) && value.retryAfterMs >= 0 && value.retryAfterMs <= 1e12
