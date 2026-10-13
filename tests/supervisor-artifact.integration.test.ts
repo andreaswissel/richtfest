@@ -35,6 +35,83 @@ function unchangedEditorial(context: any) {
   if (context.documentTask === "editorial_check") return { preserved: true, issues: [] };
 }
 
+for (const scenario of ["overlap", "fallback", "timeout"] as const)
+test(`concept authoring global section scheduling: ${scenario}`, async () => {
+  const id = "exterior-noise-concept" as const;
+  const keys = acousticSectionKeys(id);
+  const versionId = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  let active = 0, peak = 0, writes = 0, retrievals = 0;
+  let draft: any;
+  const started: string[] = [], finished: string[] = [];
+  const snapshots: { value: any; json: string }[] = [];
+  let failing = scenario === "timeout";
+  const input = {
+    d: { resolveSource: async () => {
+      retrievals++;
+      return { status: "resolved", source: { versionId, name: "Evidence" },
+        content: { status: "available", text: "x".repeat(scenario === "fallback" ? 9000 : 20), truncated: false } };
+    } } as any,
+    projectId: crypto.randomUUID(), id, goal: "Scheduled report", findings: [], sourceVersionIds: [versionId],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 2,
+    ...(scenario === "fallback" ? { inputByteBudget: 100000 } : {}),
+    assertActive: async () => {},
+    checkpoint: async (saved: any, section: string) => {
+      expect(++writes).toBe(1);
+      const json = JSON.stringify(saved);
+      await Bun.sleep(1);
+      expect(JSON.stringify(saved)).toBe(json);
+      if (keys.includes(section as typeof keys[number])) snapshots.push({ value: saved, json });
+      draft = structuredClone(saved);
+      writes--;
+    },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Scheduled report", language: "en", project: fixture.project,
+        sections: keys.map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
+      const editorial = unchangedEditorial(context);
+      if (editorial) return editorial;
+      const name = `${context.section}:${context.parentBatch ?? "root"}:${context.batch}`;
+      started.push(name);
+      peak = Math.max(peak, ++active);
+      try {
+        await Bun.sleep(context.section === keys[0] ? (failing ? 5 : 30) : 10);
+        if (failing && context.section === keys[0]) throw new Error("Report timeout");
+        finished.push(name);
+        return { content: (fixture as any)[context.section] + (context.parentBatch ? `\nPiece ${context.batch}` : ""),
+          citations: [versionId], complete: scenario !== "fallback" || !!context.parentBatch };
+      } finally { active--; }
+    },
+  };
+  if (failing) {
+    await expect(authorAcousticConcept(input)).rejects.toThrow("Report timeout");
+    expect(active).toBe(0);
+    expect(started).toEqual([`${keys[0]}:root:1`, `${keys[1]}:root:1`]);
+    expect(draft.sections[keys[1]!].parts[0].complete).toBe(true);
+    const saved = structuredClone(draft);
+    failing = false;
+    started.length = 0;
+    await authorAcousticConcept({ ...input, draft: saved });
+    expect(started).not.toContain(`${keys[1]}:root:1`);
+  } else {
+    const result = await authorAcousticConcept(input);
+    expect(started.slice(0, 2)).toEqual([`${keys[0]}:root:1`, `${keys[1]}:root:1`]);
+    expect(finished[0]).toBe(`${keys[1]}:root:1`);
+    expect(result.citations).toEqual([versionId]);
+    for (const key of keys) {
+      const expected = scenario === "fallback"
+        ? [1, 2, 3].map(n => (fixture as any)[key] + `\nPiece ${n}`).join("\n\n") : (fixture as any)[key];
+      expect((result.document.template as any)[key]).toBe(expected);
+    }
+    started.length = 0;
+    await authorAcousticConcept({ ...input, draft: structuredClone(draft) });
+    expect(started).toEqual([]);
+  }
+  expect(peak).toBe(2);
+  expect(active).toBe(0);
+  expect(retrievals).toBe(2); // One lossless range resolution per invocation.
+  for (const snapshot of snapshots) expect(JSON.stringify(snapshot.value)).toBe(snapshot.json);
+});
+
 for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const)
 test(`${id} editorial context and checkpoint resume preserve original section pieces`, async () => {
   const versionId = crypto.randomUUID();
@@ -374,7 +451,7 @@ integration("acoustic reports preserve oversized sections and resume old charact
             output = { complete: scenario !== "incomplete", citations: context.sources.length ? [versionId] : [], content:
               scenario === "placeholder" ? "Nicht verwendet."
                 : context.sources.length ? `${context.sources.map((s: any) => s.text).join("\n")} [${versionId}]`
-                : `No further ${context.section} evidence supplied; obtain the missing project input.${large ? "\n" + "Detailed evidence gap; obtain the original project specification. ".repeat(170) : ""}`,
+                : `No further ${context.section} evidence supplied; obtain the missing project input.${large ? "\n" + "Detailed evidence gap; obtain the original project specification. ".repeat(180) : ""}`,
             };
             if (scenario === "characters" && context.sources.length)
               output.content += `\n\n${"Long evidence note. ".repeat(3000)}\n\n| Source | Final result |\n| --- | --- |\n| [${versionId}] | Unverified, retain for review |`;
@@ -435,7 +512,10 @@ integration("acoustic reports preserve oversized sections and resume old charact
           expect(resumed!.modelPolicy).toEqual(saved!.modelPolicy);
           const before = calls.length;
           await stepSupervisor(d, runId);
-          expect(calls.slice(before)[0]).toBe(scenario === "timeout" ? "components" : "openIssues");
+          const savedSections = (saved!.review as any).documentDraft.sections;
+          // A sibling may finish its call but lose the lease before saving it.
+          // Retry starts at the first unsaved piece, not the failed section.
+          expect(calls.slice(before)[0]).toBe(keys.find(key => !savedSections[key]?.parts[0]));
           for (const completed of ["plan", "specialist", "outline", "preliminaryRemarks"])
             expect(calls.filter(call => call === completed)).toHaveLength(1);
         }
@@ -447,7 +527,7 @@ integration("acoustic reports preserve oversized sections and resume old charact
           expect(revisions).toHaveLength(1);
           if (large) {
             expect(revisions[0]!.content.length).toBeGreaterThan(60000);
-            expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 1) * 170);
+            expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 1) * 180);
           }
           if (scenario === "characters") {
             const components = (revisions[0]!.payload as any).template.components;

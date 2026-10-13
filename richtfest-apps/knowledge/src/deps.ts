@@ -1,4 +1,4 @@
-import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt } from "@richtfest/shared";
+import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt, SourceVisualRequest, SourceVisual } from "@richtfest/shared";
 
 /** Defense in depth; adapters also remove the actual credential and known input text. */
 export function redactProviderDiagnosticText(text: string) {
@@ -98,6 +98,7 @@ export type AppDeps = {
     modelPolicy?: AgentPresetSnapshot;
     calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
     searchCompanyKnowledge?: (input: CompanyKnowledgeSearch, signal?: AbortSignal) => Promise<CompanyKnowledgeReceipt>;
+    inspectSource?: (input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual>;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
     onRequest?: ProviderTelemetry["onRequest"];
@@ -116,6 +117,8 @@ export type AppDeps = {
   sourceReferences: (projectId: string, versionIds: string[]) => Promise<SourceReference[]>;
   /** Exact ready PDF version, scoped to the actor's tenant and project. */
   readSourcePdf?: (projectId: string, versionId: string) => Promise<Buffer | null>;
+  /** Targeted original visual; rendering belongs to Projects, run receipts to Knowledge. */
+  inspectSource?: (projectId: string, input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual>;
   resolveSource: (
     projectId: string,
     input: {

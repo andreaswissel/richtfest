@@ -41,6 +41,96 @@ const policy = {
   maxRevisions: 2,
 };
 
+for (const scenario of ["success", "recover", "unavailable", "no_call", "abort"] as const)
+integration(`visual source scope and durable citation authorization: ${scenario}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const versionId = crypto.randomUUID(), siblingVersionId = crypto.randomUUID();
+  const image = Buffer.from("private-rendered-image-bytes");
+  const target = { versionId, page: 1, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 } };
+  let renders = 0, calls = 0;
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, providerConfigured: async () => false, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: [versionId, siblingVersionId].map(versionId => ({ versionId, name: "Unreadable drawing", version: 1 })), truncated: false }),
+    resolveSource: async (_project: string, input: any) => ({ status: "resolved", source: { versionId: input.versionId, name: "Unreadable drawing", version: 1 },
+      content: { status: "extraction_failed", reason: "No readable text" } }),
+    inspectSource: async (project: string, input: any) => {
+      expect(project).toBe(projectId); renders++;
+      const unavailable = scenario === "unavailable" || (scenario === "recover" && calls === 1);
+      return { ...input, status: unavailable ? "unavailable" : "available", scope: "pdf_page", reason: "Unreviewed visual evidence",
+        ...(unavailable ? {} : { image: { mediaType: "image/jpeg", data: image.toString("base64") } }) };
+    },
+    executeSupervisor: async (request: any) => {
+      if (request.phase === "plan") {
+        expect(request.inspectSource).toBeUndefined();
+        return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Inspect drawing", sourceVersionIds: [versionId] }] } };
+      }
+      calls++;
+      if ((scenario === "success" && calls === 2) || (scenario === "recover" && calls === 3)) {
+        // A replay must restore authorization from the persisted receipt even
+        // when this model attempt never requests the image again.
+        return { status: "completed", output: { summary: "Visual evidence recovered", rationale: "Unreviewed", citations: [versionId] } };
+      }
+      await expect(request.inspectSource({ ...target, versionId: siblingVersionId })).rejects.toThrow("outside this call's source scope");
+      await expect(request.inspectSource(target, AbortSignal.abort())).rejects.toThrow();
+      if (scenario === "success" || scenario === "recover" || scenario === "unavailable") {
+        const [first, duplicate] = await Promise.all([request.inspectSource(target), request.inspectSource(target)]);
+        expect(first).toEqual(duplicate);
+        for (const page of [2, 3, 4]) await request.inspectSource({ versionId, page });
+        expect(await request.inspectSource({ versionId, page: 5 })).toMatchObject({ status: "unavailable" });
+      }
+      if (scenario === "success" || scenario === "recover") throw Object.assign(new Error("Interrupted after visual read"), { code: "timeout", providerFailure: true, retryable: false });
+      return { status: "completed", output: { summary: "Must not authorize unreadable citation", rationale: "", citations: [versionId] } };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Visual citation regression", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
+    const steps = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
+    expect(steps).toHaveLength(scenario === "success" || scenario === "recover" || scenario === "unavailable" ? 4 : 0);
+    expect(renders).toBe(scenario === "success" || scenario === "recover" || scenario === "unavailable" ? 4 : 0);
+    const serialized = JSON.stringify(steps);
+    expect(serialized).not.toContain(image.toString("base64"));
+    expect(serialized).not.toContain("private-rendered-image-bytes");
+    if (scenario === "success" || scenario === "recover") {
+      if (scenario === "recover") {
+        expect(steps.every(step => (step.output as any).status === "unavailable")).toBe(true);
+        expect((await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(201);
+        await stepSupervisor(d, run!.id);
+        expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
+      }
+      const receipts = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
+      const cropped = receipts.find(step => (step.output as any).page === 1 && (step.output as any).status === "available")!;
+      expect(cropped.input).toEqual({ name: "inspect_project_source", input: target });
+      expect(cropped.output).toMatchObject({ ...target, status: "available", imageHash: createHash("sha256").update(image).digest("hex") });
+      expect((cropped.output as any).image).toBeUndefined();
+      const detail = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${cropped.runId}/steps/${cropped.id}`);
+      expect(detail.status).toBe(200);
+      expect((await detail.json()).data.output).toEqual(cropped.output);
+      expect((await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(201);
+      await stepSupervisor(d, run!.id);
+      expect(renders).toBe(scenario === "recover" ? 8 : 4);
+      const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      expect(state!.phase).toBe("review");
+      expect((state!.assignments as any[])[0].output.citations).toEqual([versionId]);
+    } else {
+      const failures = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
+      expect(failures.filter(attempt => attempt.failureCategory === "validation")).toHaveLength(3);
+      const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      expect((state!.assignments as any[])[0].output).toBeUndefined();
+    }
+  } finally {
+    server.close();
+    for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
 for (const scenario of ["off", "shadow", "enabled", "uncertain", "broader", "unconfigured", "failure", "malformed", "unreadable", "custom_guidance", "long_context", "cancel", "recover", "foreign_source"] as const)
 integration(`decision routing preserves review and fallback: ${scenario}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);

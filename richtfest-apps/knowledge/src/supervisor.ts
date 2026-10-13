@@ -8,6 +8,7 @@ import { batchSectionSources, batchSpecialistSources } from "./source-batches";
 import {
   agentRuns,
   agentRunEvents,
+  agentRunSteps,
   supervisorRuns,
   tasks,
   messages,
@@ -23,7 +24,7 @@ import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { recordStep, savedStep, stepHash } from "./run-steps";
-import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import { classifyRun, decisionRoutingVersion } from "./decision-routing";
 import {
@@ -322,7 +323,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       goal: string,
       context: unknown,
       runId = id,
-      validate?: (output: unknown) => unknown,
+      validate?: (output: unknown, visualVersionIds?: string[]) => unknown,
     ) => {
       // Retry state lives in the existing durable phase history. A restart must
       // honor the saved deadline and attempt budget, not start a fresh burst.
@@ -381,6 +382,57 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxRevisions: state.modelPolicy?.maxRevisions,
         },
       };
+      const visuallyInspected = new Set<string>();
+      if (d.inspectSource && phase !== "plan") {
+        // A cached provider output may skip tool execution on resume. Only this
+        // exact call's successful persisted visual receipts restore its citations.
+        const previousReads = await d.db.select({ output: agentRunSteps.output }).from(agentRunSteps).where(and(
+          eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.runId, runId), eq(agentRunSteps.kind, "tool"),
+          eq(agentRunSteps.status, "completed"), sql`${agentRunSteps.stepKey} like ${`visual:${callKey}:%`}`,
+        ));
+        for (const { output } of previousReads) {
+          const receipt = output as { status?: string; versionId?: string; imageHash?: string } | null;
+          if (receipt?.status === "available" && receipt.versionId && receipt.imageHash) visuallyInspected.add(receipt.versionId);
+        }
+      }
+      // Render only this call's source scope. Cache within inference, and persist
+      // page/crop/hash receipts, never megabytes of image data in run checkpoints.
+      const visualReads = new Map<string, Promise<SourceVisual>>();
+      const inspectSource: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["inspectSource"] =
+        d.inspectSource && phase !== "plan" ? async (raw, signal) => {
+          signal?.throwIfAborted();
+          await assertActive();
+          const input = sourceVisualRequestSchema.parse(raw);
+          const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; sourceCoverage?: { sliceVersionIds?: string[] } };
+          const allowed = new Set([...(scope.sourceVersionIds ?? scope.sourceCoverage?.sliceVersionIds ?? []), ...(scope.visualSourceVersionIds ?? [])]);
+          if (!allowed.has(input.versionId)) throw conflict("Visual source is outside this call's source scope");
+          const inputHash = stepHash(input);
+          const cached = visualReads.get(inputHash);
+          if (cached) return cached;
+          if (visualReads.size >= 4) return { ...input, status: "unavailable", scope: "image", reason: "Four targeted visual reads per model call are available; report remaining coverage gaps." };
+          const read = (async () => {
+            await sources(d, run.projectId, [input.versionId]);
+            const result = await d.inspectSource!(run.projectId!, input, signal);
+            signal?.throwIfAborted();
+            const { image, ...metadata } = result;
+            const output = { ...metadata, ...(image ? { imageHash: createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex") } : {}) };
+            const stepKey = `visual:${callKey}:${inputHash}`;
+            const saved = await commit(d, run, token, async tx => {
+              const previous = await savedStep(d, runId, "tool", stepKey, inputHash, tx);
+              // A failed render may recover on an explicit retry. Retain that
+              // successful receipt too so cached model replay can cite it.
+              if (!previous || stepHash(previous.output) !== stepHash(output)) await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+                kind: "tool", stepKey, inputHash, input: { name: "inspect_project_source", input },
+                output, status: "completed",
+              });
+            });
+            if (!saved) throw conflict("Supervisor no longer active");
+            if (result.status === "available" && image) visuallyInspected.add(input.versionId);
+            return result;
+          })();
+          visualReads.set(inputHash, read);
+          return read;
+        } : undefined;
       const searchKnowledge: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"] =
         phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? async (raw, signal) => {
@@ -516,6 +568,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             modelPolicy: state.modelPolicy,
             calculateAcoustics,
             searchCompanyKnowledge: searchKnowledge,
+            inspectSource,
             onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
             });
             if (response.status === "completed") {
@@ -527,7 +580,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               await assertCompanyKnowledgeCurrent(d, receipts);
             }
             if (response.status === "completed" && validate) {
-              try { response.output = validate(response.output); }
+              try { response.output = validate(response.output, [...visuallyInspected]); }
               catch (error) {
                 if (!(error instanceof z.ZodError)) throw error;
                 throw Object.assign(new Error("Document output validation failed."), {
@@ -858,14 +911,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const readableSourceIds = new Set<string>(
                 readableSources.map(({ versionId }) => versionId),
               );
-              // Keep unreadable files visible as coverage gaps, but do not give
-              // their version IDs to the model as possible citation targets.
+              // Unreadable text is not unreadable imagery. These identifiers are
+              // inspection candidates, never citation targets until a tool read succeeds.
               const unreadableSources = resolvedSources
                 .filter(({ versionId, excerpt }) =>
                   !readableSourceIds.has(versionId) ||
                   excerpt?.source?.versionId !== versionId,
                 )
                 .map(({ versionId, excerpt }) => ({
+                  ...(d.inspectSource ? { versionId } : {}),
                   name:
                     typeof excerpt?.source?.name === "string"
                       ? excerpt.source.name
@@ -938,6 +992,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const result = schemas.specialist.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
                   sourceVersionIds: batchIds,
+                  ...(d.inspectSource ? { visualSourceVersionIds: assignment.sourceVersionIds } : {}),
                   sources: batch,
                   unreadableSources,
                   previousFindings: accumulated,
@@ -948,8 +1003,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     assignedVersionCount: assignment.sourceVersionIds.length,
                     readableVersionCount: readableSourceIds.size,
                   },
-                }, assignment.runId, raw => {
+                }, assignment.runId, (raw, visualVersionIds = []) => {
                   const parsed = schemas.specialist.parse(raw);
+                  for (const versionId of visualVersionIds) allowedCitations.add(versionId);
                   const rejected = parsed.citations.flatMap((versionId, index) => allowedCitations.has(versionId) ? [] : [{ versionId, index }]);
                   if (rejected.length) throw Object.assign(new Error("Specialist citation validation failed."), {
                     providerFailure: true, retryable: true, failureCategory: "validation",

@@ -14,6 +14,55 @@ import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noi
 import { calculateAcoustics } from "@richtfest/acoustics";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("visual inspection reaches the same model's second step as native media with exact provenance", async () => {
+  const request = { versionId: crypto.randomUUID(), page: 2, crop: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } };
+  const data = Buffer.from("synthetic image bytes").toString("base64");
+  const metadata = { ...request, status: "available" as const, scope: "pdf_page" as const, reason: "Unreviewed visual evidence" };
+  let rounds = 0, inspections = 0;
+  const prompts: any[] = [];
+  const output = { summary: "Inspected the exact page crop.", rationale: "Visual inference, not approved measurements.", citations: [request.versionId] };
+  const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+    prompts.push(options.prompt);
+    const inspect = rounds++ === 0;
+    return { stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] });
+      if (inspect) controller.enqueue({ type: "tool-call", toolCallId: "visual-1", toolName: "inspect_project_source", input: JSON.stringify(request) });
+      else {
+        controller.enqueue({ type: "text-start", id: "result" });
+        controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify(output) });
+        controller.enqueue({ type: "text-end", id: "result" });
+      }
+      controller.enqueue({ type: "finish", finishReason: inspect ? "tool-calls" : "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+      controller.close();
+    } }) };
+  } });
+  expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer", sourceVersionIds: [request.versionId] },
+    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 },
+    inspectSource: async input => { inspections++; expect(input).toEqual(request); return { ...metadata, image: { mediaType: "image/jpeg", data } }; },
+  }, "test-key", { model })).toEqual(output);
+  expect(rounds).toBe(2);
+  expect(inspections).toBe(1);
+  const results = prompts[1].filter((message: any) => message.role === "tool").flatMap((message: any) => message.content);
+  const result = results.find((part: any) => part.type === "tool-result" && part.toolCallId === "visual-1");
+  expect(result.output).toEqual({ type: "content", value: [
+    { type: "text", text: JSON.stringify(metadata) }, { type: "media", mediaType: "image/jpeg", data },
+  ] });
+  expect(result.output.value.filter((part: any) => part.type === "text").map((part: any) => part.text).join("")).not.toContain(data);
+});
+
+test("visual inspection is not registered for a one-step model or planning", async () => {
+  for (const [phase, maxSteps] of [["specialist", 1], ["plan", 4]] as const) {
+    const output = phase === "plan" ? { tasks: [{ role: "source_reviewer", goal: "Review source", sourceVersionIds: [] }] }
+      : { summary: "No visual tool available", rationale: "Step budget", citations: [] };
+    expect(await callMastraSupervisor({ ...base, phase,
+      modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps },
+      inspectSource: async () => { throw new Error("Visual inspection must not execute"); },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: options => { expect(options.tools ?? []).toHaveLength(0); },
+    }) })).toEqual(output);
+  }
+});
+
 test("company search keeps Unicode validation locally without sending unsupported regex to OpenAI", async () => {
   for (const term of ["Außenschallschutz", "DIN 4109-1", "隔音", " façade "]) {
     expect(companyKnowledgeSearchSchema.parse({ terms: [term] }).terms).toEqual([term.trim()]);

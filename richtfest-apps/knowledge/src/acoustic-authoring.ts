@@ -100,6 +100,18 @@ export async function authorAcousticConcept(input: {
   const bodies: Record<string, string> = {};
   const citations = new Set(outline.attachments.map(a => a.versionId));
   const resolvedRanges = new Map<string, Awaited<ReturnType<typeof resolveCompleteRunSource>>>();
+  const jobs: (() => Promise<void>)[] = [];
+  let stopped = false;
+  let failure: unknown;
+  let checkpoint = Promise.resolve();
+  const save = (key: string, batchCount: number, update: () => void) => {
+    checkpoint = checkpoint.then(async () => {
+      update();
+      // A checkpoint owns its snapshot, even while other sections are prepared.
+      await input.checkpoint(structuredClone(draft!), key, draft!.sections[key]!.parts.filter(Boolean).length, batchCount);
+    });
+    return checkpoint;
+  };
   for (const key of keys) {
     await input.assertActive();
     const definition = outline.sections.find(section => section.key === key)!;
@@ -142,18 +154,10 @@ export async function authorAcousticConcept(input: {
     const progress: AcousticDraft["sections"][string] = draft.sections[key]?.inputHash === sectionHash
       ? draft.sections[key]! : { inputHash: sectionHash, parts: [], byteLimit };
     draft.sections[key] = progress;
-    let nextIndex = 0;
-    let stopped = false;
-    let failure: unknown;
-    let checkpoint = Promise.resolve();
-    const save = (update: () => void) => {
-      checkpoint = checkpoint.then(async () => {
-        update();
-        await input.checkpoint(draft, key, progress.parts.filter(Boolean).length, batches.length);
-      });
-      return checkpoint;
-    };
+    const savePiece = (update: () => void) => save(key, batches.length, update);
     const requestPart = async (batch: typeof batches[number], batchNumber: number, batchCount: number, splitOnTruncation: boolean, parentBatch?: number) => {
+      await input.assertActive();
+      if (stopped) throw new Error("Section drafting stopped after a sibling failure.");
       const allowed = new Set([...batch.map(source => source.versionId), ...calculationSourceIds]);
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
         if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
@@ -181,35 +185,45 @@ export async function authorAcousticConcept(input: {
       if (!part?.complete) {
         const smaller = batchSpecialistSources(batch.map(source => ({ ...source, truncated: source.extractionTruncated })), legacyLimit);
         if (smaller.length < 2) invalid(["complete"], "The section piece is incomplete within its configured output budget.");
-        if (!progress.fallbacks?.[index]) await save(() => { (progress.fallbacks ??= {})[index] = []; });
+        if (!progress.fallbacks?.[index]) await savePiece(() => { (progress.fallbacks ??= {})[index] = []; });
         const parts = progress.fallbacks![index]!;
         // Keep successful fallback pieces across cancellation/restart. Each root
         // worker owns its fallback sequence, preserving the shared parallel cap.
         for (let i = parts.length; i < smaller.length; i++) {
           if (stopped) throw new Error("Section drafting stopped after a sibling failure.");
           const completed = await requestPart(smaller[i]!, i + 1, smaller.length, false, index + 1);
-          await save(() => { parts.push(completed); });
+          await savePiece(() => { parts.push(completed); });
         }
         part = { content: parts.map(piece => piece.content).join("\n\n"), citations: [...new Set(parts.flatMap(piece => piece.citations))], complete: true };
       }
       // Serialize draft mutations and writes, but not provider calls. JSON nulls
       // preserve holes when later pieces finish first; old prefix arrays still work.
-      await save(() => { progress.parts[index] = part!; });
+      await savePiece(() => { progress.parts[index] = part!; });
     };
-    await Promise.allSettled(Array.from({ length: Math.min(input.maxParallel, batches.length) }, async () => {
+    for (let index = 0; index < batches.length; index++) {
+      if (!progress.parts[index]) jobs.push(() => writePiece(index));
+    }
+  }
+  // Root pieces across every section share one worker pool. A fallback stays
+  // in its root's slot, so retries cannot exceed the same provider-call cap.
+  let nextIndex = 0;
+  await Promise.allSettled(Array.from({ length: Math.min(input.maxParallel, jobs.length) }, async () => {
       try {
-        while (!stopped && nextIndex < batches.length) {
+        while (!stopped && nextIndex < jobs.length) {
           const index = nextIndex++;
-          if (!progress.parts[index]) await writePiece(index);
+          await input.assertActive();
+          if (!stopped) await jobs[index]!();
         }
       } catch (error) {
         if (!stopped) failure = error;
         stopped = true;
         throw error;
       }
-    }));
-    // Drain in-flight siblings before releasing the lease or failing the run.
-    if (stopped) throw failure;
+  }));
+  // Drain in-flight siblings before releasing the lease or failing the run.
+  if (stopped) throw failure;
+  for (const key of keys) {
+    const progress = draft.sections[key]!;
     bodies[key] = progress.parts.map(part => part!.content).join("\n\n");
     for (const part of progress.parts) for (const citation of part!.citations) citations.add(citation);
   }

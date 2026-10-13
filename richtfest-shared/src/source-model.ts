@@ -35,9 +35,9 @@ export type SourceModelImport = {
   metadata: Record<string, unknown>;
 };
 
-/** Intentionally narrow, bounded output contract for the one document pass. */
+/** Intentionally narrow output contract per bounded evidence batch (at most six). */
 export const documentModelOutput = z.object({
-  entities: z.array(sourceEntityInput.extend({ key: z.string().min(1).max(100), kind: z.string().min(1).max(100), name: z.string().max(300) })).max(30),
+  entities: z.array(sourceEntityInput.extend({ key: z.string().min(1).max(100), kind: z.string().min(1).max(100), name: z.string().max(300) })).max(5),
   facts: z.array(sourceFactInput.extend({
     predicate: z.string().min(1).max(200),
     value: z.discriminatedUnion("type", [
@@ -51,7 +51,7 @@ export const documentModelOutput = z.object({
       z.object({ kind: z.literal("text"), page: z.number().int().positive(), quote: z.string().min(1).max(1500) }),
       z.object({ kind: z.literal("image"), scope: z.enum(["image", "affinity_preview"]), description: z.string().min(1).max(1500) }),
     ]),
-  })).max(60),
+  })).max(10),
 }).strict();
 export type DocumentModelInput = {
   tenantId: string; actorId: string; versionId: string;

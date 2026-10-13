@@ -7,6 +7,21 @@ import { isIfcSource } from "./ifc-model";
 import { readSourceText } from "./source-extraction";
 import { extractSourceImage, isImageSource } from "./source-text";
 
+/** Non-overlapping evidence windows: never re-read text or accept cross-window quotes. */
+function textBatches(pages: DocumentModelInput["pages"]) {
+  const batches: DocumentModelInput["pages"][] = [];
+  let batch: DocumentModelInput["pages"] = [], size = 0;
+  for (const page of pages) {
+    for (let offset = 0; offset < page.text.length;) {
+      const text = page.text.slice(offset, offset + 4000 - size);
+      batch.push({ page: page.page, text }); size += text.length; offset += text.length;
+      if (size === 4000) { batches.push(batch); batch = []; size = 0; }
+    }
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 async function parseIfc(bytes: Uint8Array, signal: AbortSignal): Promise<SourceModelImport> {
   signal.throwIfAborted();
   const worker = new Worker(new URL("./ifc-model-worker.ts", import.meta.url));
@@ -53,8 +68,9 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
   const workSignal = AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]);
   let status = "complete";
   let imported: SourceModelImport = { entities: [], facts: [], metadata: {} };
+  let failureCode = "provider";
   try {
-    if (job.status === "running") throw new Error("Interrupted attempt");
+    if (job.status === "running") { failureCode = "interrupted"; throw new Error("Interrupted attempt"); }
     if (method === "ifc") {
       const stream = await d.fileStorage.read(source.storageKey, workSignal);
       if (!stream) throw new Error("Source unavailable");
@@ -91,19 +107,30 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
       }
       if (!pages.length && !image) status = "unsupported";
       else {
-        workSignal.throwIfAborted();
-        const result = await d.structureDocument({ tenantId: job.tenantId, actorId: source.createdBy, versionId: job.versionId, pages, image });
-        if ("metadata" in result) imported.metadata = { ...imported.metadata, ...result.metadata };
-        if (result.status !== "completed") status = result.status;
-        else {
+        const batches = textBatches(pages);
+        if (!batches.length) batches.push([]);
+        const diagnostics: Record<string, unknown>[] = [];
+        imported.metadata.batches = diagnostics;
+        for (const [index, batch] of batches.entries()) {
+          workSignal.throwIfAborted();
+          const batchImage = index === 0 ? image : undefined;
+          const result = await d.structureDocument({ tenantId: job.tenantId, actorId: source.createdBy, versionId: job.versionId, pages: batch, image: batchImage });
+          diagnostics.push({ batch: index + 1, status: result.status, ...("metadata" in result ? result.metadata : {}) });
+          if ("metadata" in result) imported.metadata = { ...imported.metadata, ...result.metadata, batches: diagnostics };
+          if (result.status !== "completed") { status = result.status; imported.entities = []; imported.facts = []; break; }
+          failureCode = "schema";
           const output = documentModelOutput.parse(result.output);
+          failureCode = "evidence";
           const keys = new Set(output.entities.map(entity => entity.key));
           if (keys.size !== output.entities.length || output.facts.some(fact => !keys.has(fact.entityKey)
             || (fact.evidence.kind === "image"
-              ? !image || fact.evidence.scope !== image.scope || fact.provenance !== "inferred"
-              : !pages.find(page => fact.evidence.kind === "text" && page.page === fact.evidence.page)?.text.includes(fact.evidence.quote))))
+              ? !batchImage || fact.evidence.scope !== batchImage.scope || fact.provenance !== "inferred"
+              : !batch.some(page => fact.evidence.kind === "text" && page.page === fact.evidence.page && page.text.includes(fact.evidence.quote)))))
             throw new Error("Source evidence does not match supplied text or image");
-          imported = { ...imported, ...output };
+          const namespace = (key: string) => `batch${index + 1}:${key}`;
+          imported.entities.push(...output.entities.map(entity => ({ ...entity, key: namespace(entity.key) })));
+          imported.facts.push(...output.facts.map(fact => ({ ...fact, entityKey: namespace(fact.entityKey) })));
+          failureCode = "provider";
         }
       }
     }
@@ -111,6 +138,7 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
   } catch {
     status = "failed";
     imported = { entities: [], facts: [], metadata: { ...imported.metadata,
+      diagnostic: { code: workSignal.aborted ? "interrupted" : failureCode, retryable: false },
       reason: "Import failed, evidence was invalid, or the attempt was interrupted. No automatic replay; originals and saved text remain available." } };
   }
   await d.db.transaction(async (tx: any) => {

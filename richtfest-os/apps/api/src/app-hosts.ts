@@ -7,6 +7,8 @@ import type { Database } from "./db/client";
 import { fileStorage } from "./file-storage";
 export { fileStorage } from "./file-storage";
 import { readSourceEvidence } from "@richtfest/projects/source-model";
+import { extractSourceVisual } from "@richtfest/projects/source-text";
+import { sourceVisualRequestSchema } from "@richtfest/shared";
 import { searchReviewedComponents } from "@richtfest/components/queries";
 import { componentsDeps } from "./components-host";
 import { configuredProvider, getActiveProvider, withProviderCredential } from "./ai-connections";
@@ -235,6 +237,20 @@ export const knowledgeDeps = (
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready'
         and v.id in (${sql.join([...new Set(versionIds)].map(id => sql`${id}::uuid`), sql`, `)})`);
       return result.rows as { versionId: string; fileName: string; version: number }[];
+    },
+    inspectSource: async (projectId, raw, signal) => {
+      if (!actor.permissions.has("projects:read") || !actor.permissions.has("agent:run"))
+        throw new HttpError(403, "forbidden", "Source inspection requires projects:read and agent:run");
+      const input = sourceVisualRequestSchema.parse(raw);
+      const result = await db.execute(sql`select v.storage_key as "storageKey", v.mime_type as "mimeType", f.name
+        from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id
+        where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${input.versionId}::uuid
+        and v.status='ready' limit 1`);
+      const source = result.rows[0] as { storageKey: string; mimeType: string; name: string } | undefined;
+      if (!source) throw new HttpError(404, "not_found", "Source version not found in project");
+      const stream = await fileStorage.read(source.storageKey, signal);
+      if (!stream) return { ...input, status: "unavailable", scope: "image", reason: "Original source object unavailable." };
+      return extractSourceVisual(stream, source.mimeType, source.name, input, signal);
     },
     readSourcePdf: async (projectId, versionId) => {
       const result = await db.execute(sql`select v.storage_key as "storageKey", v.mime_type as "mimeType"

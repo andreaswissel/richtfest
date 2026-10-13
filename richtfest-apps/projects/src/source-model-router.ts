@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { files, fileVersions, sourceFacts } from "./schema";
+import { files, fileVersions, sourceFacts, sourceModels, sourceExtractions, sourcePages } from "./schema";
 import { readSourceModel } from "./source-model";
 
 const failure = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
@@ -26,6 +26,41 @@ export function createSourceModelRouter(getDeps: (req: Request) => AppDeps) {
       const input = z.object({ query: z.string().max(500).optional(), entityKey: z.string().max(200).optional(),
         offset: z.coerce.number().int().min(0).max(1000000).optional(), limit: z.coerce.number().int().min(1).max(100).optional() }).parse(req.query);
       res.json(ok(await readSourceModel(d.db, d.tenantId, versionId, input)));
+    } catch (error) { next(error); }
+  });
+  // Explicit, scoped recovery only. Reads and new agent runs never replay jobs.
+  router.post("/projects/:projectId/source-versions/:versionId/reprocess", async (req, res, next) => {
+    try {
+      const { d, versionId } = await scope(req);
+      d.requirePermission("projects:write");
+      d.requirePermission("agent:run");
+      z.object({}).strict().parse(req.body ?? {});
+      const result = await d.db.transaction(async (tx: any) => {
+        const where = and(eq(sourceExtractions.versionId, versionId), eq(sourceExtractions.tenantId, d.tenantId));
+        const modelWhere = and(eq(sourceModels.versionId, versionId), eq(sourceModels.tenantId, d.tenantId));
+        const [extraction] = await tx.select().from(sourceExtractions).where(where).for("update");
+        const [model] = await tx.select().from(sourceModels).where(modelWhere).for("update");
+        if (!extraction || !model) throw failure(409, "processing_unavailable", "No processing record exists for this version");
+        if ([extraction.status, model.status].some(status => ["queued", "running"].includes(status)))
+          throw failure(409, "processing_active", "Source processing is already queued or running");
+        if (model.status === "complete")
+          throw failure(409, "model_preserved", "A completed source model cannot be replaced by recovery");
+        const [fact] = await tx.select({ id: sourceFacts.id }).from(sourceFacts)
+          .where(and(eq(sourceFacts.versionId, versionId), eq(sourceFacts.tenantId, d.tenantId))).limit(1);
+        if (fact) throw failure(409, "model_preserved", "Existing source facts and reviews must be preserved");
+        const retryExtraction = extraction.status === "failed";
+        if (retryExtraction) {
+          await tx.delete(sourcePages).where(and(eq(sourcePages.versionId, versionId), eq(sourcePages.tenantId, d.tenantId)));
+          await tx.update(sourceExtractions).set({ status: "queued", nextPage: 1, attempts: 0, result: null,
+            leaseToken: null, leaseUntil: null, updatedAt: new Date() }).where(where);
+        }
+        await tx.update(sourceModels).set({ status: "queued", leaseToken: null, leaseUntil: null, updatedAt: new Date() }).where(modelWhere);
+        await d.audit(tx, "projects.source.reprocessing.queued", "file_version", versionId,
+          { extraction: retryExtraction, previousExtractionStatus: extraction.status, previousModelStatus: model.status,
+            previousModelMetadata: model.metadata });
+        return { versionId, extraction: retryExtraction ? "queued" : extraction.status, model: "queued" };
+      });
+      res.status(202).json(ok(result, "Source recovery queued; original version and citations preserved"));
     } catch (error) { next(error); }
   });
   // Review is human-only: this mutation is not in the agent tool registry.

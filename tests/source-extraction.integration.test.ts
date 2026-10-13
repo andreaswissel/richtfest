@@ -143,6 +143,7 @@ run("upload models are persisted once, IFC bypasses AI, and source claims remain
   const originals = new Map<string, Buffer>();
   const audits: string[] = [];
   let providerCalls = 0, reads = 0, accessTenant = tenantId, mayApprove = true;
+  let deniedPermission = "", failRecoveryAudit = false;
   let visualProvenance = "inferred", wrongImageScope = false;
   const signal = new AbortController().signal;
   let server: ReturnType<ReturnType<typeof express>["listen"]> | undefined;
@@ -215,8 +216,8 @@ ENDSEC; END-ISO-10303-21;`));
     const app = express(); app.use(express.json());
     app.use("/api", createRouter(() => ({
       db, tenantId: accessTenant, actorId,
-      requirePermission: permission => { if (permission === "knowledge:approve" && !mayApprove) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
-      audit: async (_tx, action) => { audits.push(action); }, validateCustomer: async () => false, customerNames: async () => ({}),
+      requirePermission: permission => { if (permission === deniedPermission || (permission === "knowledge:approve" && !mayApprove)) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
+      audit: async (_tx, action) => { if (failRecoveryAudit && action === "projects.source.reprocessing.queued") throw new Error("Audit unavailable"); audits.push(action); }, validateCustomer: async () => false, customerNames: async () => ({}),
       fileStorage: { kind: "bucket", ...d.fileStorage, initiate: async () => ({ uploadUrl: "/unused", headers: {}, expiresAt: new Date().toISOString() }),
         head: async key => ({ sizeBytes: originals.get(key)!.length, checksum: "fixture", mimeType: contentTypes.get(key)! }),
         saveStream: async () => { throw new Error("unused"); }, remove: async () => {}, download: async () => null },
@@ -237,14 +238,16 @@ ENDSEC; END-ISO-10303-21;`));
       await runSourceExtraction(d, signal);
       return data;
     };
-    const document = await upload("Wall A thickness 240 mm\nAlternate Wall A thickness 300 mm\n" + "Other material. ".repeat(2500));
+    // Single-batch fixture for review/read behavior; multi-batch collision and
+    // atomic rejection are covered through runSourceModel in source-model.test.ts.
+    const document = await upload("Wall A thickness 240 mm\nAlternate Wall A thickness 300 mm\n" + "Other material. ".repeat(100));
     await Promise.all([runSourceModel(d, signal), runSourceModel(d, signal)]);
     expect(providerCalls).toBe(1);
     const modelPath = `/api/projects/${projectId}/source-versions/${document.versionId}/model`;
     const response = await fetch(`${base}${modelPath}`); expect(response.status).toBe(200);
     const model = (await response.json()).data;
     expect(model.facts.map((row: any) => row.fact.value.value).sort()).toEqual([240, 300]); // No last-writer wins.
-    expect(model.metadata).toMatchObject({ inputCharacters: 24000, usage: { inputTokens: 10, outputTokens: 5 } });
+    expect(model.metadata).toMatchObject({ inputCharacters: 1658, usage: { inputTokens: 10, outputTokens: 5 } });
     const fact = model.facts[0].fact;
     const reviewPath = `/api/projects/${projectId}/source-versions/${document.versionId}/facts/${fact.id}/review`;
     const review = { expectedRevision: 0, status: "approved", note: "Checked against original" };
@@ -271,7 +274,7 @@ ENDSEC; END-ISO-10303-21;`));
     expect((await readSourceModel(db, tenantId, next.versionId))!.facts.every((r: any) => r.fact.reviewStatus === "unreviewed")).toBe(true);
     expect((await db.select().from(sourceFacts).where(eq(sourceFacts.id, fact.id)))[0].reviewStatus).toBe("approved");
     // A crash after a provider request must not silently charge for another attempt.
-    const interrupted = await upload("Wall A thickness 240 mm");
+    const interrupted = await upload("Wall A thickness 240 mm\nWall A thickness 300 mm");
     await db.update(sourceModels).set({ status: "running", leaseToken: crypto.randomUUID(), leaseUntil: new Date(0) }).where(eq(sourceModels.versionId, interrupted.versionId));
     await runSourceModel(d, signal); expect(providerCalls).toBe(2);
     expect((await readSourceModel(db, tenantId, interrupted.versionId))!.status).toBe("failed");
@@ -280,6 +283,57 @@ ENDSEC; END-ISO-10303-21;`));
     await runSourceModel(d, signal); expect(providerCalls).toBe(3);
     expect(await readSourceModel(db, tenantId, invalid.versionId)).toMatchObject({ status: "failed", facts: [], metadata: { usage: { inputTokens: 10 } } });
     expect(await runSourceModel(d, signal)).toBe(false);
+
+    const recoveryPath = (id: string) => `/api/projects/${projectId}/source-versions/${id}/reprocess`;
+    const recovery = () => post(recoveryPath(interrupted.versionId), {});
+    const versionsBefore = await db.select().from(fileVersions);
+    const pagesBefore = await db.select().from(sourcePages).where(eq(sourcePages.versionId, interrupted.versionId));
+    const extractionBefore = (await db.select().from(sourceExtractions).where(eq(sourceExtractions.versionId, interrupted.versionId)))[0];
+    for (const permission of ["projects:read", "projects:write", "agent:run"]) {
+      deniedPermission = permission;
+      expect((await recovery()).status).toBe(403);
+    }
+    deniedPermission = "";
+    accessTenant = crypto.randomUUID(); expect((await recovery()).status).toBe(404); accessTenant = tenantId;
+    expect((await post(recoveryPath(interrupted.versionId).replace(projectId, crypto.randomUUID()), {})).status).toBe(404);
+    // Recovery never overwrites a successful source or its human review, even
+    // when a stale/failed model record coexists with already persisted facts.
+    const reviewedBefore = await db.select().from(sourceFacts).where(eq(sourceFacts.versionId, document.versionId));
+    expect((await post(recoveryPath(document.versionId), {})).status).toBe(409);
+    await db.update(sourceModels).set({ status: "failed" }).where(eq(sourceModels.versionId, document.versionId));
+    expect((await post(recoveryPath(document.versionId), {})).status).toBe(409);
+    expect(await db.select().from(sourceFacts).where(eq(sourceFacts.versionId, document.versionId))).toEqual(reviewedBefore);
+    await db.update(sourceModels).set({ status: "complete" }).where(eq(sourceModels.versionId, document.versionId));
+    failRecoveryAudit = true; expect((await recovery()).status).toBe(500); failRecoveryAudit = false;
+    expect((await readSourceModel(db, tenantId, interrupted.versionId))!.status).toBe("failed");
+    const auditCount = audits.filter(action => action === "projects.source.reprocessing.queued").length;
+    const queued = await Promise.all([recovery(), recovery()]);
+    expect(queued.map(response => response.status).sort()).toEqual([202, 409]);
+    expect((await queued.find(response => response.status === 202)!.json()).data).toEqual({ versionId: interrupted.versionId, extraction: "complete", model: "queued" });
+    expect(audits.filter(action => action === "projects.source.reprocessing.queued")).toHaveLength(auditCount + 1);
+    expect(await db.select().from(fileVersions)).toEqual(versionsBefore);
+    expect(await db.select().from(sourcePages).where(eq(sourcePages.versionId, interrupted.versionId))).toEqual(pagesBefore);
+    expect((await db.select().from(sourceExtractions).where(eq(sourceExtractions.versionId, interrupted.versionId)))[0]).toEqual(extractionBefore);
+    const readsBeforeRetry = reads;
+    await runSourceModel(d, signal);
+    expect(reads).toBe(readsBeforeRetry);
+    expect((await readSourceModel(db, tenantId, interrupted.versionId))!.status).toBe("complete");
+
+    // Failed extraction resets atomically, but original storage and version
+    // identity remain untouched. Both queued and running records fence retries.
+    await db.update(sourceExtractions).set({ status: "failed", attempts: 3, nextPage: 2, result: { status: "extraction_failed", reason: "fixture" } }).where(eq(sourceExtractions.versionId, invalid.versionId));
+    failRecoveryAudit = true; expect((await post(recoveryPath(invalid.versionId), {})).status).toBe(500); failRecoveryAudit = false;
+    expect((await db.select().from(sourcePages).where(eq(sourcePages.versionId, invalid.versionId))).length).toBeGreaterThan(0);
+    expect((await post(recoveryPath(invalid.versionId), {})).status).toBe(202);
+    expect((await db.select().from(sourceExtractions).where(eq(sourceExtractions.versionId, invalid.versionId)))[0]).toMatchObject({ status: "queued", attempts: 0, nextPage: 1, result: null, leaseToken: null, leaseUntil: null });
+    expect(await db.select().from(sourcePages).where(eq(sourcePages.versionId, invalid.versionId))).toEqual([]);
+    expect((await post(recoveryPath(invalid.versionId), {})).status).toBe(409);
+    await db.update(sourceModels).set({ status: "running" }).where(eq(sourceModels.versionId, invalid.versionId));
+    expect((await post(recoveryPath(invalid.versionId), {})).status).toBe(409);
+    expect(await db.select().from(fileVersions)).toEqual(versionsBefore);
+    // Settle this deliberately broken fixture before the OCR worker cases.
+    await db.update(sourceExtractions).set({ status: "failed" }).where(eq(sourceExtractions.versionId, invalid.versionId));
+    await db.update(sourceModels).set({ status: "failed" }).where(eq(sourceModels.versionId, invalid.versionId));
 
     // Real OCR travels through upload completion, durable extraction, and both
     // agent evidence paths. Preview limitations must survive model indexing.

@@ -76,7 +76,16 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(body.messages[0].content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: image.data } });
     expect(JSON.parse(body.messages[0].content[0].text).context).toEqual({ versionId: input.versionId, pages: [], imageScope: "affinity_preview" });
     output = { entities: [], facts: [], approved: true };
-    expect(await run()).toMatchObject({ status: "failed", metadata: { usage: { inputTokens: 42, outputTokens: 12 } } });
+    expect(await run()).toMatchObject({ status: "failed", metadata: { diagnostic: { code: "schema" }, usage: { inputTokens: 42, outputTokens: 12 } } });
+    const truncated: ProviderFetch = async () => Response.json({ id: "bounded-response", model: "configured-source-model", stop_reason: "max_tokens",
+      usage: { input_tokens: 42, output_tokens: 800 }, content: [{ type: "text", text: '{"entities":[' }] });
+    expect(await structureSourceDocument(db, input, truncated)).toMatchObject({ status: "failed", metadata: {
+      diagnostic: { code: "truncation", retryable: false }, response: { responseId: "bounded-response", finishReason: "max_tokens" }, usage: { outputTokens: 800 } } });
+    const providerFailure: ProviderFetch = async () => { throw new Error("private prompt test-workspace-key"); };
+    const failed = await structureSourceDocument(db, input, providerFailure);
+    expect(failed).toMatchObject({ status: "failed", metadata: { diagnostic: { code: "provider", retryable: false } } });
+    expect(JSON.stringify(failed)).not.toContain("private prompt");
+    expect(JSON.stringify(failed)).not.toContain("test-workspace-key");
     const before = calls;
     env.ANTHROPIC_SUPERVISOR_MODEL = "";
     await pool.query("update os_agent_presets set config=null");

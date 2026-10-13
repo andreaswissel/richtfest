@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SourceText } from "@richtfest/shared";
+import { sourceVisualRequestSchema, type SourceText, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
 import { extractAffinityPreview } from "./affinity-preview";
 
 const BYTE_LIMIT = 32 * 1024 * 1024;
@@ -36,7 +36,7 @@ export function isImageSource(mimeType: string, name: string) {
 }
 
 /** Bounded local raster preparation shared by OCR and the one visual model pass. */
-export async function extractSourceImage(stream: AsyncIterable<Uint8Array>, name: string, vision = false): Promise<{
+export async function extractSourceImage(stream: AsyncIterable<Uint8Array>, name: string, vision = false, crop?: SourceVisualRequest["crop"]): Promise<{
   content: SourceText;
   image?: { mediaType: "image/jpeg"; data: string; scope: "image" | "affinity_preview" };
 }> {
@@ -76,7 +76,8 @@ export async function extractSourceImage(stream: AsyncIterable<Uint8Array>, name
       if (!width || !height || width * height > 40_000_000)
         return { content: { status: "extraction_too_large", reason: "Image processing is limited to 40 megapixels; the original upload remains available." } };
       const raster = join(directory, vision ? "visual.jpg" : "ocr.png");
-      await command("convert", [...limits, `${format}:${input}[0]`, "-background", "white", "-alpha", "remove", "-alpha", "off", "-resize", vision ? "1568x1568>" : "5000x5000>", "-strip", "-quality", "85", raster], deadline, 65536);
+      const cropArgs = crop ? ["-crop", `${Math.max(1, Math.floor(width * crop.width))}x${Math.max(1, Math.floor(height * crop.height))}+${Math.floor(width * crop.x)}+${Math.floor(height * crop.y)}`, "+repage"] : [];
+      await command("convert", [...limits, `${format}:${input}[0]`, ...cropArgs, "-background", "white", "-alpha", "remove", "-alpha", "off", "-resize", vision ? "1568x1568>" : "5000x5000>", "-strip", "-quality", "85", raster], deadline, 65536);
       const scope = affinity
         ? "Affinity Publisher embedded preview only; not the full document. Page count, omitted pages, native text and editable layout are unknown. Export the full document as PDF for complete page access"
         : "Standalone image";
@@ -101,6 +102,60 @@ export async function extractSourceImage(stream: AsyncIterable<Uint8Array>, name
       reason: `${affinity ? "Affinity Publisher embedded-preview" : "Image"} processing could not complete (invalid image, unavailable tools, resource limit or processing deadline). ${affinity ? "Native Publisher content is not supported; export the full document as PDF. " : ""}Open the original for manual review.`,
     } };
   } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
+}
+
+/** Targeted visual read, independent of OCR/index success. Never modifies source evidence. */
+export async function extractSourceVisual(stream: AsyncIterable<Uint8Array>, mimeType: string, name: string,
+  raw: SourceVisualRequest, signal?: AbortSignal): Promise<SourceVisual> {
+  const request = sourceVisualRequestSchema.parse(raw);
+  const pdf = mimeType === "application/pdf" || /\.pdf$/i.test(name);
+  const scope = pdf ? "pdf_page" : /\.afpub$/i.test(name) ? "affinity_preview" : "image";
+  const unavailable = (reason: string): SourceVisual => ({ ...request, scope, status: "unavailable", reason });
+  let directory: string | undefined;
+  try {
+    signal?.throwIfAborted();
+    let rasterStream = stream;
+    if (pdf) {
+      directory = await mkdtemp(join(tmpdir(), "richtfest-visual-"));
+      const path = join(directory, "source.pdf"), prefix = join(directory, "page");
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      for await (const part of stream) {
+        signal?.throwIfAborted();
+        bytes += part.length;
+        if (bytes > BYTE_LIMIT) return unavailable("Visual PDF processing is limited to 32 MiB; the original remains available.");
+        chunks.push(Buffer.from(part));
+      }
+      await writeFile(path, Buffer.concat(chunks));
+      const deadline = Date.now() + 60_000;
+      const info = await command("pdfinfo", [path], deadline, 65536);
+      const pages = Number(info.match(/^Pages:\s+(\d+)/m)?.[1]);
+      if (!pages || request.page > pages) return unavailable("The requested original PDF page does not exist.");
+      await ocrSlot(deadline);
+      try {
+        // A 3000px raster fits the shared 128 MiB decoder budget, including
+        // square sheets; crop before downsampling to the provider's 1568px image.
+        await command("pdftoppm", ["-f", String(request.page), "-l", String(request.page), "-singlefile",
+          "-scale-to", request.crop ? "3000" : "1568", "-png", path, prefix], deadline, 65536);
+      } finally { activeOcr--; }
+      signal?.throwIfAborted();
+      const raster = await readFile(prefix + ".png");
+      rasterStream = (async function* () { yield raster; })();
+    } else if (!isImageSource(mimeType, name) || request.page !== 1) {
+      return unavailable("This source has no requested visual page; images and Publisher previews use page 1 only.");
+    }
+    const result = await extractSourceImage(rasterStream, pdf ? "page.png" : name, true, request.crop);
+    signal?.throwIfAborted();
+    if (!result.image) return unavailable(result.content.reason ?? "Visual rendering unavailable.");
+    return { ...request, scope, status: "available", image: result.image,
+      reason: `${scope === "affinity_preview" ? "Embedded preview only, not the full Publisher document. " : ""}${request.crop ? "Selected crop only. " : "One displayed page/image only. "}Visual observations are unreviewed inferences, not verified measurements, calculations or approval. Cite this exact version, original page and crop; do not infer omitted content.` };
+  } catch {
+    signal?.throwIfAborted();
+    return unavailable("Visual rendering failed (invalid source, unavailable tools, resource limit or deadline). The original remains available.");
+  } finally {
+    (stream as { destroy?: () => void }).destroy?.();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export async function extractSourceText(
