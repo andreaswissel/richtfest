@@ -491,7 +491,8 @@ for (const independentReviewEnabled of [false, true]) integration(
         }
         if (input.phase === "independent_review") {
           expect(input.context.firstPassReview.document.content).toContain(templateId === "sound-insulation-review" ? "## 8. Review status" : "## Review status and acknowledgment");
-          expect(input.context.firstPassReview.document.template).toEqual(template);
+          expect(input.context.firstPassReview.document.template).toBeUndefined();
+          expect(input.context.firstPassReview.document.content).toContain(templateId === "sound-insulation-review" ? "Room 101" : "Separating wall W-17");
           return { status: "completed", output: { summary: "Draft checked", rationale: "Declarations remain unreviewed", decision: "accept", revisions: [], findings: [], citations: [versionId] } };
         }
         expect(input.context.documentTemplate).toEqual({ id: "sound-insulation-review", version: 1 });

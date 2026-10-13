@@ -20,6 +20,7 @@ import { executeTrackedProvider } from "./usage";
 import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage } from "./agent-messages";
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
+import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt } from "@richtfest/shared";
@@ -61,6 +62,7 @@ export type Assignment = {
   sourceVersionIds: string[];
   // Absent on historical assignments: their saved batch identities stay unchanged.
   sourceInputByteBudget?: number;
+  sourceBatchingVersion?: 2;
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
@@ -732,6 +734,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           const model = policy.specialists[item.role]!;
           assignments.push({ ...item, taskId: task.id, runId: child.id,
             sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
+            sourceBatchingVersion: 2,
           });
         }
         await tx
@@ -823,8 +826,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // Reserve the maximum accumulated findings (including JSON escaping),
               // variable context and instructions/schema before packing whole pages.
               // Persist the chosen limit with progress so retries never repack saved work.
-              const byteLimit = assignment.sourceInputByteBudget === undefined ? undefined : assignment.sourceProgress?.byteLimit
-                ?? assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
+              const byteLimit = assignment.sourceProgress?.byteLimit ?? (assignment.sourceInputByteBudget === undefined
+                ? assignment.sourceBatchingVersion === 2 ? 48 * 1024 : undefined
+                : assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
                   // Five tool schemas currently serialize to ~18 KiB; leave headroom.
                   - (assignment.role === "sound_insulation" && d.calculateAcoustics ? 24576 : 0)
                   - AGENT_MESSAGING_CONTEXT_BYTES
@@ -834,7 +838,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     documentReview: await artifactReviewContext(d, run.conversationId),
                     profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
                     budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
-                  }), "utf8");
+                  }), "utf8"));
               if (byteLimit !== undefined && byteLimit < 1024) throw conflict("Specialist context exceeds the model input budget");
               const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources) : batchSectionSources(specialistSources, byteLimit);
               // Checkpoints can only be reused for the same goal and extracted
@@ -1204,94 +1208,87 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
       const firstPassReview = state.review;
       const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId));
-      const sourceSlices = conceptId
+      const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
+      // Reuse old completed slices, but repack their unfinished evidence. Deploying
+      // a better batching strategy must not buy already-reviewed evidence again.
+      const legacySlices = !state.history.some((entry: any) => entry.phase === "independent_review_slice") ? [] : conceptId
         ? batchSpecialistSources(readableExcerpts.map(({ versionId, resolution }: any) => ({
           versionId, resolution, text: resolution.content.text, truncated: resolution.content.truncated,
         }))).map(batch => batch.map(({ versionId, resolution, text, textRange, truncated }) => ({ versionId,
           resolution: { ...resolution, content: { ...resolution.content, text, textRange, truncated } },
         })))
         : chunkSourceVersionIds([...readableSourceIds]).map(ids => readableExcerpts.filter(({ versionId }) => ids.includes(versionId)));
-      const inputHash = checkpointHash({ goal, assignments, firstPassReview,
-        sourceSlices, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
-      const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
-      for (let index = 0; index < sourceSlices.length; index++) {
-        const sourceExcerpts = sourceSlices[index]!;
-        const sliceIds = [...new Set(sourceExcerpts.map(({ versionId }) => versionId))];
+      const legacyHash = checkpointHash({ goal, assignments, firstPassReview,
+        sourceSlices: legacySlices, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
+      const remaining = legacySlices.filter((slice, index) => {
+        const saved = state.history.find((entry: any) => entry.phase === "independent_review_slice"
+          && entry.inputHash === legacyHash && entry.index === index);
+        if (!saved) return true;
+        const ids = [...new Set(slice.map(source => source.versionId))];
+        const output = schemas.independent_review.parse(saved.output);
+        assertIndependentReviewCitations(output, new Set(ids));
+        sliceResults.push({ sourceVersionIds: ids, output });
+        return false;
+      }).flat();
+      const legacyCount = sliceResults.length;
+      const contextOverhead = {
+        goal, documentReview: await artifactReviewContext(d, run.conversationId),
+        componentCatalog: await d.componentContext?.(run.goal),
+        profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
+        budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
+      };
+      const modelBudget = agentModelInputByteBudget(run.provider, policy.supervisor.modelId, policy.supervisor.maxOutputTokens);
+      const plan = prepareIndependentReview({ review: firstPassReview ?? {}, assignments,
+        sources: legacyCount ? remaining as any : readableExcerpts as any,
+        originalGoal: run.goal, revision: state.revision, assignedVersionCount: sourceVersionIds.length,
+        readableSourceIds: [...readableSourceIds], unreadableSources, contextOverhead,
+        inputByteBudget: modelBudget === undefined ? undefined : modelBudget - AGENT_MESSAGING_CONTEXT_BYTES,
+      });
+      const inputHash = checkpointHash({ version: 2, goal, assignments, firstPassReview, resolvedExcerpts,
+        modelPolicy: state.modelPolicy, profiles: state.profileSnapshot, contextOverhead });
+      const needsConsistency = legacyCount > 0 || plan.batches.some(batch => batch.reviewTask === "evidence");
+      const batchCount = plan.batches.length + Number(needsConsistency);
+      for (let index = 0; index < batchCount; index++) {
+        const context = index < plan.batches.length ? plan.batches[index]!
+          : plan.consistency(aggregateIndependentReviews(sliceResults, limits));
+        context.sourceCoverage.slice = index + 1;
+        context.sourceCoverage.sliceCount = batchCount;
+        const sourceExcerpts = context.sourceExcerpts;
+        const sliceIds = context.sourceCoverage.sliceVersionIds;
         const sliceIdSet = new Set(sliceIds);
-        const savedSlice = state.history.find((entry: any) => entry.phase === "independent_review_slice"
+        const savedSlice = state.history.find((entry: any) => entry.phase === "independent_review_batch"
           && entry.inputHash === inputHash && entry.index === index);
         if (savedSlice) {
           const output = schemas.independent_review.parse(savedSlice.output);
           assertIndependentReviewCitations(output, sliceIdSet);
+          assertIndependentReviewDecision(output, assignments);
           sliceResults.push({ sourceVersionIds: sliceIds, output });
           continue;
         }
-        const workSources = sourceExcerpts.map(({ versionId, resolution }: any) => ({
+        const workSources = [...new Map(sourceExcerpts.map(({ versionId, resolution }: any) => [versionId, {
           versionId, name: resolution.source.name, version: resolution.source.version,
-        }));
+        }] as const)).values()];
         await commit(d, run, token, async (tx) => {
           await logWorkProgress(d, tx, run, {
             runId: id, stage: "independent_review", sources: workSources,
-            batch: index + 1, batchCount: sourceSlices.length,
+            batch: index + 1, batchCount,
           });
         });
-        const sliceAssignments = assignments.filter((assignment) =>
-          assignment.sourceVersionIds.some((versionId) => sliceIdSet.has(versionId)) ||
-          (index === 0 && assignment.sourceVersionIds.length === 0),
-        );
-        const sliceReview = firstPassReview && typeof firstPassReview === "object"
-          ? { ...firstPassReview, citations: Array.isArray((firstPassReview as any).citations) ? (firstPassReview as any).citations.filter((versionId: string) => sliceIdSet.has(versionId)) : [] }
-          : firstPassReview;
-        const output = schemas.independent_review.parse(await call("independent_review", goal, {
-          role: "independent_reviewer",
-          originalGoal: run.goal,
-          companyKnowledge: sliceAssignments.flatMap(a => a.companyKnowledge ?? []),
-          assignments: sliceAssignments.map((assignment) => ({
-            taskId: assignment.taskId,
-            role: assignment.role,
-            goal: assignment.goal,
-            calculationReceipts: assignment.calculationReceipts,
-            sourceVersionIds: assignment.sourceVersionIds.filter((versionId) => sliceIdSet.has(versionId)),
-            result: assignment.output ? {
-              ...assignment.output,
-              citations: assignment.output.citations.filter((versionId) => sliceIdSet.has(versionId)),
-            } : undefined,
-          })),
-          specialistResults: sliceAssignments.map((assignment) => ({
-            taskId: assignment.taskId,
-            role: assignment.role,
-            goal: assignment.goal,
-            sourceVersionIds: assignment.sourceVersionIds.filter((versionId) => sliceIdSet.has(versionId)),
-            output: assignment.output ? {
-              ...assignment.output,
-              citations: assignment.output.citations.filter((versionId) => sliceIdSet.has(versionId)),
-            } : undefined,
-          })),
-          firstPassReview: sliceReview,
-          sourceExcerpts,
-          sourceCoverage: {
-            slice: index + 1,
-            sliceCount: sourceSlices.length,
-            assignedVersionCount: sourceVersionIds.length,
-            readableVersionCount: readableSourceIds.size,
-            sliceVersionIds: sliceIds,
-            unreadableSources,
-          },
-          revision: state.revision,
-        }, id, raw => {
+        const output = schemas.independent_review.parse(await call("independent_review", goal, context, id, raw => {
           const parsed = schemas.independent_review.parse(raw);
           assertIndependentReviewCitations(parsed, sliceIdSet);
+          assertIndependentReviewDecision(parsed, assignments);
           return parsed;
         }));
         const saved = await commit(d, run, token, async (tx, current) => {
           await tx.update(supervisorRuns).set({ history: [...current.history,
-            { phase: "independent_review_slice", inputHash, index, output, sourceVersionIds: sliceIds },
+            { phase: "independent_review_batch", inputHash, index, output, sourceVersionIds: sliceIds },
           ] }).where(eq(supervisorRuns.runId, id));
           await logWorkProgress(d, tx, run, {
             runId: id, stage: "independent_review", sources: workSources,
-            batch: index + 1, batchCount: sourceSlices.length, summary: output.summary,
+            batch: index + 1, batchCount, summary: output.summary,
           });
-          await log(d, tx, run, "independent_review_checkpointed", `${index + 1}/${sourceSlices.length}`);
+          await log(d, tx, run, "independent_review_checkpointed", `${index + 1}/${batchCount}`);
         });
         if (!saved) throw conflict("Supervisor no longer active");
         sliceResults.push({ sourceVersionIds: sliceIds, output });

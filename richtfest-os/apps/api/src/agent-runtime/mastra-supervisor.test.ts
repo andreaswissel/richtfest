@@ -114,7 +114,7 @@ test("acoustic tools are absent for other roles and insufficient model steps", a
   }
 });
 
-test("section and specialist context budgets reserve output and reject oversized prompts before inference", async () => {
+test("section, specialist and independent review context budgets reject oversized prompts before inference", async () => {
   expect(agentModelInputByteBudget("openai", "gpt-6-astra", 8000)).toBe(832000);
   expect(agentModelInputByteBudget("vercel", "openai/gpt-6.1-sol", 128000)).toBe(712000);
   expect(agentModelInputByteBudget("openai", "gpt-4.1-mini-2025-04-14", 8000)).toBe(830060);
@@ -124,8 +124,9 @@ test("section and specialist context budgets reserve output and reject oversized
     expect(agentModelInputByteBudget(provider, modelId, 8000)).toBeUndefined();
   const content = "Source-backed report section, pending specialist review.";
   let prepared = 0;
-  for (const phase of ["review", "specialist"] as const) for (const length of [20000, 840000]) {
-    const output = phase === "review" ? { content, citations: [], complete: true } : { summary: content, rationale: "", citations: [] };
+  for (const phase of ["review", "specialist", "independent_review"] as const) for (const length of [20000, 840000]) {
+    const output = phase === "review" ? { content, citations: [], complete: true }
+      : { summary: content, rationale: "", citations: [], ...(phase === "independent_review" ? { decision: "accept", findings: [], revisions: [] } : {}) };
     const response = callMastraSupervisor({ ...base, phase, modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 8000, maxSteps: 1 },
       context: { ...(phase === "review" ? { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 } } : { role: "source_reviewer" }), sources: [{ text: "x".repeat(length) }] },
       onPrepared: async () => { prepared++; return undefined; },
@@ -133,7 +134,7 @@ test("section and specialist context budgets reserve output and reject oversized
     if (length === 20000) expect(await response).toEqual(output);
     else await expect(response).rejects.toMatchObject({ retryable: false, diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   }
-  expect(prepared).toBe(2);
+  expect(prepared).toBe(3);
 });
 
 test("concept authoring accepts separate outline and section contracts through Mastra", async () => {
@@ -626,7 +627,8 @@ test("independent review requires evidence findings and does not inherit the sup
   expect(output).toEqual(finding);
   const prompt = JSON.stringify(request);
   expect(prompt).toContain("fresh, independent reviewer");
-  expect(prompt).toContain("Re-read the supplied immutable source excerpts");
+  expect(prompt).toContain("against every supplied source excerpt");
+  expect(prompt).toContain("Do not claim to have reread absent source text");
 });
 
 test("source review plans treat unreviewed files as readable and honor all-source requests", async () => {

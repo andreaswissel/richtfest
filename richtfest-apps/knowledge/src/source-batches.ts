@@ -45,11 +45,11 @@ export function batchSpecialistSources<T extends { text: string; truncated?: boo
 }
 
 /** Pack complete saved pages against serialized input size, without a file-count cap. */
-export function batchSectionSources<T extends { text: string; truncated?: boolean }>(sources: T[], byteLimit: number) {
+export function batchSectionSources<T extends { text: string; truncated?: boolean }>(sources: T[], byteLimit: number,
+  sizeOf: (batch: T[]) => number = batch => Buffer.byteLength(JSON.stringify(batch), "utf8")) {
   type Slice = ReturnType<typeof batchSpecialistSources<T>>[number][number];
   const batches: Slice[][] = [];
   let batch: Slice[] = [];
-  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
   for (const source of sources) {
     const totalBytes = Buffer.byteLength(source.text, "utf8");
     let startByte = 0;
@@ -60,10 +60,10 @@ export function batchSectionSources<T extends { text: string; truncated?: boolea
         truncated: source.truncated || startByte > 0 || endByte < totalBytes,
         textRange: { startByte, endByte, totalBytes } };
       let pieces = [page];
-      if (bytes([page]) > byteLimit) {
+      if (sizeOf([page]) > byteLimit) {
         // An oversized page/text-only source still needs a lossless UTF-8 split.
         // JSON can expand one byte to six (e.g. a control character as \u0001).
-        const allowance = Math.floor((byteLimit - bytes([{ ...page, text: "" }]) - 128) / 6);
+        const allowance = Math.floor((byteLimit - sizeOf([{ ...page, text: "" }]) - 128) / 6);
         if (allowance < 4) throw new Error("Source metadata exceeds the model input budget.");
         pieces = batchSpecialistSources([page], allowance).flat().map(piece => ({ ...piece,
           extractionTruncated: page.extractionTruncated,
@@ -71,8 +71,8 @@ export function batchSectionSources<T extends { text: string; truncated?: boolea
         }));
       }
       for (const piece of pieces) {
-        if (batch.length && bytes([...batch, piece]) > byteLimit) { batches.push(batch); batch = []; }
-        if (bytes([piece]) > byteLimit) throw new Error("Source metadata exceeds the model input budget.");
+        if (batch.length && sizeOf([...batch, piece]) > byteLimit) { batches.push(batch); batch = []; }
+        if (sizeOf([piece]) > byteLimit) throw new Error("Source metadata exceeds the model input budget.");
         batch.push(piece);
       }
       startByte = endByte;

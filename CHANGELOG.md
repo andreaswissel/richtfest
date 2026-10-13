@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Agent reviews now group evidence by model capacity instead of small file batches and avoid duplicate report input, reducing repeated work and cost. Retries preserve completed reviews and unresolved findings.
+
 - Specialist agents can search company knowledge concurrently without blocking each other's searches. Search limits, approval checks and cancellation safeguards remain in place.
 
 - Purely visual changes can deploy after verification without separate approval; functional and mixed changes still require an explicit deployment request.

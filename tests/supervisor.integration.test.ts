@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { and, eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
@@ -138,10 +139,10 @@ for (const changedEvidence of [false, true]) integration(`${failure} review resu
     validateProject: async () => true, validateSourceVersion: async (_p: string, id: string) => versions.includes(id),
     componentContext: async () => componentCatalog,
     listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId })), truncated: false }),
-    resolveSource: async (_p: string, { versionId }: any) => ({ status: "resolved", source: { versionId }, content: { status: "available", text: `${evidence} ${versionId}` } }),
+    resolveSource: async (_p: string, { versionId }: any) => ({ status: "resolved", source: { versionId }, content: { status: "available", text: `${evidence} ${versionId} ${"x".repeat(14000)}` } }),
     executeSupervisor: async ({ phase, context }: any) => {
       expect(context.componentCatalog).toEqual(componentCatalog);
-      calls.push(phase === "independent_review" ? `slice-${context.sourceCoverage.slice}` : phase);
+      calls.push(phase === "independent_review" ? context.reviewTask === "consistency" ? "consistency" : `slice-${context.sourceCoverage.slice}` : phase);
       if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Read all sources", sourceVersionIds: versions }] } };
       if (phase === "specialist") return { status: "completed", output: { summary: "Saved findings", rationale: "Evidence", citations: context.sourceVersionIds } };
       if (phase === "review") return { status: "completed", output: { summary: "Saved handoff", rationale: "Draft only", citations: versions,
@@ -180,7 +181,7 @@ for (const changedEvidence of [false, true]) integration(`${failure} review resu
     // Advance past the recorded rate-limit cooldown, without waiting in real time.
     const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 120001);
     try { await stepSupervisor(d, run!.id); } finally { clock.mockRestore(); }
-    expect(calls.slice(before.length)).toEqual(changedEvidence ? ["slice-1", "slice-2"] : ["slice-2"]);
+    expect(calls.slice(before.length)).toEqual(changedEvidence ? ["slice-1", "slice-2", "consistency"] : ["slice-2", "consistency"]);
     const [completed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
     expect(completed!.status).toBe("needs_review");
     const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
@@ -188,6 +189,83 @@ for (const changedEvidence of [false, true]) integration(`${failure} review resu
     expect(revisions[0]!.content).toContain("Do not regenerate this draft.");
   } finally {
     server.close();
+    for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+for (const scenario of ["complete", "oversized", "legacy"] as const)
+integration(`independent review packs requests without losing evidence or saved findings: ${scenario}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const evidence = Array.from({ length: scenario === "complete" ? 40 : 10 }, (_, index) => ({ versionId: crypto.randomUUID(),
+    text: `${index}:ä🧱\n${"x".repeat(scenario === "oversized" && index === 0 ? 950000 : 2000)}\nEnd ${index}.`,
+  }));
+  const versions = evidence.map(source => source.versionId);
+  const document = { title: "Review packing", content: `# Draft\n\n## First source\n[${versions[0]}]\nFirst claim.\n\n## Last source\n[${versions[9]}]\nLast claim.\n\n## Assumptions\nKeep uncertainty visible.` };
+  const contexts: any[] = [];
+  const finding = { severity: "blocking", issue: "First claim contradicts its source", recommendation: "Correct the claim", citations: [versions[0]] };
+  const accepted = { summary: "Reviewed evidence", rationale: "Independent check", citations: [], decision: "accept", revisions: [], findings: [] };
+  const resolution = (versionId: string) => ({ status: "resolved", source: { versionId },
+    content: { status: "available", text: evidence.find(source => source.versionId === versionId)!.text, truncated: false } });
+  const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId })), truncated: false }),
+    resolveSource: async (_: string, { versionId }: any) => resolution(versionId),
+    executeSupervisor: async ({ phase, context }: any) => {
+      if (phase === "plan") return { status: "completed", output: { tasks: Array.from({ length: versions.length / 10 }, (_, index) => ({
+        role: "source_reviewer", goal: `Read evidence group ${index + 1}`, sourceVersionIds: versions.slice(index * 10, (index + 1) * 10),
+      })) } };
+      if (phase === "specialist") return { status: "completed", output: { summary: "Specialist findings", rationale: "Unreviewed", citations: context.sourceVersionIds } };
+      if (phase === "review") return { status: "completed", output: { ...accepted, citations: versions, document } };
+      contexts.push(context);
+      expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(838976);
+      expect(context.specialistResults).toBeUndefined();
+      if (context.reviewTask === "consistency") {
+        expect(context.firstPassReview.document).toEqual(document);
+        expect(context.sourceExcerpts).toEqual([]);
+        expect(context.evidenceReview.findings).toContainEqual(finding);
+      }
+      return { status: "completed", output: scenario === "oversized" && contexts.length === 1
+        ? { ...accepted, decision: "revise", findings: [finding], citations: [versions[0]] } : accepted };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Review packing",
+      provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { ...policy, supervisor: { ...config, modelId: "gpt-6-astra" }, independentReviewEnabled: true });
+    for (let phase = 0; phase < 3; phase++) await stepSupervisor(d, run!.id);
+    if (scenario === "legacy") {
+      const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      const sourceSlices = [versions.slice(0, 3), versions.slice(3, 6), versions.slice(6, 9), versions.slice(9)]
+        .map(ids => ids.map(versionId => ({ versionId, resolution: resolution(versionId) })));
+      // Persist the pre-upgrade wire format, not the new packer's output.
+      const inputHash = createHash("sha256").update(JSON.stringify({ goal: run!.goal, assignments: state!.assignments,
+        firstPassReview: state!.review, sourceSlices, modelPolicy: state!.modelPolicy, profiles: state!.profileSnapshot },
+      (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value)).digest("hex");
+      await db.update(supervisorRuns).set({ history: [...state!.history, { phase: "independent_review_slice", inputHash, index: 0,
+        output: { ...accepted, decision: "revise", findings: [finding], citations: [versions[0]] } }] }).where(eq(supervisorRuns.runId, run!.id));
+    }
+    await stepSupervisor(d, run!.id);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    expect(state!.phase).toBe("done");
+    expect(contexts.map(context => context.reviewTask)).toEqual(scenario === "complete" ? ["complete"]
+      : scenario === "legacy" ? ["complete", "consistency"] : ["evidence", "evidence", "consistency"]);
+    const supplied = contexts.flatMap(context => context.sourceExcerpts);
+    for (const [index, source] of evidence.entries()) {
+      const slices = supplied.filter(item => item.versionId === source.versionId);
+      expect(slices.map(item => item.resolution.content.text).join("")).toBe(scenario === "legacy" && index < 3 ? "" : source.text);
+    }
+    if (scenario !== "complete") {
+      expect((state!.review as any).unresolved).toBe(true);
+      expect((state!.review as any).findings).toContainEqual(finding);
+    }
+    const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]!.content).toContain(document.content);
+  } finally {
     for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
@@ -423,7 +501,7 @@ for (const batching of ["unknown-model", "model-aware", "saved-legacy"] as const
     await stepSupervisor(d, runId);
     if (batching === "saved-legacy") {
       const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
-      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, runId));
+      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, sourceBatchingVersion, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, runId));
     }
     await stepSupervisor(d, runId);
     const [checkpoint] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
@@ -435,12 +513,13 @@ for (const batching of ["unknown-model", "model-aware", "saved-legacy"] as const
     if (batching === "model-aware") {
       expect(accepted).toHaveLength(3);
       expect(accepted.some(context => context.sources.length > 3)).toBe(true);
-    } else expect(accepted.length).toBeGreaterThan(3);
+    } else if (batching === "saved-legacy") expect(accepted.length).toBeGreaterThan(3);
+    else expect(accepted.some(context => context.sources.length > 3)).toBe(true);
     expect(accepted.map(item => item.sourceCoverage.batch)).toEqual(accepted.map((_, index) => index + 1));
     for (const [index, context] of accepted.entries()) {
       if (batching === "model-aware") expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(838976);
       else {
-        expect(context.sources.length).toBeLessThanOrEqual(3);
+        if (batching === "saved-legacy") expect(context.sources.length).toBeLessThanOrEqual(3);
         expect(context.sources.reduce((sum: number, source: any) => sum + Buffer.byteLength(source.text), 0)).toBeLessThanOrEqual(49152);
       }
       expect(context.unreadableSources).toEqual([{ name: "Source 9", reason: "Export required" }]);
@@ -493,7 +572,7 @@ for (const batching of ["unknown-model", "model-aware", "saved-legacy"] as const
     await stepSupervisor(invalidDeps, invalid!.id);
     if (batching === "saved-legacy") {
       const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, invalid!.id));
-      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, invalid!.id));
+      await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, sourceBatchingVersion, ...assignment }) => assignment) }).where(eq(supervisorRuns.runId, invalid!.id));
     }
     await stepSupervisor(invalidDeps, invalid!.id);
     const [rejected] = await db.select().from(agentRuns).where(eq(agentRuns.id, invalid!.id));
@@ -518,7 +597,7 @@ for (const outcome of ["recover", "exhaust"] as const) integration(`invalid spec
     resolveSource: async (_project: string, input: { versionId: string }) => ({ status: "resolved",
       source: evidence.find(source => source.versionId === input.versionId),
       content: input.versionId === evidence[4]!.versionId ? { status: "unsupported", reason: "Unreadable" }
-        : { status: "available", text: "Source evidence", truncated: false },
+        : { status: "available", text: "Source evidence " + "x".repeat(14000), truncated: false },
     }),
     executeSupervisor: async (input: any) => {
       if (input.phase === "plan") return { status: "completed", output: { tasks: [
