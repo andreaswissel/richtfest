@@ -87,7 +87,9 @@ Complete the pilot with a real project source: upload the original file, start t
 
 ## Release procedure
 
-Preparing configuration does not authorize deployment. On an explicit deploy request, follow `AGENTS.md`: review the intended changes, update release notes and affected docs, run required checks, commit on local `main`, then push that branch to `origin/main`.
+Preparing configuration does not authorize deployment. Purely UI/visual changes are pre-authorized for immediate deployment after verification unless the user asks to hold them. This covers presentation only, such as layout, spacing, typography, colors and icons. Changes to business logic, workflows, data, APIs, permissions, integrations or infrastructure, including mixed changes, still require an explicit deployment request.
+
+For every authorized deployment, follow `AGENTS.md`: review the intended changes, update release notes and affected docs, run required checks (including browser verification for visual changes), commit on local `main`, then push that branch to `origin/main`. Do not include unrelated changes. This authorization does not extend to provisioning services or sending live invitations.
 
 Before that commit and docs build, move the included `Unreleased` entries into the deployment's `## YYYY-MM-DD` section in Europe/Berlin time. Reuse an existing section for that day and leave only genuinely undeployed work in `Unreleased`. See [Writing documentation and release notes](/docs/engineering/writing-docs#preparing-a-release) for the release-note lifecycle and historical corrections.
 

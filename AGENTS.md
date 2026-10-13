@@ -95,7 +95,9 @@ Performance is a first-class feature. Target: Linear-grade instant. The working 
 
 In this repo, "deploy" means the local `main` branch contains the change and is pushed to `origin/main`. Pushing another branch to `origin/main` is not considered deployed.
 
-Preparing deployment files does not authorize provisioning services, sending live invitations or deploying. Deploy only when requested.
+Preparing deployment files does not authorize provisioning services or sending live invitations. Deploy only when requested, except for the standing authorization below.
+
+Purely UI/visual changes are pre-authorized for immediate deployment after verification, without asking for separate deployment approval, unless the user asks to hold them. This applies to presentation-only changes (such as layout, spacing, typography, colors and icons), not changes to business logic, workflows, data, APIs, permissions, integrations or infrastructure. Mixed changes still require an explicit deployment request. Browser verification and every deployment requirement below still apply; do not include unrelated changes in the deployment.
 
 Every deploy must:
 

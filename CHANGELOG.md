@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Purely visual changes can deploy after verification without separate approval; functional and mixed changes still require an explicit deployment request.
+
 - Project agents can search approved company knowledge on demand. Retrieved excerpts and entry references stay with their findings through report drafting and review, separate from project evidence; retries recheck approval and changed content.
 
 - Project resource navigation is back at the top of the right sidebar, with tabs for Artifacts, Shared work, Agents and Sources. The left rail is dedicated to active and archived threads.
