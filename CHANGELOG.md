@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Account settings no longer hide password setup when an older session needs renewed sign-in. Session management now shows a clear sign-in prompt, and authentication errors return usable messages instead of server errors.
+
 - Sound-insulation agents can use five deterministic tools for sound levels, single-band sound reduction and room-based exterior-noise targets and façade screening. Results keep inputs, sources or assumptions, formulas and review status; incomplete or unsupported exterior-noise cases return a blocking reason rather than a number. These are reviewable calculations, not certified engineering verification.
 
 - Company knowledge now has a searchable review screen with draft and approved filters, source caveats, direct links and explicit approval. Imported training knowledge stays unapproved until a permitted reviewer confirms it; agent assignments remain separate.

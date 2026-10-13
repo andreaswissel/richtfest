@@ -38,9 +38,13 @@ export function Security() {
   });
   const sessions = useQuery({
     queryKey: ["security", "sessions"],
-    queryFn: async () =>
-      authResult(await (await getAuthClient()).listSessions()),
+    queryFn: async () => {
+      const result = await (await getAuthClient()).listSessions();
+      if (result.error?.code === "SESSION_NOT_FRESH") return null;
+      return authResult(result);
+    },
   });
+  const sessionsRequireSignIn = sessions.isSuccess && sessions.data === null;
   const current = useQuery({
     queryKey: ["security", "current"],
     queryFn: async () => authResult(await (await getAuthClient()).getSession()),
@@ -225,12 +229,12 @@ export function Security() {
                   />
                 </Field>
               </Form>
-            ) : (
+            ) : !status.data.passwordConfigured ? (
               <Callout>
                 {t("freshSessionRequired")}{" "}
                 <Link to="/login">{t("signIn")}</Link>
               </Callout>
-            )}
+            ) : null}
             {password.isSuccess && (
               <Callout tone="success">{t("passwordSaved")}</Callout>
             )}
@@ -298,6 +302,7 @@ export function Security() {
               operation.isPending ||
               clientLoadFailed ||
               !sessions.isSuccess ||
+              sessionsRequireSignIn ||
               !current.isSuccess
             }
             onClick={() => operation.mutate({ kind: "others" })}
@@ -306,6 +311,12 @@ export function Security() {
           </Button>
         }
       >
+        {sessionsRequireSignIn && (
+          <Callout>
+            {t("sessionListFreshSessionRequired")}{" "}
+            <Link to="/login">{t("signIn")}</Link>
+          </Callout>
+        )}
         {sessions.data && (
           <Table
             headers={[t("device"), t("status")]}

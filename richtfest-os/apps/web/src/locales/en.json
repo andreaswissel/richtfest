@@ -625,6 +625,7 @@
   "removePasskey": "Remove passkey",
   "noPasskeys": "No passkeys registered.",
   "activeSessions": "Active sessions",
+  "sessionListFreshSessionRequired": "Sign in again to view and manage your active sessions.",
   "revokeOthers": "Sign out other sessions",
   "device": "Device",
   "unknownDevice": "Unknown device",

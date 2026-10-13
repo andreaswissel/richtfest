@@ -7,6 +7,64 @@ import { startSourceExtractionWorker } from "../richtfest-apps/projects/src/sour
 const databaseUrl = process.env.DATABASE_URL;
 const run = databaseUrl ? test : test.skip;
 
+run("account settings remain readable for older sessions and password enrollment requires fresh verification", async () => {
+  const { db, pool } = createDatabase(databaseUrl!);
+  const userId = crypto.randomUUID();
+  const email = `security-${userId}@richtfest.local`;
+  const server = createApp(db, { allowDevAuth: true }).listen(0);
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  let cookie = "";
+  const request = (path: string, body?: unknown) => fetch(base + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { cookie, "content-type": "application/json", origin: "http://localhost:5173" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    await pool.query("insert into os_users(id, email, name) values ($1, $2, 'Security test')", [userId, email]);
+    await pool.query("insert into auth_user(id, email, name, email_verified) values ($1, $2, 'Security test', true)", [userId, email]);
+    await pool.query(`insert into os_memberships(tenant_id, user_id, role_id, status)
+      select m.tenant_id, $1, m.role_id, 'active' from os_memberships m
+      join os_users u on u.id = m.user_id where u.email = 'andreas@richtfest.local'`, [userId]);
+    expect((await request("/api/account/security")).status).toBe(401);
+    const login = await request("/api/auth/dev-login", { email });
+    expect(login.status).toBe(200);
+    cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const fresh = await request("/api/account/security");
+    expect(fresh.status).toBe(200);
+    expect((await fresh.json()).data).toMatchObject({ emailVerified: true, recentlyVerified: true, passwordConfigured: false });
+
+    await pool.query("update auth_session set created_at = now() - interval '2 days' where user_id = $1", [userId]);
+    const old = await request("/api/account/security");
+    expect(old.status).toBe(200);
+    expect((await old.json()).data).toMatchObject({ emailVerified: true, recentlyVerified: false, passwordConfigured: false });
+    const sessions = await request("/api/auth/list-sessions");
+    expect(sessions.status).toBe(403);
+    expect((await sessions.json()).code).toBe("SESSION_NOT_FRESH");
+    const staleEnrollment = await request("/api/account/security/password", { newPassword: "Test-only-password-42" });
+    expect(staleEnrollment.status).toBe(403);
+    expect((await staleEnrollment.json()).error.code).toBe("recent_session_required");
+
+    await pool.query("update auth_session set created_at = now() where user_id = $1", [userId]);
+    const invalid = await request("/api/account/security/password", { newPassword: "x".repeat(129) });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json()).error.code).toBe("PASSWORD_TOO_LONG");
+    const password = `Test-only-password-${userId}`;
+    expect((await request("/api/account/security/password", { newPassword: password })).status).toBe(200);
+    expect((await (await request("/api/account/security")).json()).data.passwordConfigured).toBe(true);
+    expect((await request("/api/account/security/password", { newPassword: password })).status).toBe(409);
+    cookie = "";
+    expect((await request("/api/auth/sign-in/email", { email, password })).status).toBe(200);
+  } finally {
+    server.close();
+    await pool.query("delete from auth_session where user_id = $1", [userId]);
+    await pool.query("delete from auth_account where user_id = $1", [userId]);
+    await pool.query("delete from os_memberships where user_id = $1", [userId]);
+    await pool.query("delete from auth_user where id = $1", [userId]);
+    await pool.query("delete from os_users where id = $1", [userId]);
+    await pool.end();
+  }
+});
+
 describe("accepted API workflow (PostgreSQL)", () => {
   run(
     "creates and reads tenant-scoped customer, project, file, knowledge and approval records",

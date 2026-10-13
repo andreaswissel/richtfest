@@ -625,6 +625,7 @@
   "removePasskey": "Passkey entfernen",
   "noPasskeys": "Keine Passkeys registriert.",
   "activeSessions": "Aktive Sitzungen",
+  "sessionListFreshSessionRequired": "Melden Sie sich erneut an, um Ihre aktiven Sitzungen anzuzeigen und zu verwalten.",
   "revokeOthers": "Andere Sitzungen abmelden",
   "device": "Gerät",
   "unknownDevice": "Unbekanntes Gerät",
