@@ -232,12 +232,21 @@ export async function callMastraSupervisor(
   const feedback = sanitizeProviderDiagnostics(
     (input.context as { outputValidationFeedback?: unknown } | null)?.outputValidationFeedback,
   );
+  const workflow = input.modelPolicy?.workflow;
+  const team = workflow?.mode === "team";
+  const workflowInstructions = team
+    ? "The user explicitly selected Team, not Report. This overrides document-authoring instructions: delegate focused work and return the complete answer in summary. In plan set documentTemplate to null; in review set document to null. Acoustic terminology or specialist assignment must not trigger a report. Preserve evidence and review safeguards; ask the user to select Report if a formal deliverable is needed."
+    : workflow?.mode === "report"
+      ? `The user explicitly selected Report with template ${workflow.reportTemplate}. Preserve that exact template regardless of domain keywords or planning suggestions. The plan must assign every selected source version. Produce a source-backed draft, never an approval.` : "";
   const requireSoundInsulation = input.phase === "review" &&
     (input.context as { documentTemplate?: { id?: string } } | null)?.documentTemplate?.id === "sound-insulation-review";
   const authoring = input.phase === "review" ? z.object({ documentTask: z.enum(["outline", "section", "editorial", "editorial_check"]),
     documentTemplate: z.object({ id: acousticConceptIdSchema }) }).safeParse(input.context) : undefined;
   const authoringTask = authoring?.success ? authoring.data : undefined;
-  const outputSchema = authoringTask?.documentTask === "outline"
+  const outputSchema = team && input.phase === "review"
+    ? schemas.review.extend({ document: z.null() })
+    : team && input.phase === "plan" ? schemas.plan.extend({ documentTemplate: z.null() })
+    : authoringTask?.documentTask === "outline"
     ? acousticConceptOutlineSchema.extend({ id: z.literal(authoringTask.documentTemplate.id) })
     : authoringTask?.documentTask === "section" ? acousticSectionOutputSchema
     : authoringTask?.documentTask === "editorial" ? acousticEditorialOutputSchema
@@ -263,7 +272,7 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
 When authoring a concept, put new arithmetic from calculationReceipts in the calculationAppendix, separate from imported calculation evidence. Supplied receipts are an exception to the section's sources-only rule: use their exact result and quoted input provenance only, not as permission to infer other source contents. Preserve assumptions, engine version, formula, units and limitations. Never cite receipt UUIDs as source UUIDs.
 Acoustic tools: when context.acousticToolsAvailable is true, the configured sound_insulation specialist can use sum_sound_levels, equivalent_sound_level, composite_sound_reduction, exterior_noise_room_requirement and exterior_noise_facade (richtfest-acoustics v1). These are the only exception to the general no-calculation instructions. They are not a validated DIN 4109, ISO 12354 or compliance engine. Only invoke tools actually registered in this phase. Never approximate a missing or failed tool in prose. Use source-backed inputs or explicitly labelled assumptions; never invent missing inputs to finish a report. The generic composite tool accepts band R only, not weighted ratings. The separate exterior tools implement bounded DIN 4109-1/-2:2018-01 numerical screening using assessed La and distinct Rw/Dn,e,w inputs. Do not derive La from Leq/Lden or add source/time corrections in prose. Require actual applicability, completeness, installed-rating and flanking evidence; mark unresolved checks unknown/false, never negligible merely to get a result. An unsupported receipt has no numeric result: retain its blocking reason, do not retry by changing facts or claim compliance. Numerical target comparisons remain unreviewed, not approvals; preserve margin precision and all limitations. Do not combine different receiver positions, frequency weightings, periods or bands in generic sound-level tools. Do not add day and night levels. Final answers and reports may quote only actual saved calculationReceipts/tool results, retaining units, assumptions and limitations, separate from imported source claims. Receipt IDs identify execution records, not source citations; cite their input source versions, not receipt UUIDs. Arithmetic does not establish input correctness, applicability or approval. If the sound_insulation role is disabled or has fewer than two model steps, tools are unavailable; request configuration rather than claiming a calculation.
 ${componentEvidencePolicy} Reference catalog evidence in prose by component key, revision number, source title and page, never in project citations. Catalog options are reference alternatives, not evidence of what is installed or specified in this project.
-${companyKnowledgePolicy}`;
+${companyKnowledgePolicy}\n${workflowInstructions}`;
   const toolDefinitions = input.phase === "specialist" && role.success && role.data.role === "sound_insulation"
     && input.calculateAcoustics && (modelConfig?.maxSteps ?? 1) >= 2 ? [
       ["sum_sound_levels", sumSoundLevelsSchema, "Add uncorrelated simultaneous sound levels at one receiver with identical weighting and period. Not day/night or coherent addition."],
@@ -411,7 +420,14 @@ ${companyKnowledgePolicy}`;
     const serialized = JSON.stringify(object);
     if (typeof serialized !== "string") throw safeProviderError(true, undefined, "validation");
     const output = outputSchema.parse(JSON.parse(redact(serialized)));
-    if ("document" in output) output.document = prepareAgentDocument(schemas.review.shape.document.parse(output.document), requestedAcousticConcept(input.goal) ?? requireSoundInsulation, limits.documentMaxCharacters)!;
+    if ("document" in output && output.document) {
+      const document = schemas.review.shape.document.parse(output.document);
+      if (workflow?.mode === "report" && document.template?.id !== workflow.reportTemplate)
+        throw safeProviderError(false, undefined, "validation");
+      output.document = prepareAgentDocument(document,
+        workflow ? workflow.mode === "report" ? acousticConceptIdSchema.safeParse(workflow.reportTemplate).data ?? requireSoundInsulation : false
+          : requestedAcousticConcept(input.goal) ?? requireSoundInsulation, limits.documentMaxCharacters)!;
+    }
     if (input.phase === "plan" && input.modelPolicy && "tasks" in output && output.tasks.some(task => !input.modelPolicy!.specialists[task.role])) {
       throw safeProviderError(false, undefined, "validation");
     }

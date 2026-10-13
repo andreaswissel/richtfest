@@ -13,9 +13,9 @@ export async function withSupervisorCancellation<T>(db: Database, tenantId: stri
   active.add(controller);
   controllers.set(runId, active);
   const state = async () => {
-    const result = await db.execute(sql`select r.status, s.generation
+    const result = await db.execute(sql`select r.status, coalesce(s.generation, r.generation) as generation
       from knowledge_agent_runs r
-      join knowledge_supervisor_runs s on s.run_id=coalesce(r.parent_run_id,r.id) and s.tenant_id=r.tenant_id
+      left join knowledge_supervisor_runs s on s.run_id=coalesce(r.parent_run_id,r.id) and s.tenant_id=r.tenant_id
       where r.id=${runId} and r.tenant_id=${tenantId}`);
     return result.rows[0] as { status: string; generation: number } | undefined;
   };

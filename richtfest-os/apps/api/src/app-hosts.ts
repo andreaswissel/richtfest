@@ -156,9 +156,12 @@ export const knowledgeDeps = (
     resolveActiveProvider: () => getActiveProvider(db, actor.tenantId),
     executeDecision: async (input) => {
       const { callDecisionModel } = await import("./decision-runtime");
-      const result = await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, signal =>
+      const execute = (signal?: AbortSignal) =>
         withProviderCredential(db, actor.tenantId, actor.id, "typesafe",
-          key => callDecisionModel(input, key, { signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal, fetch: providerFetch })));
+          key => callDecisionModel(input, key, { signal: signal && input.signal ? AbortSignal.any([signal, input.signal]) : signal ?? input.signal, fetch: providerFetch }));
+      const result = input.runId
+        ? await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, execute)
+        : await execute();
       return result ?? { status: "unconfigured" as const };
     },
     generateConversationTitle: async ({ message }) => {

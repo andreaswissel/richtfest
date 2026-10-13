@@ -5,6 +5,8 @@ import { useApi, useWrite } from "../query";
 import { list, type RecordData } from "../api";
 import { useT } from "../i18n";
 import { AgentEffortControl } from "./agent-effort-control";
+import { AgentWorkflowControl, workflowReady } from "./agent-workflow-control";
+import type { AgentWorkflow } from "@richtfest/shared";
 import { AgentRunMetrics, isAgentRunActive } from "./agent-run-metrics";
 import { Section } from "./layout";
 import { Textarea } from "./ui/input";
@@ -26,6 +28,8 @@ export function AgentRuns({
 }) {
   const t = useT();
   const [effort, setEffort] = useState("medium");
+  const [workflow, setWorkflow] = useState<AgentWorkflow>({ mode: "chat" });
+  const [goal, setGoal] = useState("");
   const [open, setOpen] = useState(false);
   const [fileId, setFileId] = useState("");
   const [sources, setSources] = useState<{ id: string; label: string }[]>([]);
@@ -71,21 +75,63 @@ export function AgentRuns({
           <Form
             label={t("assignAgentGoal")}
             pending={create.isPending}
+            disabled={
+              !workflowReady(
+                workflow,
+                sources.map((s) => s.id),
+                !!supervisor?.enabled,
+              )
+            }
             error={create.error}
-            onSubmit={(form) =>
+            onSubmit={(form) => {
+              if (
+                create.isPending ||
+                !workflowReady(
+                  workflow,
+                  sources.map((s) => s.id),
+                  !!supervisor?.enabled,
+                )
+              )
+                return;
               create.mutate({
                 projectId,
                 conversationId,
                 effort,
+                workflow,
                 goal: form.get("goal"),
                 sourceVersionIds: sources.map((s) => s.id),
-              })
-            }
+              });
+            }}
           >
             <Callout>{t("agentGoalHint")}</Callout>
+            {create.error && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={create.isPending}
+                onClick={() => create.mutate(create.variables)}
+              >
+                {t("retry")}
+              </Button>
+            )}
             <Field label={t("assignedGoal")}>
-              <Textarea name="goal" required autoFocus />
+              <Textarea
+                name="goal"
+                required
+                autoFocus
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+              />
             </Field>
+            <AgentWorkflowControl
+              projectId={projectId}
+              conversationId={conversationId}
+              goal={goal}
+              sourceVersionIds={sources.map((s) => s.id)}
+              value={workflow}
+              onChange={setWorkflow}
+              supervisorEnabled={!!supervisor?.enabled}
+            />
             <AgentEffortControl
               enabled={supervisor?.enabled}
               presets={supervisor?.presets}

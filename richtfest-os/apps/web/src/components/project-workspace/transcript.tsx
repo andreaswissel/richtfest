@@ -16,6 +16,9 @@ import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Callout, Field } from "../ui/primitives";
 import { AgentEffortControl } from "../agent-effort-control";
+import { AgentWorkflowControl, workflowReady } from "../agent-workflow-control";
+import { AgentSourcePicker } from "../agent-source-picker";
+import type { AgentWorkflow } from "@richtfest/shared";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -268,7 +271,12 @@ function Conversation({
   useAgentMessageEvents(conversationId);
   const richtfest = useRichtfestCelebration();
   const [effort, setEffort] = useState("medium");
+  const [workflow, setWorkflow] = useState<AgentWorkflow>({ mode: "chat" });
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [attachmentLabels, setAttachmentLabels] = useState<
+    Record<string, string>
+  >({});
   const readiness = useApi("/agent/readiness");
   const readinessProvider =
     readiness.data?.provider ||
@@ -300,16 +308,19 @@ function Conversation({
       sourceVersionIds,
       messageId,
       effort,
+      workflow,
     }: {
       goal: string;
       sourceVersionIds: string[];
       messageId?: string;
       effort: string;
+      workflow: AgentWorkflow;
     }) =>
       api("/knowledge/runs", {
         projectId,
         conversationId,
         effort,
+        workflow,
         goal,
         sourceVersionIds,
         messageId,
@@ -341,18 +352,19 @@ function Conversation({
         queryKey: [`/knowledge/workspaces/${projectId}`],
       }),
   });
-  const activeSupervisorRun = readiness.data?.supervisor?.enabled
-    ? runs.find(
-        (candidate) =>
-          !candidate.parentRunId &&
-          candidate.conversationId === conversationId &&
-          (!readinessProvider || candidate.provider === readinessProvider) &&
-          ["queued", "running"].includes(candidate.status),
-      )
-    : undefined;
+  const activeRun = runs.find(
+    (candidate) =>
+      !candidate.parentRunId &&
+      candidate.conversationId === conversationId &&
+      (!readinessProvider || candidate.provider === readinessProvider) &&
+      ["queued", "running"].includes(candidate.status),
+  );
+  const activeSupervisorRun =
+    readiness.data?.supervisor?.enabled && activeRun?.isSupervisor
+      ? activeRun
+      : undefined;
   const stopRun = useMutation({
-    mutationFn: () =>
-      api(`/knowledge/runs/${activeSupervisorRun!.id}/cancel`, {}),
+    mutationFn: () => api(`/knowledge/runs/${activeRun!.id}/cancel`, {}),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: [`/knowledge/workspaces/${projectId}`],
@@ -516,7 +528,15 @@ function Conversation({
       body: string;
       parentMessageId?: string;
       sourceVersionIds: string[];
-    }) => api<WorkspaceMessage>(`${path}/messages`, body),
+      workflow: AgentWorkflow;
+      effort: string;
+      steeringRunId?: string;
+    }) =>
+      api<WorkspaceMessage>(`${path}/messages`, {
+        body: body.body,
+        parentMessageId: body.parentMessageId,
+        sourceVersionIds: body.sourceVersionIds,
+      }),
     onSuccess: async (message, submitted) => {
       richtfest.onMessageSent(message);
       // A text-only acknowledgement belongs in chat, not in a new plan or
@@ -529,32 +549,29 @@ function Conversation({
           goal: submitted.body,
           sourceVersionIds: submitted.sourceVersionIds,
           messageId: message.id,
-          effort: selectedEffort,
+          effort: submitted.effort,
+          workflow: submitted.workflow,
         };
-        if (activeSupervisorRun)
-          steer.mutate(
-            {
-              runId: activeSupervisorRun.id,
-              instruction: submitted.body,
-              messageId: message.id,
-              sourceVersionIds: submitted.sourceVersionIds,
-            },
-            {
-              onError: (error) => {
-                // A legacy direct run has no supervisor state. The saved human
-                // message is reused when starting its first supervisor round.
-                if (error instanceof ApiError && error.status === 409)
-                  startRun.mutate(nextRun);
-              },
-            },
-          );
+        if (submitted.steeringRunId)
+          steer.mutate({
+            runId: submitted.steeringRunId,
+            instruction: submitted.body,
+            messageId: message.id,
+            sourceVersionIds: submitted.sourceVersionIds,
+          });
         else startRun.mutate(nextRun);
       }
       const composerUnchanged = latestDraft.current === submitted.body;
       if (composerUnchanged) {
         setDraft("");
         setAttachments([]);
+        setAttachmentLabels({});
         setReply(undefined);
+        setWorkflow((current) =>
+          JSON.stringify(current) === JSON.stringify(submitted.workflow)
+            ? { mode: "chat" }
+            : current,
+        );
       }
       draftDirty.current = !composerUnchanged;
       reader.current = {
@@ -591,7 +608,12 @@ function Conversation({
     )
       return;
     initialMessageSubmitted.current = true;
-    send.mutate({ body: initialMessage, sourceVersionIds: [] });
+    send.mutate({
+      body: initialMessage,
+      sourceVersionIds: [],
+      workflow: { mode: "chat" },
+      effort: selectedEffort,
+    });
     onInitialMessageSent?.();
   }, [initialMessage, ready, readiness.isFetched, messages.length]);
   useEffect(() => {
@@ -937,15 +959,62 @@ function Conversation({
         className="workspace-composer"
         onSubmit={(e) => {
           e.preventDefault();
-          if (draft.trim())
+          if (
+            draft.trim() &&
+            !send.isPending &&
+            (activeSupervisorRun ||
+              workflowReady(
+                workflow,
+                attachments,
+                !!readiness.data?.supervisor?.enabled,
+              ))
+          )
             send.mutate({
               body: draft,
               parentMessageId: reply,
               sourceVersionIds: attachments,
+              workflow,
+              effort: selectedEffort,
+              steeringRunId: activeSupervisorRun?.id,
             });
         }}
       >
         <div className="workspace-composer-shell">
+          <AgentWorkflowControl
+            projectId={projectId}
+            conversationId={conversationId}
+            goal={draft}
+            sourceVersionIds={attachments}
+            value={workflow}
+            onChange={setWorkflow}
+            supervisorEnabled={!!readiness.data?.supervisor?.enabled}
+            steering={!!activeSupervisorRun}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setPickerOpen(!pickerOpen)}
+          >
+            {t("addSourceVersion")}
+          </Button>
+          {(pickerOpen ||
+            (workflow.mode === "report" && !activeSupervisorRun)) && (
+            <AgentSourcePicker
+              projectId={projectId}
+              onSelect={(source) => {
+                setAttachmentLabels((current) => ({
+                  ...current,
+                  [source.id]: source.label,
+                }));
+                setAttachments((current) =>
+                  current.includes(source.id)
+                    ? current
+                    : [...current, source.id],
+                );
+              }}
+            />
+          )}
           {reply && (
             <div className="workspace-composer-context">
               <span>
@@ -983,7 +1052,7 @@ function Conversation({
                 <Attachment key={source}>
                   <AttachmentContent>
                     <AttachmentTitle>
-                      {t("source")} · {source}
+                      {attachmentLabels[source] ?? `${t("source")} · ${source}`}
                     </AttachmentTitle>
                     <Button
                       type="button"
@@ -1048,7 +1117,7 @@ function Conversation({
                   ? t("workspaceSaving")
                   : ""}
             </span>
-            {activeSupervisorRun && !draft.trim() ? (
+            {activeRun && !draft.trim() ? (
               <Button
                 type="button"
                 variant="destructive"
@@ -1068,7 +1137,16 @@ function Conversation({
                 className="workspace-send-button"
                 aria-label={t("workspaceUiSendMessage")}
                 title={t("workspaceUiSendShortcut")}
-                disabled={send.isPending || !draft.trim()}
+                disabled={
+                  send.isPending ||
+                  !draft.trim() ||
+                  (!activeSupervisorRun &&
+                    !workflowReady(
+                      workflow,
+                      attachments,
+                      !!readiness.data?.supervisor?.enabled,
+                    ))
+                }
               >
                 <ArrowUp aria-hidden="true" />
               </Button>
@@ -1094,24 +1172,14 @@ function Conversation({
               type="button"
               variant="link"
               onClick={() =>
-                startRun.mutate({
-                  goal: send.variables?.body || draft,
-                  sourceVersionIds:
-                    send.variables?.sourceVersionIds || attachments,
-                  messageId: send.data?.id,
-                  effort: selectedEffort,
-                })
+                startRun.variables && startRun.mutate(startRun.variables)
               }
             >
               {t("retry")}
             </Button>
           </Callout>
         )}
-        {steer.error &&
-          (!(steer.error instanceof ApiError) ||
-            steer.error.status !== 409) && (
-            <Callout tone="error">{steer.error.message}</Callout>
-          )}
+        {steer.error && <Callout tone="error">{steer.error.message}</Callout>}
         {stopRun.error && (
           <Callout tone="error">{stopRun.error.message}</Callout>
         )}

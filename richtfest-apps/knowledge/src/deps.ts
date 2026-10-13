@@ -79,7 +79,8 @@ export type AppDeps = {
   supervisorEnabled?: boolean;
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
   executeDecision?: (input: {
-    runId: string;
+    // Pre-submit recommendations have no run; authorization is checked by the app.
+    runId?: string;
     signal?: AbortSignal;
     state: unknown;
     questions: Record<string, { type: "choice"; instructions: string; criteria: Record<string, string> }>;

@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, agentWorkflowSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
 import { companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
@@ -32,6 +32,7 @@ import { createSupervisor } from "./supervisor";
 import { executeTrackedProvider, summarizeUsageRows } from "./usage";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { resolveRunSource } from "./source-evidence";
+import { recommendMode } from "./decision-routing";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -43,6 +44,7 @@ import {
 } from "./run-reasons";
 const runInput = z.object({
   effort: z.enum(["low", "medium", "high", "ultra"]).default("medium"),
+  workflow: agentWorkflowSchema.optional(),
   messageId: z.string().uuid().optional(),
   intent: z.enum(["assist", "calculation"]).default("assist"),
   projectId: z.string().uuid(),
@@ -318,7 +320,8 @@ export async function executeRun(d: AppDeps, run: any) {
       artifacts: recentArtifacts,
       priorRuns: recentRuns,
       specialistRole: run.specialistRole ?? null,
-      delegationAllowed: !run.parentRunId,
+      workflow: run.modelPolicy?.workflow,
+      delegationAllowed: !run.parentRunId && run.modelPolicy?.workflow?.mode !== "chat",
       sources: sourceContent,
       sourceInventory,
       projectId: run.projectId,
@@ -338,7 +341,10 @@ export async function executeRun(d: AppDeps, run: any) {
     if (specialistRole && !executionModel) throw conflict("Specialist is disabled in the snapshotted preset");
     // Historical direct runs retain their original 50k draft cap.
     const limits = run.modelPolicy?.executionLimits ? modelPolicy?.executionLimits : undefined;
-    const outputSchema = directOutputSchema(limits);
+    const outputSchema = directOutputSchema(limits).refine(output =>
+      modelPolicy?.workflow?.mode !== "chat" || (!output.artifact
+        && !output.tools.some(tool => ["delegate_source_review", "create_draft"].includes(tool.name))),
+    "Chat cannot delegate or create report artifacts. Ask the user to choose Team or Report.");
     let partialOutput = "";
     let lastCheckpoint = 0;
     const onSummaryDelta = async (delta: string) => {
@@ -438,6 +444,13 @@ export async function executeRun(d: AppDeps, run: any) {
           ? await resolveRunSource(d, run.projectId, { textQuery: run.goal, ...input }, () => active(d, run, async () => {}))
           : undefined;
       recordResolvedEvidence(evidence, resolved);
+      // Reranking records its own tracked provider transaction. Never invoke it
+      // while holding the run lock in active(), or the two transactions deadlock.
+      const search = tool.name === "search_company_knowledge"
+        ? await searchCompanyKnowledge(d, input, d.db, companyKnowledge.length >= 2,
+          modelPolicy?.knowledgeRerankingEnabled ? { runId: run.id, correlationId: run.correlationId,
+            goal: run.goal, generation: run.generation } : undefined)
+        : undefined;
       await active(d, run, async (tx) => {
         const stepKey = `tool:${toolIndex}`;
         const stepInput = { name: tool.name, input, citations: output.citations, ...(resolved ? { resolved } : {}) };
@@ -463,8 +476,10 @@ export async function executeRun(d: AppDeps, run: any) {
         }
         let result: any;
         if (tool.name === "resolve_project_source") result = resolved;
-        else if (tool.name === "search_company_knowledge")
-          result = await searchCompanyKnowledge(d, input, tx, companyKnowledge.length >= 2);
+        else if (tool.name === "search_company_knowledge") {
+          await assertCompanyKnowledgeCurrent(d, [search!], tx);
+          result = search;
+        }
         else if (tool.name === "send_thread_message")
           result = await deliverAgentMessage(d, tx, run, input, stepKey);
         else if (tool.name === "delegate_source_review") {
@@ -901,24 +916,32 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         throw missing("Task not found in project and conversation");
     }
     await sources(d, input.projectId, input.sourceVersionIds);
+    const workflow = input.workflow;
+    if (workflow && workflow.mode !== "chat" && !d.supervisorEnabled)
+      throw conflict("Team and Report require supervisor execution to be enabled");
+    if (workflow?.mode === "report" && !input.sourceVersionIds.length)
+      throw conflict("Select project source versions before starting a report");
     const provider = providerOverride ?? await d.resolveActiveProvider?.() ?? "openai";
     const calculation = input.intent === "calculation";
     const configured = calculation
       ? false
       : await d.providerConfigured(provider);
-    const useSupervisor = d.supervisorEnabled && !lineage?.parentRunId;
-    const modelPolicy = modelPolicyOverride
+    const useSupervisor = d.supervisorEnabled && !lineage?.parentRunId && workflow?.mode !== "chat";
+    const resolvedPolicy = modelPolicyOverride
       ? agentPresetSnapshotSchema.parse(modelPolicyOverride)
-      : configured
+      : configured || workflow
         ? await d.resolveSupervisorPreset?.(input.effort, provider)
         : undefined;
+    if (workflow && !resolvedPolicy) throw conflict("Workflow model policy unavailable");
+    const modelPolicy = resolvedPolicy ? { ...resolvedPolicy, ...(workflow ? { workflow } : {}) } : undefined;
     if (useSupervisor && configured && !modelPolicy)
       throw conflict("Supervisor model policy unavailable");
+    const { workflow: _workflow, ...runValues } = input;
     const row = await d.db.transaction(async (tx: any) => {
       const [created] = await tx
         .insert(agentRuns)
         .values({
-          ...input,
+          ...runValues,
           provider,
           checkpointVersion: configured ? 1 : 0,
           modelPolicy: modelPolicy ?? null,
@@ -951,6 +974,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           projectId: input.projectId,
           provider,
           status: created.status,
+          workflow,
           retryOfRunId,
           correlationId: created.correlationId,
         },
@@ -964,6 +988,20 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
   route("post", "/runs", "agent:run", (d, req) =>
     create(d, runInput.parse(req.body)),
   );
+  route("post", "/mode-recommendation", "agent:run", async (d, req) => {
+    const input = runInput.pick({ projectId: true, conversationId: true, goal: true, sourceVersionIds: true }).parse(req.body);
+    d.requirePermission("knowledge:read");
+    d.requirePermission("projects:read");
+    if (!(await d.validateProject(input.projectId))) throw missing("Project not found");
+    if (input.conversationId) await conversation(d, input.conversationId, input.projectId);
+    await sources(d, input.projectId, input.sourceVersionIds);
+    const history = input.conversationId ? await d.db.select({ body: messages.body, actorKind: messages.actorKind })
+      .from(messages).where(and(eq(messages.tenantId, d.tenantId), eq(messages.conversationId, input.conversationId)))
+      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(21) : [];
+    return recommendMode(d, input.projectId, { goal: input.goal,
+      selectedSourceCount: input.sourceVersionIds.length, history: history.slice(0, 20).reverse() },
+    history.length <= 20 && history.every((message: any) => message.body.length <= 2000));
+  });
   route("get", "/runs/:runId/steps", "knowledge:read", async (d, req) => {
     const run = await getRun(d, String(req.params.runId));
     const page = z.coerce.number().int().min(0).default(0).parse(req.query.page);
@@ -1303,6 +1341,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       d,
       runInput.parse({
         ...run,
+        workflow: run.modelPolicy?.workflow,
         effort: previousPolicy?.effort ?? run.modelPolicy?.effort ?? "medium",
         messageId: run.messageId ?? undefined,
         conversationId: run.conversationId ?? undefined,

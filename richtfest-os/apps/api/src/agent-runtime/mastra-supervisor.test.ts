@@ -375,6 +375,73 @@ const responsePolicy = {
   ...vendorPreset("openai", "medium"), provider: "openai" as const, effort: "medium" as const, source: "workspace" as const, version: 2,
   executionLimits: { summaryMaxCharacters: 12000, rationaleMaxCharacters: 3000, documentMaxCharacters: 70000, timeoutSeconds: 10 },
 };
+test("explicit Team plans and reviews without documents despite acoustic context and goal", async () => {
+  const modelPolicy = { ...responsePolicy, workflow: { mode: "team" as const } };
+  for (const phase of ["plan", "review"] as const) {
+    const output = phase === "plan"
+      ? { tasks: [{ role: "source_reviewer", goal: "Review acoustic evidence", sourceVersionIds: [] }], documentTemplate: null }
+      : { summary: "Acoustic evidence reviewed; specialist approval remains necessary.", rationale: "Evidence gaps retained", citations: [], decision: "accept", revisions: [], document: null };
+    const request = { ...base, phase, goal: "Create exterior-noise-concept", modelPolicy,
+      context: { role: "sound_insulation", documentTemplate: { id: "sound-insulation-review", version: 1 } } };
+    expect(await callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+        spyStream: value => { expect(JSON.stringify(value)).toContain("The user explicitly selected Team, not Report"); },
+      }),
+    })).toEqual(output);
+    const invalid = phase === "plan" ? { ...output, documentTemplate: "exterior-noise-concept" }
+      : { ...output, document: { title: "Acoustic report", content: "Unrequested deliverable" } };
+    await expect(callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: invalid }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
+  }
+});
+
+test("explicit Report preserves its chosen template instead of inferring one from the goal", async () => {
+  const versionId = crypto.randomUUID();
+  for (const reportTemplate of ["interior-noise-concept", "exterior-noise-concept"] as const) {
+    const other = reportTemplate === "interior-noise-concept" ? "exterior-noise-concept" : "interior-noise-concept";
+    const template = acousticConceptFixture(reportTemplate, "en", versionId);
+    const output = { summary: "Draft ready", rationale: "Evidence gaps retained", citations: [versionId], decision: "accept", revisions: [],
+      document: { title: "Chosen report", content: "MODEL CONTENT MUST NOT WIN", template } };
+    const request = { ...base, phase: "review" as const, goal: `Create ${other}`,
+      modelPolicy: { ...responsePolicy, workflow: { mode: "report" as const, reportTemplate } },
+      context: { documentTemplate: { id: "sound-insulation-review", version: 1 } } };
+    const result: any = await callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+        spyStream: value => { expect(JSON.stringify(value)).toContain(`The user explicitly selected Report with template ${reportTemplate}`); },
+      }),
+    });
+    expect(result.document.template).toEqual(template);
+    expect(result.document.content).not.toContain("MODEL CONTENT MUST NOT WIN");
+    await expect(callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: {
+        ...output, document: { ...output.document, template: acousticConceptFixture(other, "en", versionId) },
+      } }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
+  }
+});
+
+test("explicit Report with the general review template rejects goal-inferred concept templates", async () => {
+  const versionId = crypto.randomUUID();
+  const template = { id: "sound-insulation-review", version: 1, language: "en", scope: "General review",
+    sourcesAndRevisions: `Source [${versionId}]`, requirements: "Requirements need confirmation", entities: [],
+    findings: "Evidence remains unverified", measures: "Request specialist review", openIssues: "Approval pending" };
+  const output = { summary: "Draft ready", rationale: "Evidence gaps retained", citations: [versionId], decision: "accept", revisions: [],
+    document: { title: "General review", content: "Rendered from template", template } };
+  const request = { ...base, phase: "review" as const, goal: "Create exterior-noise-concept",
+    modelPolicy: { ...responsePolicy, workflow: { mode: "report" as const, reportTemplate: "sound-insulation-review" as const } },
+    context: { documentTemplate: { id: "sound-insulation-review", version: 1 } } };
+  const result: any = await callMastraSupervisor(request, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
+  });
+  expect(result.document.template).toEqual(template);
+  await expect(callMastraSupervisor(request, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: {
+      ...output, document: { ...output.document, template: acousticConceptFixture("exterior-noise-concept", "en", versionId) },
+    } }),
+  })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
+});
+
 test("real Mastra accepts enlarged responses and rejects each configured cap", async () => {
   const review = { summary: "s".repeat(12000), rationale: "r".repeat(3000), citations: [], decision: "accept", revisions: [],
     document: { title: "Concept", content: "d".repeat(70000) } };

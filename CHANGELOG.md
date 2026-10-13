@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Project agents now default to Chat for search and questions, with explicit Team and Report modes for delegated work and structured documents. On-demand Jev mode suggestions require Apply and never start work; report creation requires a template and selected sources. Opted-in Jev knowledge ranking also works in direct Chat runs.
+
 - Main and specialist chats now follow new output at the bottom, preserve your place while reading or selecting transcript text, and resume following with Latest. Unrelated text selections and keypresses no longer pause the chat.
 
 - Failed agent calls now show the provider’s redacted reason, error code, parameter and request ID, including billing and schema failures. Saved run diagnostics and correlated server logs cover supervisor, direct and Jev calls without retaining raw errors or credentials. Fixed OpenAI rejecting the company-search tool schema; Unicode search-term validation remains enforced by the application.

@@ -627,8 +627,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     };
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
     const plannedTemplate = state.history.findLast((entry: any) => entry.phase === "plan")?.output?.documentTemplate;
-    const conceptId = requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
-      ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
+    const workflow = policy.workflow;
+    const conceptId = workflow
+      ? workflow.mode === "report" ? acousticConceptIdSchema.safeParse(workflow.reportTemplate).data : undefined
+      : requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
+        ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
     const readCompleteSources = !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
@@ -686,6 +689,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         .limit(20);
       const planContext = {
         projectId: run.projectId,
+        workflow,
         sourceVersionIds: run.sourceVersionIds,
         sourceInventory,
         history: history.slice(0, 20)
@@ -694,7 +698,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       };
       let fastSummary = false;
       const routing = policy.decisionRouting;
-      if (routing && routing.mode !== "off") {
+      if (!workflow && routing && routing.mode !== "off") {
         // Do not bypass custom workspace planning instructions, artifact workflows,
         // annotations, steering or context that was clipped out of the classifier.
         let blocked = conceptId || run.intent === "calculation" ? "engineering_workflow"
@@ -751,6 +755,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         assertConfiguredAssignments(parsed, policy);
         if (parsed.tasks.some(task => task.sourceVersionIds.some(v => !availableSourceIds.has(v))))
           throw conflict("Assignment exceeds source scope");
+        if (workflow?.mode === "report" && run.sourceVersionIds.some((versionId: string) =>
+          !parsed.tasks.some(task => task.sourceVersionIds.includes(versionId))))
+          throw conflict("Report plan must cover every selected source version");
         return parsed;
       }));
       if (plan.tasks.length > policy.maxTasks)
@@ -1037,13 +1044,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           summary: (state.assignments as Assignment[]).map(a => a.output?.summary).filter(Boolean).join("\n\n"),
         });
       });
-      const requireSoundInsulation = (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
+      const requireSoundInsulation = workflow
+        ? workflow.mode === "report" && workflow.reportTemplate === "sound-insulation-review"
+        : (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
       // Only application-assembled concepts are exempt from the per-response cap.
       const reviewSchema = schemas.review.extend({
         document: (conceptId ? agentDocumentSchema : schemas.review.shape.document).nullish(),
       });
       const validateReview = (raw: unknown) => {
         const review = reviewSchema.parse(raw);
+        if (workflow?.mode === "team" && review.document)
+          throw conflict("Team returns findings in chat, not a report artifact");
+        if (workflow?.mode === "report" && review.document?.template?.id !== workflow.reportTemplate)
+          throw conflict("Report must use the selected template");
         review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId ? null : limits.documentMaxCharacters);
         const allowedCitations = (state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []);
         if (review.citations.some(v => !allowedCitations.includes(v))) throw conflict("Review introduced unsupported citations");
@@ -1165,7 +1178,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               ? `${review.summary}\n\nRevision limit reached. Unresolved issues require human review.`
               : review.summary;
           d.requirePermission("knowledge:write");
-          const resultArtifact = await createArtifact(
+          const resultArtifact = workflow?.mode === "team" ? null : await createArtifact(
             {
               ...d,
               audit: (tx, action, type, entityId, metadata) =>
@@ -1194,12 +1207,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             },
             id,
           );
-          const resultReference = {
+          const resultReference = resultArtifact ? {
             kind: "supervisor_result",
             artifactId: resultArtifact.artifact.id,
             revisionId: resultArtifact.revision.id,
             generation: state.generation,
-          };
+          } : undefined;
           await tx
             .update(agentRuns)
             .set({
@@ -1236,7 +1249,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               runId: id,
               parentMessageId: run.messageId,
               body: summary,
-              openui: `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
+              openui: resultReference ? `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})` : null,
               sourceVersionIds: review.citations,
             });
           await log(d, tx, run, "supervisor_review_completed");
@@ -1271,7 +1284,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const unreadableSources = resolvedExcerpts
         .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId) || (readCompleteSources && resolution?.content?.truncated))
         .map(({ versionId, resolution }: any) => ({ versionId, name: resolution?.source?.name ?? null }));
-      const coverageIncomplete = sourceVersionIds.length === 0 || unreadableSources.length > 0;
+      const coverageIncomplete = (sourceVersionIds.length === 0 && workflow?.mode !== "team") || unreadableSources.length > 0;
       const firstPassReview = state.review;
       const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId));
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
@@ -1437,7 +1450,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             ...output.findings.flatMap((finding) => finding.citations),
           ])];
           d.requirePermission("knowledge:write");
-          const resultArtifact = await createArtifact({
+          const resultArtifact = workflow?.mode === "team" ? null : await createArtifact({
             ...d,
             audit: (tx, action, type, entityId, metadata) => d.auditRun(tx, action, type, entityId, id, run.correlationId, metadata),
           }, tx, {
@@ -1448,12 +1461,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             payload: { kind: "summary", data: [{ summary, rationale }], template: firstPassReview?.document?.template },
             sourceVersionIds: reviewCitations,
           }, id);
-          const resultReference = {
+          const resultReference = resultArtifact ? {
             kind: "supervisor_result",
             artifactId: resultArtifact.artifact.id,
             revisionId: resultArtifact.revision.id,
             generation: state.generation,
-          };
+          } : undefined;
           await tx.update(agentRuns).set({
             status: "needs_review",
             outputSummary: summary,
@@ -1477,7 +1490,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             runId: id,
             parentMessageId: run.messageId,
             body: summary,
-            openui: `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})`,
+            openui: resultReference ? `root = ArtifactPdf(${JSON.stringify(resultReference.artifactId)}, ${JSON.stringify(resultReference.revisionId)})` : null,
             sourceVersionIds: reviewCitations,
           });
           await log(d, tx, run, "independent_review_completed");

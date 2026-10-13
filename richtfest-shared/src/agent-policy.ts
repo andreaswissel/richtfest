@@ -2,6 +2,22 @@ import { z } from "zod";
 
 export const agentEffortSchema = z.enum(["low", "medium", "high", "ultra"]);
 export type AgentEffort = z.infer<typeof agentEffortSchema>;
+export const agentWorkflowModeSchema = z.enum(["chat", "team", "report"]);
+export type AgentWorkflowMode = z.infer<typeof agentWorkflowModeSchema>;
+export const agentReportTemplateSchema = z.enum(["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"]);
+export const agentWorkflowSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("chat") }).strict(),
+  z.object({ mode: z.literal("team") }).strict(),
+  z.object({ mode: z.literal("report"), reportTemplate: agentReportTemplateSchema }).strict(),
+]);
+export type AgentWorkflow = z.infer<typeof agentWorkflowSchema>;
+export const agentModeRecommendationSchema = z.object({
+  version: z.string(),
+  outcome: z.enum(["classified", "unconfigured", "fallback", "context_limit"]),
+  recommendation: z.enum(["chat", "team", "report", "uncertain"]).nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+});
+export type AgentModeRecommendation = z.infer<typeof agentModeRecommendationSchema>;
 export const agentProviderSchema = z.enum(["openai", "anthropic", "vercel"]);
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 // GPT-6 models support up to 128K generated tokens. This is an output ceiling,
@@ -55,6 +71,8 @@ export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
   provider: agentProviderSchema,
   version: z.number().int().positive(),
   source: z.enum(["vendor", "workspace"]),
+  // Absent on historical runs: preserve their original orchestration behavior.
+  workflow: agentWorkflowSchema.optional(),
 });
 export type AgentPresetSnapshot = z.infer<typeof agentPresetSnapshotSchema>;
 

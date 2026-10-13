@@ -93,7 +93,7 @@ export function Segmented({
   onChange,
   ...props
 }: {
-  items: { value: string; label: string }[];
+  items: { value: string; label: string; disabled?: boolean }[];
   value: string;
   onChange: (v: string) => void;
   id?: string;
@@ -110,7 +110,7 @@ export function Segmented({
       {...props}
     >
       {items.map((i) => (
-        <ToggleGroupItem value={i.value} key={i.value} aria-label={i.label}>
+        <ToggleGroupItem value={i.value} key={i.value} aria-label={i.label} disabled={i.disabled}>
           {i.label}
         </ToggleGroupItem>
       ))}
