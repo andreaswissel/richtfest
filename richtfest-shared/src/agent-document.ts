@@ -62,8 +62,8 @@ export function prepareAgentDocument(document: z.infer<typeof agentDocumentSchem
   const content = [
     de ? "Schallschutzprüfung · Vorlage 1 · Entwurf" : "Sound insulation review · Template 1 · Draft",
     de
-      ? "Dokumentenprüfung, kein rechnerischer Schallschutznachweis. Es wurde keine Berechnung durchgeführt. Raum- und Bauteilzuordnungen sind ungeprüfte Vorschläge; IFC-Geometrie, Eigenschaften und Vollständigkeit sind nicht verifiziert."
-      : "Document review, not an engineering verification. No calculation was performed. Room and component links are unreviewed proposals; IFC geometry, properties and completeness are not verified.",
+      ? "Dokumentenprüfung, kein normativer Schallschutznachweis. Ausdrücklich ausgewiesene Werkzeugberechnungen bleiben fachlich ungeprüft. Raum- und Bauteilzuordnungen sind ungeprüfte Vorschläge; IFC-Geometrie, Eigenschaften und Vollständigkeit sind nicht verifiziert."
+      : "Document review, not a standards-based engineering verification. Explicitly identified tool calculations remain subject to specialist review. Room and component links are unreviewed proposals; IFC geometry, properties and completeness are not verified.",
     section(de ? "1. Auftrag und Umfang" : "1. Scope", prose(template.scope)),
     section(de ? "2. Quellen und Planungsstände" : "2. Sources and revisions", prose(template.sourcesAndRevisions)),
     section(de ? "3. Anforderungen und Annahmen" : "3. Requirements and assumptions", prose(template.requirements)),

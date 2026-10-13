@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
+  acousticInputProvenance, type AcousticCalculationReceipt,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -23,6 +24,7 @@ export type AcousticDraft = {
 export async function authorAcousticConcept(input: {
   d: AppDeps; projectId: string; id: AcousticConceptId; goal: string;
   findings: unknown; sourceVersionIds: string[]; limits: AgentExecutionLimits; maxOutputTokens: number;
+  calculationReceipts?: AcousticCalculationReceipt[];
   maxParallel: number;
   inputByteBudget?: number; contextOverhead?: unknown;
   previousReview?: unknown; draft?: AcousticDraft;
@@ -33,7 +35,9 @@ export async function authorAcousticConcept(input: {
   const { d, id, projectId, limits } = input;
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   // Preserve the fingerprint contract so drafts saved under the old aggregate cap resume.
-  const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens });
+  const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens,
+    ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
+  });
   const sourceIds = new Set(input.sourceVersionIds);
   const keys = acousticSectionKeys(id);
   const invalid = (path: (string | number)[], message: string): never => {
@@ -52,6 +56,7 @@ export async function authorAcousticConcept(input: {
     const outline = outlineSchema.parse(await input.call({
       documentTask: "outline", documentTemplate: { id, version: 1 }, sectionKeys: keys,
       findings: input.findings, sourceVersionIds: input.sourceVersionIds, previousReview: input.previousReview,
+      ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
     }, value => outlineSchema.parse(value)));
     // Normalize new outlines only: old drafts retain their batch identities on retry.
     for (const section of outline.sections) {
@@ -101,10 +106,16 @@ export async function authorAcousticConcept(input: {
         text: String(source.content.text), coverage: source.content.coverage, retrieval: source.content.retrieval,
         extractionNotes: source.content.reason });
     }
+    // Keep new arithmetic together in the appendix, separate from source claims.
+    const calculationReceipts = key === "calculationAppendix" ? input.calculationReceipts ?? [] : [];
+    const calculationSourceIds = calculationReceipts.flatMap(receipt =>
+      acousticInputProvenance(receipt.input).flatMap(p => p.kind === "source" && sourceIds.has(p.versionId) ? [p.versionId] : []),
+    );
     const sectionContext = {
       documentTask: "section", documentTemplate: { id, version: 1 }, section: key,
       project: outline.project, language: outline.language,
       attachments: outline.attachments.filter(a => a.section === key), previousReview: draft.previousReview,
+      ...(calculationReceipts.length ? { calculationReceipts } : {}),
     };
     // Reserve instructions/schema space plus the actual variable context. A byte
     // budget is conservative, not an assumed four-characters-per-token ratio.
@@ -132,7 +143,7 @@ export async function authorAcousticConcept(input: {
       return checkpoint;
     };
     const requestPart = async (batch: typeof batches[number], batchNumber: number, batchCount: number, splitOnTruncation: boolean, parentBatch?: number) => {
-      const allowed = new Set(batch.map(source => source.versionId));
+      const allowed = new Set([...batch.map(source => source.versionId), ...calculationSourceIds]);
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
         if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
         const inline = part.content.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [];
@@ -198,7 +209,7 @@ export async function authorAcousticConcept(input: {
     document, citations: [...citations], decision: "accept" as const, revisions: [],
     summary: outline.language === "de" ? "Konzeptentwurf mit Quellenbelegen erstellt. Fachliche Prüfung und Freigabe stehen aus."
       : "Source-backed concept draft created. Specialist review and approval remain outstanding.",
-    rationale: outline.language === "de" ? "Abschnittsweise aus den angegebenen Quellseiten erstellt; keine Neuberechnung oder Freigabe."
-      : "Authored section by section from the listed source pages; no new calculation or approval.",
+    rationale: outline.language === "de" ? "Abschnittsweise aus Quellen und gegebenenfalls gespeicherten Rechenprotokollen erstellt; kein normativer Nachweis oder Freigabe."
+      : "Authored section by section from source pages and any saved calculation receipts; no normative verification or approval.",
   };
 }

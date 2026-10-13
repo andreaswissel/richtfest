@@ -10,8 +10,69 @@ import { createDatabase } from "../db/client";
 import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
+import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noise";
+import { calculateAcoustics } from "@richtfest/acoustics";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("Mastra specialists execute all acoustic tools before returning structured findings", async () => {
+  const provenance = { kind: "assumption", reason: "Synthetic demonstration" };
+  const { method, elements, elementsComplete, flanking, ...room } = exteriorNoiseFixture();
+  const calls = [
+    { name: "sum_sound_levels", input: { receiver: "Facade", weighting: "A", period: "Day", uncorrelatedSources: true,
+      sources: [60, 70].map(levelDb => ({ label: String(levelDb), levelDb, provenance })) } },
+    { name: "equivalent_sound_level", input: { receiver: "Facade", weighting: "A",
+      intervals: [{ label: "Loud", levelDb: 70, durationSeconds: 1, provenance }, { label: "Quiet", levelDb: 50, durationSeconds: 9, provenance }] } },
+    { name: "composite_sound_reduction", input: { bandCentreHz: 500, bandwidth: "third_octave",
+      elements: [{ label: "Wall", areaM2: 9, reductionDb: 50, provenance }, { label: "Window", areaM2: 1, reductionDb: 20, provenance }] } },
+    { name: "exterior_noise_room_requirement", input: room },
+    { name: "exterior_noise_facade", input: { ...room, elements, elementsComplete, flanking } },
+    { name: "exterior_noise_facade", input: { ...room, elements, elementsComplete: false, flanking } },
+  ];
+  const receipts: any[] = [];
+  let round = 0;
+  let settings: any, prepared: any;
+  const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+    const call = calls[round++];
+    const received = options.prompt.filter(message => message.role === "tool").flatMap(message => message.content)
+      .flatMap(part => part.type === "tool-result" && part.output.type === "json" ? [part.output.value as any] : []);
+    return { stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] });
+      if (call) controller.enqueue({ type: "tool-call", toolCallId: `calculation-${round}`, toolName: call.name, input: JSON.stringify(call.input) });
+      else {
+        controller.enqueue({ type: "text-start", id: "result" });
+        controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify({ summary: received.map(r => r.status === "unsupported" ? "unsupported" : `${r.value.toFixed(3)} ${r.unit}`).join("; "), rationale: "Arithmetic only, inputs not reviewed.", citations: [] }) });
+        controller.enqueue({ type: "text-end", id: "result" });
+      }
+      controller.enqueue({ type: "finish", finishReason: call ? "tool-calls" : "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+      controller.close();
+    } }) };
+  } });
+  const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", acousticToolsAvailable: true },
+    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 8 },
+    calculateAcoustics: async input => { const receipt = { ...calculateAcoustics(input), receiptId: crypto.randomUUID() }; receipts.push(receipt); return receipt; },
+    onRequest: async value => { settings = value; }, onPrepared: async value => { prepared = value; return undefined; },
+  }, "test-key", { model });
+  expect(result).toMatchObject({ summary: "70.414 dB(A); 60.374 dB(A); 29.961 dB; 44.650 dB; 44.669 dB; unsupported", citations: [] });
+  expect(receipts).toHaveLength(6);
+  expect(receipts.every(r => r.reviewStatus === "not_reviewed")).toBe(true);
+  expect(settings).toMatchObject({ maxSteps: 8, maxOutputTokens: 2048 });
+  expect(settings.toolSchemaHash).toMatch(/^[0-9a-f]{64}$/);
+  expect(prepared.tools.map((tool: any) => tool.name)).toEqual([...new Set(calls.map(call => call.name))]);
+});
+
+test("acoustic tools are absent for other roles and insufficient model steps", async () => {
+  for (const [role, maxSteps] of [["sound_insulation", 1], ["source_reviewer", 4], ["construction_law", 4]] as const) {
+    const output = { summary: "No arithmetic tool is available", rationale: "Configuration limit", citations: [] };
+    const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role, acousticToolsAvailable: true },
+      modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps },
+      calculateAcoustics: async () => { throw new Error("Must not execute"); },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: request => { expect(request.tools ?? []).toHaveLength(0); },
+    }) });
+    expect(result).toEqual(output);
+  }
+});
+
 test("section and specialist context budgets reserve output and reject oversized prompts before inference", async () => {
   expect(agentModelInputByteBudget("openai", "gpt-6-astra", 8000)).toBe(832000);
   expect(agentModelInputByteBudget("vercel", "openai/gpt-6.1-sol", 128000)).toBe(712000);
@@ -76,7 +137,8 @@ test("sound-insulation synthesis requires the fixed template and renders rather 
   expect(result.document.content).not.toContain("IGNORE THIS");
   expect(result.document.content).toContain("## 1. Auftrag und Umfang");
   expect(result.document.content).toContain("## 8. Prüfstatus");
-  expect(result.document.content).toContain("keine Berechnung durchgeführt");
+  expect(result.document.content).toContain("kein normativer Schallschutznachweis");
+  expect(result.document.content).toContain("Werkzeugberechnungen bleiben fachlich ungeprüft");
   expect(result.document.content).toContain("1AbCdEfGhIjKlMnOpQrStu");
   expect(result.document.template).toEqual(template);
   expect(() => assertDocumentCitations(result.document, [])).toThrow("undeclared");
@@ -121,7 +183,8 @@ for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const) 
     expect(result.document.content).not.toContain("MODEL CONTENT MUST NOT WIN");
     expect(result.document.content).toContain(template.components);
     expect(result.document.content).toContain(language === "de" ? "| Bauherr | Nicht angegeben |" : "| Client | Not supplied |");
-    expect(result.document.content).toContain(language === "de" ? "Es wurde keine Berechnung durchgeführt." : "No calculation was performed.");
+    expect(result.document.content).toContain(language === "de" ? "kein normativer Schallschutznachweis" : "not a standards-based engineering verification");
+    expect(result.document.content).toContain(language === "de" ? "Werkzeugberechnungen bleiben fachlich ungeprüft" : "tool calculations remain subject to specialist review");
     expect(result.document.content).toContain(language === "de" ? "## Anlage · Berechnungsnachweise" : "## Appendix · Calculation evidence");
     expect(result.document.content).toContain(language === "de" ? "Keine Freigabe, Unterschrift" : "Not approved, signed");
     if (id === "interior-noise-concept") {
@@ -161,7 +224,7 @@ test("domain specialists select their snapshotted models and cannot execute or b
     });
     expect(metadata.modelId).toBe(model.modelId);
     expect(request.maxOutputTokens).toBe(777);
-    expect(JSON.stringify(request)).toContain("never calculates or claims IFC semantic completeness");
+    expect(JSON.stringify(request)).toContain("never mental arithmetic or claims of IFC semantic completeness");
     expect(JSON.stringify(request)).toContain("never gives binding legal approval");
     expect(JSON.stringify(request)).toContain("never invents prices");
     await expect(callMastraSupervisor({ ...base, phase: "specialist", context: { role }, modelPolicy: legacy, modelConfig: model }, "test-key", {

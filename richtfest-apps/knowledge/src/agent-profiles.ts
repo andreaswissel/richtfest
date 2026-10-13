@@ -9,7 +9,7 @@ import { conflict, missing } from "./workspace";
 export const profileKey = z.enum(["supervisor", "source_reviewer", "requirements_reviewer", "independent_reviewer", ...domainSpecialistRoles]);
 const labels = { supervisor: "Supervisor", source_reviewer: "Source reviewer", requirements_reviewer: "Requirements reviewer", independent_reviewer: "Independent reviewer", sound_insulation: "Sound insulation specialist", construction_law: "Construction law specialist", cost_optimizer: "Cost options specialist" };
 const domainDefaults = {
-  sound_insulation: { instructions: "Review acoustic source evidence and prepare input proposals, identifying missing values and uncertainties. Never calculate or claim IFC semantic completeness.", triggerPhrases: ["sound insulation", "acoustics", "Schallschutz"] },
+  sound_insulation: { instructions: "Review acoustic source evidence and prepare input proposals, identifying missing values and uncertainties. Use only available deterministic acoustic tools for arithmetic, keeping inputs, assumptions and limitations explicit. Never improvise calculations, claim normative compliance or IFC semantic completeness.", triggerPhrases: ["sound insulation", "acoustics", "Schallschutz"] },
   construction_law: { instructions: "Propose source-based applicable requirements. Identify jurisdiction, edition and applicability uncertainty. Never provide binding legal approval.", triggerPhrases: ["construction law", "building regulations", "Baurecht", "jurisdiction"] },
   cost_optimizer: { instructions: "Compare evidence-backed options and identify price evidence, assumptions and gaps. Never invent prices or claim validated optimization or savings.", triggerPhrases: ["cost comparison", "cost options", "Kostenoptimierung", "budget"] },
 };

@@ -24,6 +24,7 @@ import type { AppDeps as CrmDeps } from "@richtfest/crm/deps";
 import type { AppDeps as ProjectsDeps } from "@richtfest/projects/deps";
 import type { AppDeps as KnowledgeDeps } from "@richtfest/knowledge/deps";
 import { availableUpdates } from "@richtfest/public-data/queries";
+import { calculateAcoustics } from "@richtfest/acoustics";
 import {
   S3Client,
   DeleteObjectCommand,
@@ -401,6 +402,7 @@ export const knowledgeDeps = (
         return null;
       }
     },
+    calculateAcoustics,
     executeSupervisor: async (input) => {
       const { callMastraSupervisor } = await import("./agent-runtime/mastra-supervisor");
       const output = await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, signal =>

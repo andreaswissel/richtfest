@@ -19,6 +19,8 @@ import { conflict, sources, createArtifact, artifactReviewContext } from "./work
 import { executeTrackedProvider } from "./usage";
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
+import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
+import { recordStep, savedStep, stepHash } from "./run-steps";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -57,6 +59,8 @@ export type Assignment = {
   // Absent on historical assignments: their saved batch identities stay unchanged.
   sourceInputByteBudget?: number;
   output?: z.infer<typeof specialistOutput>;
+  calculationReceipts?: AcousticCalculationReceipt[];
+  calculationEvidenceHash?: string;
   sourceProgress?: {
     inputHash: string;
     byteLimit?: number;
@@ -337,6 +341,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
       const providerContext = {
         ...(context as object),
+        acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         documentReview: await artifactReviewContext(d, run.conversationId),
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.
@@ -359,6 +364,47 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxRevisions: state.modelPolicy?.maxRevisions,
         },
       };
+      const calculateAcoustics: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["calculateAcoustics"] =
+        phase === "specialist" && (context as { role?: string }).role === "sound_insulation" && providerContext.acousticToolsAvailable
+          ? async (raw, signal) => {
+            signal?.throwIfAborted();
+            await assertActive();
+            const input = acousticCalculationSchema.parse(raw);
+            const allowed = new Set((context as { sourceVersionIds?: string[] }).sourceVersionIds ?? []);
+            for (const provenance of acousticInputProvenance(input)) {
+              if (provenance.kind === "source") {
+                if (!allowed.has(provenance.versionId)) throw conflict("Calculation source is outside the current readable batch");
+                const excerpt = (context as { sources: { versionId: string; text: string }[] }).sources
+                  .find(source => source.versionId === provenance.versionId && source.text.includes(provenance.excerpt));
+                if (!excerpt) throw conflict("Calculation quotation is absent from the current source text");
+                await sources(d, run.projectId, [provenance.versionId]);
+              }
+            }
+            const inputHash = stepHash({ engine: "richtfest-acoustics", version: 1, input });
+            const stepKey = `acoustics:${callKey}:${inputHash}`;
+            let receipt: AcousticCalculationReceipt | undefined;
+            const saved = await commit(d, run, token, async (tx, current) => {
+              signal?.throwIfAborted();
+              const assignment = (current.assignments as Assignment[]).find(a => a.runId === runId);
+              if (!assignment || assignment.role !== "sound_insulation") throw conflict("Calculation specialist unavailable");
+              const previous = await savedStep(d, runId, "tool", stepKey, inputHash, tx);
+              if ((assignment.calculationReceipts?.length ?? 0) >= 20 && !assignment.calculationReceipts?.some(r => r.receiptId === previous?.id))
+                throw conflict("Specialist calculation limit reached");
+              const result = acousticCalculationResultSchema.parse(previous?.output ?? d.calculateAcoustics!(input));
+              signal?.throwIfAborted();
+              const step = previous ?? await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+                kind: "tool", stepKey, inputHash, input: { engine: "richtfest-acoustics", version: 1, input }, output: result, status: "completed",
+              });
+              receipt = { ...result, receiptId: step.id };
+              await tx.update(supervisorRuns).set({ assignments: (current.assignments as Assignment[]).map(a => a.runId !== runId ? a : {
+                ...a, calculationReceipts: [...(a.calculationReceipts ?? []).filter(r => r.receiptId !== step.id), receipt],
+              }) }).where(eq(supervisorRuns.runId, id));
+              if (!previous) await log(d, tx, { ...run, id: runId }, "tool_executed", input.method, `Calculation receipt ${step.id}; not reviewed`);
+            });
+            if (!saved) throw conflict("Supervisor no longer active");
+            signal?.throwIfAborted();
+            return receipt!;
+          } : undefined;
       let outputValidationFeedback = sameGeneration && checkpoint.failureCategory === "validation"
         ? sanitizeProviderDiagnostics(checkpoint.diagnostics) : undefined;
       for (let attempt = (sameGeneration ? checkpoint.attempt : 0) + 1; attempt <= 5; attempt++) {
@@ -390,6 +436,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             goal,
             context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
+            calculateAcoustics,
             onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
             });
             if (response.status === "completed" && validate) {
@@ -692,6 +739,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // Persist the chosen limit with progress so retries never repack saved work.
               const byteLimit = assignment.sourceInputByteBudget === undefined ? undefined : assignment.sourceProgress?.byteLimit
                 ?? assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
+                  // Five tool schemas currently serialize to ~18 KiB; leave headroom.
+                  - (assignment.role === "sound_insulation" && d.calculateAcoustics ? 24576 : 0)
                   - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
                     sourceVersionIds: assignment.sourceVersionIds,
                     documentReview: await artifactReviewContext(d, run.conversationId),
@@ -706,6 +755,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 goal: assignment.goal, batches, unreadableSources,
               })).digest("hex");
               const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
+              if (assignment.role === "sound_insulation" && d.calculateAcoustics && assignment.calculationEvidenceHash !== inputHash) await commit(d, run, token, async (tx, current) => {
+                await tx.update(supervisorRuns).set({ assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
+                  ? { ...a, calculationReceipts: undefined, calculationEvidenceHash: inputHash } : a) }).where(eq(supervisorRuns.runId, id));
+              });
               let accumulated = progress?.output;
               for (let index = progress?.completedBatches ?? 0; index < batches.length; index++) {
                 if (stopped) throw new Error("Specialist work stopped after a sibling failure.");
@@ -760,6 +813,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               }
               const output = specialistOutput.parse(accumulated);
               await commit(d, run, token, async (tx, current) => {
+                const receipts = (current.assignments as Assignment[]).find(a => a.runId === assignment.runId)?.calculationReceipts ?? [];
+                output.citations = [...new Set([...output.citations, ...receipts.flatMap(receipt =>
+                  acousticInputProvenance(receipt.input).flatMap(p => p.kind === "source" ? [p.versionId] : []),
+                )])];
                 const assignments = (current.assignments as Assignment[]).map(
                   (a) => (a.runId === assignment.runId ? { ...a, output, sourceProgress: undefined } : a),
                 );
@@ -845,6 +902,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           },
           findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
             .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output })),
+          calculationReceipts: (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
@@ -877,7 +935,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               (r) => r.taskId === a.taskId,
             );
             return revision
-              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined }
+              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined }
               : a;
           });
           for (const a of assignments.filter((a) => !a.output)) {
@@ -1094,6 +1152,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             taskId: assignment.taskId,
             role: assignment.role,
             goal: assignment.goal,
+            calculationReceipts: assignment.calculationReceipts,
             sourceVersionIds: assignment.sourceVersionIds.filter((versionId) => sliceIdSet.has(versionId)),
             result: assignment.output ? {
               ...assignment.output,
@@ -1163,7 +1222,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await commit(d, run, token, async (tx, current) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
-            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined } : assignment;
+            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined } : assignment;
           });
           for (const assignment of revisedAssignments.filter((item) => !item.output)) {
             await tx.update(agentRuns).set({

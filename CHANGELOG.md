@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Sound-insulation agents can use five deterministic tools for sound levels, single-band sound reduction and room-based exterior-noise targets and façade screening. Results keep inputs, sources or assumptions, formulas and review status; incomplete or unsupported exterior-noise cases return a blocking reason rather than a number. These are reviewable calculations, not certified engineering verification.
+
 - Company knowledge now has a searchable review screen with draft and approved filters, source caveats, direct links and explicit approval. Imported training knowledge stays unapproved until a permitted reviewer confirms it; agent assignments remain separate.
 
 - Specialist source reviews now use larger, model-aware batches and fill available parallel slots immediately instead of waiting for the slowest specialist. Retries preserve saved findings and historical batch layouts; output limits and review safeguards remain unchanged.

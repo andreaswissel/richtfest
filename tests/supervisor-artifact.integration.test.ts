@@ -3,6 +3,9 @@ import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
 import { acousticSectionKeys } from "../richtfest-shared/src/acoustic-concept";
+import { agentExecutionLimitsSchema } from "../richtfest-shared/src/agent-policy";
+import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
+import { authorAcousticConcept } from "../richtfest-apps/knowledge/src/acoustic-authoring";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
@@ -24,6 +27,37 @@ import {
   annotations,
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
+
+test("concept appendices can cite saved arithmetic inputs without treating receipt IDs as sources", async () => {
+  const versionId = crypto.randomUUID();
+  const receipt = { ...calculateAcoustics({ method: "sum_sound_levels", receiver: "North facade", weighting: "A", period: "Day", uncorrelatedSources: true,
+    sources: [60, 70].map(levelDb => ({ label: String(levelDb), levelDb,
+      provenance: { kind: "source", versionId, page: 2, excerpt: "Simultaneous uncorrelated contributions: 60 and 70 dB(A)." } })),
+  }), receiptId: crypto.randomUUID() };
+  for (const citation of [versionId, receipt.receiptId, crypto.randomUUID()]) {
+    const result = authorAcousticConcept({ d: {} as any, projectId: crypto.randomUUID(), id: "exterior-noise-concept",
+      goal: "Document source-backed arithmetic", findings: [], sourceVersionIds: [versionId], calculationReceipts: [receipt],
+      limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
+      assertActive: async () => {}, checkpoint: async () => {},
+      call: async context => {
+        if (context.documentTask === "outline") return { id: "exterior-noise-concept", title: "Acoustic arithmetic", language: "en",
+          project: { name: "Synthetic project", number: null, client: null, designer: null, author: null, date: null },
+          sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key, sources: [] })), attachments: [],
+        };
+        if (context.section !== "calculationAppendix") return { content: "No further evidence supplied.", citations: [], complete: true };
+        const [saved] = context.calculationReceipts as typeof receipt[];
+        return { content: `Tool result: ${saved!.value.toFixed(3)} ${saved!.unit} [${citation}]. Inputs and applicability require review.`, citations: [citation], complete: true };
+      },
+    });
+    if (citation !== versionId) await expect(result).rejects.toThrow("Cite only source versions");
+    else {
+      const report = await result;
+      expect(report.document.content).toContain(`70.414 dB(A) [${versionId}]`);
+      expect(report.document.content).toContain("tool calculations remain subject to specialist review");
+      expect(report.citations).toEqual([versionId]);
+    }
+  }
+});
 
 integration("continued document review receives only its thread's comments and their exact historical revision", async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
@@ -469,7 +503,7 @@ for (const independentReviewEnabled of [false, true]) integration(
       expect((revisions[0]!.payload as any).template).toEqual(template);
       expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
       expect(revisions[0]!.content).not.toContain("MODEL CONTENT MUST NOT WIN");
-      expect(revisions[0]!.content).toContain("No calculation was performed.");
+      expect(revisions[0]!.content).toContain("not a standards-based engineering verification");
       if (templateId === "sound-insulation-review") {
         expect(revisions[0]!.content).toContain("1AbCdEfGhIjKlMnOpQrStu");
         expect(revisions[0]!.content).toContain("## 4. Room and component references");

@@ -11,6 +11,7 @@ import {
   agentRunEvents,
   agentRunUsage,
   agentRunAttempts,
+  agentRunSteps,
   conversations,
   messages,
 } from "../richtfest-apps/knowledge/src/schema";
@@ -22,6 +23,9 @@ import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
 import { soundInsulationPlanningFixture as fixture } from "./fixtures/sound-insulation-planning";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
+import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
+import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
+import { exteriorNoiseFixture } from "./fixtures/exterior-noise";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 const config = { modelId: "test-model", maxOutputTokens: 1024, maxSteps: 1 };
 const policy = {
@@ -232,6 +236,113 @@ integration(`retrying a ${failure} specialist preserves its successful sibling`,
   } finally {
     server.close();
     for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+integration("acoustic tools retain scoped, repeatable receipts through failure, retry and changed evidence", async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), versionId = crypto.randomUUID();
+  const model = { ...config, maxSteps: 2 };
+  let text = "Traffic 60 dB(A). Plant 70 dB(A).", interrupted = false, calculations = 0, captured: any, reviewReceipts: any[] = [];
+  const input = { method: "sum_sound_levels" as const, receiver: "North facade", weighting: "A" as const, period: "Day", uncorrelatedSources: true as const,
+    sources: [60, 70].map((levelDb, i) => ({ label: i ? "Plant" : "Traffic", levelDb,
+      provenance: { kind: "source" as const, versionId, page: 1, excerpt: i ? "Plant 70 dB(A)." : "Traffic 60 dB(A)." } })),
+  };
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
+    validateProject: async () => true, validateSourceVersion: async (_project: string, id: string) => id === versionId, providerConfigured: async () => false,
+    listProjectSources: async () => ({ sources: [{ versionId, name: "Noise evidence" }], truncated: false }),
+    resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Noise evidence", version: 1 }, content: { status: "available", text } }),
+    calculateAcoustics: (value: any) => { calculations++; return calculateAcoustics(value); },
+    executeSupervisor: async (request: any) => {
+      if (request.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "sound_insulation", goal: "Combine stated simultaneous noise contributions", sourceVersionIds: [versionId] },
+        { role: "source_reviewer", goal: "Check gaps", sourceVersionIds: [] },
+      ] } };
+      if (request.phase === "review") {
+        expect(request.calculateAcoustics).toBeUndefined();
+        reviewReceipts = request.context.assignments.find((a: any) => a.role === "sound_insulation").calculationReceipts;
+        return { status: "completed", output: { summary: "Unreviewed arithmetic available", rationale: "Review required", decision: "accept", revisions: [], citations: [versionId],
+          document: { title: "Noise review", content: "Rendered from template", template: acousticConceptFixture("exterior-noise-concept", "en", versionId) } } };
+      }
+      if (request.context.role !== "sound_insulation") {
+        expect(request.calculateAcoustics).toBeUndefined();
+        return { status: "completed", output: { summary: "No additional evidence", rationale: "", citations: [] } };
+      }
+      captured = request.calculateAcoustics;
+      expect(captured).toBeFunction();
+      await expect(captured({ ...input, sources: [{ ...input.sources[0], provenance: { ...input.sources[0]!.provenance, versionId: crypto.randomUUID() } }] })).rejects.toThrow("outside the current readable batch");
+      await expect(captured({ ...input, sources: [{ ...input.sources[0], provenance: { ...input.sources[0]!.provenance, excerpt: "Fabricated quotation" } }] })).rejects.toThrow("absent from the current source text");
+      await expect(captured(input, AbortSignal.abort())).rejects.toThrow();
+      const [first, duplicate] = await Promise.all([captured(input), captured(input)]);
+      expect(first.receiptId).toBe(duplicate.receiptId);
+      expect(first.value).toBeCloseTo(70.41392685158225, 10);
+      const scenario = await captured({ ...input, sources: [input.sources[0], { label: "Sensitivity case", levelDb: 80, provenance: { kind: "assumption", reason: "User scenario: plant ten dB louder" } }] });
+      expect(scenario.receiptId).not.toBe(first.receiptId);
+      expect(scenario.value).toBeCloseTo(80.04321373782642, 10);
+      const facade = exteriorNoiseFixture();
+      // Nested geometry, noise, applicability, flanking and rating provenance all retain scope checks.
+      for (const record of [facade.room, facade.applicability, facade.facades[0]!, facade.facades[0]!.noise, facade.flanking, facade.elements[0]!]) {
+        const original = record.provenance;
+        record.provenance = { kind: "source", versionId: crypto.randomUUID(), page: 1, excerpt: "Traffic 60 dB(A)." };
+        await expect(captured(facade)).rejects.toThrow("outside the current readable batch");
+        record.provenance = { kind: "source", versionId, page: 1, excerpt: "Invented facade geometry" };
+        await expect(captured(facade)).rejects.toThrow("absent from the current source text");
+        record.provenance = original;
+      }
+      expect(await captured(facade)).toMatchObject({ status: "calculated", value: expect.closeTo(44.66896537322387, 10) });
+      expect(await captured({ ...facade, elementsComplete: false })).toMatchObject({ status: "unsupported", value: null });
+      if (!interrupted) { interrupted = true; throw Object.assign(new Error("Interrupted after calculation"), { code: "timeout", providerFailure: true, retryable: false }); }
+      // Tool input citations must survive even if the model omits them.
+      return { status: "completed", output: { summary: "70.414 dB(A), inputs and applicability not reviewed", rationale: "Saved arithmetic, not a compliance decision", citations: [] } };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  const base = `http://127.0.0.1:${(server.address() as any).port}`;
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Check noise arithmetic", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { ...policy, specialists: { ...policy.specialists, sound_insulation: model } });
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    expect(calculations).toBe(4);
+    expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
+    const initialSteps = await db.select().from(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId));
+    expect(initialSteps).toHaveLength(4);
+    const step = initialSteps[0]!;
+    const detail = await fetch(`${base}/runs/${step.runId}/steps/${step.id}`);
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).data.output).toMatchObject({ engine: "richtfest-acoustics", version: 1, reviewStatus: "not_reviewed" });
+    expect((await fetch(`${base}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(201);
+    await stepSupervisor(d, run!.id);
+    expect(calculations).toBe(4);
+    const [completed] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const receipts = (completed!.assignments as any[]).find(a => a.role === "sound_insulation").calculationReceipts;
+    expect(receipts).toHaveLength(4);
+    expect(receipts.find((r: any) => r.status === "unsupported")).toMatchObject({ method: "exterior_noise_facade", value: null });
+    expect(receipts.find((r: any) => r.method === "exterior_noise_facade" && r.status === "calculated").exteriorNoise.marginDb).toBeCloseTo(0.019312208551912345, 10);
+    expect((completed!.assignments as any[]).find(a => a.role === "sound_insulation").output.citations).toEqual([versionId]);
+    expect(receipts.map((r: any) => r.receiptId).sort()).toEqual(initialSteps.map(s => s.id).sort());
+    await stepSupervisor(d, run!.id);
+    expect(reviewReceipts).toEqual(receipts);
+    // Re-reading changed evidence invalidates the assignment's active receipts,
+    // but retains its historical execution records for inspection.
+    text += "\nAdditional extraction context.";
+    await db.update(agentRuns).set({ status: "running" }).where(eq(agentRuns.id, run!.id));
+    await db.update(supervisorRuns).set({ phase: "specialists", assignments: (completed!.assignments as any[]).map(a => a.role === "sound_insulation" ? { ...a, output: undefined } : a) }).where(eq(supervisorRuns.runId, run!.id));
+    await stepSupervisor(d, run!.id);
+    expect(calculations).toBe(8);
+    const [updated] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const changedReceipts = (updated!.assignments as any[]).find(a => a.role === "sound_insulation").calculationReceipts;
+    expect(changedReceipts).toHaveLength(4);
+    expect(changedReceipts.every((r: any) => !initialSteps.some(s => s.id === r.receiptId))).toBe(true);
+    await db.update(agentRuns).set({ status: "cancelled" }).where(eq(agentRuns.id, run!.id));
+    await expect(captured(input)).rejects.toThrow("no longer active");
+    expect(calculations).toBe(8);
+    expect(await db.select().from(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId))).toHaveLength(8);
+  } finally {
+    server.close();
+    for (const table of [artifactRevisions, artifacts, agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }

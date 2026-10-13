@@ -1,0 +1,10 @@
+{
+  "name": "@richtfest/acoustics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/calculations.ts" },
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": { "@richtfest/shared": "workspace:*" },
+  "devDependencies": { "typescript": "^5.7.2" }
+}

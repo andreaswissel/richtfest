@@ -1,4 +1,4 @@
-import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits } from "@richtfest/shared";
+import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt } from "@richtfest/shared";
 
 /** Only these structural facts may cross the provider/event boundary. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
@@ -47,6 +47,7 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
 export type AppDeps = {
   db: any;
   supervisorEnabled?: boolean;
+  calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
   resolveSupervisorPreset?: (
     effort: "low" | "medium" | "high" | "ultra",
     provider: AgentProvider,
@@ -58,6 +59,7 @@ export type AppDeps = {
     goal: string;
     context: unknown;
     modelPolicy?: AgentPresetSnapshot;
+    calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
     onRequest?: ProviderTelemetry["onRequest"];
@@ -151,6 +153,7 @@ export type ProviderExecutionSettings = {
   instructionsHash: string;
   promptHash: string;
   outputSchemaHash: string | null;
+  toolSchemaHash?: string;
 };
 export type ProviderResponseMetadata = {
   modelId: string | null;
@@ -162,7 +165,7 @@ export type ProviderTelemetry = {
   onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   /** Sanitized model-visible input only. A hit skips inference, not application validation. */
-  onPrepared?: (input: { version: 1; instructions: string; prompt: string; outputSchema?: unknown }) => Promise<{ output: unknown } | undefined>;
+  onPrepared?: (input: { version: 1; instructions: string; prompt: string; outputSchema?: unknown; tools?: unknown }) => Promise<{ output: unknown } | undefined>;
 };
 export type ProviderUsage = {
   provider: AgentProvider;

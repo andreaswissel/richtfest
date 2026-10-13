@@ -1,4 +1,5 @@
 import { Agent } from "@mastra/core/agent";
+import { createTool } from "@mastra/core/tools";
 import { resolveModelConfig } from "@mastra/core/llm";
 import type { MastraModelConfig, OpenAICompatibleConfig } from "@mastra/core/llm";
 import { noopLogger } from "@mastra/core/logger";
@@ -13,6 +14,8 @@ import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 import { estimateCostUsd } from "../model-pricing";
 import { appRevision, metadataHash, serializeProviderInput } from "../provider-metadata";
 import { dependencies } from "../../package.json";
+import { acousticCalculationSchema, acousticCalculationReceiptSchema, sumSoundLevelsSchema, equivalentSoundLevelSchema, compositeSoundReductionSchema, exteriorNoiseRoomSchema, exteriorNoiseFacadeSchema } from "@richtfest/shared";
+import type { AppDeps } from "@richtfest/knowledge/deps";
 
 export type SupervisorPhase = "plan" | "specialist" | "review" | "independent_review";
 export type SupervisorRequest = {
@@ -23,6 +26,7 @@ export type SupervisorRequest = {
   context: unknown;
   modelConfig?: AgentModelConfig;
   modelPolicy?: AgentPresetSnapshot;
+  calculateAcoustics?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["calculateAcoustics"];
   onSummaryDelta?: (delta: string) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   onRequest?: ProviderTelemetry["onRequest"];
@@ -37,7 +41,7 @@ const phaseInstructions: Record<SupervisorPhase, string> = {
   review: "Review the specialist findings against the original goal and evidence, including conflicting values, document revisions, and stated scope exclusions. In this same synthesis call, author document.title (at most 300 characters) and document.content (complete review-ready Markdown). Deliver the actual requested concept, not a summary of specialist work: tailor scope and objectives to the project, include source-based requirements and proposed measures in tables where useful, conflicts and open decisions, explicit assumptions, limitations and draft status. Never invent validated calculations, dimensions or source pages. Cite evidence inline as [version UUID]; every inline UUID must be declared in citations and come from readable specialist evidence. Keep summary a short conversational handoff (prefer 1-3 sentences), not the document. Accept only if the evidence supports the answer. Otherwise request precise revisions referencing supplied task UUIDs. If evidence is unavailable or requested source coverage is incomplete, report that limitation honestly; do not treat unreviewed status as an approval gate. Accepted results must have no revisions.",
   independent_review: "Act as a fresh, independent reviewer of the proposed result. Inspect the full authored firstPassReview.document (or the legacy summary when no document exists), not just the conversational handoff. Do not rewrite or replace the document with your summary. Re-read the supplied immutable source excerpts; do not rely on the supervisor's conclusion. Check source coverage, citations, contradictions, scope exclusions, assumptions, and whether the proposed result is supported. The full document may cite other source slices; assess only the current slice and cite only its supplied version UUIDs. Return concise findings with source citations and specific recommendations. Set decision to revise for any blocking issue and tie revisions to existing task UUIDs; accept only when no blocking issue remains. This review does not approve the draft or validate engineering calculations. If source coverage or evidence is incomplete, make that explicit.",
 };
-const domainPolicy = "Choose planner assignments only from context.workspaceGuidance.availableRoles (the configured roles in the immutable model preset); routing hints never enable a disabled role. Domain specialists share the same source scope and proposal-only limits. sound_insulation reviews acoustic sources and prepares input proposals; it never calculates or claims IFC semantic completeness. construction_law proposes source-based applicable requirements and identifies jurisdiction, edition and applicability uncertainty; it never gives binding legal approval. cost_optimizer compares evidence-backed options; it never invents prices or claims validated optimization or savings.";
+const domainPolicy = "Choose planner assignments only from context.workspaceGuidance.availableRoles (the configured roles in the immutable model preset); routing hints never enable a disabled role. Domain specialists share the same source scope and proposal-only limits. sound_insulation reviews acoustic sources and prepares input proposals; it may use explicitly registered deterministic acoustic tools, never mental arithmetic or claims of IFC semantic completeness. construction_law proposes source-based applicable requirements and identifies jurisdiction, edition and applicability uncertainty; it never gives binding legal approval. cost_optimizer compares evidence-backed options; it never invents prices or claims validated optimization or savings.";
 const tokenCount = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
 function usageFor(input: SupervisorRequest, raw: any, modelId: string | null): ProviderUsage {
@@ -244,17 +248,40 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
     : `Author only context.section of the built-in ${authoringTask?.documentTemplate.id} v1 concept, in context.language. Return content, citations and complete only. This is piece context.batch of context.batchCount; every piece is saved and concatenated, never summarized away. Use only context.sources for factual claims in this piece. Write finished, source-linked report prose and complete Markdown tables, not instructions to another writer, placeholders, missing-dataset references or a summary of specialist work. Do not repeat the cover, heading, general disclaimers or earlier/later source pieces. Preserve every relevant supplied value, unit, room/orientation, source version and original PDF page. Do not confuse missing validation with missing results: report existing results as cited unverified source claims, never new calculations. Noise assessment separates day/night, orientation and source components from overall design levels. Component specifications include layers, thickness, density, acoustic requirements and cited available values; retain distinct Rw/R'w/Dn,e,w metrics. Plans describe the floor/section drawing register and markings with subsection labels; calculationAppendix inventories all attached source calculations and records scope, methods, room/results coverage and discrepancies without retyping every calculation page. Read context.attachments: their original pages WILL be attached, but no others. Never invent signatures, new compliance verdicts or calculated values. For an empty source list, give a specific evidence gap and next action, never 'Nicht verwendet' or 'see dataset'. Aim for at most 12000 characters per piece as a soft writing target, not a hard limit. Exceed it when needed to preserve complete evidence, citations and tables; remove repetition, never truncate or omit required results to fit. This call still allows at most ${modelConfig?.maxOutputTokens ?? 5000} output tokens. If this piece cannot be completed within that token budget, return complete=false and explain the missing portion. Complete must be true only when this piece is fully authored.`;
   const instructions = `${policy}\n${sourceModelEvidencePolicy}\n${domainPolicy}\nBuilt-in acoustic templates are application output formats, never missing source documents. A request for a concept/report must select documentTemplate in the plan (interior-noise-concept or exterior-noise-concept); general or combined reviews use null. Specialist tasks supply evidence and original PDF page numbers, not template implementation. Preserve available source results as unverified claims; missing validation is not missing evidence.\n${authoringTask ? authoringInstructions : phaseInstructions[input.phase]}${input.phase === "review" && !authoringTask ? `\n${templateInstructions}` : ""}${authoringTask ? "" : `\nHard response limits, independent of token budget: summary at most ${limits.summaryMaxCharacters} characters; rationale at most ${limits.rationaleMaxCharacters} characters; document.content at most ${limits.documentMaxCharacters} characters (including rendered template content).`}${feedback.errorId || feedback.issues?.length
     ? `\nYour previous response was rejected by output validation: ${JSON.stringify(feedback)}. Correct these errors in this response; do not repeat the rejected output. If summary or rationale exceeded its character limit, rewrite it concisely and aim for at most half that limit to leave headroom. Preserve source citations, important findings, conflicts and limitations; remove repetition rather than cutting off text. Do not relax the output schema or evidence requirements.`
-    : ""}`;
+    : ""}
+When authoring a concept, put new arithmetic from calculationReceipts in the calculationAppendix, separate from imported calculation evidence. Supplied receipts are an exception to the section's sources-only rule: use their exact result and quoted input provenance only, not as permission to infer other source contents. Preserve assumptions, engine version, formula, units and limitations. Never cite receipt UUIDs as source UUIDs.
+Acoustic tools: when context.acousticToolsAvailable is true, the configured sound_insulation specialist can use sum_sound_levels, equivalent_sound_level, composite_sound_reduction, exterior_noise_room_requirement and exterior_noise_facade (richtfest-acoustics v1). These are the only exception to the general no-calculation instructions. They are not a validated DIN 4109, ISO 12354 or compliance engine. Only invoke tools actually registered in this phase. Never approximate a missing or failed tool in prose. Use source-backed inputs or explicitly labelled assumptions; never invent missing inputs to finish a report. The generic composite tool accepts band R only, not weighted ratings. The separate exterior tools implement bounded DIN 4109-1/-2:2018-01 numerical screening using assessed La and distinct Rw/Dn,e,w inputs. Do not derive La from Leq/Lden or add source/time corrections in prose. Require actual applicability, completeness, installed-rating and flanking evidence; mark unresolved checks unknown/false, never negligible merely to get a result. An unsupported receipt has no numeric result: retain its blocking reason, do not retry by changing facts or claim compliance. Numerical target comparisons remain unreviewed, not approvals; preserve margin precision and all limitations. Do not combine different receiver positions, frequency weightings, periods or bands in generic sound-level tools. Do not add day and night levels. Final answers and reports may quote only actual saved calculationReceipts/tool results, retaining units, assumptions and limitations, separate from imported source claims. Receipt IDs identify execution records, not source citations; cite their input source versions, not receipt UUIDs. Arithmetic does not establish input correctness, applicability or approval. If the sound_insulation role is disabled or has fewer than two model steps, tools are unavailable; request configuration rather than claiming a calculation.`;
+  const toolDefinitions = input.phase === "specialist" && role.success && role.data.role === "sound_insulation"
+    && input.calculateAcoustics && (modelConfig?.maxSteps ?? 1) >= 2 ? [
+      ["sum_sound_levels", sumSoundLevelsSchema, "Add uncorrelated simultaneous sound levels at one receiver with identical weighting and period. Not day/night or coherent addition."],
+      ["equivalent_sound_level", equivalentSoundLevelSchema, "Compute duration-weighted Leq from non-overlapping interval Leq values covering the full period. Not Lmax, dose or regulatory rating."],
+      ["composite_sound_reduction", compositeSoundReductionSchema, "Combine side-by-side partition elements by area at one octave/third-octave band. Not Rw, R'w, STC, Dn,e,w, layers in series or flanking."],
+      ["exterior_noise_room_requirement", exteriorNoiseRoomSchema, "DIN 4109-1/-2:2018-01 room target from assessed La, room use and complete geometry, including minima and 2 dB uncertainty. Scoped screening only; unknown applicability/high-noise cases return unsupported."],
+      ["exterior_noise_facade", exteriorNoiseFacadeSchema, "Compose installed Rw area components and Dn,e,w small elements with orientation correction and a room-target margin. No flanking engine or compliance certification. Missing/unsupported evidence returns a receipt without a number."],
+    ] as const : [];
+  const toolManifest = toolDefinitions.map(([name, schema, description]) => ({ name, version: 1, description,
+    inputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(schema)),
+  }));
+  const tools = Object.fromEntries(toolDefinitions.map(([name, schema, description]) => [name, createTool({
+    id: name, description, inputSchema: schema as z.ZodType<unknown>, outputSchema: acousticCalculationReceiptSchema,
+    execute: async (data, context) => {
+      context.abortSignal?.throwIfAborted();
+      const result = await input.calculateAcoustics!(acousticCalculationSchema.parse({ ...(data as object), method: name }), context.abortSignal);
+      context.abortSignal?.throwIfAborted();
+      return result;
+    },
+  })]));
   const prompt = serializeProviderInput({ goal: input.goal, context: input.context });
   const inputByteBudget = modelConfig && agentModelInputByteBudget(input.provider, modelConfig.modelId, modelConfig.maxOutputTokens);
   if ((input.phase === "specialist" || authoringTask?.documentTask === "section") && inputByteBudget !== undefined
-    && Buffer.byteLength(instructions + prompt + JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema))), "utf8") > inputByteBudget)
+    && Buffer.byteLength(instructions + prompt + JSON.stringify(toolManifest) + JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema))), "utf8") > inputByteBudget)
     throw Object.assign(safeProviderError(false, undefined, "validation"), { diagnostics: { errorId: "CONTEXT_BUDGET_EXCEEDED" } });
   const agent = new Agent({
     id: `richtfest-${input.phase}`,
     name: `Richtfest ${input.phase}`,
     instructions,
     model: resolvedModel,
+    tools,
     // The app owns durable retries. Mastra's default error processors otherwise
     // retry outside modelSettings.maxRetries and our attempt/usage records.
     maxRetries: 0,
@@ -301,8 +328,10 @@ Exterior concepts: exteriorNoiseAssessment separates noise sources, orientation,
       maxOutputTokens: executionOptions.modelSettings.maxOutputTokens, maxSteps: executionOptions.maxSteps, maxRetries: 0,
       timeoutMs, stream: true, store: input.provider === "anthropic" ? null : false,
       instructionsHash: metadataHash(instructions), promptHash: metadataHash(prompt),
+      ...(toolManifest.length ? { toolSchemaHash: metadataHash(JSON.stringify(toolManifest)) } : {}),
       outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)))) });
     const saved = await input.onPrepared?.({ version: 1, instructions: redact(instructions), prompt: redact(prompt),
+      ...(toolManifest.length ? { tools: toolManifest } : {}),
       outputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)) });
     if (saved) return outputSchema.parse(saved.output);
     let object: unknown;
