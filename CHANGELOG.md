@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Chat scrollbars now blend into light and dark themes instead of showing a bright track in dark mode.
+
 - Specialist agents now retry invalid source citations with targeted correction feedback while preserving completed work. Failed calls retain safe, inspectable diagnostic records, including rejected source identifiers, without saving raw provider errors or rejected text.
 
 - Team administrators can create and edit workspace roles, choose their permissions and assign them to members or invitations. Changes apply to everyone with that role, with audit history and protection against removing the last administrator.
