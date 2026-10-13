@@ -35,12 +35,15 @@ import { RunActivityFeed } from "./run-activity-feed";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { AgentRunMetrics, isAgentRunActive } from "../agent-run-metrics";
 import {
-  MessageScrollerProvider,
   MessageScroller,
-  MessageScrollerViewport,
   MessageScrollerContent,
   MessageScrollerItem,
 } from "../ui/message-scroller";
+import {
+  ChatScrollerProvider,
+  ChatScrollerViewport,
+  ChatLatest,
+} from "./chat-scroller";
 import "./subagent-thread.css";
 
 const runReasonPhases = {
@@ -626,13 +629,9 @@ export function SubagentThread({
         createdAt={run.createdAt ?? run.created_at}
         events={activityEvents}
       />
-      <MessageScrollerProvider
-        key={runId}
-        autoScroll={false}
-        defaultScrollPosition="start"
-      >
+      <ChatScrollerProvider key={runId}>
         <MessageScroller className="agent-thread-scroll">
-          <MessageScrollerViewport>
+          <ChatScrollerViewport>
             <MessageScrollerContent className="p-page gap-stack">
               {list(query.data?.approvals).length > 0 && (
                 <MessageScrollerItem messageId={`${runId}-reviews`}>
@@ -735,10 +734,7 @@ export function SubagentThread({
                   </details>
                 </MessageScrollerItem>
               )}
-              <MessageScrollerItem
-                messageId={`${runId}-assignment`}
-                scrollAnchor
-              >
+              <MessageScrollerItem messageId={`${runId}-assignment`}>
                 <Message>
                   <MessageContent>
                     <MessageHeader>{t("agentThreadAssignment")}</MessageHeader>
@@ -898,9 +894,10 @@ export function SubagentThread({
                 </MessageScrollerItem>
               )}
             </MessageScrollerContent>
-          </MessageScrollerViewport>
+          </ChatScrollerViewport>
         </MessageScroller>
-      </MessageScrollerProvider>
+        <ChatLatest />
+      </ChatScrollerProvider>
       <footer className="agent-thread-footer">
         <Link to={mainHref}>
           {t(managed ? "agentThreadGuide" : "agentThreadContinue")}

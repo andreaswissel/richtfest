@@ -48,10 +48,10 @@ Use shadcn's conversation primitives: `MessageScroller` for transcript behavior,
 
 Acceptance criteria for the chat implementation:
 
-- Treat scrolling as reader-controlled state, never unconditional auto-scroll. Follow streaming only while the reader is following at the live edge. Scrolling away, selecting text, keyboard navigation, opening a link or searching suspends following.
-- Place a submitted turn near the top of the viewport, retaining some prior context. Let the answer expand below it without pulling the reader away.
+- Treat scrolling as reader-controlled state, never unconditional auto-scroll. Main and subagent chats follow streaming at the live edge. Scrolling away, selecting transcript text, opening a transcript link or searching suspends following. Unrelated selections, ordinary keypresses and downward scrolling at the bottom must not disable following.
+- Sending a message returns to the live edge and follows the answer as it expands. Incoming messages never pull a reader away from history or selected text; do not mark user messages as automatic scroll anchors.
 - Allow output to arrive offscreen, indicate ongoing generation and unread messages, and provide a "Jump to latest" action that explicitly resumes following.
-- Reopen at the reader's saved meaningful turn, usually the last user message, rather than the absolute bottom. Avoid a visible jump through the oldest messages during restoration.
+- Reopen a conversation at the reader's saved visible message; keep explicit message links at their target. Without a saved position, open at the latest output. Avoid a visible jump through the oldest messages during restoration.
 - Keep position stable when older history loads, images/Markdown/code render, rich content expands or the artifact panel resizes.
 - Use stable message IDs for restoration, citations, message links and direct jumps. Support search and unread markers for navigating long conversations. Preserve selected text and unsent composer input during updates.
 - Stopping, retrying, regenerating, branching and errors must not unexpectedly change position or keyboard focus.

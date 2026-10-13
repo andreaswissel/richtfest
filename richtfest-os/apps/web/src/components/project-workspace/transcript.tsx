@@ -26,15 +26,18 @@ import {
   X,
 } from "lucide-react";
 import {
-  MessageScrollerProvider,
   MessageScroller,
-  MessageScrollerViewport,
   MessageScrollerContent,
   MessageScrollerItem,
   useMessageScroller,
   useMessageScrollerVisibility,
-  useMessageScrollerScrollable,
 } from "../ui/message-scroller";
+import {
+  ChatScrollerProvider,
+  ChatScrollerViewport,
+  ChatLatest,
+  useChatScroller,
+} from "./chat-scroller";
 import {
   Message,
   MessageContent,
@@ -67,7 +70,10 @@ import {
   type ReadState,
 } from "./types";
 import { LazyOpenUI } from "./lazy-openui";
-import { AgentThreadMessage, useAgentMessageEvents } from "./agent-thread-message";
+import {
+  AgentThreadMessage,
+  useAgentMessageEvents,
+} from "./agent-thread-message";
 
 const runFailureCategoryLabels: Record<string, string> = {
   provider: "workspaceRunCategoryProvider",
@@ -224,14 +230,8 @@ export function Transcript({
   initialMessage?: string;
   onInitialMessageSent?: () => void;
 }) {
-  const [following, setFollowing] = useState(false);
   return (
-    <MessageScrollerProvider
-      key={conversationId}
-      autoScroll={following}
-      defaultScrollPosition="last-anchor"
-      scrollPreviousItemPeek={32}
-    >
+    <ChatScrollerProvider key={conversationId}>
       <Conversation
         key={conversationId}
         conversationId={conversationId}
@@ -241,10 +241,8 @@ export function Transcript({
         runs={runs}
         initialMessage={initialMessage}
         onInitialMessageSent={onInitialMessageSent}
-        following={following}
-        setFollowing={setFollowing}
       />
-    </MessageScrollerProvider>
+    </ChatScrollerProvider>
   );
 }
 function Conversation({
@@ -252,8 +250,6 @@ function Conversation({
   conversationTitle,
   projectId,
   readState,
-  following,
-  setFollowing,
   runs,
   initialMessage,
   onInitialMessageSent,
@@ -263,8 +259,6 @@ function Conversation({
   projectId: string;
   readState?: ReadState;
   runs: RecordData[];
-  following: boolean;
-  setFollowing: (value: boolean) => void;
   initialMessage?: string;
   onInitialMessageSent?: () => void;
 }) {
@@ -423,9 +417,9 @@ function Conversation({
     restored = useRef(false),
     reader = useRef<ReadState>(readState || {}),
     draftDirty = useRef(false);
-  const { scrollToMessage, scrollToEnd } = useMessageScroller();
-  const visibility = useMessageScrollerVisibility(),
-    scrollable = useMessageScrollerScrollable();
+  const { scrollToMessage } = useMessageScroller();
+  const { following, pauseFollowing, resumeFollowing } = useChatScroller();
+  const visibility = useMessageScrollerVisibility();
   const composer = useRef<HTMLTextAreaElement>(null);
   const handleReply = useCallback((id: string) => {
     setReply(id);
@@ -580,14 +574,7 @@ function Conversation({
             }
           : old,
       );
-      setFollowing(true);
-      requestAnimationFrame(() =>
-        scrollToMessage(message.id, {
-          align: "start",
-          behavior: "instant",
-          scrollMargin: 32,
-        }),
-      );
+      requestAnimationFrame(resumeFollowing);
       void queryClient.invalidateQueries({
         queryKey: [`/knowledge/workspaces/${projectId}`],
       });
@@ -700,18 +687,16 @@ function Conversation({
   useEffect(() => {
     const id = params.get("message");
     if (ready && id) {
-      setFollowing(false);
+      pauseFollowing();
       scrollToMessage(id, { align: "center", behavior: "instant" });
     }
   }, [params.get("message"), ready, direct.data]);
   useEffect(() => {
     if (!ready) return;
-    const meaningful = visibility.currentAnchorId;
-    if (
-      meaningful &&
-      persistedMessages.some((message) => message.id === meaningful)
-    )
-      reader.current.meaningfulMessageId = meaningful;
+    const meaningful = visibility.visibleMessageIds.find((id) =>
+      persistedMessages.some((message) => message.id === id),
+    );
+    if (meaningful) reader.current.meaningfulMessageId = meaningful;
     const last = visibility.visibleMessageIds
       .filter((id) => !id.startsWith("run-"))
       .at(-1);
@@ -722,20 +707,12 @@ function Conversation({
     );
     return () => clearTimeout(timer);
   }, [
-    visibility.currentAnchorId,
     visibility.visibleMessageIds.join(","),
     persistedMessages,
     draft,
     ready,
     following,
   ]);
-  useEffect(() => {
-    const select = () => {
-      if (window.getSelection()?.toString()) setFollowing(false);
-    };
-    document.addEventListener("selectionchange", select);
-    return () => document.removeEventListener("selectionchange", select);
-  }, []);
   const matches = searchTerm
     ? mergeMessages(searchQuery.data?.pages || [])
     : [];
@@ -784,7 +761,7 @@ function Conversation({
               value={search}
               aria-label={t("workspaceSearch")}
               placeholder={t("workspaceSearch")}
-              onFocus={() => setFollowing(false)}
+              onFocus={pauseFollowing}
               onChange={(e) => setSearch(e.target.value)}
             />
             {search && (
@@ -794,7 +771,7 @@ function Conversation({
                     variant="ghost"
                     key={m.id}
                     onClick={() => {
-                      setFollowing(false);
+                      pauseFollowing();
                       const next = new URLSearchParams(params);
                       next.set("message", m.id);
                       setParams(next);
@@ -832,37 +809,9 @@ function Conversation({
         </Callout>
       )}
       <MessageScroller className="project-transcript">
-        <MessageScrollerViewport
+        <ChatScrollerViewport
           aria-label={t("workspaceConversation")}
           preserveScrollOnPrepend
-          onScroll={(event) => {
-            const viewport = event.currentTarget;
-            const atEnd =
-              viewport.scrollHeight -
-                viewport.scrollTop -
-                viewport.clientHeight <=
-              8;
-            if (!atEnd) {
-              setFollowing(false);
-              return;
-            }
-
-            setFollowing(true);
-            const lastMessage = messages.at(-1);
-            if (
-              lastMessage &&
-              reader.current.lastReadMessageId !== lastMessage.id
-            ) {
-              reader.current.lastReadMessageId = lastMessage.id;
-              persistReader({ ...reader.current, composerDraft: draft });
-            }
-          }}
-          onWheel={() => setFollowing(false)}
-          onTouchMove={() => setFollowing(false)}
-          onKeyDown={() => setFollowing(false)}
-          onClick={(e) => {
-            if ((e.target as HTMLElement).closest("a")) setFollowing(false);
-          }}
         >
           <MessageScrollerContent
             className={`p-page gap-stack ${ready ? "" : "invisible"}`}
@@ -873,7 +822,7 @@ function Conversation({
                 variant="outline"
                 disabled={query.isFetchingNextPage}
                 onClick={() => {
-                  setFollowing(false);
+                  pauseFollowing();
                   void query.fetchNextPage();
                 }}
               >
@@ -893,12 +842,6 @@ function Conversation({
                       : message.id
                 }
                 messageId={message.id}
-                scrollAnchor={
-                  (message.actorKind ||
-                    message.authorType ||
-                    message.role ||
-                    "user") === "user"
-                }
               >
                 {index > 0 &&
                   displayMessages[index - 1]?.id ===
@@ -981,23 +924,15 @@ function Conversation({
               </Marker>
             )}
           </MessageScrollerContent>
-        </MessageScrollerViewport>
+        </ChatScrollerViewport>
       </MessageScroller>
-      {scrollable.end && (
-        <div className="workspace-jump">
-          <Button
-            variant="outline"
-            onClick={() => {
-              setFollowing(true);
-              scrollToEnd({ behavior: "instant" });
-              reader.current.lastReadMessageId = messages.at(-1)?.id;
-              persistReader({ ...reader.current, composerDraft: draft });
-            }}
-          >
-            {t("workspaceLatest")} {unread > 0 && `· ${unread}`}
-          </Button>
-        </div>
-      )}
+      <ChatLatest
+        unread={unread}
+        onLatest={() => {
+          reader.current.lastReadMessageId = messages.at(-1)?.id;
+          persistReader({ ...reader.current, composerDraft: draft });
+        }}
+      />
       <form
         className="workspace-composer"
         onSubmit={(e) => {
