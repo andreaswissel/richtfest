@@ -10,6 +10,7 @@ import {
   index,
   primaryKey,
   foreignKey,
+  check,
 } from "drizzle-orm/pg-core";
 import type { AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress, SourceText, SourceFactInput } from "@richtfest/shared";
 
@@ -60,12 +61,13 @@ export const files = pgTable("projects_files", {
   projectId: uuid("project_id").notNull(),
   name: text("name").notNull(),
   sourceType: text("source_type").notNull(),
+  purpose: text("purpose").$type<"project_evidence" | "reference_report" | "comparison_only">().notNull().default("project_evidence"),
   sourceRef: text("source_ref"),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
-});
+}, table => ({ purposeCheck: check("projects_files_purpose_check", sql`${table.purpose} in ('project_evidence', 'reference_report', 'comparison_only')`) }));
 export const fileVersions = pgTable(
   "projects_file_versions",
   {

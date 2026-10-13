@@ -11,6 +11,13 @@ export const agentWorkflowSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("report"), reportTemplate: agentReportTemplateSchema }).strict(),
 ]);
 export type AgentWorkflow = z.infer<typeof agentWorkflowSchema>;
+// Requests can leave the format to the application; persisted policies remain exact.
+export const agentWorkflowRequestSchema = z.discriminatedUnion("mode", [
+  agentWorkflowSchema.options[0],
+  agentWorkflowSchema.options[1],
+  agentWorkflowSchema.options[2].partial({ reportTemplate: true }),
+]);
+export type AgentWorkflowRequest = z.infer<typeof agentWorkflowRequestSchema>;
 export const agentModeRecommendationSchema = z.object({
   version: z.string(),
   outcome: z.enum(["classified", "unconfigured", "fallback", "context_limit"]),

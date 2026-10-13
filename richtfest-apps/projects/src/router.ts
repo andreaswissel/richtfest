@@ -323,6 +323,7 @@ export function createRouter(getDeps: GetDeps) {
           ok({
             fileId: row.file.id,
             fileName: row.file.name,
+            purpose: row.file.purpose,
             sourceType: row.file.sourceType,
             sourceRef: row.file.sourceRef,
             versionId: row.version.id,
@@ -343,6 +344,33 @@ export function createRouter(getDeps: GetDeps) {
   );
   const representationPath = "/projects/:projectId/source-versions/:versionId/pdf-representation";
   const failure = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
+  router.patch("/projects/:projectId/files/:fileId/purpose", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("projects:read");
+      d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      const fileId = z.string().uuid().parse(req.params.fileId);
+      const purpose = z.enum(["project_evidence", "reference_report", "comparison_only"]);
+      const input = z.object({ purpose, expectedPurpose: purpose }).strict().parse(req.body);
+      const result = await d.db.transaction(async (tx: any) => {
+        const where = and(eq(files.id, fileId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId));
+        const [current] = await tx.select({ file: files }).from(files)
+          .innerJoin(projects, and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId)))
+          .where(where).for("update", { of: files });
+        if (!current) throw failure(404, "not_found", "File not found in project");
+        if (current.file.purpose !== input.expectedPurpose)
+          throw failure(409, "purpose_conflict", "File purpose changed; reload before updating");
+        const [updated] = await tx.update(files).set({ purpose: input.purpose })
+          .where(and(where, eq(files.purpose, input.expectedPurpose))).returning();
+        if (!updated) throw failure(409, "purpose_conflict", "File purpose changed; reload before updating");
+        await d.audit(tx, "projects.file.purpose.updated", "file", fileId,
+          { projectId, previousPurpose: input.expectedPurpose, purpose: input.purpose });
+        return updated;
+      });
+      return send(res, 200, ok(result));
+    } catch (e) { return next(e); }
+  });
   for (const method of ["put", "delete"] as const) {
     router[method](representationPath, async (req, res, next) => {
       try {
@@ -780,7 +808,7 @@ export function createRouter(getDeps: GetDeps) {
         const projectId = routeId(req.params.projectId);
         const fileId = routeId(req.params.fileId);
         const [file] = await d.db
-          .select({ id: files.id })
+          .select({ id: files.id, purpose: files.purpose })
           .from(files)
           .where(
             and(
@@ -802,7 +830,7 @@ export function createRouter(getDeps: GetDeps) {
         return send(
           res,
           200,
-          ok(versions.map((version: any) => ({ ...version, pdfRepresentation: representations[version.id] ?? null }))),
+          ok(versions.map((version: any) => ({ ...version, purpose: file.purpose, pdfRepresentation: representations[version.id] ?? null }))),
         );
       } catch (e) {
         return next(e);

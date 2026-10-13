@@ -21,7 +21,7 @@ export function agentOutputSchemas(limits: AgentExecutionLimits = agentExecution
     plan: z.object({ messages, documentTemplate: acousticConceptIdSchema.nullish(), tasks: z.array(z.object({
       role: specialistRoleSchema,
       goal: z.string().min(1).max(2000),
-      sourceVersionIds: z.array(z.string().uuid()).max(10),
+      sourceVersionIds: z.array(z.string().uuid()).max(100),
     })).min(1).max(4) }),
     specialist,
     review: specialist.extend({

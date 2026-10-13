@@ -6,6 +6,7 @@ import { files, fileVersions, projects, sourceRepresentations } from "./schema";
 /** Read only explicit, still-ready pairings. Confirmation attests a matching full export, not content approval. */
 export async function readPdfRepresentations(
   db: any, tenantId: string, projectId: string, versionIds: string[],
+  evidenceOnly = false,
 ): Promise<Record<string, SourcePdfRepresentation>> {
   if (!versionIds.length) return {};
   const original = alias(fileVersions, "representation_original");
@@ -19,7 +20,8 @@ export async function readPdfRepresentations(
     .innerJoin(projects, and(eq(projects.id, projectId), eq(projects.tenantId, tenantId)))
     .innerJoin(pdf, and(eq(pdf.id, sourceRepresentations.pdfVersionId), eq(pdf.tenantId, tenantId), eq(pdf.status, "ready"), eq(pdf.mimeType, "application/pdf")))
     .innerJoin(pdfFile, and(eq(pdfFile.id, pdf.fileId), eq(pdfFile.tenantId, tenantId), eq(pdfFile.projectId, projectId)))
-    .where(and(eq(sourceRepresentations.tenantId, tenantId), inArray(sourceRepresentations.originalVersionId, versionIds)));
+    .where(and(eq(sourceRepresentations.tenantId, tenantId), inArray(sourceRepresentations.originalVersionId, versionIds),
+      ...(evidenceOnly ? [eq(originalFile.purpose, "project_evidence"), eq(pdfFile.purpose, "project_evidence")] : [])));
   const result: Record<string, SourcePdfRepresentation> = {};
   for (const row of rows) {
     if (!/\.afpub$/i.test(row.originalName) || row.link.originalVersionId === row.pdf.id) continue;

@@ -239,8 +239,9 @@ export async function testWorkflowDefault() {
           } else {
             await f.submit();
             assert(
-              f.runs.length === 0,
-              "Report without sources must stay blocked",
+              f.runs.length === 1 && f.runs[0].workflow.mode === "report" &&
+                !f.runs[0].workflow.reportTemplate && f.runs[0].sourceVersionIds.length === 0,
+              "Report must request automatic evidence and format selection",
             );
           }
         } else {

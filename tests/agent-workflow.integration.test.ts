@@ -6,7 +6,7 @@ import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
 import { stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
 import { agentRuns, agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEvents,
-  supervisorRuns, tasks, artifacts, artifactRevisions, conversations, messages, drafts } from "../richtfest-apps/knowledge/src/schema";
+  supervisorRuns, tasks, artifacts, artifactRevisions, annotations, conversations, messages, drafts } from "../richtfest-apps/knowledge/src/schema";
 import { agentPresetSnapshotSchema } from "../richtfest-shared/src/agent-policy";
 
 const integration = process.env.DATABASE_URL ? test : test.skip;
@@ -77,7 +77,7 @@ async function fixture() {
     calls: () => ({ providerCalls, supervisorCalls, decisionCalls }),
     close: async () => {
       await new Promise<void>(resolve => server.close(() => resolve()));
-      for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, artifactRevisions,
+      for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, annotations, artifactRevisions,
         artifacts, messages, supervisorRuns, tasks, agentRuns, conversations, drafts])
         await db.delete(table).where(eq(table.tenantId, tenantId));
       await pool.end();
@@ -185,7 +185,7 @@ integration(`team supervision does not force an acoustic report (independent rev
   } finally { await f.close(); }
 });
 
-integration("report requires sources and an exact template before run creation", async () => {
+integration("report rejects empty evidence and invalid formats, and preserves explicit formats", async () => {
   const f = await fixture();
   try {
     for (const workflow of [{ mode: "report" }, { mode: "report", reportTemplate: "unknown" },
@@ -203,6 +203,51 @@ integration("report requires sources and an exact template before run creation",
       expect(result.body.data.modelPolicy.workflow).toEqual(workflow);
     }
     expect(await f.rows(supervisorRuns)).toHaveLength(3);
+  } finally { await f.close(); }
+});
+
+integration("report snapshots automatic evidence and infers its format without reusing earlier answers", async () => {
+  const f = await fixture();
+  const versions = Array.from({ length: 12 }, () => crypto.randomUUID());
+  const inventory = versions.map((versionId, index) => ({ fileId: crypto.randomUUID(), name: `Plan ${index}.pdf`, versionId, version: 2, mimeType: "application/pdf" }));
+  f.d.validateSourceVersion = async (project, id) => project === f.projectId && versions.includes(id);
+  f.d.listProjectSources = async () => ({ sources: [...inventory], truncated: false, authority: "unreviewed_source_inventory" });
+  try {
+    const [conversation] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId, title: "Test report", createdBy: f.d.actorId }).returning();
+    const [message] = await f.db.insert(messages).values({ tenantId: f.d.tenantId, conversationId: conversation.id, actorKind: "agent", body: "HELD_OUT_EXPECTED_ANSWER", authorId: f.d.actorId }).returning();
+    const [artifact] = await f.db.insert(artifacts).values({ tenantId: f.d.tenantId, projectId: f.projectId, title: "Earlier answer", type: "report", createdBy: f.d.actorId }).returning();
+    const [revision] = await f.db.insert(artifactRevisions).values({ tenantId: f.d.tenantId, artifactId: artifact.id, version: 1, title: "Earlier answer", content: "HELD_OUT_COMMENTED_DOCUMENT", createdBy: f.d.actorId }).returning();
+    await f.db.insert(annotations).values({ tenantId: f.d.tenantId, projectId: f.projectId, artifactRevisionId: revision.id, messageId: message.id, body: "HELD_OUT_FEEDBACK", createdBy: f.d.actorId });
+    const result = await f.post("/runs", { ...f.input, conversationId: conversation.id, goal: "Erstelle ein Außenlärmkonzept", workflow: { mode: "report" } });
+    expect(result.status).toBe(201);
+    expect(result.body.data.sourceVersionIds).toEqual(versions);
+    expect(result.body.data.modelPolicy.workflow).toEqual({ mode: "report", reportTemplate: "exterior-noise-concept" });
+    // A later upload must not broaden an already pinned report's plan.
+    const later = crypto.randomUUID();
+    inventory.push({ ...inventory[0], versionId: later, fileId: crypto.randomUUID() });
+    let context: any;
+    f.d.executeSupervisor = async input => {
+      context = input.context;
+      return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Review evidence", sourceVersionIds: versions }] } };
+    };
+    await stepSupervisor(f.d, result.body.data.id);
+    expect((await f.rows(supervisorRuns))[0].phase).toBe("specialists");
+    expect(context.sourceInventory.sources.map((s: any) => s.versionId)).toEqual(versions);
+    expect(JSON.stringify(context)).not.toContain("HELD_OUT_");
+    expect(context.history).toEqual([]);
+    expect(context.documentReview).toEqual({ comments: [], documents: [] });
+    expect((await f.rows(agentRuns)).find((r: any) => r.id === result.body.data.id).sourceVersionIds).toEqual(versions);
+    for (const [goal, expected] of [["Write an interior noise report", "interior-noise-concept"], ["Review sound insulation", "sound-insulation-review"]]) {
+      const created = await f.post("/runs", { ...f.input, goal, sourceVersionIds: [versions[0]], workflow: { mode: "report" } });
+      expect(created.status).toBe(201);
+      expect(created.body.data.sourceVersionIds).toEqual([versions[0]]);
+      expect(created.body.data.modelPolicy.workflow.reportTemplate).toBe(expected);
+    }
+    const count = (await f.rows(agentRuns)).length;
+    f.d.listProjectSources = async () => ({ sources: [], truncated: true, authority: "unreviewed_source_inventory" });
+    expect((await f.post("/runs", { ...f.input, workflow: { mode: "report" } })).status).toBe(409);
+    expect(await f.rows(agentRuns)).toHaveLength(count);
+    expect(f.calls().providerCalls).toBe(0);
   } finally { await f.close(); }
 });
 

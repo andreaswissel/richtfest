@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useApi, useWrite } from "../query";
-import { list, type RecordData } from "../api";
+import { type RecordData } from "../api";
 import { useT } from "../i18n";
 import { AgentEffortControl } from "./agent-effort-control";
 import {
@@ -16,7 +16,7 @@ import { Section } from "./layout";
 import { Textarea } from "./ui/input";
 import { AgentRunReview } from "./agent-run-review";
 import { AgentRunRetryActions } from "./agent-run-retry-actions";
-import { NativeSelect } from "./ui/native-select";
+import { AgentSourcePicker } from "./agent-source-picker";
 import { Button } from "./ui/button";
 import { Badge, Callout, Empty, Field, Form, Modal } from "./ui/primitives";
 import "./agent-runs.css";
@@ -37,7 +37,7 @@ export function AgentRuns({
   });
   const [goal, setGoal] = useState("");
   const [open, setOpen] = useState(false);
-  const [fileId, setFileId] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [sources, setSources] = useState<{ id: string; label: string }[]>([]);
   const readiness = useApi("/agent/readiness");
   const supervisor = readiness.data?.supervisor;
@@ -51,13 +51,9 @@ export function AgentRuns({
     active: open,
   };
   const workflowDecision = useWorkflowDecision(workflowContext);
-  const files = useApi(`/projects/${projectId}/files`, open);
-  const versions = useApi(
-    `/projects/${projectId}/files/${fileId}/versions`,
-    open && !!fileId,
-  );
   const create = useWrite("/knowledge/runs", () => {
     setOpen(false);
+    setPickerOpen(false);
     setSources([]);
     setWorkflow({ mode: "suggest" });
   });
@@ -153,48 +149,25 @@ export function AgentRuns({
               value={effort}
               onChange={setEffort}
             />
-            <Field label={t("source")}>
-              <NativeSelect
-                value={fileId}
-                onChange={(e) => setFileId(e.target.value)}
-              >
-                <option value="">{t("chooseSource")}</option>
-                {list(files.data, "files").map((file) => (
-                  <option key={file.id} value={file.id}>
-                    {file.name}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            {fileId && (
-              <Field label={t("version")}>
-                <NativeSelect
-                  value=""
-                  onChange={(e) => {
-                    const version = list(versions.data).find(
-                      (v) => v.id === e.target.value,
-                    );
-                    const file = list(files.data, "files").find(
-                      (f) => f.id === fileId,
-                    );
-                    if (version && !sources.some((s) => s.id === version.id))
-                      setSources([
-                        ...sources,
-                        {
-                          id: version.id,
-                          label: `${file?.name} · ${version.version}`,
-                        },
-                      ]);
-                  }}
-                >
-                  <option value="">{t("addSourceVersion")}</option>
-                  {list(versions.data).map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.version}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </Field>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setPickerOpen(!pickerOpen)}
+            >
+              {t("addSourceVersion")}
+            </Button>
+            {pickerOpen && (
+              <AgentSourcePicker
+                projectId={projectId}
+                onSelect={(source) =>
+                  setSources((current) =>
+                    current.some((s) => s.id === source.id)
+                      ? current
+                      : [...current, source],
+                  )
+                }
+              />
             )}
             {sources.map((source) => (
               <div key={source.id} className="task-row">

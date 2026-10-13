@@ -298,6 +298,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const limits = policy.executionLimits;
     const schemas = agentOutputSchemas(limits);
+    // A fresh report must not inherit earlier answers through quoted artifact feedback.
+    const documentReview = policy.workflow?.mode === "report"
+      ? { comments: [], documents: [] }
+      : await artifactReviewContext(d, run.conversationId);
     await assertCompanyKnowledgeCurrent(d, (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []));
     const assertActive = async () => {
       if (!(await commit(d, run, token, async () => {})))
@@ -360,7 +364,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         componentCatalog: await d.componentContext?.(run.goal),
-        documentReview: await artifactReviewContext(d, run.conversationId),
+        documentReview,
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.
           const profiles: ProfileSnapshot[] = state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] }));
@@ -688,6 +692,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const readCompleteSources = !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
+      if (workflow?.mode === "report") {
+        await sources(d, run.projectId, run.sourceVersionIds);
+        // Report evidence is pinned at creation, not expanded by later uploads.
+        sourceInventory.sources = sourceInventory.sources.filter(source => run.sourceVersionIds.includes(source.versionId));
+      }
       const availableSourceIds = new Set<string>([
         ...run.sourceVersionIds,
         ...sourceInventory.sources.map((source) => source.versionId),
@@ -745,9 +754,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         workflow,
         sourceVersionIds: run.sourceVersionIds,
         sourceInventory,
-        history: history.slice(0, 20)
+        // New reports start from their request and evidence, not an earlier answer
+        // or a quoted comparison report already present in conversation history.
+        history: (workflow?.mode === "report" ? [] : history).slice(0, 20)
           .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) })).reverse(),
-        artifacts: recentArtifacts,
+        artifacts: workflow?.mode === "report" ? [] : recentArtifacts,
       };
       let fastSummary = false;
       const routing = policy.decisionRouting;
@@ -959,7 +970,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   - ((policy.specialists[assignment.role as keyof typeof policy.specialists]?.maxSteps ?? 1) >= 2 ? COMPANY_KNOWLEDGE_CONTEXT_BYTES : 0)
                   - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
                     sourceVersionIds: assignment.sourceVersionIds,
-                    documentReview: await artifactReviewContext(d, run.conversationId),
+                    documentReview,
                     profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
                     budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
                   }), "utf8"));
@@ -1127,7 +1138,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxParallel: policy.maxParallel,
           inputByteBudget: agentModelInputByteBudget(run.provider, policy.supervisor.modelId, policy.supervisor.maxOutputTokens),
           contextOverhead: {
-            documentReview: await artifactReviewContext(d, run.conversationId),
+            documentReview,
             profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
             budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
           },
@@ -1367,7 +1378,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       }).flat();
       const legacyCount = sliceResults.length;
       const contextOverhead = {
-        goal, documentReview: await artifactReviewContext(d, run.conversationId),
+        goal, documentReview,
         componentCatalog: await d.componentContext?.(run.goal),
         profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
         budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },

@@ -23,7 +23,7 @@ import {
   type WorkflowSelection,
 } from "../agent-workflow-control";
 import { AgentSourcePicker } from "../agent-source-picker";
-import type { AgentWorkflow } from "@richtfest/shared";
+import type { AgentWorkflowRequest } from "@richtfest/shared";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -321,7 +321,7 @@ function Conversation({
       sourceVersionIds: string[];
       messageId?: string;
       effort: string;
-      workflow: AgentWorkflow;
+      workflow: AgentWorkflowRequest;
     }) =>
       api("/knowledge/runs", {
         projectId,
@@ -545,7 +545,7 @@ function Conversation({
       body: string;
       parentMessageId?: string;
       sourceVersionIds: string[];
-      workflow: AgentWorkflow;
+      workflow: AgentWorkflowRequest;
       effort: string;
       steeringRunId?: string;
     }) =>
@@ -628,7 +628,7 @@ function Conversation({
     void (
       readiness.data?.executionAvailable && !isPositiveFeedback(initialMessage)
         ? workflowDecision.resolve()
-        : Promise.resolve({ mode: "chat" } as AgentWorkflow)
+        : Promise.resolve({ mode: "chat" } as AgentWorkflowRequest)
     ).then((resolved) => {
       if (resolved)
         send.mutate({
@@ -1006,7 +1006,7 @@ function Conversation({
               readiness.data?.executionAvailable &&
               (attachments.length > 0 || !isPositiveFeedback(draft))
                 ? await workflowDecision.resolve()
-                : ({ mode: "chat" } as AgentWorkflow);
+                : ({ mode: "chat" } as AgentWorkflowRequest);
             if (resolved) send.mutate({ ...submitted, workflow: resolved });
           }
         }}
@@ -1025,8 +1025,7 @@ function Conversation({
           >
             {t("addSourceVersion")}
           </Button>
-          {(pickerOpen ||
-            (workflow.mode === "report" && !activeSupervisorRun)) && (
+          {pickerOpen && (
             <AgentSourcePicker
               projectId={projectId}
               onSelect={(source) => {

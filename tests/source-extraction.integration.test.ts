@@ -486,6 +486,44 @@ run("Affinity PDF links require confirmation and preserve exact revisions, acces
     expect((await send({ expectedPdfVersionId: replacement.versionId }, "DELETE")).status).toBe(200);
     expect((await getOriginal()).pdfRepresentation).toBeNull();
     expect(audits).toEqual(["projects.source.pdf_representation.confirmed", "projects.source.pdf_representation.confirmed", "projects.source.pdf_representation.removed"]);
+
+    // A reference/comparison file remains inspectable by a person, but cannot
+    // enter agent evidence through a filename, exact ID, PDF link or visual tool.
+    expect((await send(body)).status).toBe(200);
+    const purposePath = `${base}/files/${pdf.fileId}/purpose`;
+    const classify = (purpose: string, expectedPurpose = "project_evidence", target = purposePath) => send({ purpose, expectedPurpose }, "PATCH", target);
+    const immutableVersions = await db.select().from(fileVersions);
+    deniedPermission = "projects:write"; expect((await classify("reference_report")).status).toBe(403); deniedPermission = "";
+    accessTenant = crypto.randomUUID(); expect((await classify("reference_report")).status).toBe(404); accessTenant = tenantId;
+    expect((await classify("reference_report", "project_evidence", purposePath.replace(projectId, crypto.randomUUID()))).status).toBe(404);
+    expect((await classify("unknown")).status).toBe(400);
+    failAudit = true; expect((await classify("reference_report")).status).toBe(500); failAudit = false;
+    expect(await host.validateSourceVersion(projectId, pdf.versionId)).toBe(true);
+    let previous = "project_evidence";
+    for (const purpose of ["reference_report", "comparison_only"]) {
+      expect((await classify(purpose, previous)).status).toBe(200);
+      expect((await classify(purpose, previous)).status).toBe(409);
+      const human = (await (await fetch(`${base}/source-versions/${pdf.versionId}`)).json()).data;
+      expect(human).toMatchObject({ purpose, versionId: pdf.versionId });
+      expect(human.downloadUrl).toContain(pdf.fileId);
+      expect((await getOriginal()).pdfRepresentation.pdf.versionId).toBe(pdf.versionId);
+      const evidenceInventory = await host.listProjectSources(projectId);
+      expect(evidenceInventory.sources.map(s => s.versionId)).not.toContain(pdf.versionId);
+      expect(evidenceInventory.sources.map(s => s.versionId)).not.toContain(newPdfId);
+      expect(await host.validateSourceVersion(projectId, pdf.versionId)).toBe(false);
+      expect(await host.validateSourceVersion(projectId, newPdfId)).toBe(false);
+      for (const input of [{ versionId: pdf.versionId }, { fileId: pdf.fileId }, { query: "matching-export" }])
+        expect((await host.resolveSource(projectId, input) as any).status).toBe("missing_input");
+      expect((await host.resolveSource(projectId, { versionId: original.versionId }) as any).source.pdfRepresentation).toBeNull();
+      expect(await host.readSourcePdf!(projectId, pdf.versionId)).toBeNull();
+      await expect(host.inspectSource!(projectId, { versionId: pdf.versionId, page: 1 }, new AbortController().signal)).rejects.toMatchObject({ status: 403 });
+      const visualHost = knowledgeDeps(db, { actor: { id: actorId, tenantId, permissions: new Set(["projects:read", "knowledge:read", "agent:run"]) } } as any);
+      await expect(visualHost.inspectSource!(projectId, { versionId: pdf.versionId, page: 1 }, new AbortController().signal)).rejects.toMatchObject({ status: 404 });
+      expect(await host.sourceReferences(projectId, [pdf.versionId])).toMatchObject([{ versionId: pdf.versionId }]);
+      previous = purpose;
+    }
+    expect(await db.select().from(fileVersions)).toEqual(immutableVersions);
+    expect(audits.filter(action => action === "projects.file.purpose.updated")).toHaveLength(2);
   } finally {
     server?.closeAllConnections(); server?.close();
     await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();

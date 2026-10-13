@@ -147,6 +147,12 @@ export const knowledgeDeps = (
   };
   return {
     ...base(db, req),
+    // Only agent source access is evidence-only. Other apps retain generic validation.
+    validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
+      sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id
+        where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid
+        and v.status='ready' and f.purpose='project_evidence' limit 1`,
+    )).rows.length),
     userNames: async (userIds) => {
       if (!userIds.length) return {};
       const result = await db.execute(sql`select u.id, u.name from os_users u
@@ -215,7 +221,7 @@ export const knowledgeDeps = (
       // Fetch one extra row to expose truncation without an unbounded count or
       // sending private storage/provenance fields to the provider.
       const result = await db.execute(
-        sql`select "fileId", name, "versionId", version, "mimeType" from (select distinct on (f.id) f.id as "fileId", left(f.name, 500) as name, v.id as "versionId", v.version, v.mime_type as "mimeType", v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready' order by f.id,v.version desc) latest order by "createdAt" desc limit 101`,
+        sql`select "fileId", name, "versionId", version, "mimeType" from (select distinct on (f.id) f.id as "fileId", left(f.name, 500) as name, v.id as "versionId", v.version, v.mime_type as "mimeType", v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and f.purpose='project_evidence' and v.status='ready' order by f.id,v.version desc) latest order by "createdAt" desc limit 101`,
       );
       const rows = result.rows as {
         fileId: string;
@@ -225,7 +231,7 @@ export const knowledgeDeps = (
         mimeType: string;
       }[];
       const representations = await readPdfRepresentations(db, actor.tenantId, projectId,
-        rows.slice(0, 100).filter(row => /\.afpub$/i.test(row.name)).map(row => row.versionId));
+        rows.slice(0, 100).filter(row => /\.afpub$/i.test(row.name)).map(row => row.versionId), true);
       // Include pinned historical PDFs as selectable evidence, not just their
       // latest revisions. The native source remains a distinct citation target.
       const sources = [...new Map(rows.slice(0, 100).flatMap(row => {
@@ -258,7 +264,7 @@ export const knowledgeDeps = (
       const result = await db.execute(sql`select v.storage_key as "storageKey", v.mime_type as "mimeType", f.name
         from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${input.versionId}::uuid
-        and v.status='ready' limit 1`);
+        and f.purpose='project_evidence' and v.status='ready' limit 1`);
       const source = result.rows[0] as { storageKey: string; mimeType: string; name: string } | undefined;
       if (!source) throw new HttpError(404, "not_found", "Source version not found in project");
       const stream = await fileStorage.read(source.storageKey, signal);
@@ -269,7 +275,7 @@ export const knowledgeDeps = (
       const result = await db.execute(sql`select v.storage_key as "storageKey", v.mime_type as "mimeType"
         from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid
-        and v.status='ready' and v.mime_type='application/pdf' limit 1`);
+        and f.purpose='project_evidence' and v.status='ready' and v.mime_type='application/pdf' limit 1`);
       const source = result.rows[0] as { storageKey: string; mimeType: string } | undefined;
       if (!source) return null;
       const download = await fileStorage.download(source.storageKey, source.mimeType, "");
@@ -284,7 +290,7 @@ export const knowledgeDeps = (
     },
     resolveSource: async (projectId, input) => {
       const result = await db.execute(
-        sql`select distinct on (f.id) f.id as "fileId", f.name, v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,
+        sql`select distinct on (f.id) f.id as "fileId", f.name, v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and f.purpose='project_evidence' and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,
       );
       const rows = result.rows as any[];
       const latest = [
@@ -306,7 +312,7 @@ export const knowledgeDeps = (
       const { storageKey, ...source } = selected;
       const content = await readSourceEvidence(db, actor.tenantId, source.versionId, { ...input, name: source.name, mimeType: source.mimeType ?? "" });
       const pdfRepresentation = /\.afpub$/i.test(source.name)
-        ? (await readPdfRepresentations(db, actor.tenantId, projectId, [source.versionId]))[source.versionId] ?? null : null;
+        ? (await readPdfRepresentations(db, actor.tenantId, projectId, [source.versionId], true))[source.versionId] ?? null : null;
       return {
         status: "resolved",
         source: { ...source, pdfRepresentation },

@@ -5,7 +5,7 @@ import { useT } from "../i18n";
 import { NativeSelect } from "./ui/native-select";
 import { Callout, Field } from "./ui/primitives";
 
-/** Mount only on explicit picker opening or report use, never on navigation. */
+/** Mount only on explicit picker opening, never on navigation or mode changes. */
 export function AgentSourcePicker({
   projectId,
   onSelect,
@@ -16,9 +16,17 @@ export function AgentSourcePicker({
   const t = useT();
   const [fileId, setFileId] = useState("");
   const files = useApi(`/projects/${projectId}/files`);
+  const evidenceFiles = list(files.data, "files").filter(
+    (file) =>
+      file.purpose !== "reference_report" && file.purpose !== "comparison_only",
+  );
+  const evidenceFilesById = new Map(
+    evidenceFiles.map((file) => [file.id, file]),
+  );
+  const selectedFile = evidenceFilesById.get(fileId);
   const versions = useApi(
     `/projects/${projectId}/files/${fileId}/versions`,
-    !!fileId,
+    !!selectedFile,
   );
   return (
     <div className="flex flex-wrap gap-stack">
@@ -28,14 +36,14 @@ export function AgentSourcePicker({
           onChange={(e) => setFileId(e.target.value)}
         >
           <option value="">{t("chooseSource")}</option>
-          {list(files.data, "files").map((file) => (
+          {evidenceFiles.map((file) => (
             <option key={file.id} value={file.id}>
               {file.name}
             </option>
           ))}
         </NativeSelect>
       </Field>
-      {fileId && (
+      {selectedFile && (
         <Field label={t("version")}>
           <NativeSelect
             value=""
@@ -45,7 +53,7 @@ export function AgentSourcePicker({
                   (v) => `pdf:${v.id}` === e.target.value,
                 );
                 const pdf = original?.pdfRepresentation?.pdf;
-                if (pdf)
+                if (pdf && evidenceFilesById.has(pdf.fileId))
                   onSelect({
                     id: pdf.versionId,
                     label: `${pdf.fileName} · ${pdf.version}`,
@@ -55,13 +63,10 @@ export function AgentSourcePicker({
               const version = list(versions.data).find(
                 (v) => v.id === e.target.value,
               );
-              const file = list(files.data, "files").find(
-                (f) => f.id === fileId,
-              );
               if (version)
                 onSelect({
                   id: version.id,
-                  label: `${file?.name} · ${version.version}`,
+                  label: `${selectedFile.name} · ${version.version}`,
                 });
             }}
           >
@@ -75,10 +80,8 @@ export function AgentSourcePicker({
               .filter(
                 (v) =>
                   v.pdfRepresentation &&
-                  /\.afpub$/i.test(
-                    list(files.data, "files").find((f) => f.id === fileId)
-                      ?.name || "",
-                  ),
+                  evidenceFilesById.has(v.pdfRepresentation.pdf.fileId) &&
+                  /\.afpub$/i.test(selectedFile.name || ""),
               )
               .map((v) => (
                 <option key={`pdf:${v.id}`} value={`pdf:${v.id}`}>

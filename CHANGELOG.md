@@ -2,6 +2,8 @@
 
 ## 2026-10-13
 
+- Reports now start from a goal and project evidence without requiring a template or attachments. File-purpose controls keep reference reports and comparison-only material out of agent evidence while preserving originals and human previews. Fresh Reports exclude earlier conversation answers and document-comment excerpts; existing reports remain unchanged.
+
 - Affinity originals can now be linked to a confirmed full PDF export at exact revisions. Agents can select and cite that PDF without confusing it with a cover preview; new revisions never inherit links or approval. Stale historical attempt records were reconciled without deleting run history or inventing missing usage.
 
 - Project agents can inspect exact source pages and crops, index documents in smaller batches, and draft independent report sections in parallel. Failed source processing can be recovered without re-uploading or changing versions, citations or reviews. Processing diagnostics and retry checkpoints preserve clear limits; visual observations remain unreviewed.

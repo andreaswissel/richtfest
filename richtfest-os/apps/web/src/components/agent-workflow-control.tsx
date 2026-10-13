@@ -1,25 +1,23 @@
 import { useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
-import type { AgentWorkflow, AgentModeRecommendation } from "@richtfest/shared";
+import type {
+  AgentWorkflowRequest,
+  AgentModeRecommendation,
+} from "@richtfest/shared";
 import { api } from "../api";
 import { useT } from "../i18n";
 import { Button } from "./ui/button";
-import { NativeSelect } from "./ui/native-select";
 import { Callout, Field, Segmented } from "./ui/primitives";
 
 // Suggest is a composer choice, not an executable or persisted run workflow.
-export type WorkflowSelection = AgentWorkflow | { mode: "suggest" };
+export type WorkflowSelection = AgentWorkflowRequest | { mode: "suggest" };
 
 export function workflowReady(
   workflow: WorkflowSelection,
-  sources: string[],
+  _sources: string[],
   enabled: boolean,
 ) {
-  return (
-    workflow.mode === "suggest" ||
-    workflow.mode === "chat" ||
-    (enabled && (workflow.mode !== "report" || sources.length > 0))
-  );
+  return workflow.mode === "suggest" || workflow.mode === "chat" || enabled;
 }
 
 type WorkflowContext = {
@@ -90,7 +88,7 @@ export function useWorkflowDecision(props: WorkflowContext) {
     error,
     request,
     isPending: suggest.isPending,
-    resolve: async (): Promise<AgentWorkflow | undefined> => {
+    resolve: async (): Promise<AgentWorkflowRequest | undefined> => {
       if (props.active === false) return;
       if (props.steering) return { mode: "chat" }; // Existing run retains its own workflow.
       if (props.value.mode !== "suggest") return props.value;
@@ -151,41 +149,11 @@ export function AgentWorkflowControl({
             onChange={(mode) =>
               onChange(
                 mode === "report"
-                  ? {
-                      mode: "report",
-                      reportTemplate: "sound-insulation-review",
-                    }
+                  ? { mode: "report" }
                   : { mode: mode as "suggest" | "chat" | "team" },
               )
             }
           />
-        </Field>
-      )}
-      {!steering && value.mode === "report" && (
-        <Field label={t("agentReportTemplate")}>
-          <NativeSelect
-            value={value.reportTemplate}
-            disabled={steering}
-            onChange={(e) =>
-              onChange({
-                mode: "report",
-                reportTemplate: e.target.value as Extract<
-                  AgentWorkflow,
-                  { mode: "report" }
-                >["reportTemplate"],
-              })
-            }
-          >
-            <option value="sound-insulation-review">
-              {t("agentTemplateSound")}
-            </option>
-            <option value="interior-noise-concept">
-              {t("agentTemplateInterior")}
-            </option>
-            <option value="exterior-noise-concept">
-              {t("agentTemplateExterior")}
-            </option>
-          </NativeSelect>
         </Field>
       )}
       <Button
@@ -209,7 +177,7 @@ export function AgentWorkflowControl({
             <Callout>{t("agentTeamUnavailable")}</Callout>
           )}
           {value.mode === "report" && !sourceVersionIds.length && (
-            <Callout>{t("agentReportSourcesRequired")}</Callout>
+            <Callout>{t("agentReportAutomaticEvidence")}</Callout>
           )}
           {(decision.error || (decision.result && !actionable)) && (
             <Callout>{t("agentSuggestionUnavailable")}</Callout>
@@ -230,10 +198,7 @@ export function AgentWorkflowControl({
                 onClick={() =>
                   onChange(
                     recommendation === "report"
-                      ? {
-                          mode: "report",
-                          reportTemplate: "sound-insulation-review",
-                        }
+                      ? { mode: "report" }
                       : { mode: recommendation as "chat" | "team" },
                   )
                 }

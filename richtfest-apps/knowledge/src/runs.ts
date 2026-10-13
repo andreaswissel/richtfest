@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, agentWorkflowSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
 import { companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
@@ -44,14 +44,14 @@ import {
 } from "./run-reasons";
 const runInput = z.object({
   effort: z.enum(["low", "medium", "high", "ultra"]).default("medium"),
-  workflow: agentWorkflowSchema.optional(),
+  workflow: agentWorkflowRequestSchema.optional(),
   messageId: z.string().uuid().optional(),
   intent: z.enum(["assist", "calculation"]).default("assist"),
   projectId: z.string().uuid(),
   conversationId: z.string().uuid().optional(),
   taskId: z.string().uuid().optional(),
   goal: z.string().trim().min(1).max(5000),
-  sourceVersionIds: z.array(z.string().uuid()).max(10).default([]),
+  sourceVersionIds: z.array(z.string().uuid()).max(100).default([]),
 });
 export const directOutputSchema = (limits?: AgentExecutionLimits) => z.object({
   summary: z.string().trim().min(1).max(limits?.summaryMaxCharacters ?? 10000),
@@ -915,12 +915,23 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       )
         throw missing("Task not found in project and conversation");
     }
-    await sources(d, input.projectId, input.sourceVersionIds);
-    const workflow = input.workflow;
+    const workflow = input.workflow?.mode === "report"
+      ? agentWorkflowSchema.parse({ ...input.workflow,
+          reportTemplate: input.workflow.reportTemplate ?? requestedAcousticConcept(input.goal) ?? "sound-insulation-review" })
+      : input.workflow;
     if (workflow && workflow.mode !== "chat" && !d.supervisorEnabled)
       throw conflict("Team and Report require supervisor execution to be enabled");
-    if (workflow?.mode === "report" && !input.sourceVersionIds.length)
-      throw conflict("Select project source versions before starting a report");
+    if (workflow?.mode === "report" && !input.sourceVersionIds.length) {
+      const inventory = await d.listProjectSources(input.projectId);
+      if (inventory.truncated)
+        throw conflict("Project evidence exceeds the automatic selection limit. Narrow the evidence scope before starting a report.");
+      const sourceVersionIds = [...new Set(inventory.sources.map(source =>
+        source.pdfRepresentation?.pdf.versionId ?? source.versionId))];
+      if (!sourceVersionIds.length)
+        throw conflict("No ready project evidence is available. Reference and comparison reports cannot supply project facts.");
+      input = { ...input, sourceVersionIds };
+    }
+    await sources(d, input.projectId, input.sourceVersionIds);
     const provider = providerOverride ?? await d.resolveActiveProvider?.() ?? "openai";
     const calculation = input.intent === "calculation";
     const configured = calculation

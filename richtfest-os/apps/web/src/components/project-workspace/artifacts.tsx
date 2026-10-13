@@ -123,6 +123,15 @@ export function ArtifactPanel({
   const selectedFile = list(filesData, "files").find((f) => f.id === fileId);
   const selectedFileName =
     selectedFile?.name || exactSource.data?.fileName || "";
+  const sourcePurpose = version?.purpose || selectedFile?.purpose || "project_evidence";
+  const session = useApi("/auth/me");
+  const canClassify = (session.data?.permissions || session.data?.user?.permissions || []).includes("projects:write");
+  const classify = useMutation({
+    mutationFn: (purpose: string) => api(`/projects/${projectId}/files/${fileId}/purpose`,
+      { purpose, expectedPurpose: sourcePurpose }, "PATCH"),
+    onSettled: () => queryClient.invalidateQueries(),
+  });
+  useEffect(() => { classify.reset(); }, [fileId]);
   const isAffinityPublisher = /\.afpub$/i.test(selectedFileName);
   const tab = artifactId
     ? "artifacts"
@@ -254,6 +263,21 @@ export function ArtifactPanel({
                   exactSource.data?.fileName ||
                   t("source")}
               </h3>
+              {version && (
+                <Field label={t("sourcePurpose")}>
+                  <NativeSelect
+                    value={sourcePurpose}
+                    disabled={!canClassify || classify.isPending}
+                    onChange={(event) => classify.mutate(event.target.value)}
+                  >
+                    <option value="project_evidence">{t("sourcePurposeEvidence")}</option>
+                    <option value="reference_report">{t("sourcePurposeReference")}</option>
+                    <option value="comparison_only">{t("sourcePurposeComparison")}</option>
+                  </NativeSelect>
+                  <span className="text-ui-xs text-muted-foreground">{t("sourcePurposeHint")}</span>
+                </Field>
+              )}
+              {classify.error && <Callout tone="error">{classify.error.message}</Callout>}
               <Field label={t("version")}>
                 <NativeSelect
                   value={versionId || ""}
@@ -340,12 +364,18 @@ export function ArtifactPanel({
                     {t("workspaceUnreviewedSource")} ·{" "}
                     {version.checksum || t("workspaceChecksumUnavailable")}
                   </p>
-                  <SourceText
-                    key={version.id}
-                    projectId={projectId}
-                    conversationId={conversationId}
-                    versionId={version.id}
-                  />
+                  {sourcePurpose === "project_evidence" ? (
+                    <SourceText
+                      key={version.id}
+                      projectId={projectId}
+                      conversationId={conversationId}
+                      versionId={version.id}
+                    />
+                  ) : (
+                    <Callout>
+                      {t(sourcePurpose === "comparison_only" ? "sourceComparisonOnly" : "sourceReferenceReport")}
+                    </Callout>
+                  )}
                 </>
               )}
               <VersionUpload projectId={projectId} fileId={fileId} />
