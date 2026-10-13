@@ -26,6 +26,11 @@ import {
   providerActivityExplanation,
   terminalProviderFailure,
 } from "./run-activity";
+import {
+  AgentThreadMessage,
+  useAgentMessageEvents,
+} from "./agent-thread-message";
+import type { WorkspaceMessage } from "./types";
 import { RunActivityFeed } from "./run-activity-feed";
 import { CraneWorkingIndicator } from "./crane-working-indicator";
 import { AgentRunMetrics, isAgentRunActive } from "../agent-run-metrics";
@@ -481,6 +486,7 @@ export function SubagentThread({
         ),
       }
     : initialRun;
+  useAgentMessageEvents(run?.conversationId, runId);
   useEffect(() => {
     setLiveEvents([]);
     setStreamStatus(undefined);
@@ -742,6 +748,13 @@ export function SubagentThread({
                   </MessageContent>
                 </Message>
               </MessageScrollerItem>
+              {(
+                query.data?.threadMessages as WorkspaceMessage[] | undefined
+              )?.map((message) => (
+                <MessageScrollerItem key={message.id} messageId={message.id}>
+                  <AgentThreadMessage message={message} projectId={projectId} />
+                </MessageScrollerItem>
+              ))}
               <MessageScrollerItem messageId={`${runId}-result`}>
                 <Message>
                   <MessageContent>

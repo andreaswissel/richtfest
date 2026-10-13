@@ -7,6 +7,7 @@ export * from "./acoustic-calculation";
 export * from "./agent-analytics";
 export * from "./agent-output";
 export * from "./agent-progress";
+export * from "./agent-message";
 export * from "./customer";
 export * from "./support";
 export * from "./location";

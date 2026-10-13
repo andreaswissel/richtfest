@@ -1,5 +1,5 @@
 import { openuiRegistryPrompt } from "@richtfest/shared/openui-registry";
-import { sourceModelEvidencePolicy, agentExecutionLimitsSchema } from "@richtfest/shared";
+import { sourceModelEvidencePolicy, agentExecutionLimitsSchema, agentMessagingPolicy } from "@richtfest/shared";
 import { validateOpenUI } from "./openui-validation";
 import type {
   ProviderRequest,
@@ -101,7 +101,7 @@ export async function callProvider(
   const maxResponseCharacters = limits ? Math.max(200000, 6 * (limits.documentMaxCharacters * 6 + limits.summaryMaxCharacters + limits.rationaleMaxCharacters + 30000)) : 200000;
   if (isVercel && !input.modelId?.trim()) throw new Error("Vercel Gateway model preset is unconfigured");
   const modelId = input.modelId ?? (isOpenAi ? process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini" : process.env.ANTHROPIC_PROJECT_MODEL ?? "claude-sonnet-4-6");
-  const effectiveInstructions = (input.systemInstructions ?? `${instructions}\n${sourceModelEvidencePolicy} resolve_project_source also accepts entityKey and modelOffset to retrieve more saved facts; textQuery ranks fact predicates/values before falling back to saved document text.`) +
+  const effectiveInstructions = (input.systemInstructions ?? `${instructions}\n${agentMessagingPolicy}\n${sourceModelEvidencePolicy} resolve_project_source also accepts entityKey and modelOffset to retrieve more saved facts; textQuery ranks fact predicates/values before falling back to saved document text.`) +
     (limits ? `\nResponse limits: summary at most ${limits.summaryMaxCharacters} characters; rationale at most ${limits.rationaleMaxCharacters} characters; artifact.content and create_draft content at most ${limits.documentMaxCharacters} characters. These are not token limits.` : "") +
     (input.includeOpenUI === false ? "" : "\nThe following registry instructions apply ONLY inside the optional openui JSON string. The outer response remains JSON with summary first.\n" + openuiRegistryPrompt);
   const effort = reasoningEffortForModel(input.provider, modelId, input.reasoningEffort);

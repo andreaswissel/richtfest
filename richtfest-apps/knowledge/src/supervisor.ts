@@ -17,6 +17,7 @@ import {
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider } from "./usage";
+import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage } from "./agent-messages";
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
@@ -319,6 +320,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       // Retry state lives in the existing durable phase history. A restart must
       // honor the saved deadline and attempt budget, not start a fresh burst.
       const callKey = checkpointHash({ phase, goal, context, runId, revision: state.revision });
+      const [sender] = runId === run.id ? [run] : await d.db.select().from(agentRuns).where(and(
+        eq(agentRuns.id, runId), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.parentRunId, run.id),
+      ));
+      if (!sender) throw conflict("Message sender is not part of this execution");
       const checkpoint = state.history.findLast((entry: any) => entry.phase === "provider_retry" && entry.callKey === callKey);
       const sameGeneration = checkpoint?.generation === state.generation;
       const callId = sameGeneration ? checkpoint.callId : crypto.randomUUID();
@@ -342,6 +347,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const providerContext = {
         ...(context as object),
         acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
+        ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         documentReview: await artifactReviewContext(d, run.conversationId),
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.
@@ -453,6 +459,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           });
           if (response.status !== "completed") throw conflict("Provider unavailable");
           const completed = await commit(d, run, token, async (tx, current) => {
+            // The stable phase key and receipt commit with delivery: replay cannot
+            // publish an exchange twice, even if the phase checkpoint is retried.
+            const outgoing = (response.output as { messages?: unknown[] }).messages ?? [];
+            for (const [index, message] of outgoing.entries())
+              await deliverAgentMessage(d, tx, sender, message, `supervisor:${callKey}:${index}`);
             await tx.update(supervisorRuns).set({ history: current.history.filter((entry: any) =>
               entry.phase !== "provider_retry" || entry.callKey !== callKey) }).where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "provider_call_completed", phase, callId);
@@ -548,6 +559,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             .select({
               body: messages.body,
               actorKind: messages.actorKind,
+              agentMessage: messages.agentMessage,
               sourceVersionIds: messages.sourceVersionIds,
               annotation: {
                 sourceVersionId: annotations.sourceVersionId,
@@ -741,6 +753,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 ?? assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
                   // Five tool schemas currently serialize to ~18 KiB; leave headroom.
                   - (assignment.role === "sound_insulation" && d.calculateAcoustics ? 24576 : 0)
+                  - AGENT_MESSAGING_CONTEXT_BYTES
                   - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
                     sourceVersionIds: assignment.sourceVersionIds,
                     documentReview: await artifactReviewContext(d, run.conversationId),

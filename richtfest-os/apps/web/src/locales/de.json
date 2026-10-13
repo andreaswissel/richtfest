@@ -27,6 +27,8 @@
   "companyKnowledgeApprovalHint": "Gib den Eintrag erst nach Prüfung des Inhalts und seiner Quellen frei. Die Freigabe macht ihn für Agentenprofile auswählbar; sie weist ihn nicht automatisch zu und bestätigt keine technische Berechnung.",
   "companyKnowledgeReadOnly": "Du kannst diesen Eintrag lesen. Für die Freigabe ist die Berechtigung zur Wissensprüfung erforderlich.",
   "all": "Alle",
+  "agentMessageDelivered": "Zugestellt · beim nächsten Agentenschritt verfügbar",
+  "agentMessageReplyTo": "Ursprüngliche Nachricht ansehen",
   "newUpdatesAvailable": "Updates verfügbar",
   "reloadForUpdates": "App neu laden, um sie zu aktualisieren. Ungespeicherte Änderungen vorher speichern.",
   "moduleLoadFailed": "Ein Teil dieser Seite konnte nicht geladen werden. Möglicherweise wurde die App aktualisiert oder die Verbindung unterbrochen.",

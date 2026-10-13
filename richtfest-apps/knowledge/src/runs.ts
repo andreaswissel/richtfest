@@ -1,8 +1,9 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
+import { agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
+import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
 import {
   supervisorRuns,
   agentRuns,
@@ -106,6 +107,7 @@ export function recordResolvedEvidence(evidence: Set<string>, result: unknown) {
 }
 
 export const toolInputs = {
+  send_thread_message: agentMessageInputSchema,
   delegate_source_review: z
     .object({
       goal: z.string().min(1).max(2000),
@@ -232,6 +234,7 @@ export async function executeRun(d: AppDeps, run: any) {
           .select({
             id: messages.id,
             actorKind: messages.actorKind,
+            agentMessage: messages.agentMessage,
             body: messages.body,
             sourceVersionIds: messages.sourceVersionIds,
             annotation: {
@@ -306,6 +309,7 @@ export async function executeRun(d: AppDeps, run: any) {
       .reverse();
     const context = {
       history: boundedHistory,
+      messaging: await agentMessagingContext(d, run),
       documentReview: await artifactReviewContext(d, run.conversationId),
       artifacts: recentArtifacts,
       priorRuns: recentRuns,
@@ -454,6 +458,8 @@ export async function executeRun(d: AppDeps, run: any) {
         }
         let result: any;
         if (tool.name === "resolve_project_source") result = resolved;
+        else if (tool.name === "send_thread_message")
+          result = await deliverAgentMessage(d, tx, run, input, stepKey);
         else if (tool.name === "delegate_source_review") {
           const [task] = await tx
             .insert(tasks)
@@ -565,6 +571,8 @@ export async function executeRun(d: AppDeps, run: any) {
             ? "validated_tool_unavailable"
             : tool.name === "resolve_project_source"
               ? result.status
+              : tool.name === "send_thread_message"
+                ? "Message delivered; recipient execution unchanged"
               : "Draft or question persisted; review required",
         );
       });
@@ -603,7 +611,7 @@ export async function executeRun(d: AppDeps, run: any) {
         maxOutputTokens: executionModel?.maxOutputTokens,
         executionLimits: limits,
         goal: run.goal,
-        context: { ...context, sources: context.sources.filter(source => !results.some((entry: any) =>
+        context: { ...context, messaging: await agentMessagingContext(d, run), sources: context.sources.filter(source => !results.some((entry: any) =>
           entry.tool === "resolve_project_source" && JSON.stringify(entry.result) === JSON.stringify(source))) },
         toolResults: results,
         });
@@ -1039,6 +1047,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     return {
       run,
       events,
+      threadMessages: await runThreadMessages(d, run),
       approvals,
       attempts,
       artifacts: output,

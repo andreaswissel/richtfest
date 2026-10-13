@@ -12,6 +12,8 @@
 
 - Company knowledge now has a searchable review screen with draft and approved filters, source caveats, direct links and explicit approval. Imported training knowledge stays unapproved until a permitted reviewer confirms it; agent assignments remain separate.
 
+- Project agents can exchange questions and findings across threads in the same project. Messages appear in both chats with linked sender and recipient names, including late arrivals; delivery never interrupts or automatically restarts an agent.
+
 - Specialist source reviews now use larger, model-aware batches and fill available parallel slots immediately instead of waiting for the slowest specialist. Retries preserve saved findings and historical batch layouts; output limits and review safeguards remain unchanged.
 
 - Downloaded reports now carry Richtfest branding on generated pages, with clear revision and review status. Imported plans and calculation pages keep their original artwork and unverified-source labels. Existing reports can be downloaded again without rerunning the agent.

@@ -27,6 +27,8 @@
   "companyKnowledgeApprovalHint": "Approve only after checking the content and its sources. Approval makes this entry eligible for agent profiles; it does not assign it automatically or certify an engineering calculation.",
   "companyKnowledgeReadOnly": "You can read this entry. Approval requires knowledge review permission.",
   "all": "All",
+  "agentMessageDelivered": "Delivered · available at the next agent step",
+  "agentMessageReplyTo": "View original message",
   "newUpdatesAvailable": "New updates available",
   "reloadForUpdates": "Reload the app to update. Save any unsaved changes first.",
   "moduleLoadFailed": "Part of this page could not load. The app may have been updated, or the connection was interrupted.",

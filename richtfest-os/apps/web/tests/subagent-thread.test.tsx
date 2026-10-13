@@ -87,6 +87,49 @@ test("specialist threads show work but never independent lifecycle controls or c
   expect(wrong).toContain("not available");
 });
 
+test("agent exchanges preserve literal text and link both participants and the original message", () => {
+  const html = render(<SubagentThread projectId={projectId} runId={run.id} />, {
+    run,
+    events: [],
+    threadMessages: [
+      {
+        id: "reply",
+        body: "<script>not executable</script>",
+        createdAt: "2026-10-13T12:00:00Z",
+        agentMessage: {
+          deliveryId: "delivery",
+          sender: {
+            runId: run.id,
+            conversationId: "main",
+            role: "source_reviewer",
+            goal: run.goal,
+          },
+          recipient: {
+            runId: "acoustic-run",
+            conversationId: "acoustic-thread",
+            role: "sound_insulation",
+            goal: "Prepare the acoustic concept",
+          },
+          replyToMessageId: "question",
+        },
+      },
+    ],
+  });
+  expect(html).toContain(
+    `href="/projects/${projectId}?conversation=main&amp;agentRun=source-run"`,
+  );
+  expect(html).toContain(
+    `href="/projects/${projectId}?conversation=acoustic-thread&amp;agentRun=acoustic-run"`,
+  );
+  expect(html).toContain(
+    `href="/projects/${projectId}?conversation=main&amp;message=question"`,
+  );
+  expect(html).toContain("&lt;script&gt;not executable&lt;/script&gt;");
+  expect(html).not.toContain("<script>");
+  expect(html).toContain(en.agentMessageDelivered);
+  expect(html).not.toContain("Review result");
+});
+
 test("persisted timeout reasons show phase and safe retry guidance in run rows and threads", () => {
   const phases = [
     ["plan", en.workspaceRunPhasePlan],

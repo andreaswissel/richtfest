@@ -243,6 +243,41 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
 }
 export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
+  // A conversation remains subscribable after its runs finish. Run activity
+  // streams deliberately close at completion and cannot deliver late messages.
+  router.get("/conversations/:conversationId/message-events", async (req, res, next) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    try {
+      const d = getDeps(req);
+      d.requirePermission("knowledge:read");
+      d.requirePermission("projects:read");
+      const id = z.string().uuid().parse(req.params.conversationId);
+      const thread = await conversation(d, id);
+      if (!thread.projectId || !(await d.validateProject(thread.projectId))) throw missing();
+      req.on("close", () => { closed = true; if (timer) clearTimeout(timer); });
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+      let previous: number | undefined;
+      const poll = async () => {
+        if (closed) return;
+        try {
+          await conversation(d, id, thread.projectId);
+          const [row] = await d.db.select({ count: sql<number>`count(*)::int` }).from(messages).where(and(
+            eq(messages.tenantId, d.tenantId), eq(messages.conversationId, id), sql`${messages.agentMessage} is not null`,
+          ));
+          if (row.count !== previous) {
+            res.write(`event: messages\ndata: ${JSON.stringify({ conversationId: id, count: row.count })}\n\n`);
+            previous = row.count;
+          } else res.write(": heartbeat\n\n");
+          if (!closed) timer = setTimeout(poll, 1500);
+        } catch { res.end(); }
+      };
+      void poll();
+    } catch (error) { next(error); }
+  });
   const route = (
     method: "get" | "post" | "put",
     path: string,

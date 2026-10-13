@@ -33,6 +33,7 @@ export const messages = pgTable("knowledge_messages", {
   openui: text("openui"),
   annotationId: uuid("annotation_id"),
   runId: uuid("run_id"),
+  agentMessage: jsonb("agent_message").$type<import("@richtfest/shared").AgentMessage>(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

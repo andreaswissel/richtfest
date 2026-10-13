@@ -481,7 +481,7 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .project-transcript [data-slot="message-content"] { max-width:min(100%, 72rem); }
 .workspace-review-result { display:inline-flex; width:max-content; align-items:center; border-radius:var(--radius); padding:.25rem .55rem; color:var(--primary); font-size:var(--ui-xs); font-weight:600; text-decoration:none; }
 .workspace-review-result:hover, .workspace-review-result:focus-visible { background:var(--muted); text-decoration:underline; text-underline-offset:3px; }
-.project-transcript [data-slot="message-footer"] { opacity:0; transition:opacity .15s; }
+.project-transcript [data-slot="message-footer"]:not([data-persistent]) { opacity:0; transition:opacity .15s; }
 .project-transcript [data-slot="message"]:hover [data-slot="message-footer"],
 .project-transcript [data-slot="message"]:focus-within [data-slot="message-footer"] { opacity:1; }
 @media(pointer:coarse) { .project-transcript [data-slot="message-footer"] { opacity:1; } }

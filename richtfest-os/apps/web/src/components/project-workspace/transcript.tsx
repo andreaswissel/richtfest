@@ -67,6 +67,7 @@ import {
   type ReadState,
 } from "./types";
 import { LazyOpenUI } from "./lazy-openui";
+import { AgentThreadMessage, useAgentMessageEvents } from "./agent-thread-message";
 
 const runFailureCategoryLabels: Record<string, string> = {
   provider: "workspaceRunCategoryProvider",
@@ -270,6 +271,7 @@ function Conversation({
   const t = useT(),
     [params, setParams] = useSearchParams();
   const path = `/knowledge/conversations/${conversationId}`;
+  useAgentMessageEvents(conversationId);
   const richtfest = useRichtfestCelebration();
   const [effort, setEffort] = useState("medium");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -641,6 +643,7 @@ function Conversation({
     const terminal = persistedMessages
       .filter(
         (message) =>
+          !message.agentMessage &&
           message.runId === run.id &&
           message.actorKind === "agent" &&
           message.body === run.outputSummary,
@@ -913,7 +916,9 @@ function Conversation({
                       <MarkerContent>{t("workspaceInterrupted")}</MarkerContent>
                     </Marker>
                   )}
-                {failedOutcomes.has(message.id) ? (
+                {message.agentMessage ? (
+                  <AgentThreadMessage message={message} projectId={projectId} />
+                ) : failedOutcomes.has(message.id) ? (
                   <FailedRunOutcome
                     run={failedOutcomes.get(message.id)!}
                     projectId={projectId}

@@ -1,8 +1,9 @@
-import type { SourceReference } from "@richtfest/shared";
+import type { AgentMessage, SourceReference } from "@richtfest/shared";
 
 export type WorkspaceMessage = {
   id: string;
   body: string;
+  agentMessage?: AgentMessage | null;
   authorId?: string;
   runId?: string;
   actorKind?: string;

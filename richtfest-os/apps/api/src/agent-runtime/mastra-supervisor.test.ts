@@ -429,10 +429,15 @@ test("Mastra telemetry reports filtered effort and no configured-model response 
 });
 test("real Mastra agent validates scoped specialist output and redacts transient secrets", async () => {
   const key = "sk-test-secret";
+  const recipientRunId = crypto.randomUUID();
   const output = await callMastraSupervisor({ ...base, phase: "specialist" }, key, {
-    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: ({ summary: `Evidence ${key}`, rationale: "Only assigned sources", citations: [] }) }),
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: ({ summary: `Evidence ${key}`, rationale: "Only assigned sources", citations: [],
+      messages: [{ recipientRunId, body: `Please check the revision. ${key}` }],
+    }) }),
   });
-  expect(output).toEqual({ summary: "Evidence [redacted]", rationale: "Only assigned sources", citations: [] });
+  expect(output).toEqual({ summary: "Evidence [redacted]", rationale: "Only assigned sources", citations: [],
+    messages: [{ recipientRunId, body: "Please check the revision. [redacted]" }],
+  });
 });
 test("real Mastra agent rejects plans outside bounded schema", async () => {
   await expect(callMastraSupervisor({ ...base, phase: "plan" }, "test-key", {
