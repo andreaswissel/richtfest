@@ -383,6 +383,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             const input = companyKnowledgeSearchSchema.parse(raw);
             const inputHash = stepHash(input);
             const stepKey = `company-knowledge:${state.revision}:${inputHash}`;
+            await assertActive();
+            const [snapshot] = await d.db.select({ assignments: supervisorRuns.assignments }).from(supervisorRuns)
+              .where(and(eq(supervisorRuns.runId, id), eq(supervisorRuns.tenantId, d.tenantId)));
+            const assignment = (snapshot?.assignments as Assignment[]).find(a => a.runId === runId);
+            if (!assignment) throw conflict("Knowledge specialist unavailable");
+            const known = assignment.companyKnowledge ?? [];
+            // Full-text reads must not hold the shared checkpoint lock. This
+            // snapshot only avoids redundant work; commit rechecks the budget.
+            const candidate = known.length < 2 && !known.some(r => stepHash({ terms: r.terms }) === inputHash)
+              ? await searchCompanyKnowledge(d, input) : undefined;
             let receipt: CompanyKnowledgeReceipt | undefined;
             const saved = await commit(d, run, token, async (tx, current) => {
               signal?.throwIfAborted();
@@ -391,14 +401,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const receipts = assignment.companyKnowledge ?? [];
               const matching = receipts.find(r => stepHash({ terms: r.terms }) === inputHash);
               if (matching) {
-                await assertCompanyKnowledgeCurrent(d, [matching]);
+                await assertCompanyKnowledgeCurrent(d, [matching], tx);
                 // Already present in this attempt's context or a preceding tool
                 // response: return its identity, not another copy of the text.
                 receipt = { ...matching, status: "already_retrieved", entries: [] };
                 return;
               }
-              // Re-read approval/content even on retry; no cached read can grant access.
-              const result = await searchCompanyKnowledge(d, input, tx, receipts.length >= 2);
+              const result = receipts.length >= 2
+                ? await searchCompanyKnowledge(d, input, tx, true) : candidate!;
+              // Approval/content may have changed while the read was in flight.
+              await assertCompanyKnowledgeCurrent(d, [result], tx);
               const previous = await savedStep(d, runId, "tool", stepKey, stepHash({ input, result }), tx);
               const step = previous ?? await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
                 kind: "tool", stepKey, inputHash: stepHash({ input, result }),

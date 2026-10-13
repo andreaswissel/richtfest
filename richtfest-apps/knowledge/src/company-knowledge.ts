@@ -21,12 +21,12 @@ export async function searchCompanyKnowledge(d: AppDeps, raw: unknown, db = d.db
 }
 
 /** Historical receipts remain in the ledger, but revoked/edited content cannot silently resume. */
-export async function assertCompanyKnowledgeCurrent(d: AppDeps, receipts: CompanyKnowledgeReceipt[]) {
+export async function assertCompanyKnowledgeCurrent(d: AppDeps, receipts: Pick<CompanyKnowledgeReceipt, "entries">[], db = d.db) {
   if (!receipts.length) return;
   d.requirePermission("knowledge:read");
   const entries = receipts.flatMap(r => r.entries);
   if (!entries.length) return;
-  const current = await d.db.select({ id: drafts.id, title: drafts.title, body: drafts.body }).from(drafts).where(and(
+  const current = await db.select({ id: drafts.id, title: drafts.title, body: drafts.body }).from(drafts).where(and(
     eq(drafts.tenantId, d.tenantId), isNull(drafts.projectId), eq(drafts.status, "approved"),
     inArray(drafts.id, entries.map(e => e.id)),
   ));

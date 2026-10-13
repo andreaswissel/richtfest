@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Specialist agents can search company knowledge concurrently without blocking each other's searches. Search limits, approval checks and cancellation safeguards remain in place.
+
 - Purely visual changes can deploy after verification without separate approval; functional and mixed changes still require an explicit deployment request.
 
 - Project agents can search approved company knowledge on demand. Retrieved excerpts and entry references stay with their findings through report drafting and review, separate from project evidence; retries recheck approval and changed content.
