@@ -8,4 +8,86 @@
 }
 .shared-work-view .section-heading {
   margin-bottom: var(--stack);
+  flex-wrap: wrap;
+  gap: calc(var(--stack) / 2);
+}
+.shared-work-view > .section:first-child > .section-heading h2 {
+  color: var(--foreground);
+  font-size: var(--ui-sm);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.shared-work-tasks {
+  container-type: inline-size;
+}
+.shared-work-task {
+  border-bottom: 1px solid var(--border);
+}
+.shared-work-task:first-child {
+  border-top: 1px solid var(--border);
+}
+.shared-work-task > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: calc(var(--stack) / 2);
+  padding-block: var(--cell);
+  cursor: pointer;
+  list-style: none;
+}
+.shared-work-task > summary::-webkit-details-marker {
+  display: none;
+}
+.shared-work-task > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+.shared-work-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ui-sm);
+  font-weight: 500;
+}
+.shared-work-task > summary > svg {
+  color: var(--muted-foreground);
+}
+.shared-work-task[open] > summary > svg {
+  transform: rotate(90deg);
+}
+.shared-work-task[data-status="cancelled"] .shared-work-task-title,
+.shared-work-task[data-status="completed"] .shared-work-task-title {
+  color: var(--muted-foreground);
+}
+.shared-work-task-instructions {
+  padding-bottom: var(--cell);
+  color: var(--muted-foreground);
+  font-size: var(--ui-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@container (max-width: 22rem) {
+  .shared-work-task > summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .shared-work-task-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .shared-work-task > summary > [data-slot="badge"] {
+    grid-column: 1;
+  }
+  .shared-work-task > summary > svg {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+}
+@media (hover: hover) {
+  .shared-work-task > summary:hover {
+    background: var(--muted);
+  }
 }

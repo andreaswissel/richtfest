@@ -804,6 +804,7 @@
   "workspaceShowPassage": "Show marked passage",
   "task_open": "Open",
   "task_in_progress": "In progress",
+  "task_needs_review": "Needs review",
   "task_completed": "Completed",
   "task_cancelled": "Cancelled",
   "task_blocked": "Blocked",

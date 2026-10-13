@@ -804,6 +804,7 @@
   "workspaceShowPassage": "Markierte Textstelle anzeigen",
   "task_open": "Offen",
   "task_in_progress": "In Bearbeitung",
+  "task_needs_review": "Prüfung erforderlich",
   "task_completed": "Abgeschlossen",
   "task_cancelled": "Abgebrochen",
   "task_blocked": "Blockiert",

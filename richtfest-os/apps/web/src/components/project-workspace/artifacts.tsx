@@ -557,15 +557,17 @@ export function ArtifactPanel({
     );
   return (
     <aside className="project-artifacts" aria-label={t("workspaceArtifacts")}>
-      <h2 className="thread-panel-heading">
-        {tab === "tasks"
-          ? t("sharedWork")
-          : tab === "runs"
-            ? t("agentThreadList")
-            : tab === "documents"
-              ? t("sources")
-              : t("workspaceArtifacts")}
-      </h2>
+      {!(tab === "tasks" && conversationId && !previewOpen) && (
+        <h2 className="thread-panel-heading">
+          {tab === "tasks"
+            ? t("sharedWork")
+            : tab === "runs"
+              ? t("agentThreadList")
+              : tab === "documents"
+                ? t("sources")
+                : t("workspaceArtifacts")}
+        </h2>
+      )}
       {previewOpen ? artifactCards : panelBody}
       <Dialog
         open={previewOpen}

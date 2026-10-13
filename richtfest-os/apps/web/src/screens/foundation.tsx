@@ -8,6 +8,7 @@ import { queryClient } from "../query";
 import { NativeSelect } from "../components/ui/native-select";
 import { Button } from "../components/ui/button";
 import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import "./shared-work.css";
 import { list, type RecordData } from "../api";
@@ -577,17 +578,31 @@ export function SharedWork({
       <Section
         title={t("sharedWork")}
         meta={
-          <Button variant="outline" onClick={() => setCreate(true)}>
+          <Button variant="outline" size="sm" onClick={() => setCreate(true)}>
             {t("addTask")}
           </Button>
         }
       >
-        {tasks.map((task) => (
-          <div className="task-row" key={task.id}>
-            <Badge>{t(`task_${task.status}` as never) || task.status}</Badge>
-            <span>{task.title}</span>
-          </div>
-        ))}
+        <div className="shared-work-tasks">
+          {tasks.map((task) => (
+            <details
+              className="shared-work-task"
+              data-status={task.status}
+              key={task.id}
+            >
+              <summary>
+                <span className="shared-work-task-title">{task.title}</span>
+                <Badge>
+                  {t(`task_${task.status}` as never) || task.status}
+                </Badge>
+                <ChevronRight className="size-icon-sm" aria-hidden="true" />
+              </summary>
+              <p className="shared-work-task-instructions">
+                {runs.find((run) => run.taskId === task.id)?.goal || task.title}
+              </p>
+            </details>
+          ))}
+        </div>
         {!tasks.length && <Empty>{t("noWork")}</Empty>}
       </Section>
       <AgentRuns

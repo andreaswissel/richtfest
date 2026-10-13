@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Shared work now uses compact task rows with expandable instructions, readable review statuses and a single header. Completed and cancelled tasks stay accessible without dominating the list.
+
 - Chat scrollbars now blend into light and dark themes instead of showing a bright track in dark mode.
 
 - Specialist agents now retry invalid source citations with targeted correction feedback while preserving completed work. Failed calls retain safe, inspectable diagnostic records, including rejected source identifiers, without saving raw provider errors or rejected text.
