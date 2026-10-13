@@ -61,15 +61,27 @@ test("team member cannot see administrative invitation or role actions", () => {
   });
   expect(html).not.toContain("Create invitation");
   expect(html).not.toContain("Manage member");
+  expect(html).not.toContain("Create role");
+  expect(html).not.toContain("Edit role");
 });
 test("authorized team administrator can open invitation creation", () => {
   const html = render(<Team />, "/access/team", {
     canManageTeam: true,
     members: [],
     invitations: [],
-    roles: [],
+    roles: [
+      {
+        id: "reader",
+        name: "Project reader",
+        permissions: ["richtfest-os:use", "projects:read"],
+      },
+    ],
   });
   expect(html).toContain("Create invitation");
+  expect(html).toContain("Create role");
+  expect(html).toContain("Edit role");
+  expect(html).toContain("View projects");
+  expect(html).not.toContain("Edit projects");
 });
 
 test("account security offers recovery without claiming a failed passkey list is empty", async () => {

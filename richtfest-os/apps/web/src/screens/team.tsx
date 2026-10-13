@@ -1,6 +1,7 @@
 import { DeliveryStatus } from "./auth";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { permissions, type PermissionKey } from "@richtfest/shared";
 import { api, list, type RecordData } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { useT } from "../i18n";
@@ -8,6 +9,7 @@ import { Page, PageHeader, Section } from "../components/layout";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
+import { Switch } from "../components/ui/switch";
 import {
   Badge,
   Callout,
@@ -19,6 +21,22 @@ import {
 } from "../components/ui/primitives";
 import { LoadState } from "./foundation";
 
+const permissionLabels = {
+  "richtfest-os:use": "permissionOsUse",
+  "crm:read": "permissionCrmRead",
+  "crm:write": "permissionCrmWrite",
+  "projects:read": "permissionProjectsRead",
+  "projects:write": "permissionProjectsWrite",
+  "knowledge:read": "permissionKnowledgeRead",
+  "knowledge:write": "permissionKnowledgeWrite",
+  "knowledge:approve": "permissionKnowledgeApprove",
+  "agent:run": "permissionAgentRun",
+  "access:manage": "permissionAccessManage",
+} as const satisfies Record<
+  PermissionKey,
+  Parameters<ReturnType<typeof useT>>[0]
+>;
+
 export function Team() {
   const t = useT();
   const query = useApi("/access/team");
@@ -29,6 +47,7 @@ export function Team() {
     query.data?.devOutboxAvailable === true;
   const outbox = useApi("/access/dev-outbox", outboxAllowed && outboxOpen);
   const [member, setMember] = useState<RecordData | null>(null);
+  const [editingRole, setEditingRole] = useState<RecordData | null>(null);
   const [offboard, setOffboard] = useState<RecordData | null>(null);
   const [cancelInvite, setCancelInvite] = useState<RecordData | null>(null);
   const offboarding = useWrite(
@@ -109,6 +128,52 @@ export function Team() {
               }))}
             />
           </Section>
+          {canManage && (
+            <Section
+              title={t("rolesAndPermissions")}
+              meta={
+                <Button
+                  onClick={() =>
+                    setEditingRole({ permissions: ["richtfest-os:use"] })
+                  }
+                >
+                  {t("createRole")}
+                </Button>
+              }
+            >
+              <Table
+                headers={[t("role"), t("rolePermissions"), t("manage")]}
+                rows={roles.map((role) => ({
+                  id: role.id,
+                  cells: [
+                    <div>
+                      <div>{role.name}</div>
+                      {role.description && (
+                        <div className="text-ui-sm text-muted-foreground">
+                          {role.description}
+                        </div>
+                      )}
+                    </div>,
+                    <div className="flex flex-wrap gap-1">
+                      {permissions
+                        .filter((key) => role.permissions?.includes(key))
+                        .map((key) => (
+                          <Badge key={key}>{t(permissionLabels[key])}</Badge>
+                        ))}
+                    </div>,
+                    <Button
+                      variant="link"
+                      onClick={() => setEditingRole(role)}
+                      aria-label={`${t("editRole")} · ${role.name}`}
+                    >
+                      {t("editRole")}
+                    </Button>,
+                  ],
+                  sort: [role.name],
+                }))}
+              />
+            </Section>
+          )}
           <Section title={t("invitations")}>
             {list(query.data.invitations).length ? (
               <Table
@@ -229,6 +294,9 @@ export function Team() {
           </Form>
         </Modal>
       )}
+      {editingRole && canManage && (
+        <RoleEditor role={editingRole} onClose={() => setEditingRole(null)} />
+      )}
       {member && canManage && (
         <Modal
           title={`${t("manageMember")} · ${member.name || member.email}`}
@@ -303,6 +371,95 @@ export function Team() {
     </Page>
   );
 }
+
+function RoleEditor({
+  role,
+  onClose,
+}: {
+  role: RecordData;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const save = useMutation({
+    mutationFn: (body: unknown) =>
+      api(
+        role.id ? `/access/roles/${role.id}` : "/access/roles",
+        body,
+        role.id ? "PUT" : "POST",
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries();
+      onClose();
+    },
+  });
+  return (
+    <Modal
+      title={role.id ? `${t("editRole")} · ${role.name}` : t("createRole")}
+      onClose={onClose}
+    >
+      <Form
+        label={role.id ? t("saveRole") : t("createRole")}
+        pending={save.isPending}
+        error={save.error}
+        onSubmit={(form) =>
+          save.mutate({
+            name: form.get("name"),
+            description: form.get("description"),
+            permissions: ["richtfest-os:use", ...form.getAll("permissions")],
+          })
+        }
+      >
+        <Field label={t("name")}>
+          <Input
+            name="name"
+            defaultValue={role.name || ""}
+            required
+            maxLength={120}
+            autoFocus
+          />
+        </Field>
+        <Field label={t("description")}>
+          <Input
+            name="description"
+            defaultValue={role.description || ""}
+            maxLength={500}
+          />
+        </Field>
+        <fieldset className="space-y-1">
+          <legend className="text-ui font-medium mb-2">
+            {t("rolePermissions")}
+          </legend>
+          {permissions.map((key) => (
+            <label
+              key={key}
+              className="flex min-h-[var(--control)] items-center justify-between gap-stack text-ui"
+            >
+              <span>
+                {t(permissionLabels[key])}
+                {key === "richtfest-os:use" && (
+                  <span className="text-ui-sm text-muted-foreground">
+                    {" "}
+                    · {t("roleOsRequired")}
+                  </span>
+                )}
+              </span>
+              <Switch
+                name="permissions"
+                value={key}
+                defaultChecked={
+                  key === "richtfest-os:use" || role.permissions?.includes(key)
+                }
+                disabled={key === "richtfest-os:use" || save.isPending}
+              />
+            </label>
+          ))}
+        </fieldset>
+        <Callout>{t("rolePermissionsHint")}</Callout>
+      </Form>
+    </Modal>
+  );
+}
+
 function formatDate(value: unknown) {
   if (typeof value !== "string") return "—";
   const date = new Date(value);

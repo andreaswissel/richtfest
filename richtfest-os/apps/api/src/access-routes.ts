@@ -1,14 +1,15 @@
 import crypto from "node:crypto";
 import { Router, type Request } from "express";
-import { and, eq, gt, isNull, ne } from "drizzle-orm";
+import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ok } from "@richtfest/shared";
+import { ok, permissions as permissionKeys } from "@richtfest/shared";
 import {
   authDevOutbox,
   invitations,
   memberships,
   rolePermissions,
   roles,
+  tenants,
   users,
 } from "./db/schema";
 import { authSession, authUser } from "./db/auth-schema";
@@ -27,6 +28,20 @@ const actor = (req: Request) => (req as any).actor as RequestActor;
 const send = (res: any, status: number, body: any) =>
   res.status(status).json(body);
 
+const roleInput = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(500).default(""),
+    permissions: z
+      .array(z.enum(permissionKeys))
+      .max(permissionKeys.length)
+      .transform((keys) => [...new Set(keys)]),
+  })
+  .refine((role) => role.permissions.includes("richtfest-os:use"), {
+    message: "Workspace roles require Richtfest OS access",
+    path: ["permissions"],
+  });
+
 export const createAccessRouter = (
   db: Database,
   auth: any,
@@ -44,42 +59,53 @@ export const createAccessRouter = (
     }
     return current;
   };
-  const requireAnotherManager = async (tenantId: string, userId: string) => {
-    const targetPermissions = await db
-      .select({ permission: rolePermissions.permission })
-      .from(memberships)
-      .innerJoin(rolePermissions, eq(rolePermissions.roleId, memberships.roleId))
-      .where(
-        and(
-          eq(memberships.tenantId, tenantId),
-          eq(memberships.userId, userId),
-          eq(memberships.status, "active"),
-          eq(rolePermissions.permission, "access:manage"),
-        ),
-      )
-      .limit(1);
-    if (!targetPermissions[0]) return;
-    const otherManagers = await db
-      .select({ userId: memberships.userId })
-      .from(memberships)
-      .innerJoin(rolePermissions, eq(rolePermissions.roleId, memberships.roleId))
-      .where(
-        and(
-          eq(memberships.tenantId, tenantId),
-          ne(memberships.userId, userId),
-          eq(memberships.status, "active"),
-          eq(rolePermissions.permission, "access:manage"),
-        ),
-      )
-      .limit(1);
-    if (!otherManagers[0]) {
-      throw new HttpError(
-        409,
-        "last_manager_required",
-        "Assign another workspace administrator before removing the last manager",
-      );
-    }
-  };
+  // Serialize access changes per workspace, including member changes, so two
+  // concurrent administrators cannot both remove the last usable manager.
+  const managedTransaction = <T>(
+    current: RequestActor,
+    write: (
+      tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+    ) => Promise<T>,
+  ) =>
+    db.transaction(async (tx) => {
+      await tx
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(eq(tenants.id, current.tenantId))
+        .for("update");
+      const managers = () =>
+        tx
+          .select({ userId: memberships.userId })
+          .from(memberships)
+          .innerJoin(roles, eq(roles.id, memberships.roleId))
+          .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+          .where(
+            and(
+              eq(memberships.tenantId, current.tenantId),
+              eq(roles.tenantId, current.tenantId),
+              eq(memberships.status, "active"),
+              eq(rolePermissions.permission, "access:manage"),
+              sql`exists (select 1 from ${rolePermissions} os_grant where os_grant.role_id = ${roles.id} and os_grant.permission = 'richtfest-os:use')`,
+            ),
+          );
+      // Authorization may have changed while this request waited for the lock.
+      if (!(await managers()).some((row) => row.userId === current.id)) {
+        throw new HttpError(
+          403,
+          "forbidden",
+          "Team administration requires access:manage",
+        );
+      }
+      const result = await write(tx);
+      if (!(await managers()).length) {
+        throw new HttpError(
+          409,
+          "last_manager_required",
+          "Assign another workspace administrator before removing the last manager",
+        );
+      }
+      return result;
+    });
 
   router.get("/access/team", async (req, res, next) => {
     try {
@@ -105,9 +131,24 @@ export const createAccessRouter = (
         )
         .orderBy(users.name);
       const availableRoles = await db
-        .select({ id: roles.id, name: roles.name, description: roles.description })
+        .select({
+          id: roles.id,
+          name: roles.name,
+          description: roles.description,
+        })
         .from(roles)
-        .where(eq(roles.tenantId, current.tenantId));
+        .where(eq(roles.tenantId, current.tenantId))
+        .orderBy(roles.name);
+      const grants = current.permissions.has("access:manage")
+        ? await db
+            .select({
+              roleId: roles.id,
+              permission: rolePermissions.permission,
+            })
+            .from(roles)
+            .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+            .where(eq(roles.tenantId, current.tenantId))
+        : [];
       const pending = await db
         .select({
           id: invitations.id,
@@ -132,12 +173,132 @@ export const createAccessRouter = (
         200,
         ok({
           members,
-          roles: availableRoles,
+          roles: availableRoles.map((role) => ({
+            ...role,
+            ...(current.permissions.has("access:manage")
+              ? {
+                  permissions: grants
+                    .filter((grant) => grant.roleId === role.id)
+                    .map((grant) => grant.permission),
+                }
+              : {}),
+          })),
           invitations: pending.map((item) => ({ ...item, status: "pending" })),
           canManageTeam: current.permissions.has("access:manage"),
           devOutboxAvailable: allowDevAuth,
         }),
       );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/access/roles", async (req, res, next) => {
+    try {
+      const current = manage(req);
+      const input = roleInput.parse(req.body);
+      const role = await managedTransaction(current, async (tx) => {
+        const [created] = await tx
+          .insert(roles)
+          .values({
+            tenantId: current.tenantId,
+            name: input.name,
+            description: input.description,
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (!created)
+          throw new HttpError(
+            409,
+            "role_exists",
+            "A role with this name already exists",
+          );
+        await tx
+          .insert(rolePermissions)
+          .values(
+            input.permissions.map((permission) => ({
+              roleId: created.id,
+              permission,
+            })),
+          );
+        await recordAudit(
+          tx,
+          current.id,
+          current.tenantId,
+          "access.role.created",
+          "role",
+          created.id,
+          input,
+        );
+        return { ...created, permissions: input.permissions };
+      });
+      return send(res, 201, ok(role, "Role created"));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put("/access/roles/:id", async (req, res, next) => {
+    try {
+      const current = manage(req);
+      const id = z.string().uuid().parse(req.params.id);
+      const input = roleInput.parse(req.body);
+      const role = await managedTransaction(current, async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(roles)
+          .where(and(eq(roles.id, id), eq(roles.tenantId, current.tenantId)));
+        if (!existing) throw new HttpError(404, "not_found", "Role not found");
+        const [duplicate] = await tx
+          .select({ id: roles.id })
+          .from(roles)
+          .where(
+            and(
+              eq(roles.tenantId, current.tenantId),
+              eq(roles.name, input.name),
+              ne(roles.id, id),
+            ),
+          );
+        if (duplicate)
+          throw new HttpError(
+            409,
+            "role_exists",
+            "A role with this name already exists",
+          );
+        const before = await tx
+          .select({ permission: rolePermissions.permission })
+          .from(rolePermissions)
+          .where(eq(rolePermissions.roleId, id));
+        const [updated] = await tx
+          .update(roles)
+          .set({ name: input.name, description: input.description })
+          .where(and(eq(roles.id, id), eq(roles.tenantId, current.tenantId)))
+          .returning();
+        await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, id));
+        await tx
+          .insert(rolePermissions)
+          .values(
+            input.permissions.map((permission) => ({ roleId: id, permission })),
+          );
+        await recordAudit(
+          tx,
+          current.id,
+          current.tenantId,
+          "access.role.updated",
+          "role",
+          id,
+          {
+            before: {
+              name: existing.name,
+              description: existing.description,
+              permissions: before.map((row) => row.permission),
+            },
+            after: input,
+          },
+        );
+        return { ...updated, permissions: input.permissions };
+      });
+      return send(res, 200, ok(role, "Role updated"));
     } catch (error) {
       next(error);
     }
@@ -185,7 +346,10 @@ export const createAccessRouter = (
         const userId = existing?.id ?? crypto.randomUUID();
         if (existing) {
           const [existingMembership] = await tx
-            .select({ tenantId: memberships.tenantId, status: memberships.status })
+            .select({
+              tenantId: memberships.tenantId,
+              status: memberships.status,
+            })
             .from(memberships)
             .where(eq(memberships.userId, userId))
             .limit(1);
@@ -384,53 +548,46 @@ export const createAccessRouter = (
     try {
       const current = manage(req);
       const userId = z.string().uuid().parse(req.params.userId);
-      const { roleId } = z.object({ roleId: z.string().uuid() }).parse(req.body);
-      const [role] = await db
-        .select({ id: roles.id })
-        .from(roles)
-        .where(and(eq(roles.id, roleId), eq(roles.tenantId, current.tenantId)))
-        .limit(1);
-      if (!role) {
-        throw new HttpError(
-          400,
-          "invalid_role",
-          "Role is not available in this workspace",
+      const { roleId } = z
+        .object({ roleId: z.string().uuid() })
+        .parse(req.body);
+      await managedTransaction(current, async (db) => {
+        const [role] = await db
+          .select({ id: roles.id })
+          .from(roles)
+          .where(
+            and(eq(roles.id, roleId), eq(roles.tenantId, current.tenantId)),
+          )
+          .limit(1);
+        if (!role) {
+          throw new HttpError(
+            400,
+            "invalid_role",
+            "Role is not available in this workspace",
+          );
+        }
+        const [updated] = await db
+          .update(memberships)
+          .set({ roleId })
+          .where(
+            and(
+              eq(memberships.tenantId, current.tenantId),
+              eq(memberships.userId, userId),
+              eq(memberships.status, "active"),
+            ),
+          )
+          .returning({ userId: memberships.userId });
+        if (!updated) throw new HttpError(404, "not_found", "Member not found");
+        await recordAudit(
+          db,
+          current.id,
+          current.tenantId,
+          "access.member.role_changed",
+          "user",
+          userId,
+          { roleId },
         );
-      }
-      const [newRoleManagerPermission] = await db
-        .select({ permission: rolePermissions.permission })
-        .from(rolePermissions)
-        .where(
-          and(
-            eq(rolePermissions.roleId, roleId),
-            eq(rolePermissions.permission, "access:manage"),
-          ),
-        )
-        .limit(1);
-      if (!newRoleManagerPermission) {
-        await requireAnotherManager(current.tenantId, userId);
-      }
-      const [updated] = await db
-        .update(memberships)
-        .set({ roleId })
-        .where(
-          and(
-            eq(memberships.tenantId, current.tenantId),
-            eq(memberships.userId, userId),
-            eq(memberships.status, "active"),
-          ),
-        )
-        .returning({ userId: memberships.userId });
-      if (!updated) throw new HttpError(404, "not_found", "Member not found");
-      await recordAudit(
-        db,
-        current.id,
-        current.tenantId,
-        "access.member.role_changed",
-        "user",
-        userId,
-        { roleId },
-      );
+      });
       return send(res, 200, ok({ userId, roleId }, "Member role updated"));
     } catch (error) {
       next(error);
@@ -451,8 +608,7 @@ export const createAccessRouter = (
       const { reason } = z
         .object({ reason: z.string().trim().max(500).optional() })
         .parse(req.body);
-      await requireAnotherManager(current.tenantId, userId);
-      const result = await db.transaction(async (tx) => {
+      const result = await managedTransaction(current, async (tx) => {
         const [member] = await tx
           .update(memberships)
           .set({ status: "inactive" })
@@ -508,11 +664,7 @@ export const createAccessRouter = (
   router.get("/access/dev-outbox", async (req, res, next) => {
     try {
       if (!allowDevAuth) {
-        throw new HttpError(
-          404,
-          "not_found",
-          "Development outbox is disabled",
-        );
+        throw new HttpError(404, "not_found", "Development outbox is disabled");
       }
       const current = manage(req);
       const rows = await db

@@ -19,6 +19,18 @@ If an open tab cannot load the sign-in code after a deployment or network failur
 
 Roles control application permissions. Removing access must revoke active sessions and outstanding invitations. Authentication establishes identity; business routes still enforce workspace scope and capability checks.
 
+## Roles and permissions
+
+Open **Team → Roles and permissions** to create a workspace role or edit its name, description and permissions. Assign roles through **Manage member**, or choose one when creating an invitation. Existing roles and assignments are unchanged until you save a change.
+
+All roles created or saved here retain **Use Richtfest OS**. Select view and edit permissions for CRM, projects and knowledge separately; editing does not automatically grant viewing. Knowledge approval and agent execution are separate capabilities. For example, a project reader needs **Use Richtfest OS** and **View projects**, without **Edit projects**.
+
+**Manage workspace access** (`access:manage`) grants administration of invitations, member assignments and roles, as well as shared settings that already use this permission. It is powerful administrative access, not limited to managing one role. Management depends on this permission, not the role's name; Admin is simply the default fully permitted role.
+
+Saving permissions affects every member assigned that role. The server reads current grants on each request, so removing a grant blocks subsequent protected requests without requiring a new sign-in. Already loaded content is not erased from another person's open tab. Use offboarding to revoke workspace membership, sessions and pending invitations.
+
+At least one active member must retain both OS access and workspace access management. Role edits, member reassignment and offboarding are checked transactionally, including concurrent changes, to prevent administrator lockout. Role creation and edits are recorded in the audit log; edits include the previous and new permissions. Roles are workspace-scoped and cannot be assigned or edited across workspaces.
+
 ## Account settings
 
 Open your name in the sidebar to reach Account settings. The Preferences section contains language (English or German), display density (Dense or Normal) and appearance (Light or Dark); changes are saved to your account and restored when you return. Passwords, passkeys and active sessions are managed on the same page.
