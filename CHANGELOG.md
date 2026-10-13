@@ -2,7 +2,7 @@
 
 ## 2026-10-13
 
-- Failed agent calls now show the provider’s redacted reason, error code, parameter and request ID, including billing and schema failures. Saved run diagnostics and correlated server logs cover supervisor, direct and Jev calls without retaining raw errors or credentials.
+- Failed agent calls now show the provider’s redacted reason, error code, parameter and request ID, including billing and schema failures. Saved run diagnostics and correlated server logs cover supervisor, direct and Jev calls without retaining raw errors or credentials. Fixed OpenAI rejecting the company-search tool schema; Unicode search-term validation remains enforced by the application.
 
 - Project resource tabs now have comfortable horizontal padding in both Dense and Normal display modes. Workspace tabs keep a consistent font weight so switching tabs no longer shifts neighboring labels.
 

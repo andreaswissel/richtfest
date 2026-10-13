@@ -7,13 +7,36 @@ import type { AppDeps } from "@richtfest/knowledge/deps";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
-import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget } from "@richtfest/shared";
+import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, companyKnowledgeSearchSchema } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
 import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noise";
 import { calculateAcoustics } from "@richtfest/acoustics";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("company search keeps Unicode validation locally without sending unsupported regex to OpenAI", async () => {
+  for (const term of ["Außenschallschutz", "DIN 4109-1", "隔音", " façade "]) {
+    expect(companyKnowledgeSearchSchema.parse({ terms: [term] }).terms).toEqual([term.trim()]);
+  }
+  for (const term of ["", " ", "O'Brien", "<script>", "sound.*", "x".repeat(81)]) {
+    expect(companyKnowledgeSearchSchema.safeParse({ terms: [term] }).success).toBe(false);
+  }
+  let request: any;
+  const fetchMock = spyOn(globalThis, "fetch").mockImplementation((async (_url, init) => {
+    request = JSON.parse(String(init?.body));
+    return Response.json({ error: { type: "invalid_request_error", message: "Offline schema capture" } }, { status: 400 });
+  }) as typeof fetch);
+  try {
+    await expect(callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation" },
+      modelConfig: { modelId: "gpt-6-luna", maxOutputTokens: 32000, maxSteps: 4 },
+      searchCompanyKnowledge: async () => { throw new Error("Must not execute"); },
+    }, "offline-placeholder")).rejects.toMatchObject({ providerStatus: 400 });
+    const parameters = request.tools.find((tool: any) => tool.name === "search_company_knowledge").parameters;
+    expect(parameters.properties.terms.items.type).toBe("string");
+    expect(parameters.properties.terms.items.pattern).toBeUndefined();
+    expect(parameters.required).toContain("category");
+  } finally { fetchMock.mockRestore(); }
+});
 test("all configured specialist roles can retrieve company knowledge through Mastra without turning it into source citations", async () => {
   const categoryId = crypto.randomUUID();
   const receipt = { receiptId: crypto.randomUUID(), status: "matched" as const, terms: ["Schallschutz"],

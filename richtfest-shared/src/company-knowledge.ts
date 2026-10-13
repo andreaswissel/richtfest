@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 export const companyKnowledgeSearchSchema = z.object({
-  terms: z.array(z.string().trim().min(1).max(80).regex(/^[\p{L}\p{N}\s-]+$/u)).min(1).max(8),
+  // JSON Schema drops JavaScript's Unicode flag; OpenAI rejects \p patterns.
+  // Keep the same validation locally without exporting an incompatible pattern.
+  terms: z.array(z.string().trim().min(1).max(80)
+    .refine(term => /^[\p{L}\p{N}\s-]+$/u.test(term), "Use letters, numbers, whitespace and hyphens only.")
+    .describe("Short subject term containing only letters, numbers, whitespace and hyphens.")).min(1).max(8),
   // Strict providers send null for optional fields; all forms of unfiltered
   // search share the historical terms-only retry identity.
   category: z.union([z.string().uuid(), z.enum(["all", "_none"])]).nullish()
