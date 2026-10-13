@@ -30,7 +30,7 @@ export async function artifactPdf(input: ArtifactPdfInput): Promise<Buffer> {
     import("pdfkit"), import("marked"),
   ]);
   const require = createRequire(import.meta.url);
-  const doc = new PDFDocument({ size: "A4", margin: 48, bufferPages: true,
+  const doc = new PDFDocument({ size: "A4", margins: { top: 88, bottom: 48, left: 48, right: 48 }, bufferPages: true,
     info: { Title: safeText(input.title), Author: "Richtfest" } });
   const result = new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -123,8 +123,22 @@ export async function artifactPdf(input: ArtifactPdfInput): Promise<Buffer> {
   }))];
   if (!input.bodyOnly) paragraph([{ text: labels.length ? labels.join("\n") : "No sources referenced." }], 9);
   const pages = doc.bufferedPageRange();
-  for (let i = 0; !input.bodyOnly && i < pages.count; i++) {
+  for (let i = 0; i < pages.count; i++) {
     doc.switchToPage(i);
+    // Match the app's boxed R / lowercase wordmark; draw locally, never fetch a logo.
+    // Reserved top margin keeps the header clear of flowing text and tables.
+    doc.roundedRect(48, 28, 26, 26, 7).fill("#171717");
+    doc.font("bold").fontSize(13).fillColor("#ffffff")
+      .text("R", 48, 32, { width: 26, align: "center", lineBreak: false });
+    doc.font("bold").fontSize(17).fillColor("#171717")
+      .text("richtfest", 83, 29, { lineBreak: false });
+    const wordmarkWidth = doc.widthOfString("richtfest");
+    doc.fillColor("#4338ca").text(".", 83 + wordmarkWidth, 29, { lineBreak: false });
+    doc.font("body").fontSize(8).fillColor("#666666")
+      .text(safeText(input.title).replace(/\s+/g, " "), 250, 31,
+        { width: doc.page.width - 298, height: 24, align: "right", ellipsis: true });
+    doc.moveTo(48, 68).lineTo(doc.page.width - 48, 68).lineWidth(0.5).strokeColor("#d4d4d4").stroke();
+    if (input.bodyOnly) continue; // Composed concepts receive final revision/page footers below.
     // Footer is inside the bottom margin; disable automatic page creation there.
     const bottom = doc.page.margins.bottom;
     doc.page.margins.bottom = 0;
@@ -192,6 +206,8 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
   }
   if (attachments.some(a => !rendered.some(s => s.attachments.includes(a)))) throw exportError();
   const output = await PDFDocument.create();
+  output.setTitle(safeText(input.title));
+  output.setAuthor("Richtfest");
   const append = async (pdf: Awaited<ReturnType<typeof fragment>>) => {
     for (const page of await output.copyPages(pdf, pdf.getPageIndices())) output.addPage(page);
   };
@@ -235,8 +251,9 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
   const font = await output.embedFont(await readFile(createRequire(import.meta.url).resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf")), { subset: true });
   output.getPages().forEach((page, i) => {
     const source = imported.get(i);
-    const label = source ? `${de ? "IMPORTIERTE UNGEPRÜFTE QUELLE" : "IMPORTED UNVERIFIED SOURCE"} - ${source.label}` : safeText(input.title);
-    page.drawText(label, {
+    // Only generated fragments carry the wordmark. Original evidence keeps its
+    // own artwork and a separate provenance band, never Richtfest authorship.
+    if (source) page.drawText(`${de ? "IMPORTIERTE UNGEPRÜFTE QUELLE" : "IMPORTED UNVERIFIED SOURCE"} - ${source.label}`, {
       x: 48, y: page.getHeight() - 24, size: 8, font, color: rgb(0.25, 0.25, 0.25),
       maxWidth: page.getWidth() - 96, lineHeight: 10,
     });

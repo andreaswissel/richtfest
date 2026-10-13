@@ -35,7 +35,10 @@ test("renders paginated Markdown with Unicode, named revisions and safe missing 
     expect(text).not.toContain("IMAGE_SENTINEL");
     const pages = text.split("\f").filter(page => page.trim());
     expect(pages.length).toBeGreaterThan(2);
-    for (const page of pages) expect(page).toContain("Draft / In review");
+    for (const page of pages) {
+      expect(page).toContain("Draft / In review");
+      expect(page).toContain("richtfest");
+    }
     // Every row survives table pagination, including the last row.
     for (let i = 1; i <= 110; i++) expect(text).toMatch(new RegExp(`Bauteil ${i}\\s`));
   } finally {
@@ -70,6 +73,8 @@ test("concept report includes original mixed-size sources, accurate contents and
   };
   const pdf = await artifactPdf(input);
   const document = await PDFDocument.load(pdf);
+  expect(document.getAuthor()).toBe("Richtfest");
+  expect(document.getTitle()).toBe(input.title);
   expect(document.getPages().some(page => page.getWidth() === 842 && page.getHeight() === 659)).toBe(true);
   expect(document.getPages().some(page => page.getWidth() === 595 && page.getHeight() === 906)).toBe(true);
   const directory = await mkdtemp(join(tmpdir(), "concept-report-"));
@@ -90,7 +95,8 @@ test("concept report includes original mixed-size sources, accurate contents and
         expect(page).toContain("IMPORTED UNVERIFIED SOURCE");
         expect(page).toContain("Prüfbericht Müller.pdf");
         expect(page).toContain("v7");
-      }
+        expect(page).not.toContain("richtfest");
+      } else expect(page).toContain("richtfest");
     }
     if (process.env.PDF_REVIEW_PATH) await writeFile(process.env.PDF_REVIEW_PATH, pdf);
   } finally { await rm(directory, { recursive: true, force: true }); }
