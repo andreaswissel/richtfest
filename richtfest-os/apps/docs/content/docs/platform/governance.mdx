@@ -27,7 +27,7 @@ The category rail scopes both **Browse** and **Ask knowledge**. Existing entries
 
 Open an entry to read its full formatted content, source references and caveats. Entries have stable links that can be shared with colleagues in the same workspace. Company imports may contain filenames and checksums in their text; those references are not uploaded originals or linked file revisions. Check the underlying evidence before approval.
 
-After reading, choose **Approve knowledge** and confirm. Reading requires `knowledge:read`; only users with `knowledge:approve` see the approval action, and the server enforces that permission. Approval is recorded with the reviewer and time. It makes the entry eligible for explicit assignment under Settings → Agents; it neither assigns it automatically nor certifies an engineering calculation. No bulk approval occurs when importing or opening an entry.
+After reading, choose **Approve knowledge** and confirm. Reading requires `knowledge:read`; only users with `knowledge:approve` see the approval action, and the server enforces that permission. Approval is recorded with the reviewer and time. It makes the entry eligible for explicit assignment under Settings → Agents and approved-only search by project agents; it neither assigns it automatically nor certifies an engineering calculation. No bulk approval occurs when importing or opening an entry.
 
 ## Ask company knowledge
 
@@ -38,6 +38,8 @@ The model expands the question into up to eight German/English terms. PostgreSQL
 Answers display linked source excerpts and their review status at search time. The server rejects unknown entry IDs and quotes that are not exact substrings of the supplied source windows. Exact quotes verify provenance, not the correctness of the model's interpretation or whether they support every claim. Check current content and caveats before use. Broaden filters or rephrase when no supported answer is found.
 
 Questions, filters, answers, source-body hashes, citation snapshots, usage and execution status are persisted in Postgres. Recent searches are private to the initiating user within the workspace, not shared conversation records. Search start and completion/failure are audited. Failed or interrupted calls are not automatically retried; running records older than three minutes appear interrupted until a terminal result arrives. A new search is an explicit new provider request. Neither search nor category changes approve knowledge or assign it to agent profiles.
+
+Project-agent **`search_company_knowledge`** is a separate workflow: it always excludes drafts and project-specific entries, uses deterministic retrieval without extra AI search calls, and saves evidence in the requesting run's audited steps rather than this private search history. Retrieved guidance remains separate from project-file evidence and engineering validation. See [Agent profiles and retrieval](/docs/architecture/agent-runtime#agent-profiles) for limits and retry behavior.
 
 ## Activity without clutter
 

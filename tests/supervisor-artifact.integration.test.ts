@@ -34,17 +34,24 @@ test("concept appendices can cite saved arithmetic inputs without treating recei
     sources: [60, 70].map(levelDb => ({ label: String(levelDb), levelDb,
       provenance: { kind: "source", versionId, page: 2, excerpt: "Simultaneous uncorrelated contributions: 60 and 70 dB(A)." } })),
   }), receiptId: crypto.randomUUID() };
-  for (const citation of [versionId, receipt.receiptId, crypto.randomUUID()]) {
+  const knowledge = { receiptId: crypto.randomUUID(), status: "matched" as const, terms: ["Schallschutz"],
+    entries: [{ id: crypto.randomUUID(), title: "Company acoustic guidance", status: "approved" as const,
+      excerpt: "Arithmetic does not establish regulatory applicability.", bodyHash: "a".repeat(64) }],
+    coverage: { limited: true as const, maxEntries: 4 as const, maxCharsPerEntry: 2000 as const },
+  };
+  for (const citation of [versionId, receipt.receiptId, knowledge.entries[0]!.id, crypto.randomUUID()]) {
     const result = authorAcousticConcept({ d: {} as any, projectId: crypto.randomUUID(), id: "exterior-noise-concept",
       goal: "Document source-backed arithmetic", findings: [], sourceVersionIds: [versionId], calculationReceipts: [receipt],
+      companyKnowledge: [knowledge],
       limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
       assertActive: async () => {}, checkpoint: async () => {},
       call: async context => {
+        expect(context.companyKnowledge).toEqual([knowledge]);
         if (context.documentTask === "outline") return { id: "exterior-noise-concept", title: "Acoustic arithmetic", language: "en",
           project: { name: "Synthetic project", number: null, client: null, designer: null, author: null, date: null },
           sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key, sources: [] })), attachments: [],
         };
-        if (context.section !== "calculationAppendix") return { content: "No further evidence supplied.", citations: [], complete: true };
+        if (context.section !== "calculationAppendix") return { content: "Company acoustic guidance: Arithmetic does not establish regulatory applicability.", citations: [], complete: true };
         const [saved] = context.calculationReceipts as typeof receipt[];
         return { content: `Tool result: ${saved!.value.toFixed(3)} ${saved!.unit} [${citation}]. Inputs and applicability require review.`, citations: [citation], complete: true };
       },
@@ -54,6 +61,7 @@ test("concept appendices can cite saved arithmetic inputs without treating recei
       const report = await result;
       expect(report.document.content).toContain(`70.414 dB(A) [${versionId}]`);
       expect(report.document.content).toContain("tool calculations remain subject to specialist review");
+      expect(report.document.content).toContain("Company acoustic guidance");
       expect(report.citations).toEqual([versionId]);
     }
   }

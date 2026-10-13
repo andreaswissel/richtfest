@@ -92,6 +92,29 @@ async function searchSettings(d: AppDeps) {
   }
 }
 
+/** Shared retrieval only: callers own permissions, filters and inference. */
+export async function retrieveCompanyEntries(d: AppDeps, f: z.infer<typeof filters>, terms: string[],
+  maxEntries = 8, maxCharsPerEntry = 4000, db = d.db) {
+  const termQueries = terms.map(term => sql`plainto_tsquery('german', ${term})`);
+  const query = sql`(${sql.join(termQueries, sql` || `)})`;
+  const result = await db.execute(sql`select ${drafts.id} as id, ${drafts.title} as title, ${drafts.status} as status, ${drafts.body} as body,
+    ts_headline('german', ${drafts.body}, ${query}, 'StartSel=__RF_MATCH_START__,StopSel=__RF_MATCH_END__,MaxWords=180,MinWords=20,MaxFragments=4,FragmentDelimiter=|||') as excerpt
+    from ${drafts} where ${conditions(d, f)} and to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}) @@ ${query}
+    order by ts_rank(to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}), ${query}) desc, ${drafts.createdAt} desc, ${drafts.id} desc limit ${maxEntries}`);
+  const entries = result.rows.map((r: any) => ({
+    id: r.id, title: r.title, status: r.status,
+    // Headline may omit boundary punctuation; recover exact source windows.
+    excerpt: r.excerpt.replaceAll("__RF_MATCH_START__", "").replaceAll("__RF_MATCH_END__", "")
+      .split("|||").filter((part: string) => part && r.body.includes(part))
+      .map((part: string) => {
+        const start = r.body.indexOf(part);
+        return r.body.slice(Math.max(0, start - 100), start + part.length + 100);
+      }).join("\n[…]\n").slice(0, maxCharsPerEntry),
+    bodyHash: createHash("sha256").update(r.body).digest("hex"),
+  })).filter((r: any) => r.excerpt.length);
+  return { entries, bodies: new Map<string, string>(result.rows.map((r: any) => [r.id, r.body])) };
+}
+
 /** Company-only library. Search execution is private, bounded and never retried. */
 export function companyLibraryRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
@@ -395,38 +418,7 @@ export function companyLibraryRouter(getDeps: (req: Request) => AppDeps) {
               { question: input.question },
             ),
           ).terms;
-        const termQueries = terms.map(
-          (term) => sql`plainto_tsquery('german', ${term})`,
-        );
-        const query = sql`(${sql.join(termQueries, sql` || `)})`;
-        const result = await d.db
-          .execute(sql`select ${drafts.id} as id, ${drafts.title} as title, ${drafts.status} as status, ${drafts.body} as body,
-          ts_headline('german', ${drafts.body}, ${query}, 'StartSel=__RF_MATCH_START__,StopSel=__RF_MATCH_END__,MaxWords=180,MinWords=20,MaxFragments=4,FragmentDelimiter=|||') as excerpt
-          from ${drafts} where ${conditions(d, f)} and to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}) @@ ${query}
-          order by ts_rank(to_tsvector('german', ${drafts.title} || ' ' || ${drafts.body}), ${query}) desc, ${drafts.createdAt} desc, ${drafts.id} desc limit 8`);
-        const entries = result.rows
-          .map((r: any) => ({
-            id: r.id,
-            title: r.title,
-            status: r.status,
-            // Headline may omit boundary punctuation; recover exact source windows.
-            excerpt: r.excerpt
-              .replaceAll("__RF_MATCH_START__", "")
-              .replaceAll("__RF_MATCH_END__", "")
-              .split("|||")
-              .filter((part: string) => part && r.body.includes(part))
-              .map((part: string) => {
-                const start = r.body.indexOf(part);
-                return r.body.slice(
-                  Math.max(0, start - 100),
-                  start + part.length + 100,
-                );
-              })
-              .join("\n[…]\n")
-              .slice(0, 4000),
-            bodyHash: createHash("sha256").update(r.body).digest("hex"),
-          }))
-          .filter((r: any) => r.excerpt.length);
+        const { entries, bodies } = await retrieveCompanyEntries(d, f, terms);
         let answer = "",
           citations: unknown[] = [];
         if (entries.length) {
@@ -467,9 +459,7 @@ export function companyLibraryRouter(getDeps: (req: Request) => AppDeps) {
             if (
               !entry ||
               !entry.excerpt.includes(c.quote) ||
-              !result.rows
-                .find((r: any) => r.id === c.id)
-                ?.body.includes(c.quote)
+              !bodies.get(c.id)?.includes(c.quote)
             )
               throw new Error("Invalid evidence");
             return {

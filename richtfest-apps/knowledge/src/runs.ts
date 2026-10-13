@@ -1,9 +1,10 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
+import { searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import {
   supervisorRuns,
   agentRuns,
@@ -108,6 +109,7 @@ export function recordResolvedEvidence(evidence: Set<string>, result: unknown) {
 
 export const toolInputs = {
   send_thread_message: agentMessageInputSchema,
+  search_company_knowledge: companyKnowledgeSearchSchema,
   delegate_source_review: z
     .object({
       goal: z.string().min(1).max(2000),
@@ -401,6 +403,7 @@ export async function executeRun(d: AppDeps, run: any) {
     assertEvidenceCitations(output, evidence);
     await sources(d, run.projectId, output.citations);
     const results: unknown[] = [];
+    const companyKnowledge: CompanyKnowledgeReceipt[] = [];
     let calculationUnavailable = false;
     const runDeps = {
       ...d,
@@ -439,7 +442,7 @@ export async function executeRun(d: AppDeps, run: any) {
         const stepInput = { name: tool.name, input, citations: output.citations, ...(resolved ? { resolved } : {}) };
         const inputHash = stepHash(stepInput);
         const saved = await savedStep(d, run.id, "tool", stepKey, undefined, tx);
-        if (saved && tool.name !== "resolve_project_source") {
+        if (saved && tool.name !== "resolve_project_source" && tool.name !== "search_company_knowledge") {
           if (saved.inputHash !== inputHash) throw conflict("Saved action inputs changed. Start a new run instead of repeating a completed action.");
           results.push({ tool: tool.name, result: saved.output });
           if (tool.name === "validated_calculation") calculationUnavailable = true;
@@ -459,6 +462,8 @@ export async function executeRun(d: AppDeps, run: any) {
         }
         let result: any;
         if (tool.name === "resolve_project_source") result = resolved;
+        else if (tool.name === "search_company_knowledge")
+          result = await searchCompanyKnowledge(d, input, tx, companyKnowledge.length >= 2);
         else if (tool.name === "send_thread_message")
           result = await deliverAgentMessage(d, tx, run, input, stepKey);
         else if (tool.name === "delegate_source_review") {
@@ -557,7 +562,15 @@ export async function executeRun(d: AppDeps, run: any) {
           };
           calculationUnavailable = true;
         }
-        await recordStep(d, tx, run, { kind: "tool", stepKey, inputHash, input: stepInput, output: result, status: "completed" });
+        // Recheck the read, but retain its identity when nothing changed so a
+        // completed follow-up can still reuse its matching model checkpoint.
+        const step = tool.name === "search_company_knowledge" && saved?.inputHash === inputHash && stepHash(saved.output) === stepHash(result)
+          ? saved
+          : await recordStep(d, tx, run, { kind: "tool", stepKey, inputHash, input: stepInput, output: result, status: "completed" });
+        if (tool.name === "search_company_knowledge") {
+          result = { ...result, receiptId: step.id };
+          companyKnowledge.push(result);
+        }
         // Duplicate reads must not duplicate the same evidence in model input.
         if (tool.name !== "resolve_project_source" || !results.some((entry: any) =>
           entry.tool === tool.name && JSON.stringify(entry.result) === JSON.stringify(result)))
@@ -572,6 +585,8 @@ export async function executeRun(d: AppDeps, run: any) {
             ? "validated_tool_unavailable"
             : tool.name === "resolve_project_source"
               ? result.status
+              : tool.name === "search_company_knowledge"
+                ? `${result.status}: ${result.entries.length} approved company references retrieved`
               : tool.name === "send_thread_message"
                 ? "Message delivered; recipient execution unchanged"
               : "Draft or question persisted; review required",
@@ -597,6 +612,7 @@ export async function executeRun(d: AppDeps, run: any) {
       return;
     }
     if (results.length) {
+      await assertCompanyKnowledgeCurrent(d, companyKnowledge);
       partialOutput = "";
       failurePhase = "provider";
       failureCategory = "provider";
@@ -634,6 +650,7 @@ export async function executeRun(d: AppDeps, run: any) {
         throw conflict("Provider exceeded the permitted tool round");
       await sources(d, run.projectId, output.citations);
     }
+    await assertCompanyKnowledgeCurrent(d, companyKnowledge);
     await sources(
       d,
       run.projectId,

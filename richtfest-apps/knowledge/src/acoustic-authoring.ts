@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
-  acousticInputProvenance, type AcousticCalculationReceipt,
+  acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -25,6 +25,7 @@ export async function authorAcousticConcept(input: {
   d: AppDeps; projectId: string; id: AcousticConceptId; goal: string;
   findings: unknown; sourceVersionIds: string[]; limits: AgentExecutionLimits; maxOutputTokens: number;
   calculationReceipts?: AcousticCalculationReceipt[];
+  companyKnowledge?: CompanyKnowledgeReceipt[];
   maxParallel: number;
   inputByteBudget?: number; contextOverhead?: unknown;
   previousReview?: unknown; draft?: AcousticDraft;
@@ -37,6 +38,7 @@ export async function authorAcousticConcept(input: {
   // Preserve the fingerprint contract so drafts saved under the old aggregate cap resume.
   const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens,
     ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
+    ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
   });
   const sourceIds = new Set(input.sourceVersionIds);
   const keys = acousticSectionKeys(id);
@@ -57,6 +59,7 @@ export async function authorAcousticConcept(input: {
       documentTask: "outline", documentTemplate: { id, version: 1 }, sectionKeys: keys,
       findings: input.findings, sourceVersionIds: input.sourceVersionIds, previousReview: input.previousReview,
       ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
+      ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     }, value => outlineSchema.parse(value)));
     // Normalize new outlines only: old drafts retain their batch identities on retry.
     for (const section of outline.sections) {
@@ -116,6 +119,7 @@ export async function authorAcousticConcept(input: {
       project: outline.project, language: outline.language,
       attachments: outline.attachments.filter(a => a.section === key), previousReview: draft.previousReview,
       ...(calculationReceipts.length ? { calculationReceipts } : {}),
+      ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     };
     // Reserve instructions/schema space plus the actual variable context. A byte
     // budget is conservative, not an assumed four-characters-per-token ratio.

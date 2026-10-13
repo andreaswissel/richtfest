@@ -15,3 +15,4 @@ export * from "./source-text";
 export * from "./source-model";
 export * from "./public-data";
 export * from "./components";
+export * from "./company-knowledge";

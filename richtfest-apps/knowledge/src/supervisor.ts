@@ -22,6 +22,8 @@ import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { recordStep, savedStep, stepHash } from "./run-steps";
+import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt } from "@richtfest/shared";
+import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -62,6 +64,7 @@ export type Assignment = {
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
+  companyKnowledge?: CompanyKnowledgeReceipt[];
   sourceProgress?: {
     inputHash: string;
     byteLimit?: number;
@@ -291,6 +294,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const limits = policy.executionLimits;
     const schemas = agentOutputSchemas(limits);
+    await assertCompanyKnowledgeCurrent(d, (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []));
     const assertActive = async () => {
       if (!(await commit(d, run, token, async () => {})))
         throw conflict("Supervisor no longer active");
@@ -346,6 +350,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
       const providerContext = {
         ...(context as object),
+        companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
         acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         componentCatalog: await d.componentContext?.(run.goal),
@@ -371,6 +376,48 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           maxRevisions: state.modelPolicy?.maxRevisions,
         },
       };
+      const searchKnowledge: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"] =
+        phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
+          ? async (raw, signal) => {
+            signal?.throwIfAborted();
+            const input = companyKnowledgeSearchSchema.parse(raw);
+            const inputHash = stepHash(input);
+            const stepKey = `company-knowledge:${state.revision}:${inputHash}`;
+            let receipt: CompanyKnowledgeReceipt | undefined;
+            const saved = await commit(d, run, token, async (tx, current) => {
+              signal?.throwIfAborted();
+              const assignment = (current.assignments as Assignment[]).find(a => a.runId === runId);
+              if (!assignment) throw conflict("Knowledge specialist unavailable");
+              const receipts = assignment.companyKnowledge ?? [];
+              const matching = receipts.find(r => stepHash({ terms: r.terms }) === inputHash);
+              if (matching) {
+                await assertCompanyKnowledgeCurrent(d, [matching]);
+                // Already present in this attempt's context or a preceding tool
+                // response: return its identity, not another copy of the text.
+                receipt = { ...matching, status: "already_retrieved", entries: [] };
+                return;
+              }
+              // Re-read approval/content even on retry; no cached read can grant access.
+              const result = await searchCompanyKnowledge(d, input, tx, receipts.length >= 2);
+              const previous = await savedStep(d, runId, "tool", stepKey, stepHash({ input, result }), tx);
+              const step = previous ?? await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+                kind: "tool", stepKey, inputHash: stepHash({ input, result }),
+                input: { name: "search_company_knowledge", input }, output: result, status: "completed",
+              });
+              receipt = { ...result, receiptId: step.id };
+              signal?.throwIfAborted();
+              if (result.status !== "limit_reached") await tx.update(supervisorRuns).set({
+                assignments: (current.assignments as Assignment[]).map(a => a.runId !== runId ? a : {
+                  ...a, companyKnowledge: [...receipts, receipt],
+                }),
+              }).where(eq(supervisorRuns.runId, id));
+              if (!previous) await log(d, tx, { ...run, id: runId }, "tool_executed", "search_company_knowledge",
+                `${result.status}: ${result.entries.length} approved company references retrieved`);
+            });
+            if (!saved) throw conflict("Supervisor no longer active");
+            signal?.throwIfAborted();
+            return receipt!;
+          } : undefined;
       const calculateAcoustics: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["calculateAcoustics"] =
         phase === "specialist" && (context as { role?: string }).role === "sound_insulation" && providerContext.acousticToolsAvailable
           ? async (raw, signal) => {
@@ -426,6 +473,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         if (retryDeadline && Date.now() >= retryDeadline) throw Object.assign(new Error("Provider recovery window expired."), {
           failurePhase: phase, failureCategory: "provider", providerStatus: 429,
         });
+        if (searchKnowledge) {
+          const [current] = await d.db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, id));
+          providerContext.companyKnowledge = (current.assignments as Assignment[]).find(a => a.runId === runId)?.companyKnowledge ?? [];
+        }
+        await assertCompanyKnowledgeCurrent(d, providerContext.companyKnowledge);
         if (streamSummary) {
           partialOutput = "";
           lastCheckpoint = 0;
@@ -444,8 +496,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
             calculateAcoustics,
+            searchCompanyKnowledge: searchKnowledge,
             onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
             });
+            if (response.status === "completed") {
+              let receipts = (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [];
+              if (searchKnowledge) {
+                const [current] = await d.db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, id));
+                receipts = (current.assignments as Assignment[]).find(a => a.runId === runId)?.companyKnowledge ?? [];
+              }
+              await assertCompanyKnowledgeCurrent(d, receipts);
+            }
             if (response.status === "completed" && validate) {
               try { response.output = validate(response.output); }
               catch (error) {
@@ -755,6 +816,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   // Five tool schemas currently serialize to ~18 KiB; leave headroom.
                   - (assignment.role === "sound_insulation" && d.calculateAcoustics ? 24576 : 0)
                   - AGENT_MESSAGING_CONTEXT_BYTES
+                  - ((policy.specialists[assignment.role as keyof typeof policy.specialists]?.maxSteps ?? 1) >= 2 ? COMPANY_KNOWLEDGE_CONTEXT_BYTES : 0)
                   - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
                     sourceVersionIds: assignment.sourceVersionIds,
                     documentReview: await artifactReviewContext(d, run.conversationId),
@@ -820,6 +882,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     history: [...current.history, {
                       phase: "specialist_batch", runId: assignment.runId, revision: current.revision,
                       batch: index + 1, batchCount: batches.length, sourceVersionIds: batchIds, output,
+                      companyKnowledge: (current.assignments as Assignment[]).find(a => a.runId === assignment.runId)?.companyKnowledge,
                     }],
                   }).where(eq(supervisorRuns.runId, id));
                   await log(d, tx, run, "specialist_batch_completed", `${index + 1}/${batches.length}`, assignment.runId);
@@ -923,6 +986,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
             .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output })),
           calculationReceipts: (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []),
+          companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
@@ -939,6 +1003,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           },
         }) : await call("review", goal, {
           assignments: state.assignments,
+          companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           revision: state.revision,
           previousReview: state.review,
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
@@ -955,7 +1020,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               (r) => r.taskId === a.taskId,
             );
             return revision
-              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined }
+              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined }
               : a;
           });
           for (const a of assignments.filter((a) => !a.output)) {
@@ -1168,6 +1233,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         const output = schemas.independent_review.parse(await call("independent_review", goal, {
           role: "independent_reviewer",
           originalGoal: run.goal,
+          companyKnowledge: sliceAssignments.flatMap(a => a.companyKnowledge ?? []),
           assignments: sliceAssignments.map((assignment) => ({
             taskId: assignment.taskId,
             role: assignment.role,
@@ -1242,7 +1308,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await commit(d, run, token, async (tx, current) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
-            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined } : assignment;
+            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined } : assignment;
           });
           for (const assignment of revisedAssignments.filter((item) => !item.output)) {
             await tx.update(agentRuns).set({

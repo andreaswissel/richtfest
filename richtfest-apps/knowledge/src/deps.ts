@@ -1,4 +1,4 @@
-import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt } from "@richtfest/shared";
+import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt } from "@richtfest/shared";
 
 /** Only these structural facts may cross the provider/event boundary. */
 export function sanitizeProviderDiagnostics(raw: unknown) {
@@ -67,6 +67,7 @@ export type AppDeps = {
     context: unknown;
     modelPolicy?: AgentPresetSnapshot;
     calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
+    searchCompanyKnowledge?: (input: CompanyKnowledgeSearch, signal?: AbortSignal) => Promise<CompanyKnowledgeReceipt>;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
     onRequest?: ProviderTelemetry["onRequest"];

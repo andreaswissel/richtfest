@@ -4,6 +4,8 @@
 
 ## 2026-10-13
 
+- Project agents can search approved company knowledge on demand. Retrieved excerpts and entry references stay with their findings through report drafting and review, separate from project evidence; retries recheck approval and changed content.
+
 - Project resource navigation is back at the top of the right sidebar, with tabs for Artifacts, Shared work, Agents and Sources. The left rail is dedicated to active and archived threads.
 
 - Component catalog rows are clickable across all columns, with keyboard access and standard open-in-new-tab behavior.
