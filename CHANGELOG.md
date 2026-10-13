@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-14
+
+- Agent calls now stop waiting when their deadline expires or cancellation is requested, even if the provider stream stays open. Deferred visual reads are recorded and continued within the existing revision allowance without redoing completed findings; any remaining inspection gaps stay explicit instead of being called unreadable sources.
+
 ## 2026-10-13
 
 - Reports now start from a goal and project evidence without requiring a template or attachments. File-purpose controls keep reference reports and comparison-only material out of agent evidence while preserving originals and human previews. Fresh Reports exclude earlier conversation answers and document-comment excerpts; existing reports remain unchanged.

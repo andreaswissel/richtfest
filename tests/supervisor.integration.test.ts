@@ -77,7 +77,7 @@ integration(`visual source scope and durable citation authorization: ${scenario}
         const [first, duplicate] = await Promise.all([request.inspectSource(target), request.inspectSource(target)]);
         expect(first).toEqual(duplicate);
         for (const page of [2, 3, 4]) await request.inspectSource({ versionId, page });
-        expect(await request.inspectSource({ versionId, page: 5 })).toMatchObject({ status: "unavailable" });
+        expect(await request.inspectSource({ versionId, page: 5 })).toMatchObject({ status: "budget_exhausted" });
       }
       if (scenario === "success" || scenario === "recover") throw Object.assign(new Error("Interrupted after visual read"), { code: "timeout", providerFailure: true, retryable: false });
       return { status: "completed", output: { summary: "Must not authorize unreadable citation", rationale: "", citations: [versionId] } };
@@ -91,14 +91,15 @@ integration(`visual source scope and durable citation authorization: ${scenario}
     await stepSupervisor(d, run!.id);
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
     const steps = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
-    expect(steps).toHaveLength(scenario === "success" || scenario === "recover" || scenario === "unavailable" ? 4 : 0);
+    expect(steps).toHaveLength(scenario === "success" || scenario === "recover" || scenario === "unavailable" ? 5 : 0);
     expect(renders).toBe(scenario === "success" || scenario === "recover" || scenario === "unavailable" ? 4 : 0);
     const serialized = JSON.stringify(steps);
     expect(serialized).not.toContain(image.toString("base64"));
     expect(serialized).not.toContain("private-rendered-image-bytes");
     if (scenario === "success" || scenario === "recover") {
       if (scenario === "recover") {
-        expect(steps.every(step => (step.output as any).status === "unavailable")).toBe(true);
+        expect(steps.filter(step => (step.output as any).status === "unavailable")).toHaveLength(4);
+        expect(steps.filter(step => (step.output as any).status === "budget_exhausted")).toHaveLength(1);
         expect((await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${run!.id}/retry`, { method: "POST" })).status).toBe(201);
         await stepSupervisor(d, run!.id);
         expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
@@ -126,6 +127,152 @@ integration(`visual source scope and durable citation authorization: ${scenario}
   } finally {
     server.close();
     for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+for (const scenario of ["recover", "report", "exhausted", "ignored"] as const)
+integration(`visual budget recovery preserves findings and shares the revision limit: ${scenario}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const versions = Array.from({ length: 10 }, () => crypto.randomUUID());
+  const requests = versions.slice(0, 9).map((versionId, index) => ({ versionId, page: 1,
+    ...(index === 8 ? { crop: { x: 0.2, y: 0.1, width: 0.5, height: 0.6 } } : {}) }));
+  const renders: any[] = [], sourceCalls: string[] = [], normalBatches: any[] = [], followups: any[] = [];
+  let siblingCalls = 0, reviewerCalls = 0;
+  let runId = "", interrupted = false;
+  const recovers = scenario === "recover" || scenario === "report";
+  const maxRevisions = recovers ? 2 : 1;
+  const concept = acousticConceptFixture("exterior-noise-concept", "en", versions[0]!);
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId, name: "Synthetic source", version: 1 })), truncated: false }),
+    resolveSource: async (_: string, { versionId }: any) => {
+      sourceCalls.push(versionId);
+      return { status: "resolved", source: { versionId, name: "Synthetic source", version: 1 },
+        content: { status: "available", text: "Saved evidence" } };
+    },
+    inspectSource: async (_: string, input: any) => {
+      renders.push(input);
+      return input.versionId === versions[1]
+        ? { ...input, status: "unavailable", scope: "image", reason: "Render failed" }
+        : { ...input, status: "available", scope: "image", reason: "Unreviewed", image: { mediaType: "image/jpeg", data: "c3ludGhldGlj" } };
+    },
+    executeSupervisor: async (request: any) => {
+      const context = request.context;
+      if (request.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Read sources", sourceVersionIds: versions },
+        { role: "requirements_reviewer", goal: "Independent requirement", sourceVersionIds: [] },
+      ] } };
+      if (request.phase === "review") {
+        if (context.documentTask === "outline") {
+          reviewerCalls++;
+          expect(context.findings.map((f: any) => f.output.summary)).toEqual([
+            "Saved batch 1", "Saved batch 2", "Saved batch 3", "Saved batch 4",
+            "Saved batch 4; visual supplement", "Saved batch 4; visual supplement; visual supplement", "Saved sibling",
+          ]);
+          return { status: "completed", output: { id: "exterior-noise-concept", title: "Visual evidence report", language: "en", project: concept.project,
+            sections: context.sectionKeys.map((key: string) => ({ key, sources: [{ versionId: versions[0], pageStart: 1, pageEnd: 1 }] })), attachments: [] } };
+        }
+        if (context.documentTask === "editorial") return { status: "completed", output: {
+          sections: context.sectionKeys.map((key: string) => ({ key, content: context.original[key] })), complete: true } };
+        if (context.documentTask === "editorial_check") return { status: "completed", output: { preserved: true, issues: [] } };
+        if (context.documentTask === "section") return { status: "completed", output: {
+          content: (concept as any)[context.section], citations: [versions[0]], complete: true } };
+        reviewerCalls++;
+        expect(context.assignments.find((a: any) => a.role === "requirements_reviewer").output.summary).toBe("Saved sibling");
+        expect(context.assignments.find((a: any) => a.role === "source_reviewer").output.citations).toEqual(versions);
+        return { status: "completed", output: { summary: "Everything inspected", rationale: "Accept", citations: versions,
+          decision: "accept", revisions: [], document: null } };
+      }
+      if (context.role === "requirements_reviewer") {
+        siblingCalls++;
+        return { status: "completed", output: { summary: "Saved sibling", rationale: "", citations: [] } };
+      }
+      if (context.visualRequests) {
+        followups.push(context);
+        expect(context.sources).toEqual([]);
+        expect(context.previousFindings.summary).toContain("Saved batch");
+        expect(request.calculateAcoustics).toBeUndefined();
+        expect(request.searchCompanyKnowledge).toBeUndefined();
+        expect(context.visualRequests.length).toBeLessThanOrEqual(4);
+        for (const target of context.visualRequests) expect(requests.slice(4)).toContainEqual(target);
+        await expect(request.inspectSource({ ...context.visualRequests[0], page: 2 })).rejects.toThrow("exact page/crop scope");
+        if (scenario === "recover" && !interrupted) {
+          interrupted = true;
+          await db.update(supervisorRuns).set({ leaseToken: null, leaseUntil: null }).where(eq(supervisorRuns.runId, runId));
+          return { status: "completed", output: { summary: "Discard late result", rationale: "", citations: [] } };
+        }
+        if (scenario !== "ignored") for (const target of context.visualRequests) await request.inspectSource(target);
+        return { status: "completed", output: { summary: `${context.previousFindings.summary}; visual supplement`, rationale: "Unreviewed", citations: [] } };
+      }
+      normalBatches.push(context);
+      if (context.sourceCoverage.batch === 1) {
+        for (const target of requests) await request.inspectSource(target);
+        // Null and absent crops identify the same already-counted request.
+        expect((await request.inspectSource({ ...requests[0], crop: null })).status).toBe("available");
+        await request.inspectSource(requests[8]);
+      }
+      return { status: "completed", output: { summary: `Saved batch ${context.sourceCoverage.batch}`, rationale: "Render failure retained", citations: context.sourceVersionIds } };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, sourceVersionIds: versions, goal: "Budget recovery", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    runId = run!.id;
+    await createSupervisor(d, db, run, "medium", { ...policy, maxRevisions, workflow: scenario === "report"
+      ? { mode: "report", reportTemplate: "exterior-noise-concept" } : { mode: "team" } });
+    await stepSupervisor(d, run!.id);
+    const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    // Legacy small batches exercise saved findings across several normal calls.
+    await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, sourceBatchingVersion, ...a }) => a) }).where(eq(supervisorRuns.runId, run!.id));
+    await stepSupervisor(d, run!.id);
+    const sourceReadsBeforeFollowup = sourceCalls.length;
+    const receipts = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
+    expect(receipts).toHaveLength(9);
+    expect(receipts.filter(r => (r.output as any).status === "budget_exhausted")).toHaveLength(5);
+    expect(JSON.stringify(receipts)).not.toContain("c3ludGhldGlj");
+    expect(renders).toHaveLength(4);
+    // Each separately invoked step reloads Postgres checkpoints, as after restart.
+    for (let round = 0; round < maxRevisions; round++) {
+      await stepSupervisor(d, run!.id);
+      const [queued] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+      expect(queued!.revision).toBe(round + 1);
+      expect(queued!.phase).toBe("specialists");
+      const frozen = (queued!.assignments as any[]).find(a => a.visualFollowup).visualFollowup;
+      await stepSupervisor(d, run!.id);
+      if (scenario === "recover" && round === 0) {
+        const [interruptedState] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, runId));
+        expect(interruptedState!.revision).toBe(1);
+        expect((interruptedState!.assignments as any[]).find(a => a.visualFollowup).visualFollowup).toEqual(frozen);
+        await stepSupervisor(d, runId);
+      }
+      expect(followups.at(-1).visualRequests).toEqual(frozen.requests);
+      expect(reviewerCalls).toBe(0);
+    }
+    expect(sourceCalls.length).toBe(sourceReadsBeforeFollowup);
+    await stepSupervisor(d, run!.id);
+    const [done] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const [parent] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+    expect(done!.phase).toBe("done");
+    expect(parent!.status).toBe("needs_review");
+    expect(normalBatches).toHaveLength(4);
+    expect(siblingCalls).toBe(1);
+    expect(followups).toHaveLength(maxRevisions + (scenario === "recover" ? 1 : 0));
+    expect(reviewerCalls).toBe(1);
+    expect(renders.filter(r => r.versionId === versions[1])).toHaveLength(1);
+    expect(renders.some(r => r.versionId === versions[9])).toBe(false);
+    const review = done!.review as any;
+    expect(review.outstandingVisualReads).toHaveLength(recovers ? 0 : scenario === "ignored" ? 5 : 1);
+    expect(review.decision).toBe(recovers ? "accept" : "revise");
+    if (!recovers) {
+      expect(parent!.outputSummary).toContain("remain uninspected");
+      expect(parent!.rationale).not.toContain(versions[9]!);
+      for (const target of review.outstandingVisualReads) expect(parent!.rationale).toContain(target.versionId);
+    }
+    expect(renders).toHaveLength(recovers ? 9 : scenario === "ignored" ? 4 : 8);
+  } finally {
+    for (const table of [artifactRevisions, artifacts, agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }

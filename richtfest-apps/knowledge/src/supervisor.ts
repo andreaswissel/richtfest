@@ -24,7 +24,7 @@ import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { recordStep, savedStep, stepHash } from "./run-steps";
-import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import { classifyRun, decisionRoutingVersion } from "./decision-routing";
 import {
@@ -69,6 +69,8 @@ export type Assignment = {
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
   companyKnowledge?: CompanyKnowledgeReceipt[];
+  visualReads?: { request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }[];
+  visualFollowup?: { requests: SourceVisualRequest[]; previousFindings: z.infer<typeof specialistOutput> };
   sourceProgress?: {
     inputHash: string;
     byteLimit?: number;
@@ -356,12 +358,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       // provider cooldown that is still in effect.
       let retryAt = sameGeneration || checkpoint?.providerStatus === 429 ? checkpoint.retryAt : 0;
       let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
+      const visualOnly = !!(context as { visualRequests?: SourceVisualRequest[] }).visualRequests;
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
-        companyKnowledgeCategories: phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
+        companyKnowledgeCategories: !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? await companyKnowledgeCategories(d) : undefined,
-        acousticToolsAvailable: !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
+        acousticToolsAvailable: !visualOnly && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         componentCatalog: await d.componentContext?.(run.goal),
         documentReview,
@@ -406,29 +409,40 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         d.inspectSource && phase !== "plan" ? async (raw, signal) => {
           signal?.throwIfAborted();
           await assertActive();
-          const input = sourceVisualRequestSchema.parse(raw);
-          const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; sourceCoverage?: { sliceVersionIds?: string[] } };
+          const parsed = sourceVisualRequestSchema.parse(raw);
+          const input = { ...parsed, crop: parsed.crop ?? undefined };
+          const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; visualRequests?: SourceVisualRequest[]; sourceCoverage?: { sliceVersionIds?: string[] } };
           const allowed = new Set([...(scope.sourceVersionIds ?? scope.sourceCoverage?.sliceVersionIds ?? []), ...(scope.visualSourceVersionIds ?? [])]);
           if (!allowed.has(input.versionId)) throw conflict("Visual source is outside this call's source scope");
           const inputHash = stepHash(input);
+          if (scope.visualRequests && !scope.visualRequests.some(request => stepHash(request) === inputHash))
+            throw conflict("Visual request is outside this follow-up's exact page/crop scope");
           const cached = visualReads.get(inputHash);
           if (cached) return cached;
-          if (visualReads.size >= 4) return { ...input, status: "unavailable", scope: "image", reason: "Four targeted visual reads per model call are available; report remaining coverage gaps." };
+          const exhausted = visualReads.size >= 4;
           const read = (async () => {
             await sources(d, run.projectId, [input.versionId]);
-            const result = await d.inspectSource!(run.projectId!, input, signal);
+            const result: SourceVisual = exhausted
+              ? { ...input, status: "budget_exhausted", reason: "Not inspected: this call's four distinct visual reads are used. The application retains this exact request for bounded follow-up; this does not mean the source is unreadable." }
+              : await d.inspectSource!(run.projectId!, input, signal);
             signal?.throwIfAborted();
             const { image, ...metadata } = result;
             const output = { ...metadata, ...(image ? { imageHash: createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex") } : {}) };
             const stepKey = `visual:${callKey}:${inputHash}`;
-            const saved = await commit(d, run, token, async tx => {
+            const saved = await commit(d, run, token, async (tx, current) => {
               const previous = await savedStep(d, runId, "tool", stepKey, inputHash, tx);
               // A failed render may recover on an explicit retry. Retain that
               // successful receipt too so cached model replay can cite it.
-              if (!previous || stepHash(previous.output) !== stepHash(output)) await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+              const receipt = !previous || stepHash(previous.output) !== stepHash(output) ? await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
                 kind: "tool", stepKey, inputHash, input: { name: "inspect_project_source", input },
                 output, status: "completed",
-              });
+              }) : previous;
+              if (phase === "specialist") await tx.update(supervisorRuns).set({
+                assignments: (current.assignments as Assignment[]).map(a => a.runId !== runId ? a : {
+                  ...a, visualReads: [...(a.visualReads ?? []).filter(read => stepHash(read.request) !== inputHash),
+                    { request: input, status: result.status, receiptId: receipt.id }],
+                }),
+              }).where(eq(supervisorRuns.runId, id));
             });
             if (!saved) throw conflict("Supervisor no longer active");
             if (result.status === "available" && image) visuallyInspected.add(input.versionId);
@@ -438,7 +452,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           return read;
         } : undefined;
       const searchKnowledge: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"] =
-        phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
+        !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? async (raw, signal) => {
             signal?.throwIfAborted();
             const input = companyKnowledgeSearchSchema.parse(raw);
@@ -900,15 +914,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               if (!claimed) return;
               await assertActive();
               await sources(d, run.projectId, assignment.sourceVersionIds);
+              // A visual continuation reuses saved findings, not another OCR/text pass.
+              const readingVersionIds = assignment.visualFollowup ? [] : assignment.sourceVersionIds;
               const excerpts = await Promise.all(
-                assignment.sourceVersionIds.map(async (versionId) => {
+                readingVersionIds.map(async (versionId) => {
                   await assertActive();
                   return readCompleteSources
                     ? resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
                     : resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
                 }),
               );
-              const resolvedSources = assignment.sourceVersionIds.map(
+              const resolvedSources = readingVersionIds.map(
                 (versionId, index) => ({ versionId, excerpt: excerpts[index] as any }),
               );
               const readableSources = resolvedSources.filter(
@@ -980,13 +996,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
                 goal: assignment.goal, batches, unreadableSources,
+                ...(assignment.visualFollowup ? { visualFollowup: assignment.visualFollowup } : {}),
               })).digest("hex");
               const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
-              if (assignment.role === "sound_insulation" && d.calculateAcoustics && assignment.calculationEvidenceHash !== inputHash) await commit(d, run, token, async (tx, current) => {
+              if (!assignment.visualFollowup && assignment.role === "sound_insulation" && d.calculateAcoustics && assignment.calculationEvidenceHash !== inputHash) await commit(d, run, token, async (tx, current) => {
                 await tx.update(supervisorRuns).set({ assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
                   ? { ...a, calculationReceipts: undefined, calculationEvidenceHash: inputHash } : a) }).where(eq(supervisorRuns.runId, id));
               });
-              let accumulated = progress?.output;
+              let accumulated = progress?.output ?? assignment.visualFollowup?.previousFindings;
               for (let index = progress?.completedBatches ?? 0; index < batches.length; index++) {
                 if (stopped) throw new Error("Specialist work stopped after a sibling failure.");
                 const batch = batches[index]!;
@@ -1003,7 +1020,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const result = schemas.specialist.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
                   sourceVersionIds: batchIds,
-                  ...(d.inspectSource ? { visualSourceVersionIds: assignment.sourceVersionIds } : {}),
+                  ...(d.inspectSource ? { visualSourceVersionIds: assignment.visualFollowup
+                    ? [...new Set(assignment.visualFollowup.requests.map(request => request.versionId))] : assignment.sourceVersionIds } : {}),
+                  ...(assignment.visualFollowup ? { visualRequests: assignment.visualFollowup.requests } : {}),
                   sources: batch,
                   unreadableSources,
                   previousFindings: accumulated,
@@ -1033,8 +1052,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
                       ? { ...a, sourceProgress: { inputHash, byteLimit, completedBatches: index + 1, output } } : a),
                     history: [...current.history, {
-                      phase: "specialist_batch", runId: assignment.runId, revision: current.revision,
-                      batch: index + 1, batchCount: batches.length, sourceVersionIds: batchIds, output,
+                      phase: assignment.visualFollowup ? "specialist_visual_followup" : "specialist_batch",
+                      runId: assignment.runId, revision: current.revision, inputHash,
+                      batch: index + 1, batchCount: batches.length,
+                      sourceVersionIds: assignment.visualFollowup ? output.citations : batchIds, output,
                       companyKnowledge: (current.assignments as Assignment[]).find(a => a.runId === assignment.runId)?.companyKnowledge,
                     }],
                   }).where(eq(supervisorRuns.runId, id));
@@ -1054,7 +1075,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   acousticInputProvenance(receipt.input).flatMap(p => p.kind === "source" ? [p.versionId] : []),
                 )])];
                 const assignments = (current.assignments as Assignment[]).map(
-                  (a) => (a.runId === assignment.runId ? { ...a, output, sourceProgress: undefined } : a),
+                  (a) => (a.runId === assignment.runId ? { ...a, output, sourceProgress: undefined, visualFollowup: undefined } : a),
                 );
                 await tx
                   .update(supervisorRuns)
@@ -1063,9 +1084,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     history: [
                       ...current.history,
                       {
-                        phase: "specialist",
+                        phase: assignment.visualFollowup ? "specialist_visual_completed" : "specialist",
                         runId: assignment.runId,
                         revision: current.revision,
+                        inputHash,
                         output,
                       },
                     ],
@@ -1105,6 +1127,32 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         });
       });
     } else if (state.phase === "review") {
+      const outstandingVisualReads = (state.assignments as Assignment[]).flatMap(a =>
+        (a.visualReads ?? []).filter(read => read.status === "budget_exhausted").map(read => ({ taskId: a.taskId, ...read.request })));
+      if (outstandingVisualReads.length && state.revision < policy.maxRevisions) {
+        // Consume one shared revision round, not a fresh per-assignment budget.
+        // Freeze targets and findings so a worker restart resumes the same call.
+        await commit(d, run, token, async (tx, current) => {
+          const assignments = (current.assignments as Assignment[]).map(a => {
+            const requests = (a.visualReads ?? []).filter(read => read.status === "budget_exhausted")
+              .map(read => read.request).sort((a, b) => stepHash(a).localeCompare(stepHash(b))).slice(0, 4);
+            return requests.length && a.output ? { ...a, output: undefined,
+              visualFollowup: { requests, previousFindings: a.output } } : a;
+          });
+          for (const a of assignments.filter(a => a.visualFollowup)) {
+            await tx.update(agentRuns).set({ status: "queued", updatedAt: new Date() }).where(eq(agentRuns.id, a.runId));
+            await tx.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, a.taskId));
+            await logWorkProgress(d, tx, run, { runId: a.runId, stage: "revision_requested", sources: [],
+              summary: "Continue only deferred visual inspections; retain completed findings." });
+          }
+          await tx.update(supervisorRuns).set({ assignments, phase: "specialists", revision: current.revision + 1,
+            history: [...current.history, { phase: "visual_followup_scheduled", revision: current.revision + 1,
+              tasks: assignments.filter(a => a.visualFollowup).map(a => ({ taskId: a.taskId, requests: a.visualFollowup!.requests })) }],
+          }).where(eq(supervisorRuns.runId, id));
+          await log(d, tx, run, "visual_followup_scheduled");
+        });
+        return;
+      }
       await commit(d, run, token, async (tx) => {
         await logWorkProgress(d, tx, run, {
           runId: id, stage: "reviewing_findings", sources: [],
@@ -1142,15 +1190,24 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
             budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
           },
-          findings: state.history.filter((entry: any) => entry.phase === "specialist_batch" && entry.revision === state.revision)
-            .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output })),
+          // Keep each assignment's latest full evidence pass plus its visual
+          // supplements, including siblings unchanged by a later revision.
+          findings: (state.assignments as Assignment[]).flatMap(a => {
+            const entries = state.history.filter((entry: any) => entry.runId === a.runId);
+            const completed = entries.findLast((entry: any) => entry.phase === "specialist");
+            return entries.filter((entry: any) => entry.phase === "specialist_batch"
+              ? entry.revision === (completed?.revision ?? state.revision) && (!completed?.inputHash || entry.inputHash === completed.inputHash)
+              : entry.phase === "specialist_visual_followup" && entry.revision > (completed?.revision ?? -1))
+              .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output }));
+          }),
           calculationReceipts: (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []),
           companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
           assertActive,
-          call: (context, validate) => call("review", goal, context, id, validate),
+          call: (context, validate) => call("review", goal, { ...context,
+            ...(outstandingVisualReads.length ? { outstandingVisualReads } : {}) }, id, validate),
           checkpoint: async (documentDraft, section, batch, batchCount) => {
             const saved = await commit(d, run, token, async tx => {
               await tx.update(supervisorRuns).set({ review: { documentDraft } }).where(eq(supervisorRuns.runId, id));
@@ -1165,12 +1222,21 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           },
         }) : await call("review", goal, {
           assignments: state.assignments,
+          ...(outstandingVisualReads.length ? { outstandingVisualReads } : {}),
           companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           revision: state.revision,
           previousReview: state.review,
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }, id, validateReview),
       );
+      if (outstandingVisualReads.length) {
+        // A model's "accept" cannot erase application-observed missing reads.
+        review.decision = "revise";
+        review.revisions = [];
+        const notice = `${outstandingVisualReads.length} requested visual inspection(s) remain uninspected: the automatic revision budget is exhausted. This does not establish that the sources are unreadable. Human review or a focused follow-up is required.`;
+        review.summary = `${notice}\n\n${review.summary}`.slice(0, limits.summaryMaxCharacters);
+        review.rationale += `\n\n${notice}\n${JSON.stringify(outstandingVisualReads)}`;
+      }
       await sources(d, run.projectId, review.citations);
       if (
         review.decision === "revise" &&
@@ -1182,7 +1248,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               (r) => r.taskId === a.taskId,
             );
             return revision
-              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined }
+              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined }
               : a;
           });
           for (const a of assignments.filter((a) => !a.output)) {
@@ -1294,7 +1360,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             .update(supervisorRuns)
             .set({
               phase: "done",
-              review: { ...review, result: resultReference },
+              review: { ...review, outstandingVisualReads, result: resultReference },
               history: [
                 ...current.history,
                 {
@@ -1463,7 +1529,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await commit(d, run, token, async (tx, current) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
-            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined } : assignment;
+            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined } : assignment;
           });
           for (const assignment of revisedAssignments.filter((item) => !item.output)) {
             await tx.update(agentRuns).set({

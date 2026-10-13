@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { Agent } from "@mastra/core/agent";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
@@ -415,6 +416,49 @@ test("phase deadlines abort real Mastra streams without accepting partial output
       } finally {
         if (timer) clearTimeout(timer);
         timeout.mockRestore();
+      }
+    }
+  }
+});
+
+test("deadlines and cancellation finish with open SDK streams and retain settled usage", async () => {
+  for (const streamSummary of [false, true]) {
+    for (const cancelled of [false, true]) {
+      const deadline = new AbortController();
+      const cancellation = new AbortController();
+      const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => deadline.signal);
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      let release!: (value: any) => void;
+      const pending = new Promise<any>(resolve => { release = resolve; });
+      let streamController!: ReadableStreamDefaultController<any>;
+      const objectStream = new ReadableStream({ start(controller) { streamController = controller; } });
+      const stream = spyOn(Agent.prototype, "stream").mockImplementation(async () => {
+        entered();
+        return { objectStream, getFullOutput: () => pending, totalUsage: Promise.resolve({ inputTokens: 37, outputTokens: 11, totalTokens: 48 }),
+          usage: pending, finishReason: pending, object: pending, text: pending } as any;
+      });
+      let summaries = 0;
+      const usage: any[] = [];
+      const execution = callMastraSupervisor({ ...base, phase: "specialist",
+        onUsage: async value => { usage.push(value); },
+        ...(streamSummary ? { onSummaryDelta: async () => { summaries++; } } : {}),
+      }, "test-key", { model: createMockModel({ version: "v2", mockText: "unused" }), signal: cancellation.signal }).then(() => "accepted", error => error);
+      try {
+        await started;
+        (cancelled ? cancellation : deadline).abort();
+        const outcome = await Promise.race([execution, Bun.sleep(1000).then(() => "still pending")]);
+        expect(outcome).toMatchObject(cancelled ? { code: "cancelled" } : {
+          code: "timeout", failureCategory: "timeout", retryable: false,
+        });
+        expect(usage).toMatchObject([{ inputTokens: 37, outputTokens: 11, totalTokens: 48 }]);
+        expect(summaries).toBe(0);
+      } finally {
+        release({});
+        try { streamController.close(); } catch { /* The application may cancel its reader. */ }
+        stream.mockRestore();
+        timeout.mockRestore();
+        await execution;
       }
     }
   }

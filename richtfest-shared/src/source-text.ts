@@ -17,12 +17,17 @@ export const sourceVisualRequestSchema = z.object({
     .refine(c => c.x + c.width <= 1 && c.y + c.height <= 1, "Crop must fit within the page").nullish(),
 }).strict();
 export type SourceVisualRequest = z.infer<typeof sourceVisualRequestSchema>;
-export type SourceVisual = SourceVisualRequest & {
+export type SourceVisual = SourceVisualRequest & ({
   status: "available" | "unavailable";
   scope: "pdf_page" | "image" | "affinity_preview";
   reason: string;
   image?: { mediaType: "image/jpeg"; data: string };
-};
+} | {
+  status: "budget_exhausted";
+  reason: string;
+  scope?: never;
+  image?: never;
+});
 
 /** Extracted text is unreviewed evidence, never an approved interpretation. */
 export type SourceText = {
