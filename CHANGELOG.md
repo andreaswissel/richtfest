@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Restored the full automated test suite with current invitation, agent recovery and source-evidence expectations. Repeated API checks no longer offboard shared demo users or share authentication rate-limit counters; application behavior is unchanged.
+
 - Parallel agent calls now wait for temporary spending reservations instead of failing, with exact waiting and stop reasons in activity and recovery previews. Unfinished report Open issues reuse saved specialist findings; outstanding visual checks remain explicit in the report without becoming unsupported section citations. Saved work and spending limits are preserved.
 
 - Agent recovery now previews saved work and requires confirmation of additional spending from both the conversation and run details. Shared spend/retry guards and explicit interrupted-attempt records prevent silent replacement calls; source inspection reserves a final answer step, and report citation feedback avoids unnecessary retries without weakening evidence checks.

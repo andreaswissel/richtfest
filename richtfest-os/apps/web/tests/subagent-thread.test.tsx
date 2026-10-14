@@ -160,16 +160,16 @@ test("persisted timeout reasons show phase and safe retry guidance in run rows a
     }
   }
   expect(de.workspaceRunCategoryTimeout).toContain("Zeitlimit überschritten");
-  expect(de.workspaceRunCategoryTimeout).toContain("enger gefassten Auftrag");
-  expect(de.workspaceRunCategoryTimeout).toContain("schnelleren Modell");
+  expect(de.workspaceRunCategoryTimeout).toContain("gespeicherten Fortschritt mit den ursprünglichen Einstellungen");
+  expect(de.workspaceRunCategoryTimeout).toContain("„Neu ausführen“ startet von vorn mit den aktuellen Modelleinstellungen");
   expect(de.workspaceRunCategoryTimeout).not.toMatch(
     /Token|Verbindung|Zugangsdaten/i,
   );
 });
 
-test("budget and uncertain-outcome stops explain the required human recovery", () => {
+test("budget and uncertain-outcome stops show safe persisted reasons", () => {
   for (const [category, reason, expected] of [
-    ["budget", "Execution paused before another paid call: allowance reached.", en.workspaceRunCategoryBudget],
+    ["budget", "Execution paused before another paid call: allowance reached.", en.budgetStopped],
     ["outcome_unknown", "The previous worker lost ownership with an unfinished provider attempt.", en.workspaceRunCategoryOutcomeUnknown],
   ]) {
     const failed = { ...run, status: "failed", error: `phase=review; category=${category}; ${reason}` };

@@ -80,7 +80,7 @@ integration(
           conversationId: thread!.id,
           goal: "Review",
           provider: "openai",
-          status: "needs_review",
+          status: "running",
           outputSummary: "Previous result",
           rationale: "Previous reasoning",
           partialOutput: "Previous streamed result",
@@ -145,22 +145,24 @@ integration(
       expect(state!.review).toBeNull();
       expect(state!.assignments).toEqual([]);
       expect(state!.history).toEqual([{ phase: "review", output: priorReview }]);
-      // Approved work is immutable to steering and must start a new round.
+      // Finished work is immutable to steering and must start a new run.
+      for (const status of ["needs_review", "approved", "failed", "cancelled"]) {
+        await db
+          .update(agentRuns)
+          .set({ status })
+          .where(eq(agentRuns.id, id));
+        expect(
+          (
+            await steer({
+              instruction: "Change finished output",
+              messageId: own!.id,
+            })
+          ).status,
+        ).toBe(409);
+      }
       await db
         .update(agentRuns)
-        .set({ status: "approved" })
-        .where(eq(agentRuns.id, id));
-      expect(
-        (
-          await steer({
-            instruction: "Change approved output",
-            messageId: own!.id,
-          })
-        ).status,
-      ).toBe(409);
-      await db
-        .update(agentRuns)
-        .set({ status: "failed" })
+        .set({ status: "queued" })
         .where(eq(agentRuns.id, id));
       const manual = await steer({ instruction: "Manual follow-up" });
       expect(manual.status).toBe(201);

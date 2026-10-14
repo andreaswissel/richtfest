@@ -217,10 +217,36 @@ integration(
         expect(JSON.stringify(snapshot)).not.toContain("Independent");
         expect(JSON.stringify(snapshot)).not.toContain("test-model");
       }
-      // Exercise the public steering route against a completed framework snapshot.
+      // Completed runs stay immutable; only interrupted active work can be steered.
       const address = server.address() as { port: number };
-      const response = await fetch(
+      const completedResponse = await fetch(
         `http://127.0.0.1:${address.port}/runs/${ids[0]}/steer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instruction: "Reconsider the requirement scope",
+          }),
+        },
+      );
+      expect(completedResponse.status).toBe(409);
+      const [activeRun] = await db
+        .insert(agentRuns)
+        .values({
+          tenantId,
+          projectId,
+          goal: "Interrupted worker to steer",
+          provider: "openai",
+          requestedBy: actorId,
+          correlationId: crypto.randomUUID(),
+        })
+        .returning();
+      const steeredId = activeRun!.id;
+      await createSupervisor(d, db, activeRun, "medium", policy);
+      await stepSupervisor(d, steeredId);
+      expect((await crashed.execute(steeredId)).status).toBe("failed");
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/runs/${steeredId}/steer`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -233,7 +259,7 @@ integration(
       const [steered] = await db
         .select()
         .from(supervisorRuns)
-        .where(eq(supervisorRuns.runId, ids[0]!));
+        .where(eq(supervisorRuns.runId, steeredId));
       expect(steered!.generation).toBe(1);
       expect(steered!.phase).toBe("plan");
       expect(steered!.assignments).toEqual([]);
@@ -250,7 +276,7 @@ integration(
         const [parent] = await db
           .select()
           .from(agentRuns)
-          .where(eq(agentRuns.id, ids[0]!));
+          .where(eq(agentRuns.id, steeredId));
         steeredStatus = parent!.status;
         if (steeredStatus === "needs_review") break;
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -259,10 +285,10 @@ integration(
       await Promise.all(workers.map((worker) => worker.stop()));
       workers.length = 0;
       expect(
-        (await crashed.workflow.getWorkflowRunById(`${ids[0]}:1`))?.status,
+        (await crashed.workflow.getWorkflowRunById(`${steeredId}:1`))?.status,
       ).toBe("success");
       expect(
-        calls.filter((c) => c.phase === "plan" && c.runId === ids[0]),
+        calls.filter((c) => c.phase === "plan" && c.runId === steeredId),
       ).toHaveLength(2);
     } finally {
       server.close();

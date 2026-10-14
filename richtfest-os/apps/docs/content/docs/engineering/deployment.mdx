@@ -17,6 +17,8 @@ Open the **Richtfest** portal and choose the seeded Andreas or Luca identity on 
 
 From the repository root, run `bun run typecheck`, `bun test`, and `bun run build`. The generated `.env` sets both `DATABASE_URL` and `MASTRA_TEST_DATABASE_URL` to the disposable local database, so database-backed tests run rather than silently skipping. PDF extraction uses the installed language models through ignored links in `tools/reference-extraction/models`; it does not download customer files or run extraction during setup. Build the docs with `bun run --filter '@richtfest/docs' build` when a static docs export is needed; application builds and test suites are intentionally not part of every setup.
 
+For full integration coverage, also point `ACCESS_TEST_DATABASE_URL`, `AGENT_PRESET_TEST_DATABASE_URL` and `SOURCE_MODEL_TEST_DATABASE_URL` at that disposable loopback database, and supply a temporary base64-encoded 32-byte `AI_CONNECTION_ENCRYPTION_KEY` to the test process. These checks use mocked provider responses, not live provider credentials. Never use production database URLs or encryption keys. Without these opt-ins, the corresponding tests are skipped. The API workflow uses a separate test client address for authentication rate limits and offboards its own invited member rather than a shared seed identity, so repeated runs leave Andreas and Luca available.
+
 Generated `.amp/portals` links, `.env`, database files, uploads, and dependencies stay out of Git. Lifecycle changes must reach the project's default branch before future orbs can use them. Committing or testing these files locally does not deploy or change Railway.
 
 ### Seed a project for portal testing

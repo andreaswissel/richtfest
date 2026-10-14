@@ -119,7 +119,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
               providerRequests.at(-1).messages[0].content,
           );
           const inventorySource = prompt.context.sourceInventory?.sources?.find(
-            (source: any) => source.name === "plan.ifc",
+            (source: any) => source.name === "plan.txt",
           );
           const resolvedSourceId =
             prompt.toolResults?.[0]?.result?.source?.versionId;
@@ -176,6 +176,8 @@ describe("accepted API workflow (PostgreSQL)", () => {
       }).listen(0);
       const address = server.address() as { port: number };
       const base = `http://127.0.0.1:${address.port}`;
+      // Keep this run's persisted authentication rate limits separate from other test runs.
+      const clientIp = `127.${Array.from(crypto.getRandomValues(new Uint8Array(3))).join(".")}`;
       const request = async (
         path: string,
         init: RequestInit = {},
@@ -183,6 +185,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
       ) => {
         const headers = new Headers(init.headers);
         headers.set("content-type", "application/json");
+        headers.set("x-forwarded-for", clientIp);
         if (cookie) headers.set("cookie", cookie);
         const response = await fetch(base + path, { ...init, headers });
         const body = await response.json();
@@ -198,7 +201,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
           {
             method: "POST",
             body: JSON.stringify({
-              name: "plan.ifc",
+              name: "plan.txt",
               mimeType: "text/plain",
               sizeBytes: 14,
               sourceMetadata: { source: "integration" },
@@ -240,6 +243,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
         const issued = new URL(outbox!.url!);
         const verified = await fetch(base + issued.pathname + issued.search, {
           redirect: "manual",
+          headers: { "x-forwarded-for": clientIp },
         });
         expect(verified.status).toBe(302);
         return verified.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -321,7 +325,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
           method: "POST",
           body: JSON.stringify({
             body: "Use the source plan",
-            sourceRef: "drive://plan.ifc",
+            sourceRef: "drive://plan.txt",
           }),
         },
         cookie,
@@ -920,7 +924,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect(proposed.artifacts[0].status).toBe("draft");
         expect(proposed.attempts).toHaveLength(1);
         expect(proposed.attempts[0]).toMatchObject({ phase: "direct", attemptNumber: 1, status: "completed", usageStatus: "reported" });
-        expect(proposed.attempts[0].settings).toMatchObject({ adapter: "direct", maxRetries: 0, timeoutMs: 60000 });
+        expect(proposed.attempts[0].settings).toMatchObject({ adapter: "direct", maxRetries: 0, timeoutMs: 180000 });
         expect(proposed.attempts[0].settings.promptHash).toMatch(/^[a-f0-9]{64}$/);
         expect(proposed.attempts[0].response.modelId).toBe("gpt-4.1-mini-2025-04-14");
         expect(proposed.usage.calls[0]).toMatchObject({ attemptId: proposed.attempts[0].id, inputTokens: 123, outputTokens: 37 });
@@ -967,7 +971,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
         expect(
           discoveryRequests[0]!.context.sourceInventory.sources[0],
         ).toMatchObject({
-          name: "plan.ifc",
+          name: "plan.txt",
           versionId: newVersion.body.data.versionId,
           version: 2,
         });
@@ -1051,6 +1055,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
         {
           method: "POST",
           body: JSON.stringify({
+            name: "Invited integration user",
             email: invitedEmail,
             roleId: team.body.data.roles[0].id,
             expiresInDays: 1,
@@ -1081,18 +1086,31 @@ describe("accepted API workflow (PostgreSQL)", () => {
       const cancelledLink = new URL(issuedLink);
       const redeemedAfterCancellation = await fetch(
         base + cancelledLink.pathname + cancelledLink.search,
-        { redirect: "manual" },
+        { redirect: "manual", headers: { "x-forwarded-for": clientIp } },
       );
       const cancelledCookie =
         redeemedAfterCancellation.headers.get("set-cookie")?.split(";")[0] ??
         "";
       const cancelledMe = await request("/api/auth/me", {}, cancelledCookie);
       expect(cancelledMe.response.status).toBe(401);
-      const luca = team.body.data.members.find(
-        (member: any) => member.email === "luca@richtfest.local",
+      // Re-invite this test's member for offboarding, leaving the shared seed user active.
+      const reinvited = await request(
+        "/api/access/invitations",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: "Invited integration user",
+            email: invitedEmail,
+            roleId: team.body.data.roles[0].id,
+          }),
+        },
+        cookie,
       );
+      expect(reinvited.response.status).toBe(201);
+      const memberCookie = await login(invitedEmail);
+      expect((await request("/api/auth/me", {}, memberCookie)).response.status).toBe(200);
       const offboarded = await request(
-        `/api/access/members/${luca.userId}/offboard`,
+        `/api/access/members/${invitation.body.data.userId}/offboard`,
         {
           method: "POST",
           body: JSON.stringify({ reason: "Integration verification" }),
@@ -1100,15 +1118,17 @@ describe("accepted API workflow (PostgreSQL)", () => {
         cookie,
       );
       expect(offboarded.response.status).toBe(200);
-      const lucaAfterOffboarding = await request(
+      const memberAfterOffboarding = await request(
         "/api/auth/me",
         {},
-        lucaCookie,
+        memberCookie,
       );
-      expect(lucaAfterOffboarding.response.status).toBe(401);
+      expect(memberAfterOffboarding.response.status).toBe(401);
+      expect((await request("/api/auth/me", {}, lucaCookie)).response.status).toBe(200);
       server.close();
       await extractionWorker.stop();
       await pool.end();
     },
+    20_000,
   );
 });

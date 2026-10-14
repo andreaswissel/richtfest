@@ -1389,10 +1389,13 @@ integration(
             output: {
               summary: `Evidence for ${input.goal}`,
               rationale: "Bounded evidence",
-              citations: [],
+              citations: (input.context as { sourceVersionIds: string[] }).sourceVersionIds,
             },
           };
-        await input.onSummaryDelta?.("Vorläufige Planungsvorlage");
+        await input.onSummaryDelta?.("Vorläufige ");
+        // Streaming checkpoints are throttled; a later delta persists the accumulated text.
+        await Bun.sleep(160);
+        await input.onSummaryDelta?.("Planungsvorlage");
         const [checkpoint] = await db
           .select()
           .from(agentRuns)
@@ -1465,7 +1468,7 @@ integration(
       assignments[0].output = {
         summary: "Evidence recovered from prior process",
         rationale: "saved",
-        citations: [],
+        citations: [inventoryVersionId],
       };
       await db
         .update(supervisorRuns)
