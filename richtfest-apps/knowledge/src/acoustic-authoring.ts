@@ -25,6 +25,7 @@ export type AcousticDraft = {
   previousReview?: unknown;
   editorial?: {
     inputHash: string;
+    mode?: "patch-editorial-v1";
     candidate?: z.infer<typeof acousticEditorialOutputSchema>;
     check?: z.infer<typeof acousticEditorialCheckSchema>;
     feedback?: z.infer<typeof acousticEditorialCheckSchema>;
@@ -333,6 +334,26 @@ export async function authorAcousticConcept(input: {
     previousReview: draft.previousReview,
     ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
   };
+  // Select once, before any editorial paid work. Any existing unversioned
+  // editorial/consolidation checkpoint retains its original algorithm.
+  const patchEditing = draft.editorial?.mode === "patch-editorial-v1"
+    || (!draft.editorial && (!draft.consolidation || draft.consolidation.mode === "patch-editorial-v1"));
+  let consolidated: z.infer<typeof acousticConceptTemplateSchema>;
+  if (patchEditing) {
+    draft.editorial = { inputHash: hash(editorialContext), mode: "patch-editorial-v1" };
+    await input.checkpoint(draft, "editing_document", 0, 0);
+    consolidated = await consolidateAcousticConcept({
+      template, sourceDirectory, visualReads: input.visualReads ?? [], state: draft.consolidation,
+      mode: "patch-editorial-v1", maxOutputTokens: input.maxOutputTokens,
+      inputByteBudget: input.inputByteBudget === undefined ? undefined
+        : input.inputByteBudget - 16384 - Buffer.byteLength(JSON.stringify({ goal: input.goal, contextOverhead: input.contextOverhead })),
+      assertActive: input.assertActive, call: input.call,
+      checkpoint: async state => {
+        draft!.consolidation = state;
+        await input.checkpoint(draft!, "checking_editorial", 1, 1);
+      },
+    });
+  } else {
   const editorialHash = hash(editorialContext);
   if (draft.editorial?.inputHash !== editorialHash) draft.editorial = { inputHash: editorialHash };
   const editorial = draft.editorial;
@@ -508,7 +529,7 @@ export async function authorAcousticConcept(input: {
   await input.assertActive();
   // A separate versioned checkpoint preserves legacy author/editor identities.
   // This stage sees bounded fragments together, never another full-report rewrite.
-  const consolidated = await consolidateAcousticConcept({
+  consolidated = await consolidateAcousticConcept({
     template: edited, sourceDirectory, visualReads: input.visualReads ?? [], state: draft.consolidation,
     maxOutputTokens: input.maxOutputTokens,
     inputByteBudget: input.inputByteBudget === undefined ? undefined
@@ -519,6 +540,7 @@ export async function authorAcousticConcept(input: {
       await input.checkpoint(draft!, "checking_editorial", 1, 1);
     },
   });
+  }
   const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: consolidated }, id, null)!;
   return {
     document, citations: [...citations], decision: "accept" as const, revisions: [],

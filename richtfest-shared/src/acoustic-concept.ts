@@ -103,6 +103,11 @@ export const acousticConsolidationOutputSchema = z.object({
   }).strict()).min(1).max(2),
 }).strict();
 
+/** Explicit patch-editorial-v1 protocol; legacy consolidation stays at two IDs. */
+export const acousticPatchEditorialOutputSchema = acousticConsolidationOutputSchema.extend({
+  replacements: acousticConsolidationOutputSchema.shape.replacements.max(32),
+});
+
 /** Reference-derived authoring formats, not executable calculation templates. */
 export const acousticConceptTemplateSchema = z.discriminatedUnion("id", [
   z.object({

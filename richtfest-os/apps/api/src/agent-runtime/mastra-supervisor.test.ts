@@ -8,9 +8,9 @@ import type { AppDeps } from "@richtfest/knowledge/deps";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks, artifacts, artifactRevisions } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
-import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, companyKnowledgeSearchSchema } from "@richtfest/shared";
+import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, agentExecutionLimitsSchema, companyKnowledgeSearchSchema } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
-import { acousticConceptFixture } from "../../../../../tests/fixtures/acoustic-concepts";
+import { acousticConceptFixture, legacyAcousticDraft } from "../../../../../tests/fixtures/acoustic-concepts";
 import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noise";
 import { calculateAcoustics } from "@richtfest/acoustics";
 
@@ -21,8 +21,12 @@ test("visual inspection reaches the same model's second step as native media wit
   const metadata = { ...request, status: "available" as const, scope: "pdf_page" as const, reason: "Unreviewed visual evidence" };
   let rounds = 0, inspections = 0;
   const prompts: any[] = [];
+  const admitted: { ordinal: number; inputBytes: number; hasMedia: boolean }[] = [];
+  const settled: any[] = [];
   const output = { summary: "Inspected the exact page crop.", rationale: "Visual inference, not approved measurements.", citations: [request.versionId] };
   const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+    expect(admitted[rounds]!.inputBytes).toBe(Buffer.byteLength(JSON.stringify(options)));
+    expect(settled).toHaveLength(rounds);
     prompts.push(options.prompt);
     const inspect = rounds++ === 0;
     return { stream: new ReadableStream({ start(controller) {
@@ -39,10 +43,14 @@ test("visual inspection reaches the same model's second step as native media wit
   } });
   expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer", sourceVersionIds: [request.versionId] },
     modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 },
+    onBeforeModelStep: async step => { admitted.push(step); },
+    onModelStepSettled: async step => { settled.push(step); },
     inspectSource: async input => { inspections++; expect(input).toEqual(request); return { ...metadata, image: { mediaType: "image/jpeg", data } }; },
   }, "test-key", { model })).toEqual(output);
   expect(rounds).toBe(2);
   expect(inspections).toBe(1);
+  expect(admitted.map(s => [s.ordinal, s.hasMedia])).toEqual([[1, false], [2, true]]);
+  expect(settled.map(s => [s.ordinal, s.usage.inputTokens, s.usage.outputTokens])).toEqual([[1, 10, 20], [2, 10, 20]]);
   const results = prompts[1].filter((message: any) => message.role === "tool").flatMap((message: any) => message.content);
   const result = results.find((part: any) => part.type === "tool-result" && part.toolCallId === "visual-1");
   expect(result.output).toEqual({ type: "content", value: [
@@ -341,14 +349,15 @@ test("editorial packets keep the selected model with bounded writer and checker 
 });
 
 test("consolidation uses bounded tool-free shared writer and independent checker contracts", async () => {
-  for (const maxOutputTokens of [1024, 32000]) for (const documentTask of ["consolidation", "consolidation_check"] as const) {
+  for (const inputMode of ["editorial-consolidation", "patch-editorial-v1"]) for (const maxOutputTokens of [1024, 32000]) for (const documentTask of ["consolidation", "consolidation_check"] as const) {
     const output = documentTask === "consolidation"
-      ? { replacements: [{ id: "requirements:0", content: null }, { id: "plans:0", content: "" }], complete: true }
+      ? { replacements: [{ id: "requirements:0", content: null }, { id: "plans:0", content: "" },
+        ...(inputMode === "patch-editorial-v1" ? [{ id: "plans:1", content: null }] : [])], complete: true }
       : { preserved: false, issues: ["The shutter-box assembly was replaced by a curtain rating."] };
     let settings: any, prepared: any;
     const request = { ...base, phase: "review" as const,
       modelConfig: { modelId: "gpt-6-astra", maxOutputTokens, maxSteps: 4, reasoningEffort: "medium" as const },
-      context: { documentTask, inputMode: "editorial-consolidation", documentTemplate: { id: "exterior-noise-concept", version: 1 } },
+      context: { documentTask, inputMode, documentTemplate: { id: "exterior-noise-concept", version: 1 } },
       inspectSource: async () => { throw new Error("No source inspection during consolidation"); },
       onRequest: async (value: unknown) => { settings = value; },
       onPrepared: async (value: unknown) => { prepared = value; return undefined; },
@@ -507,6 +516,58 @@ test("domain specialists select their snapshotted models and cannot execute or b
     await expect(callMastraSupervisor({ ...base, phase: "plan", modelPolicy: legacy }, "test-key", {
       model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: plan }),
     })).rejects.toMatchObject({ code: "invalid_provider_output" });
+  }
+});
+
+test("later model-step admission preserves control failures and pauses, but does not reset, the active deadline", async () => {
+  for (const outcome of ["success", "budget_exhausted", "outcome_unknown", "cancelled"] as const) {
+    const cancellation = new AbortController();
+    const signals: AbortController[] = [];
+    const timeouts = spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController(); signals.push(controller); return controller.signal;
+    });
+    let rounds = 0;
+    const settlements: any[] = [];
+    const versionId = crypto.randomUUID();
+    const model = new MastraLanguageModelV2Mock({ doStream: async () => {
+      const first = rounds++ === 0;
+      await Bun.sleep(25);
+      return { stream: new ReadableStream({ start(c) {
+        if (first) c.enqueue({ type: "tool-call", toolCallId: "inspect", toolName: "inspect_project_source", input: JSON.stringify({ versionId, page: 1 }) });
+        else {
+          c.enqueue({ type: "text-start", id: "result" });
+          c.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify({ summary: "Reviewed", rationale: "Draft", citations: [] }) });
+          c.enqueue({ type: "text-end", id: "result" });
+        }
+        c.enqueue({ type: "finish", finishReason: first ? "tool-calls" : "stop", usage: first
+          ? { inputTokens: { total: 19, noCache: 4, cacheRead: 15, cacheWrite: 0 }, outputTokens: { total: 7, text: 3, reasoning: 4 } } as any
+          : { inputTokens: 11, outputTokens: 5 } });
+        c.close();
+      } }) };
+    } });
+    try {
+      const result = await callMastraSupervisor({ ...base, phase: "specialist", modelConfig: { modelId: "gpt-6-astra", maxOutputTokens: 2048, maxSteps: 2 },
+        inspectSource: async request => ({ ...request, status: "unavailable", scope: "pdf_page", reason: "No rendering" }),
+        onBeforeModelStep: async ({ ordinal }, signal) => {
+          if (ordinal === 1) return;
+          expect(settlements).toHaveLength(1);
+          signals.at(-1)!.abort(new DOMException("Old deadline expired while admission paused", "TimeoutError"));
+          if (outcome === "cancelled") { cancellation.abort(); signal!.throwIfAborted(); }
+          if (outcome !== "success") throw Object.assign(new Error("Private failure details"), { code: outcome });
+        },
+        onModelStepSettled: async receipt => { settlements.push(receipt); },
+      }, "test-key", { model, signal: cancellation.signal }).then(value => value, error => error);
+      expect(rounds).toBe(outcome === "success" ? 2 : 1);
+      expect(settlements).toHaveLength(rounds);
+      expect(settlements[0].usage).toMatchObject({ inputTokens: 19, outputTokens: 7, totalTokens: 26,
+        cachedInputTokens: 15, reasoningTokens: 4, estimatedCostUsd: 0.000405 });
+      expect(timeouts.mock.calls.at(-1)![0]).toBeLessThan(180000 - 20);
+      if (outcome === "success") expect(result.summary).toBe("Reviewed");
+      else {
+        expect(result.code).toBe(outcome);
+        expect(result.message).not.toContain("Private failure details");
+      }
+    } finally { timeouts.mockRestore(); }
   }
 });
 
@@ -883,7 +944,11 @@ test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} thro
     const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Create exterior-noise-concept", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
     await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
       specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: false, maxParallel: 1, maxTasks: 1, maxRevisions: 1 });
-    await db.update(supervisorRuns).set({ phase: "review", assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, run!.id));
+    const documentDraft = await legacyAcousticDraft({ d, projectId: run!.projectId!, id, goal: run!.goal,
+      findings: [], sourceVersionIds: [versionId], limits: agentExecutionLimitsSchema.parse({}),
+      maxOutputTokens: model.maxOutputTokens, maxParallel: 1, assertActive: async () => {}, checkpoint: async () => {},
+      call: async context => (await d.executeSupervisor({ phase: "review", context })).output });
+    await db.update(supervisorRuns).set({ phase: "review", review: { documentDraft }, assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, run!.id));
     await stepSupervisor(d, run!.id);
     expect(repaired).toBe(true);
     expect(writerCalls.filter(k => k === "preliminaryRemarks")).toHaveLength(1);

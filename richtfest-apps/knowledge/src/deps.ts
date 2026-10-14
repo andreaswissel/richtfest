@@ -123,6 +123,8 @@ export type AppDeps = {
     onRequest?: ProviderTelemetry["onRequest"];
     onResponse?: ProviderTelemetry["onResponse"];
     onPrepared?: ProviderTelemetry["onPrepared"];
+    onBeforeModelStep?: ProviderTelemetry["onBeforeModelStep"];
+    onModelStepSettled?: ProviderTelemetry["onModelStepSettled"];
   }) => Promise<ProviderResult>;
   cancelExecution: (runId: string) => void;
   providerConfigured: (provider: AgentProvider) => Promise<boolean>;
@@ -198,6 +200,8 @@ export type ProviderRequest = {
   onRequest?: ProviderTelemetry["onRequest"];
   onResponse?: ProviderTelemetry["onResponse"];
   onPrepared?: ProviderTelemetry["onPrepared"];
+  onBeforeModelStep?: ProviderTelemetry["onBeforeModelStep"];
+  onModelStepSettled?: ProviderTelemetry["onModelStepSettled"];
 };
 /** Allowlisted metadata only: never headers, credentials, raw prompts or SDK errors. */
 export type ProviderExecutionSettings = {
@@ -218,6 +222,8 @@ export type ProviderExecutionSettings = {
   promptHash: string;
   outputSchemaHash: string | null;
   toolSchemaHash?: string;
+  /** Opt in only when every network model dispatch is gated and settled below. */
+  stepAccounting?: "per-model-dispatch-v1";
 };
 export type ProviderResponseMetadata = {
   modelId: string | null;
@@ -225,6 +231,17 @@ export type ProviderResponseMetadata = {
   finishReason: string | null;
 };
 export type ProviderTelemetry = {
+  /** Await immediately before dispatch. Ordinals start at 1; bytes are the exact
+   * normalized SDK request UTF-8 bytes (including schemas/tools/history).
+   * Call onRequest and onPrepared first; a cache hit skips all step callbacks.
+   * Steps are serial and bounded by min(maxSteps, 100). A rejection forbids
+   * dispatch. Pause, do not reset, the adapter's active-time deadline while awaiting. */
+  onBeforeModelStep?: (input: { ordinal: number; inputBytes: number; hasMedia: boolean }, signal?: AbortSignal) => Promise<void>;
+  /** Await once each dispatch ends, including errors. Undefined usage is unknown,
+   * not zero. Supply per-step usage with estimatedCostUsd, never cumulative usage.
+   * Duplicate settlement of the same ordinal is a no-op (first result wins).
+   * Aggregate onUsage/result.usage is ignored by explicitly step-accounted adapters. */
+  onModelStepSettled?: (input: { ordinal: number; usage?: ProviderUsage }) => Promise<void>;
   onRequest?: (settings: ProviderExecutionSettings) => Promise<void>;
   onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;

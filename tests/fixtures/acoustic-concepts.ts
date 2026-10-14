@@ -1,3 +1,20 @@
+import { authorAcousticConcept, type AcousticDraft } from "../../richtfest-apps/knowledge/src/acoustic-authoring";
+
+/** Seed the persisted, unversioned editorial path for compatibility tests. */
+export async function legacyAcousticDraft(input: Parameters<typeof authorAcousticConcept>[0]) {
+  let draft: AcousticDraft | undefined;
+  const stopped = new Error("Outline checkpoint captured");
+  try {
+    await authorAcousticConcept({ ...input, checkpoint: async saved => {
+      draft = structuredClone(saved);
+      throw stopped;
+    } });
+  } catch (error) { if (error !== stopped) throw error; }
+  if (!draft) throw new Error("Expected an outline checkpoint");
+  draft.editorial = { inputHash: "legacy" };
+  return draft;
+}
+
 /** Synthetic evidence only; never copy customer data or acoustic results from the references. */
 export function acousticConceptFixture(id: "interior-noise-concept" | "exterior-noise-concept", language: "de" | "en", versionId: string) {
   const de = language === "de";

@@ -209,3 +209,112 @@ test("directory and visual receipts include defining context versions but no unr
     return unchanged(c);
   }, { template: t, sourceDirectory: directory, visualReads });
 });
+
+test("patch editorial groups a sizable lossless report without identity check calls", async () => {
+  const h = harness();
+  const t = template();
+  t.preliminaryRemarks = Array.from({ length: 127 }, (_, i) => `${i}: ${"Evidence wording ".repeat(190)}[source:${uuid}].\n\n`).join("");
+  const result = await h.run(unchanged, { template: t, mode: "patch-editorial-v1" });
+  expect(result).toEqual(t);
+  expect(h.state!.mode).toBe("patch-editorial-v1");
+  expect(h.calls).toHaveLength(32);
+  expect(h.calls.every(c => c.documentTask === "consolidation" && Buffer.byteLength(JSON.stringify(c.original)) <= 16384)).toBe(true);
+  expect(h.state!.plan.flatMap(op => op.ids)).toHaveLength(133);
+  await h.run(() => { throw new Error("No replay"); }, { template: t });
+  expect(h.calls).toHaveLength(32);
+});
+
+test("patch groups fit the minimum response envelope at lower configured output limits", async () => {
+  for (const maxOutputTokens of [256, 1024]) {
+    const h = harness(), t = template();
+    t.preliminaryRemarks = Array.from({ length: 45 }, (_, i) => `Room ${i} remains unverified.\n\n`).join("");
+    expect(await h.run(c => {
+      const result = unchanged(c);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(Math.floor(maxOutputTokens * 2 / 3));
+      return result;
+    }, { template: t, mode: "patch-editorial-v1", maxOutputTokens })).toEqual(t);
+    expect(h.calls.length).toBeGreaterThan(1);
+    expect(h.state!.plan.flatMap(op => op.ids)).toHaveLength(51);
+  }
+});
+
+test("changed patch gets a fresh check and rejected evidence is never returned", async () => {
+  const h = harness();
+  const t = template();
+  await expect(h.run(c => c.documentTask === "consolidation_check"
+    ? { preserved: false, issues: ["Changed association"] }
+    : { complete: true, replacements: c.original.map((f: any, i: number) => ({ id: f.id,
+      content: i ? null : f.content.replace("35 dB", "40 dB") })) },
+  { template: t, mode: "patch-editorial-v1" })).rejects.toThrow("preservation check");
+  expect(h.calls.map(c => c.documentTask)).toEqual(["consolidation", "consolidation_check"]);
+  expect(t).toEqual(template());
+  expect(await h.run(unchanged, { template: t })).toEqual(t);
+  expect(h.calls).toHaveLength(3);
+});
+
+test("patch subdivision resumes checked child and accepted non-prefix group", async () => {
+  for (const truncation of [false, true]) {
+    const h = harness();
+    const t = template();
+    t.preliminaryRemarks = Array.from({ length: 12 }, (_, i) => `${i}: ${"Evidence ".repeat(300)}[source:${uuid}].\n\n`).join("");
+    await h.run(unchanged, { template: t, mode: "patch-editorial-v1" });
+    const saved = structuredClone(h.state!);
+    delete saved.plan[0].candidate; delete saved.plan[0].check;
+    const later = structuredClone(saved.plan.slice(1));
+    let n = 0;
+    await expect(h.run(c => {
+      n++;
+      if (n === 1) {
+        if (truncation) throw Object.assign(new Error("truncated"), { failureCategory: "validation", diagnostics: { finishReason: "length" } });
+        return { ...unchanged(c), complete: false };
+      }
+      if (n === 2) return { complete: true, replacements: c.original.map((f: any, i: number) => ({ id: f.id,
+        content: i ? null : f.content.replace("Evidence", "Source evidence") })) };
+      if (c.documentTask === "consolidation_check") return passed;
+      throw new Error("interrupted");
+    }, { template: t, state: saved })).rejects.toThrow("interrupted");
+    expect(h.state!.plan[0].children![0].check).toEqual(passed);
+    expect(h.state!.plan.slice(1)).toEqual(later);
+    const before = h.calls.length;
+    const result = await h.run(unchanged, { template: t });
+    expect(result.preliminaryRemarks).toContain("Source evidence");
+    expect(h.calls.length - before).toBe(1);
+  }
+});
+
+test("legacy checkpoint ignores requested patch mode and reuses paid work", async () => {
+  const h = harness();
+  await h.run(unchanged);
+  const saved = structuredClone(h.state);
+  expect(await h.run(() => { throw new Error("No replay"); }, { mode: "patch-editorial-v1" })).toEqual(template());
+  expect(h.state).toEqual(saved);
+  expect(h.calls).toHaveLength(1);
+});
+
+test("incomplete patch cannot disguise invalid evidence edits", async () => {
+  const h = harness();
+  await expect(h.run(c => ({ complete: false, replacements: c.original.map((f: any) => ({ id: f.id, content: "Unsupported" })) }),
+    { mode: "patch-editorial-v1" })).rejects.toThrow("UUID union");
+  expect(h.calls).toHaveLength(1);
+  expect(h.state!.plan[0].children).toBeUndefined();
+});
+
+test("patch checker interruption reuses the exact candidate, and section deletion fails before check", async () => {
+  const h = harness();
+  await expect(h.run(c => {
+    if (c.documentTask === "consolidation_check") throw new Error("timeout");
+    return { complete: true, replacements: c.original.map((f: any, i: number) => ({ id: f.id,
+      content: i ? null : f.content.replace("requires", "needs") })) };
+  }, { mode: "patch-editorial-v1" })).rejects.toThrow("timeout");
+  const saved = structuredClone(h.state!.plan[0].candidate);
+  await h.run(c => {
+    expect(c.documentTask).toBe("consolidation_check");
+    expect(c.edited).toEqual(saved);
+    return passed;
+  });
+  expect(h.calls.map(c => c.documentTask)).toEqual(["consolidation", "consolidation_check", "consolidation_check"]);
+  const deletion = harness();
+  await expect(deletion.run(c => ({ complete: true, replacements: c.original.map((f: any) => ({ id: f.id,
+    content: f.section === "plans" ? "" : null })) }), { mode: "patch-editorial-v1" })).rejects.toThrow("Required sections");
+  expect(deletion.calls).toHaveLength(1);
+});

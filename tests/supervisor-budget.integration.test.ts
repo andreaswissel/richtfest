@@ -5,7 +5,7 @@ import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { agentRuns, supervisorRuns, tasks, agentRunEvents, agentRunUsage, agentRunAttempts, agentRunSteps } from "../richtfest-apps/knowledge/src/schema";
 import { createSupervisor, stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
-import { executeTrackedProvider } from "../richtfest-apps/knowledge/src/usage";
+import { executeTrackedProvider, recordProviderUsage } from "../richtfest-apps/knowledge/src/usage";
 
 const integration = process.env.DATABASE_URL ? test : test.skip;
 const config = { modelId: "test-model", maxOutputTokens: 1024, maxSteps: 1 };
@@ -21,7 +21,7 @@ async function waitFor(condition: () => Promise<boolean> | boolean) {
   for (let i = 0; i < 300; i++) { if (await condition()) return; await Bun.sleep(10); }
   throw new Error("Expected durable dispatch progress was not reached");
 }
-async function fixture(options: { maxCostUsd?: number; maxAutomaticRetries?: number; maxParallel?: number; goals?: string[] } = {}) {
+async function fixture(options: { maxCostUsd?: number; maxAutomaticRetries?: number; maxParallel?: number; goals?: string[]; stepAccounting?: boolean } = {}) {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
   const dispatched: string[] = [];
@@ -41,13 +41,17 @@ async function fixture(options: { maxCostUsd?: number; maxAutomaticRetries?: num
     estimateCallCost: (_provider: string, settings: any) => costs[settings.modelId],
     executeSupervisor: async (input: any) => {
       const key = input.phase === "plan" ? "plan" : input.goal;
-      await input.onRequest({ modelId: key, maxOutputTokens: 1024, maxSteps: 1, promptHash: `${key}-${input.context.outputValidationFeedback ? "retry" : "initial"}` });
+      await input.onRequest({ modelId: key, maxOutputTokens: 1024, maxSteps: options.stepAccounting ? 3 : 1,
+        ...(options.stepAccounting ? { stepAccounting: "per-model-dispatch-v1" } : {}),
+        promptHash: `${key}-${input.context.outputValidationFeedback ? "retry" : "initial"}` });
       const saved = await input.onPrepared({ version: 1, instructions: "Test only", prompt: JSON.stringify(input.context) });
       if (saved) return { status: "completed", output: saved.output };
+      if (options.stepAccounting) await input.onBeforeModelStep({ ordinal: 1, inputBytes: 1234, hasMedia: false });
       // This is the network boundary: a rejected reservation must never reach it.
       dispatched.push(key);
       if (key === "plan") {
-        await input.onUsage(usage(costs.plan!));
+        if (options.stepAccounting) await input.onModelStepSettled({ ordinal: 1, usage: usage(costs.plan!) });
+        else await input.onUsage(usage(costs.plan!));
         return { status: "completed", output: { tasks: (options.goals ?? ["A", "B"]).map(goal => ({ role: "source_reviewer", goal, sourceVersionIds: [] })) } };
       }
       return behavior(input, key);
@@ -295,3 +299,95 @@ integration("recovery preview is scoped/read-only and authorizes additional allo
     expect(resumed.completedSpecialists).toBe(3);
   } finally { await f.close(); }
 });
+
+for (const mode of ["success", "denial", "unknown", "interruption", "retry"] as const)
+integration(`per-model dispatch accounting through supervisor provider calls: ${mode}`, async () => {
+  const f = await fixture({ stepAccounting: true, goals: ["A"], maxCostUsd: mode === "denial" ? 0.09 : 1 });
+  let calls = 0, secondDispatches = 0;
+  const estimates: any[] = [];
+  f.d.estimateCallCost = (_provider: unknown, settings: any, bytes: number, hasTools: boolean) => {
+    estimates.push({ maxSteps: settings.maxSteps, bytes, hasTools }); return costs[settings.modelId];
+  };
+  f.setBehavior(async input => {
+    calls++;
+    await input.onModelStepSettled({ ordinal: 1, usage: usage(0.02) });
+    await input.onModelStepSettled({ ordinal: 1, usage: usage(0.99) }); // duplicate cannot inflate spend
+    if (mode === "retry" && calls === 1) throw Object.assign(new Error("Test validation"),
+      { providerFailure: true, retryable: true, failureCategory: "validation" });
+    if (mode === "interruption") {
+      await f.db.update(supervisorRuns).set({ leaseUntil: new Date(0) }).where(eq(supervisorRuns.runId, f.run.id));
+      await stepSupervisor(f.d, f.run.id);
+    }
+    await input.onBeforeModelStep({ ordinal: 2, inputBytes: 2345, hasMedia: mode === "success" });
+    secondDispatches++;
+    await input.onModelStepSettled({ ordinal: 2, usage: mode === "unknown" ? usage(null) : usage(0.03) });
+    if (mode === "unknown") await input.onBeforeModelStep({ ordinal: 3, inputBytes: 3456, hasMedia: false });
+    // Aggregate legacy telemetry must not price a known prefix or add a second row.
+    await input.onUsage(usage(0.99));
+    return { status: "completed", usage: usage(0.99), output: { summary: "Saved A", rationale: "", citations: [] } };
+  });
+  try {
+    await stepSupervisor(f.d, f.run.id); await stepSupervisor(f.d, f.run.id);
+    const specialists = (await f.attempts()).filter(a => a.phase === "specialist").sort((a, b) => a.attemptNumber - b.attemptNumber);
+    expect(specialists).toHaveLength(mode === "retry" ? 2 : 1);
+    const attempt = specialists.at(-1)!;
+    const ledger = attempt.settings as any;
+    expect(ledger.everDispatched).toBe(true);
+    expect(attempt.usageStatus).not.toBe("not_applicable");
+    expect(secondDispatches).toBe(mode === "denial" || mode === "interruption" ? 0 : 1);
+    const rows = await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, attempt.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.estimatedCostUsd).toBe(mode === "unknown" ? null : mode === "denial" || mode === "interruption" ? 20000 : 50000);
+    if (mode === "unknown") {
+      expect(ledger.reservedCostUsd).toBeCloseTo(0.09);
+      expect(ledger.budgetDecision.reason).toBe("unknown_usage");
+    }
+    if (mode === "denial") expect(ledger.budgetDecision).toMatchObject({ reason: "spend_allowance", recordedUsd: 0.03, reservedUsd: 0, requestedUsd: 0.07 });
+    if (mode === "interruption") {
+      expect(attempt.status).toBe("interrupted");
+      expect(attempt.usageStatus).toBe("reported");
+    }
+    if (mode === "retry") {
+      const preview = (await (await f.request("/recovery")).json() as any).data;
+      expect(preview.accounting.automaticRetries).toBe(1);
+    }
+    if (mode === "success") {
+      await Promise.all([1, 2].map(() => recordProviderUsage(f.d, { ...f.run, id: attempt.runId }, usage(0.99), attempt.startedAt, new Date(), attempt.id)));
+      expect(await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, attempt.id))).toHaveLength(1);
+      expect(estimates).toContainEqual({ maxSteps: 1, bytes: 2345, hasTools: true });
+    }
+    expect(estimates).toContainEqual({ maxSteps: 1, bytes: 1234, hasTools: false });
+  } finally { await f.close(); }
+}, 15000);
+
+integration("step replacement releases only its own bound and still waits for a sibling", async () => {
+  const f = await fixture({ stepAccounting: true, maxCostUsd: 0.13 });
+  const hold = gate(), siblingStarted = gate(); f.releases.push(hold.resolve, siblingStarted.resolve);
+  let secondDispatched = false;
+  f.setBehavior(async (input, key) => {
+    if (key === "B") {
+      siblingStarted.resolve(); await hold.promise;
+      await input.onModelStepSettled({ ordinal: 1, usage: usage(0.01) });
+    } else {
+      await siblingStarted.promise;
+      await input.onModelStepSettled({ ordinal: 1, usage: usage(0.02) });
+      await input.onBeforeModelStep({ ordinal: 2, inputBytes: 4567, hasMedia: false });
+      secondDispatched = true;
+      await input.onModelStepSettled({ ordinal: 2, usage: usage(0.02) });
+    }
+    return { status: "completed", output: { summary: `Saved ${key}`, rationale: "", citations: [] } };
+  });
+  try {
+    await stepSupervisor(f.d, f.run.id);
+    const work = stepSupervisor(f.d, f.run.id); f.pending.push(work);
+    await waitFor(async () => (await f.attempts()).some(a => (a.settings as any)?.budgetDecision?.state === "waiting"));
+    const waiting = (await f.attempts()).find(a => (a.settings as any)?.budgetDecision?.state === "waiting")!;
+    expect(waiting.settings).toMatchObject({ everDispatched: true, settledCostUsd: 0.02, reservedCostUsd: 0.02,
+      budgetDecision: { reason: "pending_reservations", reservedUsd: 0.04 } });
+    expect(secondDispatched).toBe(false);
+    hold.resolve(); await work;
+    expect(secondDispatched).toBe(true);
+    const rows = await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, waiting.id));
+    expect(rows).toHaveLength(1); expect(rows[0]!.estimatedCostUsd).toBe(40000);
+  } finally { await f.close(); }
+}, 15000);

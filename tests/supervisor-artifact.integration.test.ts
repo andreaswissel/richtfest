@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { batchSectionSources, batchSpecialistSources } from "../richtfest-apps/knowledge/src/source-batches";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
-import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
+import { acousticConceptFixture, legacyAcousticDraft } from "./fixtures/acoustic-concepts";
 import { acousticSectionKeys } from "../richtfest-shared/src/acoustic-concept";
 import { agentExecutionLimitsSchema } from "../richtfest-shared/src/agent-policy";
 import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
@@ -34,7 +34,7 @@ const integration = process.env.DATABASE_URL ? test : test.skip;
 
 function unchangedConsolidation(context: any) {
   if (context.documentTask === "consolidation") {
-    expect(context.inputMode).toBe("editorial-consolidation");
+    expect(["editorial-consolidation", "patch-editorial-v1"]).toContain(context.inputMode);
     expect(Array.isArray(context.original)).toBe(true);
     return { complete: true, replacements: context.original.map((fragment: any) => ({ id: fragment.id, content: null })) };
   }
@@ -99,7 +99,7 @@ test("authoring reconciles false inspection claims against scoped receipts witho
       throw new Error(`Unexpected task ${context.documentTask}`);
     },
   };
-  await expect(authorAcousticConcept(input)).rejects.toThrow("Semantic checker disconnected");
+  await expect(authorAcousticConcept({ ...input, draft: await legacyAcousticDraft(input) })).rejects.toThrow("Semantic checker disconnected");
   const sections = structuredClone(draft.sections), editorial = structuredClone(draft.editorial);
   expect(sections.components.parts[0].content).toBe(claim);
   expect(editorial.candidate.sections.find((section: any) => section.key === "components").content).toBe(claim);
@@ -413,7 +413,7 @@ test(`${id} editorial context and checkpoint resume preserve original section pi
       return { preserved: true, issues: [] };
     },
   };
-  await expect(authorAcousticConcept(input)).rejects.toThrow("Checker disconnected");
+  await expect(authorAcousticConcept({ ...input, draft: await legacyAcousticDraft(input) })).rejects.toThrow("Checker disconnected");
   const pieces = structuredClone(draft.sections);
   expect(draft.editorial.candidate.complete).toBe(true);
   expect(draft.editorial.check).toBeUndefined();
@@ -480,7 +480,7 @@ test(`large editorial recovery preserves checked packets and immutable evidence:
       return { preserved: true, issues: [] };
     },
   };
-  await expect(authorAcousticConcept(input)).rejects.toThrow();
+  await expect(authorAcousticConcept({ ...input, draft: await legacyAcousticDraft(input) })).rejects.toThrow();
   const pieces = structuredClone(draft.sections);
   expect(writers.filter(text => text.includes("Room A-17"))).toHaveLength(1);
   const result = await authorAcousticConcept({ ...input, draft });
@@ -535,7 +535,7 @@ test("editorial subpackets resume checked descendants and keep Markdown, referen
       return { preserved: true, issues: [] };
     },
   };
-  await expect(authorAcousticConcept(input)).rejects.toThrow("Checker disconnected");
+  await expect(authorAcousticConcept({ ...input, draft: await legacyAcousticDraft(input) })).rejects.toThrow("Checker disconnected");
   const pieces = structuredClone(draft.sections), completedCalls = [...writers];
   const checkedBefore = checks.filter(text => !text.includes("Paragraph 4"));
   const result = await authorAcousticConcept({ ...input, draft });
@@ -628,7 +628,11 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
     runId = run!.id;
     await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
       specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: true, maxParallel: 1, maxTasks: 4, maxRevisions: 1 });
-    await db.update(supervisorRuns).set({ phase: "review", assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, runId));
+    const documentDraft = await legacyAcousticDraft({ d, projectId, id, goal: run!.goal, findings: [], sourceVersionIds: [versionId],
+      limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: model.maxOutputTokens, maxParallel: 1,
+      assertActive: async () => {}, checkpoint: async () => {},
+      call: async context => (await d.executeSupervisor({ phase: "review", context })).output });
+    await db.update(supervisorRuns).set({ phase: "review", review: { documentDraft }, assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, runId));
     await stepSupervisor(d, runId);
     expect(calls).toContain("editorial");
     if (scenario !== "edited") {
@@ -704,9 +708,9 @@ test("concept sections repair omitted allowed references but reject out-of-scope
       limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
       assertActive: async () => {}, checkpoint: async () => {},
       call: async context => {
-        if (context.section !== "calculationAppendix") expect(context.companyKnowledge).toEqual([knowledge]);
         const editorial = unchangedEditorial(context);
         if (editorial) return editorial;
+        if (context.section !== "calculationAppendix") expect(context.companyKnowledge).toEqual([knowledge]);
         if (context.documentTask === "outline") return { id: "exterior-noise-concept", title: "Acoustic arithmetic", language: "en",
           project: { name: "Synthetic project", number: null, client: null, designer: null, author: null, date: null },
           sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key,
