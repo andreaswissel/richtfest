@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AgentRunRetryActions } from "../src/components/agent-run-retry-actions";
+import { Transcript } from "../src/components/project-workspace/transcript";
 import { Input } from "../src/components/ui/input";
 import { usePreferences } from "../src/store";
 
@@ -11,6 +12,7 @@ export async function testRunRetry(
   observe?: (
     state: "loading" | "preview" | "acknowledged" | "stale" | "fresh",
   ) => Promise<void>,
+  surface: "details" | "transcript" = "details",
 ) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -48,6 +50,16 @@ export async function testRunRetry(
   });
   window.fetch = async (input, options) => {
     const path = String(input);
+    if (path === "/api/agent/readiness")
+      return Response.json({ data: { executionAvailable: false } });
+    if (
+      path.startsWith(
+        "/api/knowledge/conversations/retry-conversation/messages",
+      )
+    )
+      return Response.json({
+        data: { items: [], nextCursor: null, unreadCount: 0 },
+      });
     if (!path.startsWith("/api/knowledge/runs/retry-fixture/"))
       throw new Error(`Unexpected request: ${path}`);
     if (path.endsWith("/recovery")) {
@@ -101,9 +113,28 @@ export async function testRunRetry(
         <QueryClientProvider client={client}>
           <MemoryRouter>
             <Input aria-label="Unsent draft" defaultValue="Keep this draft" />
-            <AgentRunRetryActions
-              run={{ id: "retry-fixture", status: "failed" }}
-            />
+            {surface === "transcript" ? (
+              <Transcript
+                projectId="retry-project"
+                conversationId="retry-conversation"
+                runs={[
+                  {
+                    id: "retry-fixture",
+                    status: "failed",
+                    projectId: "retry-project",
+                    conversationId: "retry-conversation",
+                    createdAt: "2026-10-13T22:00:00Z",
+                    finishedAt: "2026-10-13T22:41:00Z",
+                    error:
+                      "phase=review; category=timeout; The provider call exceeded its time limit.",
+                  },
+                ]}
+              />
+            ) : (
+              <AgentRunRetryActions
+                run={{ id: "retry-fixture", status: "failed" }}
+              />
+            )}
           </MemoryRouter>
         </QueryClientProvider>,
       ),
@@ -114,6 +145,11 @@ export async function testRunRetry(
       "Mount fetched recovery or submitted work",
     );
     flushSync(() => button("Retry run", host).click());
+    await wait(() => gets > 0 || posts.length > 0);
+    check(
+      gets === 1 && posts.length === 0,
+      "Retry bypassed the recovery preview and submitted without authorization",
+    );
     await observe?.("loading");
     await wait(() => dialog()?.textContent?.includes("Building components"));
     check(gets === 1 && posts.length === 0, "Preview was not lazy/read-only");
@@ -236,6 +272,17 @@ export async function testRunRetry(
     await new Promise((resolve) => setTimeout(resolve, 40));
     check(!dialog() && posts.length === 3, "Closed preview reopened/submitted");
 
+    if (surface === "transcript") {
+      check(
+        ![...host.querySelectorAll("button")].some(
+          (b) => b.textContent === "Run again",
+        ),
+        "Transcript offered an unintended fresh run",
+      );
+      return [
+        "Transcript retry: lazy preview, explicit allowance/acknowledgement, exact payload, duplicate protection, 409 reload and saved draft passed",
+      ];
+    }
     flushSync(() => button("Run again", host).click());
     check(
       dialog()!.textContent!.includes("fresh workflow") &&

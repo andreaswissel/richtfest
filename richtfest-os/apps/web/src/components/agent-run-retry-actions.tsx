@@ -29,11 +29,21 @@ type Recovery = {
   budget: { maxCostUsd: number; maxAutomaticRetries: number };
 };
 
-export function AgentRunRetryActions({ run }: { run: RecordData }) {
-  return <RetryActions key={run.id} run={run} />;
+type RetryActionsProps = {
+  run: RecordData;
+  retryOnly?: boolean;
+  disabled?: boolean;
+};
+
+export function AgentRunRetryActions(props: RetryActionsProps) {
+  return <RetryActions key={props.run.id} {...props} />;
 }
 
-function RetryActions({ run }: { run: RecordData }) {
+function RetryActions({
+  run,
+  retryOnly = false,
+  disabled = false,
+}: RetryActionsProps) {
   const t = useT();
   const phaseLabel = (phase: string) => {
     const key = {
@@ -139,6 +149,7 @@ function RetryActions({ run }: { run: RecordData }) {
   const confirm = async () => {
     if (
       locked.current ||
+      disabled ||
       error ||
       !mode ||
       (mode === "retry" &&
@@ -185,9 +196,9 @@ function RetryActions({ run }: { run: RecordData }) {
     <div className="flex flex-wrap items-center gap-stack">
       {retryable && (
         <Button
-          variant="ghost"
+          variant={retryOnly ? "outline" : "ghost"}
           size="sm"
-          disabled={pending || !!mode}
+          disabled={disabled || pending || !!mode}
           onClick={() => {
             setMode("retry");
             void load();
@@ -196,17 +207,19 @@ function RetryActions({ run }: { run: RecordData }) {
           {t("workspaceRetryRun")}
         </Button>
       )}
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={pending || !!mode}
-        onClick={() => {
-          setError(null);
-          setMode("rerun");
-        }}
-      >
-        {t("workspaceRunAgain")}
-      </Button>
+      {!retryOnly && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled || pending || !!mode}
+          onClick={() => {
+            setError(null);
+            setMode("rerun");
+          }}
+        >
+          {t("workspaceRunAgain")}
+        </Button>
+      )}
       {mode && (
         <Modal
           title={t(
@@ -314,6 +327,7 @@ function RetryActions({ run }: { run: RecordData }) {
                 )}
                 <Button
                   disabled={
+                    disabled ||
                     pending ||
                     !!error ||
                     (mode === "retry" &&

@@ -24,6 +24,7 @@ import {
   DialogTrigger,
 } from "../ui/dialog";
 import { AgentEffortControl } from "../agent-effort-control";
+import { AgentRunRetryActions } from "../agent-run-retry-actions";
 import {
   AgentWorkflowControl,
   workflowReady,
@@ -183,15 +184,6 @@ function FailedRunOutcome({
       t,
     ) ??
     safeRunFailureReason(run, t);
-  const retry = useMutation({
-    mutationFn: () => api(`/knowledge/runs/${run.id}/retry`, {}),
-    onSuccess: () => queryClient.invalidateQueries(),
-  });
-  // A durable retry can fail again on the same ID. A fresh rerun's lineage
-  // does not mean this run was resumed, nor should it disable its retry.
-  useEffect(() => {
-    retry.reset();
-  }, [run.id, run.status, run.updatedAt, retry.reset]);
   const params = new URLSearchParams({
     conversation: conversationId,
     agentRun: run.id,
@@ -210,22 +202,8 @@ function FailedRunOutcome({
               <ArrowUpRight aria-hidden="true" />
             </Link>
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={retry.isPending || retry.isSuccess || hasActiveRun}
-            onClick={() => retry.mutate()}
-          >
-            {retry.isPending
-              ? t("workspaceRunRetrying")
-              : retry.isSuccess
-                ? t("workspaceRunRetryStarted")
-                : t("workspaceRetryRun")}
-          </Button>
+          <AgentRunRetryActions run={run} retryOnly disabled={hasActiveRun} />
         </div>
-        {retry.error && (
-          <Callout tone="error">{t("workspaceRunRetryFailed")}</Callout>
-        )}
       </MessageContent>
     </Message>
   );
