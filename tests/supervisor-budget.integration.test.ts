@@ -310,7 +310,7 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
   };
   f.setBehavior(async input => {
     calls++;
-    await input.onModelStepSettled({ ordinal: 1, usage: usage(0.02) });
+    await input.onModelStepSettled({ ordinal: 1, usage: { ...usage(0.02), cacheWriteInputTokens: 7 } });
     await input.onModelStepSettled({ ordinal: 1, usage: usage(0.99) }); // duplicate cannot inflate spend
     if (mode === "retry" && calls === 1) throw Object.assign(new Error("Test validation"),
       { providerFailure: true, retryable: true, failureCategory: "validation" });
@@ -333,6 +333,7 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
     const attempt = specialists.at(-1)!;
     const ledger = attempt.settings as any;
     expect(ledger.everDispatched).toBe(true);
+    expect(ledger.stepReceipts[0].usage.cacheWriteInputTokens).toBe(7);
     expect(attempt.usageStatus).not.toBe("not_applicable");
     expect(secondDispatches).toBe(mode === "denial" || mode === "interruption" ? 0 : 1);
     const rows = await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, attempt.id));

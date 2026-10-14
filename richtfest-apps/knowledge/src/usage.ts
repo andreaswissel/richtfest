@@ -123,6 +123,7 @@ export async function recordProviderUsage(
       outputTokens: row.outputTokens,
       reasoningTokens: row.reasoningTokens,
       cachedInputTokens: row.cachedInputTokens,
+      ...(usage.cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens: usage.cacheWriteInputTokens }),
       totalTokens: row.totalTokens,
       estimatedCostUsd: usage.estimatedCostUsd ?? null,
       pricingVersion: row.pricingVersion,
@@ -174,11 +175,12 @@ export async function executeTrackedProvider(
   const aggregateUsage = (): ProviderUsage | undefined => {
     if (!receipts.length) return;
     const known = receipts.every(r => r.status === "settled" && r.usage?.estimatedCostUsd != null);
-    const sum = (key: "inputTokens" | "outputTokens" | "reasoningTokens" | "cachedInputTokens" | "totalTokens") =>
+    const sum = (key: "inputTokens" | "outputTokens" | "reasoningTokens" | "cachedInputTokens" | "cacheWriteInputTokens" | "totalTokens") =>
       receipts.every(r => r.usage?.[key] != null) ? receipts.reduce((n, r) => n + r.usage![key]!, 0) : null;
     return { provider: run.provider as ProviderUsage["provider"], modelId: settings?.modelId ?? null,
       inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens"), reasoningTokens: sum("reasoningTokens"),
       cachedInputTokens: sum("cachedInputTokens"), totalTokens: sum("totalTokens"),
+      ...(settings?.promptCache ? { cacheWriteInputTokens: sum("cacheWriteInputTokens") } : {}),
       estimatedCostUsd: known ? settledCostUsd : null,
       pricingVersion: receipts.every(r => r.usage?.pricingVersion === receipts[0].usage?.pricingVersion) ? receipts[0].usage?.pricingVersion : null };
   };
@@ -360,6 +362,7 @@ export async function executeTrackedProvider(
           receipt.usage = usage ? { provider: usage.provider, modelId: usage.modelId,
             inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens,
             reasoningTokens: usage.reasoningTokens, cachedInputTokens: usage.cachedInputTokens,
+            ...(usage.cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens: usage.cacheWriteInputTokens }),
             pricingVersion: usage.pricingVersion, estimatedCostUsd: known ? cost : null } : undefined;
           if (known) settledCostUsd += cost;
           dispatchPending = true;

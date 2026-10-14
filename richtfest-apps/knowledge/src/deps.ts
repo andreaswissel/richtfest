@@ -230,6 +230,8 @@ export type ProviderExecutionSettings = {
   promptHash: string;
   outputSchemaHash: string | null;
   toolSchemaHash?: string;
+  /** Explicit-only cache ending before changing report packet content. */
+  promptCache?: "report-prefix-v1";
   /** Opt in only when every network model dispatch is gated and settled below. */
   stepAccounting?: "per-model-dispatch-v1";
 };
@@ -265,6 +267,8 @@ export type ProviderUsage = {
   outputTokens: number | null;
   reasoningTokens: number | null;
   cachedInputTokens: number | null;
+  /** Subset of input, distinct from cache reads; null means unreported. */
+  cacheWriteInputTokens?: number | null;
   totalTokens: number | null;
   estimatedCostUsd?: number | null;
   pricingVersion?: string | null;

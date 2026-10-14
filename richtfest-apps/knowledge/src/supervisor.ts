@@ -364,7 +364,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const visualOnly = !!(context as { visualRequests?: SourceVisualRequest[] }).visualRequests;
       const appendixWriter = phase === "review" && (context as { inputMode?: string }).inputMode === "imported-calculation-evidence";
       const editorialPacket = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-packet";
-      const consolidation = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-consolidation";
+      const consolidation = phase === "review" && ["editorial-consolidation", "patch-editorial-v1"].includes((context as { inputMode?: string }).inputMode ?? "");
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],

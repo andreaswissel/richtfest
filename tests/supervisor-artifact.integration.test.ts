@@ -796,10 +796,12 @@ integration("acoustic reports preserve oversized sections and resume old charact
       let permitted = true;
       let runId = "";
       const calls: string[] = [];
+      const componentCatalog = { status: "available", items: [{ name: "Reference wall", conditions: "Unverified project applicability" }] };
       const d: any = {
         db, tenantId, actorId, supervisorEnabled: true,
         requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
         audit: async () => {}, providerConfigured: async () => false,
+        componentContext: async () => componentCatalog,
         validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
         sourceReferences: async (_: string, ids: string[]) => ids.map(versionId => ({ versionId, name: "Evidence.pdf", version: 1 })),
         listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
@@ -814,6 +816,9 @@ integration("acoustic reports preserve oversized sections and resume old charact
         },
         executeSupervisor: async ({ phase, context }: any) => {
           calls.push(context.documentTask === "section" ? context.section : context.documentTask ?? phase);
+          if (["patch-editorial-v1", "editorial-consolidation", "editorial-packet", "imported-calculation-evidence"].includes(context.inputMode))
+            expect(context.componentCatalog).toBeUndefined();
+          else expect(context.componentCatalog).toEqual(componentCatalog);
           const editorial = unchangedEditorial(context);
           if (editorial) return { status: "completed", output: editorial };
           let output: any;

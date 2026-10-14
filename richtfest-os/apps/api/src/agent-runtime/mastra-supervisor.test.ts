@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { Agent } from "@mastra/core/agent";
+import { ModelRouterLanguageModel } from "@mastra/core/llm";
 import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-utils/llm-mock";
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
@@ -14,8 +15,84 @@ import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture, legacyAcousticDraft } from "../../../../../tests/fixtures/acoustic-concepts";
 import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noise";
 import { calculateAcoustics } from "@richtfest/acoustics";
+import { metadataHash, serializeProviderInput } from "../provider-metadata";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
+test("Astra report cache boundary survives real Responses transport without losing evidence or hiding write costs", async () => {
+  const requests: any[] = [];
+  let writes: number | undefined = 300;
+  const output = { complete: true, citations: [], content: "Evidence remains unreviewed." };
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async request => {
+    requests.push(await request.json());
+    const text = JSON.stringify(output);
+    const events = [
+      { type: "response.created", response: { id: "resp_test", created_at: 1, model: "gpt-6-astra" } },
+      { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_test", role: "assistant", content: [] } },
+      { type: "response.output_text.delta", item_id: "msg_test", output_index: 0, content_index: 0, delta: text },
+      { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_test", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] } },
+      { type: "response.completed", response: { id: "resp_test", status: "completed", usage: {
+        input_tokens: 2000, output_tokens: 10, input_tokens_details: { cached_tokens: 500, cache_write_tokens: writes },
+        output_tokens_details: { reasoning_tokens: 3 },
+      } } },
+    ];
+    return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const prepared: any[] = [], settings: ProviderExecutionSettings[] = [], receipts: any[] = [];
+  const context = { documentTask: "section", documentTemplate: { id: "exterior-noise-concept", version: 1 },
+    section: "plans", batch: 1, batchCount: 2, workspaceGuidance: { profile: { instructions: "Retain uncertainty. ".repeat(100) } },
+    project: { name: "Brücke 🧱", number: "R-71" }, language: "de", sources: [{ text: 'Untrusted "claim"\n31.7 dB', pages: [7, 3] }],
+    futureField: { unknown: "must not disappear" },
+  };
+  const invoke = async (value: typeof context, modelId = "gpt-6-astra") => callMastraSupervisor({ ...base, phase: "review", context: value,
+    modelConfig: { modelId, maxOutputTokens: 2048, maxSteps: 1 },
+    onRequest: async value => { settings.push(value); }, onPrepared: async value => { prepared.push(value); return undefined; },
+    onBeforeModelStep: async () => {}, onModelStepSettled: async value => { receipts.push(value); },
+  }, "test-key", { model: new ModelRouterLanguageModel({ id: `openai/${modelId}`, api: "responses", url: `${server.url}v1`, apiKey: "test-key" }) });
+  try {
+    expect(await invoke(context)).toEqual(output);
+    writes = 0;
+    const next = { ...context, batch: 2, sources: [{ text: "Different evidence: 48.2 dB", pages: [9, 5] }] };
+    expect(await invoke(Object.fromEntries(Object.entries(next).reverse()) as typeof context)).toEqual(output);
+    const prefixes: string[] = [];
+    for (const [index, value] of [context, next].entries()) {
+      const body = requests[index];
+      expect(body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" });
+      expect(body.max_output_tokens).toBe(2048);
+      expect(body.store).toBe(false);
+      expect(body.tools ?? []).toHaveLength(0);
+      const users = body.input.filter((message: any) => message.role === "user");
+      expect(users).toHaveLength(1);
+      const parts = users[0].content;
+      expect(parts).toHaveLength(2);
+      expect(parts[0].prompt_cache_breakpoint).toEqual({ mode: "explicit" });
+      expect(parts[1].prompt_cache_breakpoint).toBeUndefined();
+      prefixes.push(parts[0].text);
+      const joined = parts.map((part: any) => part.text).join("");
+      expect(JSON.parse(joined)).toEqual({ goal: base.goal, context: value });
+      expect(prepared[index].prompt).toBe(joined);
+      expect(settings[index]!.promptHash).toBe(metadataHash(joined));
+      expect(settings[index]!.promptCache).toBe("report-prefix-v1");
+    }
+    expect(prefixes[0]).toBe(prefixes[1]);
+    expect(requests[0].input[0]).toEqual(requests[1].input[0]);
+    expect(receipts[0].usage).toMatchObject({ inputTokens: 2000, outputTokens: 10, cachedInputTokens: 500,
+      cacheWriteInputTokens: 300, reasoningTokens: 3, totalTokens: 2010, estimatedCostUsd: 0.01675, pricingVersion: "2026-10-15-cache-writes" });
+    expect(receipts[1].usage).toMatchObject({ cacheWriteInputTokens: 0, estimatedCostUsd: 0.016 });
+    writes = undefined;
+    await invoke(context);
+    expect(receipts[2].usage).toMatchObject({ cacheWriteInputTokens: null, estimatedCostUsd: null });
+    // Unsupported models keep their original single-prompt transport and pricing.
+    await invoke(context, "gpt-4.1");
+    expect(requests[3].prompt_cache_options).toBeUndefined();
+    expect(settings[3]!.promptCache).toBeUndefined();
+    expect(prepared[3].prompt).toBe(serializeProviderInput({ goal: base.goal, context }));
+    const estimate = knowledgeDeps({} as any, { actor: { id: "test", tenantId: "test" } } as any).estimateCallCost!;
+    // Full bound at the 1.25x write rate, not an assumed cache hit.
+    expect(estimate("openai", settings[0]!, 2000, false)).toBe(0.1274);
+    expect(requests).toHaveLength(4);
+  } finally { await server.stop(true); }
+});
+
 for (const modelId of ["gpt-6-astra", "test-model"])
 for (const imageCount of [1, 2])
 test(`visual inspection preserves ${imageCount} native images and bounds tokens without pricing base64 as text: ${modelId}`, async () => {

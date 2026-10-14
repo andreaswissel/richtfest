@@ -31,11 +31,18 @@ function rateFor(provider: ProviderUsage["provider"], modelId: string | null) {
   return RATES.find((rate) => rate.provider === family && rate.model.test(model));
 }
 
-export function estimateCostUsd(usage: Pick<ProviderUsage, "provider" | "modelId" | "inputTokens" | "outputTokens" | "cachedInputTokens">): { estimatedCostUsd: number | null; pricingVersion: string | null } {
+export function estimateCostUsd(usage: Pick<ProviderUsage, "provider" | "modelId" | "inputTokens" | "outputTokens" | "cachedInputTokens" | "cacheWriteInputTokens">): { estimatedCostUsd: number | null; pricingVersion: string | null } {
   const rate = rateFor(usage.provider, usage.modelId);
   if (!rate || usage.inputTokens === null || usage.outputTokens === null) return { estimatedCostUsd: null, pricingVersion: null };
   const cached = usage.cachedInputTokens ?? 0;
+  // Report-prefix caching is enabled only for direct OpenAI Astra. Missing
+  // write usage is unknown, not zero; legacy callers omit the field entirely.
+  const writes = usage.cacheWriteInputTokens;
+  const cacheWritesSupported = usage.provider === "openai" && /^gpt-6-astra(?:-|$)/.test(usage.modelId ?? "");
+  if (writes !== undefined && (writes === null || !Number.isSafeInteger(writes) || writes < 0 ||
+    cached + writes > usage.inputTokens || (writes > 0 && !cacheWritesSupported)))
+    return { estimatedCostUsd: null, pricingVersion: null };
   const uncached = Math.max(0, usage.inputTokens - cached);
-  const cost = (uncached * rate.input + cached * (rate.cachedInput ?? rate.input) + usage.outputTokens * rate.output) / 1_000_000;
-  return { estimatedCostUsd: Number(cost.toFixed(8)), pricingVersion: MODEL_PRICING_VERSION };
+  const cost = (uncached * rate.input + (writes ?? 0) * rate.input * 0.25 + cached * (rate.cachedInput ?? rate.input) + usage.outputTokens * rate.output) / 1_000_000;
+  return { estimatedCostUsd: Number(cost.toFixed(8)), pricingVersion: writes === undefined ? MODEL_PRICING_VERSION : "2026-10-15-cache-writes" };
 }

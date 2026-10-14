@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Astra report calls now cache shared context separately from changing writing packets, without reducing evidence or review checks. Patch editing no longer receives the unrelated component catalogue. Cache-write costs are included in new call estimates and reservations; actual savings depend on provider reuse. No paid run restarts automatically.
+
 - Astra visual-review reservations now account for images without treating their encoded data and duplicate SDK metadata as report text. Evidence, image quality, models and review checks stay unchanged; numeric admission diagnostics explain future stops. This corrects reserved estimates, not past charges, and starts no paid run automatically.
 
 ## 2026-10-14

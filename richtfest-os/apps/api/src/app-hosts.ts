@@ -171,8 +171,11 @@ export const knowledgeDeps = (
       // Reserve uncached input and full output at every tool step. This is a
       // conservative dispatch estimate, not a promise about a provider invoice.
       // A verified native-media bound replaces transport bytes, not evidence.
+      const inputTokens = (inputTokenUpperBound ?? Math.max(inputBytes, contextBudget)) * steps;
       return estimateCostUsd({ provider, modelId: settings.modelId,
-        inputTokens: (inputTokenUpperBound ?? Math.max(inputBytes, contextBudget)) * steps,
+        inputTokens,
+        // Do not assume a hit: cover the write premium on the entire bound.
+        ...(settings.promptCache ? { cacheWriteInputTokens: inputTokens } : {}),
         outputTokens: settings.maxOutputTokens * steps, cachedInputTokens: 0 }).estimatedCostUsd;
     },
     resolveSupervisorPreset: (effort, provider) => resolveAgentPreset(db, actor.tenantId, effort, provider),

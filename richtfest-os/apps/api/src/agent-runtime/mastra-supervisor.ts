@@ -53,7 +53,7 @@ const phaseInstructions: Record<SupervisorPhase, string> = {
 const domainPolicy = "Choose planner assignments only from context.workspaceGuidance.availableRoles (the configured roles in the immutable model preset); routing hints never enable a disabled role. Domain specialists share the same source scope and proposal-only limits. sound_insulation reviews acoustic sources and prepares input proposals; it may use explicitly registered deterministic acoustic tools, never mental arithmetic or claims of IFC semantic completeness. construction_law proposes source-based applicable requirements and identifies jurisdiction, edition and applicability uncertainty; it never gives binding legal approval. cost_optimizer compares evidence-backed options; it never invents prices or claims validated optimization or savings.";
 const tokenCount = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
-function usageFor(input: SupervisorRequest, raw: any, modelId: string | null): ProviderUsage {
+function usageFor(input: SupervisorRequest, raw: any, modelId: string | null, explicitCache = false): ProviderUsage {
   const usage = raw ?? {};
   // The configured router exposes V2 methods but forwards V3 nested usage.
   // Direct V2 models and Mastra aggregate telemetry still use flat counts.
@@ -66,6 +66,7 @@ function usageFor(input: SupervisorRequest, raw: any, modelId: string | null): P
     outputTokens,
     reasoningTokens: tokenCount(usage.outputTokens?.reasoning ?? usage.reasoningTokens ?? usage.reasoning_tokens),
     cachedInputTokens: tokenCount(usage.inputTokens?.cacheRead ?? usage.cachedInputTokens ?? usage.cached_input_tokens),
+    ...(explicitCache ? { cacheWriteInputTokens: tokenCount(usage.inputTokens?.cacheWrite) } : {}),
     totalTokens: tokenCount(usage.totalTokens ?? usage.total_tokens) ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
   };
   return { ...value, ...estimateCostUsd(value) };
@@ -360,7 +361,23 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
     description: tools.inspect_project_source.description,
     inputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(sourceVisualRequestSchema)),
   });
-  const prompt = serializeProviderInput({ goal: input.goal, context: input.context });
+  // Astra caches message/block boundaries, not arbitrary matching JSON prefixes.
+  // Keep all evidence in the same user message and mark only shared context;
+  // changing packets must not pay for cache writes they cannot reuse.
+  const explicitCache = input.provider === "openai" && /^gpt-6-astra(?:-|$)/.test(modelConfig?.modelId ?? "")
+    && !!authoringTask && toolManifest.length === 0 && stepAccounting;
+  let prompt = serializeProviderInput({ goal: input.goal, context: input.context });
+  let prefix = "", suffix = "";
+  if (explicitCache) {
+    const sharedKeys = new Set(["budgets", "companyKnowledge", "componentCatalog", "documentReview", "documentTemplate", "language", "project", "workspaceGuidance"]);
+    const entries = Object.entries(JSON.parse(serializeProviderInput(input.context)));
+    const fields = (shared: boolean) => entries.filter(([key]) => sharedKeys.has(key) === shared)
+      .map(([key, value]) => `${JSON.stringify(key)}:${JSON.stringify(value)}`).join(",");
+    const shared = fields(true), changing = fields(false);
+    prefix = `{"goal":${serializeProviderInput(input.goal)},"context":{${shared}`;
+    suffix = `${shared && changing ? "," : ""}${changing}}}`;
+    prompt = prefix + suffix;
+  }
   const inputByteBudget = modelConfig && agentModelInputByteBudget(input.provider, modelConfig.modelId, modelConfig.maxOutputTokens);
   if ((input.phase === "specialist" || input.phase === "independent_review" || authoringTask) && inputByteBudget !== undefined
     && Buffer.byteLength(instructions + prompt + JSON.stringify(toolManifest) + JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema))), "utf8") > inputByteBudget)
@@ -420,7 +437,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
   let failed = false;
   const reportUsage = async () => {
     if (!rawUsage || usageReported) return;
-    await input.onUsage?.(usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
+    await input.onUsage?.(usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null, explicitCache));
     // Failed persistence must remain eligible for the error-recovery path.
     usageReported = true;
   };
@@ -431,7 +448,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
     // Finish chunks, cancellation and SDK errors can race. First settlement wins;
     // an unknown outcome must never become a priced prefix of a later tool loop.
     return step.settlement ??= input.onModelStepSettled!({ ordinal: step.ordinal,
-      usage: raw === undefined ? undefined : usageFor(input, raw, responseMetadata.modelId ?? modelConfig?.modelId ?? null) });
+      usage: raw === undefined ? undefined : usageFor(input, raw, responseMetadata.modelId ?? modelConfig?.modelId ?? null, explicitCache) });
   };
   // Gate the normalized V2 request, not prepareStep's pre-normalization prompt.
   // Await durable settlement before forwarding finish and allowing another step.
@@ -531,7 +548,9 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
           ? { activeTools: [], toolChoice: "none" as const }
           : undefined } : {}),
       modelSettings: { maxOutputTokens: modelConfig?.maxOutputTokens ?? 5000, maxRetries: 0 },
-      providerOptions: input.provider === "openai" || input.provider === "vercel" ? { openai: { store: false, ...(reasoningEffort ? { reasoningEffort } : {}) } } : undefined,
+      providerOptions: input.provider === "openai" || input.provider === "vercel" ? { openai: { store: false,
+        ...(explicitCache ? { promptCacheOptions: { mode: "explicit" as const, ttl: "30m" as const } } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}) } } : undefined,
       abortSignal,
       onStepFinish: async (step: { usage: unknown }) => {
         rawUsage = step.usage;
@@ -543,6 +562,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       maxOutputTokens: executionOptions.modelSettings.maxOutputTokens, maxSteps: executionOptions.maxSteps, maxRetries: 0,
       timeoutMs, stream: true, store: input.provider === "anthropic" ? null : false,
       instructionsHash: metadataHash(instructions), promptHash: metadataHash(prompt),
+      ...(explicitCache ? { promptCache: "report-prefix-v1" as const } : {}),
       ...(stepAccounting ? { stepAccounting: "per-model-dispatch-v1" as const } : {}),
       ...(toolManifest.length ? { toolSchemaHash: metadataHash(JSON.stringify(toolManifest)) } : {}),
       outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)))) });
@@ -555,7 +575,10 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
     // provider's execution deadline while another call holds a reservation.
     resumeDeadline();
     let object: unknown;
-    const stream = await untilAborted(agent.stream<Record<string, unknown>>(prompt, executionOptions));
+    const stream = await untilAborted(agent.stream<Record<string, unknown>>(explicitCache ? [{ role: "user", content: [
+      { type: "text", text: prefix, providerOptions: { openai: { promptCacheBreakpoint: { mode: "explicit" } } } },
+      { type: "text", text: suffix },
+    ] }] : prompt, executionOptions));
     collectFailure = async () => {
       // Read getters only after failure: Mastra can settle text after schema
       // rejection, but eagerly created promises retain that earlier rejection.
@@ -633,7 +656,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       if (!output.summary.startsWith(emitted)) throw safeProviderError(true, undefined, "validation");
       if (output.summary.length > emitted.length) await input.onSummaryDelta(output.summary.slice(emitted.length));
     }
-    return attachUsage(output, usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null));
+    return attachUsage(output, usageFor(input, rawUsage, responseMetadata.modelId ?? modelConfig?.modelId ?? null, explicitCache));
   } catch (error) {
     failed = true;
     // Diagnostic/usage recovery must never replace the original failure with
