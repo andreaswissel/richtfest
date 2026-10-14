@@ -94,6 +94,15 @@ export const acousticEditorialCheckSchema = z.object({
   issues: z.array(z.string().trim().min(1).max(2000)).max(100),
 }).strict();
 
+/** Bounded edits to identified fragments, never a replacement for the whole report. */
+export const acousticConsolidationOutputSchema = z.object({
+  complete: z.boolean(),
+  replacements: z.array(z.object({
+    id: z.string().min(1),
+    content: z.string().nullable().describe("Null keeps the exact original; empty removes only duplicate evidence retained in the other supplied fragment."),
+  }).strict()).min(1).max(2),
+}).strict();
+
 /** Reference-derived authoring formats, not executable calculation templates. */
 export const acousticConceptTemplateSchema = z.discriminatedUnion("id", [
   z.object({

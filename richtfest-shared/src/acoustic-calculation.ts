@@ -124,8 +124,18 @@ export type AcousticCalculationResult = z.infer<typeof acousticCalculationResult
 export const acousticCalculationReceiptSchema = acousticCalculationResultSchema.extend({ receiptId: z.string().uuid() });
 export type AcousticCalculationReceipt = z.infer<typeof acousticCalculationReceiptSchema>;
 
+/** Project-report context only; the durable execution ledger remains unchanged.
+ * Keep unsupported attempts so writers can explain their blocking reasons.
+ * Source provenance is declared evidence, not a claim of professional review.
+ */
+export function selectAcousticCalculationReportReceipts(receipts: readonly AcousticCalculationReceipt[]): AcousticCalculationReceipt[] {
+  return receipts.map(receipt => acousticCalculationReceiptSchema.parse(receipt)).filter(receipt =>
+    receipt.status === "unsupported" || acousticInputProvenance(receipt.input).some(p => p.kind === "source"));
+}
+
 /** Render saved arithmetic, never ask a writer to recalculate or transcribe it. */
 export function renderAcousticCalculationReceipts(receipts: AcousticCalculationReceipt[], language: "de" | "en") {
+  const reportReceipts = selectAcousticCalculationReportReceipts(receipts);
   const t = (de: string, en: string) => language === "de" ? de : en;
   const cell = (value: unknown) => String(value ?? "—").replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ");
   const fields = (value: unknown, path = ""): string[] => {
@@ -143,22 +153,26 @@ export function renderAcousticCalculationReceipts(receipts: AcousticCalculationR
     return [`| ${cell(path)} | ${cell(value)} |`];
   };
   const table = (heading: string, rows: string[]) => `**${heading}**\n\n| ${t("Feld", "Field")} | ${t("Wert", "Value")} |\n| --- | --- |\n${rows.join("\n")}`;
-  return receipts.map((raw, index) => {
+  const exclusionNotice = reportReceipts.length < receipts.length ? t(
+    "Reine Annahmeberechnungen ohne Quellenbeleg sind keine Projektergebnisse und wurden ausgeschlossen; sie bleiben im Ausführungsprotokoll erhalten.",
+    "Assumption-only calculations without source evidence are not project results and were excluded; they remain in the execution ledger.",
+  ) : "";
+  return [exclusionNotice, ...reportReceipts.map((raw, index) => {
     const receipt = acousticCalculationReceiptSchema.parse(raw);
     return [
       `**${t("Werkzeugberechnung", "Tool calculation")} ${index + 1} · ${cell(receipt.method)}**`,
       `${cell(receipt.engine)} · v${receipt.version} · ${t("Fachlich ungeprüft; kein Konformitätsnachweis oder Freigabe.", "Not reviewed; not a compliance verification or approval.")}`,
       table(t("Gespeichertes Ergebnis", "Saved result"), [
         `| ${t("Status", "Status")} | ${receipt.status === "unsupported" ? t("Nicht unterstützt – kein Rechenergebnis", "Unsupported – no calculated result") : t("Berechnet, ungeprüft", "Calculated, unreviewed")} |`,
-        `| ${t("Ergebnis", "Result")} | ${receipt.value === null ? "—" : `${receipt.value} ${cell(receipt.unit)}`} |`,
+        `| ${t("Ergebnis", "Result")} | ${receipt.status === "unsupported" || receipt.value === null ? "—" : `${receipt.value} ${cell(receipt.unit)}`} |`,
         `| ${t("Formel", "Formula")} | ${cell(receipt.formula)} |`,
         `| ${t("Methodenreferenz", "Method reference")} | ${cell(receipt.reference)} |`,
       ]),
       table(t("Eingaben und Herkunft (gespeicherte Feldnamen)", "Inputs and provenance (saved field names)"), fields(receipt.input)),
-      ...(receipt.intermediates.length ? [table(t("Zwischenergebnisse", "Intermediate results"), receipt.intermediates.map(row =>
+      ...(receipt.status !== "unsupported" && receipt.intermediates.length ? [table(t("Zwischenergebnisse", "Intermediate results"), receipt.intermediates.map(row =>
         `| ${cell(row.label)} | ${row.value} ${cell(row.unit)} |`))] : []),
-      ...(receipt.exteriorNoise ? [table(t("Numerischer Vergleich (ungeprüft)", "Numerical comparison (unreviewed)"), fields(receipt.exteriorNoise))] : []),
+      ...(receipt.status !== "unsupported" && receipt.exteriorNoise ? [table(t("Numerischer Vergleich (ungeprüft)", "Numerical comparison (unreviewed)"), fields(receipt.exteriorNoise))] : []),
       `**${t("Grenzen und Prüfbedarf", "Limitations and required review")}**\n\n${receipt.limitations.map(value => `- ${cell(value)}`).join("\n")}`,
     ].join("\n\n");
-  }).join("\n\n");
+  })].filter(Boolean).join("\n\n");
 }

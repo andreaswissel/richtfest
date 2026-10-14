@@ -42,6 +42,7 @@ export function prepareIndependentReview(input: {
       assignments: assignments.map(assignment => ({
         taskId: assignment.taskId, role: assignment.role, goal: assignment.goal,
         calculationReceipts: assignment.calculationReceipts,
+        visualReads: assignment.visualReads?.filter(read => wholeReport || ids.has(read.request.versionId)),
         sourceVersionIds: assignment.sourceVersionIds.filter(id => ids.has(id)),
         result: assignment.output ? { ...assignment.output, citations: assignment.output.citations.filter(id => ids.has(id)) } : undefined,
       })),

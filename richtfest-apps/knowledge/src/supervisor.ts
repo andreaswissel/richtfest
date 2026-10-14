@@ -364,6 +364,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const visualOnly = !!(context as { visualRequests?: SourceVisualRequest[] }).visualRequests;
       const appendixWriter = phase === "review" && (context as { inputMode?: string }).inputMode === "imported-calculation-evidence";
       const editorialPacket = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-packet";
+      const consolidation = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-consolidation";
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
@@ -371,7 +372,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           ? await companyKnowledgeCategories(d) : undefined,
         acousticToolsAvailable: !visualOnly && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
-        componentCatalog: appendixWriter || editorialPacket ? undefined : await d.componentContext?.(run.goal),
+        componentCatalog: appendixWriter || editorialPacket || consolidation ? undefined : await d.componentContext?.(run.goal),
         documentReview,
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.
@@ -1210,6 +1211,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           calculationReceipts: (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []),
           companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
+          sourceDirectory: await d.sourceReferences(run.projectId,
+            [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))]),
+          visualReads: (state.assignments as Assignment[]).flatMap(a => a.visualReads ?? []),
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
           assertActive,

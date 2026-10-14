@@ -147,6 +147,7 @@ integration(`visual budget recovery preserves findings and shares the revision l
   const concept = acousticConceptFixture("exterior-noise-concept", "en", versions[0]!);
   const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
     validateProject: async () => true, validateSourceVersion: async () => true,
+    sourceReferences: async (_: string, ids: string[]) => ids.map(versionId => ({ versionId, name: "Synthetic source", version: 1 })),
     listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId, name: "Synthetic source", version: 1 })), truncated: false }),
     resolveSource: async (_: string, { versionId }: any) => {
       sourceCalls.push(versionId);
@@ -179,6 +180,8 @@ integration(`visual budget recovery preserves findings and shares the revision l
         if (context.documentTask === "editorial") return { status: "completed", output: {
           sections: context.sectionKeys.map((key: string) => ({ key, content: context.original[key] })), complete: true } };
         if (context.documentTask === "editorial_check") return { status: "completed", output: { preserved: true, issues: [] } };
+        if (context.documentTask === "consolidation") return { status: "completed", output: {
+          complete: true, replacements: context.original.map((fragment: any) => ({ id: fragment.id, content: null })) } };
         if (context.documentTask === "section") return { status: "completed", output: {
           content: (concept as any)[context.section], citations: [versions[0]], complete: true } };
         reviewerCalls++;
@@ -563,6 +566,9 @@ integration(`independent review packs requests without losing evidence or saved 
     text: `${index}:ä🧱\n${"x".repeat(scenario === "oversized" && index === 0 ? 950000 : 2000)}\nEnd ${index}.`,
   }));
   const versions = evidence.map(source => source.versionId);
+  const visualReads = versions.map((versionId, index) => ({ request: { versionId, page: index + 1,
+    crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 } },
+    status: index % 2 ? "budget_exhausted" : "available", receiptId: crypto.randomUUID() }));
   const document = { title: "Review packing", content: `# Draft\n\n## First source\n[${versions[0]}]\nFirst claim.\n\n## Last source\n[${versions[9]}]\nLast claim.\n\n## Assumptions\nKeep uncertainty visible.` };
   const contexts: any[] = [];
   const finding = { severity: "blocking", issue: "First claim contradicts its source", recommendation: "Correct the claim", citations: [versions[0]] };
@@ -582,6 +588,9 @@ integration(`independent review packs requests without losing evidence or saved 
       contexts.push(context);
       expect(Buffer.byteLength(JSON.stringify(context))).toBeLessThan(838976);
       expect(context.specialistResults).toBeUndefined();
+      const scopedIds = context.sourceCoverage.sliceVersionIds;
+      expect(context.assignments.flatMap((assignment: any) => assignment.visualReads ?? [])).toEqual(
+        context.reviewTask === "evidence" ? visualReads.filter(read => scopedIds.includes(read.request.versionId)) : visualReads);
       if (context.reviewTask === "consistency") {
         expect(context.firstPassReview.document).toEqual(document);
         expect(context.sourceExcerpts).toEqual([]);
@@ -596,6 +605,10 @@ integration(`independent review packs requests without losing evidence or saved 
       provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
     await createSupervisor(d, db, run, "medium", { ...policy, supervisor: { ...config, modelId: "gpt-6-astra" }, independentReviewEnabled: true });
     for (let phase = 0; phase < 3; phase++) await stepSupervisor(d, run!.id);
+    const [beforeReview] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    await db.update(supervisorRuns).set({ assignments: (beforeReview!.assignments as any[]).map(assignment => ({
+      ...assignment, visualReads: visualReads.filter(read => assignment.sourceVersionIds.includes(read.request.versionId)),
+    })) }).where(eq(supervisorRuns.runId, run!.id));
     if (scenario === "legacy") {
       const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
       const sourceSlices = [versions.slice(0, 3), versions.slice(3, 6), versions.slice(6, 9), versions.slice(9)]

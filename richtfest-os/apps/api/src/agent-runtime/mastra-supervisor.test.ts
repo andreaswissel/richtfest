@@ -328,6 +328,54 @@ test("editorial packets keep the selected model with bounded writer and checker 
   }
 });
 
+test("consolidation uses bounded tool-free shared writer and independent checker contracts", async () => {
+  for (const maxOutputTokens of [1024, 32000]) for (const documentTask of ["consolidation", "consolidation_check"] as const) {
+    const output = documentTask === "consolidation"
+      ? { replacements: [{ id: "requirements:0", content: null }, { id: "plans:0", content: "" }], complete: true }
+      : { preserved: false, issues: ["The shutter-box assembly was replaced by a curtain rating."] };
+    let settings: any, prepared: any;
+    const request = { ...base, phase: "review" as const,
+      modelConfig: { modelId: "gpt-6-astra", maxOutputTokens, maxSteps: 4, reasoningEffort: "medium" as const },
+      context: { documentTask, inputMode: "editorial-consolidation", documentTemplate: { id: "exterior-noise-concept", version: 1 } },
+      inspectSource: async () => { throw new Error("No source inspection during consolidation"); },
+      onRequest: async (value: unknown) => { settings = value; },
+      onPrepared: async (value: unknown) => { prepared = value; return undefined; },
+    };
+    expect(await callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+        spyStream: options => { expect(options.tools ?? []).toHaveLength(0); },
+      }),
+    })).toEqual(output);
+    expect(settings.maxOutputTokens).toBe(Math.min(maxOutputTokens, documentTask === "consolidation" ? 6000 : 2000));
+    expect(settings.maxSteps).toBe(1);
+    expect(settings.modelId).toBe("gpt-6-astra");
+    expect(settings.reasoningEffort).toBe("medium");
+    expect(prepared.tools).toBeUndefined();
+    expect(prepared.instructions).toContain("bounded fragment");
+    expect(prepared.instructions).toContain("legal scope");
+    expect(prepared.instructions).toContain("authoritative context.visualReads");
+    expect(prepared.instructions).toContain("available rendering");
+    const invalid = documentTask === "consolidation" ? { ...output, replacements: [{ id: "x", content: 7 }] } : { preserved: "yes", issues: [] };
+    await expect(callMastraSupervisor(request, "test-key", {
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: invalid }),
+    })).rejects.toMatchObject({ code: "invalid_provider_output" });
+  }
+});
+
+test("section authoring retains canonical identity, bounded coverage and component distinctions", async () => {
+  let prepared: any;
+  const output = { content: "Unverified source claims.", citations: [], complete: true };
+  await callMastraSupervisor({ ...base, phase: "review", modelConfig: { modelId: "test-model", maxOutputTokens: 4000, maxSteps: 1 },
+    context: { documentTask: "section", section: "components", documentTemplate: { id: "exterior-noise-concept", version: 1 } },
+    onPrepared: async value => { prepared = value; return undefined; },
+  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }) });
+  for (const rule of ["canonical context.sourceDirectory", "never packet-local Q aliases", "never expands allowed citations",
+    "one section-owned requirements register", "Absence from this packet is not absence from the project",
+    "shutter-box assembly is not a shutter curtain", "budget_exhausted means not inspected",
+    "unavailable rendering does not mean illegible text", "available rendering proves only availability, not semantic review"])
+    expect(prepared.instructions).toContain(rule);
+});
+
 test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
   const versionId = crypto.randomUUID();
   const template = {
@@ -754,12 +802,16 @@ test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} thro
   let repaired = false;
   const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
     validateProject: async () => true, validateSourceVersion: async () => true,
+    sourceReferences: async () => [{ versionId, fileName: "Evidence", version: 1 }],
     resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" }, content: { status: "available", text: "Fixture" } }),
     executeSupervisor: async (input: any) => {
       const context = input.context;
       if (context.documentTask === "outline") return { status: "completed", output: { id, title: "Repair fixture", language: "en", project: fixture.project,
         sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] } };
       if (context.documentTask === "section") return { status: "completed", output: { content: context.section === "exteriorNoiseAssessment" ? prose : (fixture as any)[context.section], citations: [versionId], complete: true } };
+      if (context.documentTask === "consolidation") return { status: "completed", output: {
+        complete: true, replacements: context.original.map((fragment: any) => ({ id: fragment.id, content: null })),
+      } };
       expect(context.inputMode).toBe("editorial-packet");
       const key = context.sectionKeys[0], target = key === "exteriorNoiseAssessment";
       if (context.documentTask === "editorial") writerCalls.push(key);

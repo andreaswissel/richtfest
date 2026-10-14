@@ -1,11 +1,68 @@
 import { expect, test } from "bun:test";
 import { calculateAcoustics } from "./calculations";
 import { exteriorNoiseFixture } from "../../../tests/fixtures/exterior-noise";
+import { renderAcousticCalculationReceipts, selectAcousticCalculationReportReceipts, type AcousticCalculationReceipt } from "../../../richtfest-shared/src/acoustic-calculation";
 
 const provenance = { kind: "assumption", reason: "Synthetic arithmetic verification, not project evidence" } as const;
 const observation = (levelDb: number) => ({ label: `Level ${levelDb}`, levelDb, provenance });
 const context = { receiver: "Test receiver", weighting: "A" as const };
 const sum = { ...context, method: "sum_sound_levels" as const, period: "Simultaneous", uncorrelatedSources: true as const };
+
+const receipt = (input: Parameters<typeof calculateAcoustics>[0]): AcousticCalculationReceipt => ({
+  ...calculateAcoustics(input), receiptId: "11111111-1111-4111-8111-111111111111",
+});
+const sourceProvenance = { kind: "source", versionId: "22222222-2222-4222-8222-222222222222", page: 3, excerpt: "Measured source level" } as const;
+
+test("project reports preserve source-backed zero and mixed provenance with exact saved fields", () => {
+  const zero = receipt({ ...sum, sources: [{ ...observation(0), provenance: sourceProvenance }] });
+  const mixed = receipt({ ...sum, sources: [{ ...observation(60), provenance: sourceProvenance }, observation(70)] });
+  expect(selectAcousticCalculationReportReceipts([zero, mixed])).toEqual([zero, mixed]);
+  const report = renderAcousticCalculationReceipts([zero, mixed], "en");
+  expect(report).toContain("| Result | 0 dB(A) |");
+  expect(report).toContain(`| Result | ${mixed.value} dB(A) |`);
+  expect(report).toContain("sources.0.levelDb");
+  expect(report).toContain(sourceProvenance.versionId);
+  expect(report).toContain("Page 3");
+  expect(report).toContain(sourceProvenance.excerpt);
+  expect(report).toContain(`Assumption: ${provenance.reason}`);
+  for (const limitation of mixed.limitations) expect(report).toContain(limitation);
+  expect(report).not.toContain("were excluded");
+});
+
+test("assumption-only zero and nonzero receipts stay durable but are excluded once per report in either language", () => {
+  const receipts = [0, 73].map(level => receipt({ ...sum, sources: [observation(level)] }));
+  const original = structuredClone(receipts);
+  expect(selectAcousticCalculationReportReceipts(receipts)).toEqual([]);
+  for (const language of ["en", "de"] as const) {
+    const report = renderAcousticCalculationReceipts(receipts, language);
+    expect(report.split("\n")).toHaveLength(1);
+    expect(report).toContain(language === "en" ? "not project results" : "keine Projektergebnisse");
+    expect(report).toContain(language === "en" ? "execution ledger" : "Ausführungsprotokoll");
+    expect(report).not.toContain("|");
+    expect(report).not.toContain("sum_sound_levels");
+    expect(report).not.toContain(receipts[0]!.formula);
+    expect(report).not.toContain(provenance.reason);
+  }
+  expect(receipts).toEqual(original);
+  expect(renderAcousticCalculationReceipts([], "en")).toBe("");
+});
+
+test("unsupported assumption-only attempts retain blocking reasons, never a numeric result", () => {
+  const input = exteriorNoiseFixture();
+  input.envelopeComplete = false;
+  const blocked = receipt(input);
+  expect(blocked.status).toBe("unsupported");
+  expect(selectAcousticCalculationReportReceipts([blocked])).toEqual([blocked]);
+  for (const language of ["en", "de"] as const) {
+    const report = renderAcousticCalculationReceipts([blocked], language);
+    expect(report).toContain(language === "en" ? "Unsupported – no calculated result" : "Nicht unterstützt – kein Rechenergebnis");
+    expect(report).toContain(language === "en" ? "| Result | — |" : "| Ergebnis | — |");
+    for (const reason of blocked.limitations) expect(report).toContain(reason);
+    expect(report).not.toContain("Intermediate results");
+    expect(report).not.toContain("Numerical comparison");
+    expect(report).not.toContain("were excluded");
+  }
+});
 
 test("sound energy addition and duration averaging match independently derived ratios", () => {
   // 10^6 + 10^7 = 11,000,000; not 65 dB or 130 dB.

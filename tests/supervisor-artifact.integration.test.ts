@@ -32,12 +32,90 @@ import {
 } from "../richtfest-apps/knowledge/src/schema";
 const integration = process.env.DATABASE_URL ? test : test.skip;
 
+function unchangedConsolidation(context: any) {
+  if (context.documentTask === "consolidation") {
+    expect(context.inputMode).toBe("editorial-consolidation");
+    expect(Array.isArray(context.original)).toBe(true);
+    return { complete: true, replacements: context.original.map((fragment: any) => ({ id: fragment.id, content: null })) };
+  }
+  if (context.documentTask === "consolidation_check") throw new Error("Identity consolidation must not require a paid semantic check");
+}
+
 function unchangedEditorial(context: any) {
+  const consolidation = unchangedConsolidation(context);
+  if (consolidation) return consolidation;
   if (context.documentTask === "editorial") return {
     sections: context.sectionKeys.map((key: string) => ({ key, content: context.original[key] })), complete: true,
   };
   if (context.documentTask === "editorial_check") return { preserved: true, issues: [] };
 }
+
+test("authoring reconciles false inspection claims against scoped receipts without rewriting saved editorial work", async () => {
+  const id = "exterior-noise-concept" as const;
+  const versionId = crypto.randomUUID(), other = crypto.randomUUID(), foreign = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  const directory = [versionId, other, foreign].map(versionId => ({ versionId, fileName: "Drawing.pdf", version: 3 }));
+  const reads = [versionId, other, foreign].map(versionId => ({ request: { versionId, page: 7,
+    crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 } }, status: "budget_exhausted" as const, receiptId: crypto.randomUUID() }));
+  const arithmetic = { ...calculateAcoustics({ method: "sum_sound_levels", receiver: "Assumed receiver", weighting: "A", period: "Day", uncorrelatedSources: true,
+    sources: [{ label: "Assumed road", levelDb: 60, provenance: { kind: "assumption", reason: "Synthetic estimate only" } }],
+  }), receiptId: crypto.randomUUID() };
+  const claim = `Page 7 inspected and verified [${versionId}].`;
+  const corrected = `Page 7 not inspected: visual budget exhausted; source legibility unknown [${versionId}].`;
+  let draft: any, interrupted = false;
+  const calls: string[] = [];
+  const input = { d: { resolveSource: async () => ({ status: "resolved", source: directory[0],
+    content: { status: "available", text: "Drawing legend", truncated: false } }) } as any,
+    projectId: crypto.randomUUID(), id, goal: "Review drawing coverage", findings: [], sourceVersionIds: [versionId, other],
+    sourceDirectory: directory, visualReads: reads, calculationReceipts: [arithmetic],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
+    assertActive: async () => {}, checkpoint: async (value: any) => { draft = structuredClone(value); },
+    call: async (context: any) => {
+      calls.push(context.documentTask);
+      if (context.documentTask === "outline") {
+        expect(context.sourceDirectory).toEqual(directory.slice(0, 2));
+        expect(context.calculationReceipts).toBeUndefined();
+        return { id, title: "Coverage report", language: "en", project: fixture.project,
+          sections: acousticSectionKeys(id).map(key => ({ key, sources: key === "components" ? [{ versionId, pageStart: 7, pageEnd: 7 }] : [] })), attachments: [] };
+      }
+      if (context.documentTask === "section") {
+        expect(context.sourceDirectory).toEqual(context.section === "components" ? [directory[0]] : []);
+        expect(context.visualReads).toEqual(context.section === "components" ? [reads[0]] : []);
+        return { complete: true, citations: context.section === "components" ? [versionId] : [],
+          content: context.section === "components" ? claim : `Missing ${context.section} project input.` };
+      }
+      if (context.documentTask === "consolidation" || context.documentTask === "consolidation_check") {
+        expect(context.operation).toBe("coverage");
+        expect(context.sourceDirectory).toEqual([directory[0]]);
+        expect(context.visualReads).toEqual([reads[0]]);
+        expect(context.original).toEqual([{ id: "components:0", section: "components", content: claim }]);
+        if (context.documentTask === "consolidation") return { complete: true, replacements: [{ id: "components:0", content: corrected }] };
+        expect(context.edited.replacements).toEqual([{ id: "components:0", content: corrected }]);
+        if (!interrupted) { interrupted = true; throw new Error("Semantic checker disconnected"); }
+        return { preserved: true, issues: [] };
+      }
+      const editorial = unchangedEditorial(context);
+      if (editorial) return editorial;
+      throw new Error(`Unexpected task ${context.documentTask}`);
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow("Semantic checker disconnected");
+  const sections = structuredClone(draft.sections), editorial = structuredClone(draft.editorial);
+  expect(sections.components.parts[0].content).toBe(claim);
+  expect(editorial.candidate.sections.find((section: any) => section.key === "components").content).toBe(claim);
+  expect(draft.consolidation.plan[0].candidate.replacements[0].content).toBe(corrected);
+  expect(draft.consolidation.plan[0].check).toBeUndefined();
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(result.document.template!.components).toBe(corrected);
+  expect(result.document.content).not.toContain(claim);
+  expect(draft.sections).toEqual(sections);
+  expect(draft.editorial).toEqual(editorial);
+  for (const task of ["outline", "editorial", "editorial_check", "consolidation"]) expect(calls.filter(call => call === task)).toHaveLength(1);
+  expect(calls.filter(call => call === "consolidation_check")).toHaveLength(2);
+  const count = calls.length;
+  await authorAcousticConcept({ ...input, draft });
+  expect(calls).toHaveLength(count);
+});
 
 test("appendix recovery bounds only missing evidence, retains non-prefix pieces and resumes packets without loss", async () => {
   const id = "exterior-noise-concept" as const, keys = acousticSectionKeys(id), versionId = crypto.randomUUID();
@@ -321,6 +399,8 @@ test(`${id} editorial context and checkpoint resume preserve original section pi
       if (context.documentTask === "outline") return { id, title: "Checkpoint report", language: "en", project: fixture.project,
         sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
       if (context.documentTask === "section") return { complete: true, citations: [versionId], content: (fixture as any)[context.section] };
+      const consolidation = unchangedConsolidation(context);
+      if (consolidation) return consolidation;
       expect(context.previousReview).toEqual(previousReview);
       expect(context.sectionKeys).toEqual(acousticSectionKeys(id).filter(key => key !== "calculationAppendix"));
       const { calculationAppendix, ...editable } = fixture;
@@ -372,6 +452,8 @@ test(`large editorial recovery preserves checked packets and immutable evidence:
       if (context.documentTask === "outline") return { id, title: "Packet recovery", language: "de", project: fixture.project,
         sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
       if (context.documentTask === "section") return { content: context.section === "components" ? components : (fixture as any)[context.section], citations: [versionId], complete: true };
+      const consolidation = unchangedConsolidation(context);
+      if (consolidation) return consolidation;
       expect(context.inputMode).toBe("editorial-packet");
       expect(context.original.calculationAppendix).toBeUndefined();
       expect(context.companyKnowledge).toBeUndefined();
@@ -432,6 +514,8 @@ test("editorial subpackets resume checked descendants and keep Markdown, referen
       if (context.documentTask === "outline") return { id, title: "Lossless recovery", language: "de", project: fixture.project,
         sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
       if (context.documentTask === "section") return { complete: true, citations: [versionId], content: context.section === "components" ? components : (fixture as any)[context.section] };
+      const consolidation = unchangedConsolidation(context);
+      if (consolidation) return consolidation;
       const text = context.original[context.sectionKeys[0]];
       expect(Buffer.byteLength(JSON.stringify(text))).toBeLessThanOrEqual(4000);
       expect(text).not.toContain("Untouched");
@@ -482,6 +566,7 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
   const d: any = {
     db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
     providerConfigured: async () => false, validateProject: async () => true,
+    sourceReferences: async (_: string, ids: string[]) => ids.map(versionId => ({ versionId, name: "Evidence.pdf", version: 1 })),
     validateSourceVersion: async (_: string, sourceId: string) => sourceId === versionId,
     readSourcePdf: async () => bytes,
     resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence.pdf", version: 1 },
@@ -531,7 +616,8 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
         if (scenario === "timeout" && calls.filter(call => call === "editorial_check").length === 1)
           throw Object.assign(new Error("Checker timed out"), { code: "timeout", providerFailure: true, retryable: false });
         output = scenario === "rejected" && calls.filter(call => call === "editorial_check").length === 1 ? rejected : { preserved: true, issues: [] };
-      } else throw new Error(`Unexpected call ${task}`);
+      } else if (task === "consolidation") output = unchangedConsolidation(context);
+      else throw new Error(`Unexpected call ${task}`);
       return { status: "completed", output };
     },
   };
@@ -710,6 +796,7 @@ integration("acoustic reports preserve oversized sections and resume old charact
         requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
         audit: async () => {}, providerConfigured: async () => false,
         validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
+        sourceReferences: async (_: string, ids: string[]) => ids.map(versionId => ({ versionId, name: "Evidence.pdf", version: 1 })),
         listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
         readSourcePdf: async (_: string, id: string) => id === versionId ? bytes : null,
         resolveSource: async (_: string, input: any) => {
@@ -897,6 +984,7 @@ for (const scenario of ["serial", "parallel", "failure", "cancel", "context", "c
     const d: any = {
       db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
       validateProject: async () => true, validateSourceVersion: async (_: string, id: string) => id === versionId,
+      sourceReferences: async (_: string, ids: string[]) => ids.map(versionId => ({ versionId, name: "Evidence.pdf", version: 1 })),
       providerConfigured: async () => false,
       listProjectSources: async () => ({ sources: [{ versionId, name: "Evidence.pdf" }], truncated: false }),
       resolveSource: async (_: string, input: any) => {

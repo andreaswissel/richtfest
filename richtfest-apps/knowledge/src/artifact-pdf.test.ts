@@ -106,3 +106,62 @@ test("concept report includes original mixed-size sources, accurate contents and
   await expect(artifactPdf({ ...input, readSourcePdf: async () => Buffer.from("not a PDF") })).rejects.toMatchObject({ status: 422 });
   await expect(artifactPdf({ ...input, template: { ...template, attachments: [{ ...template.attachments[0], pageEnd: 3 }] } })).rejects.toMatchObject({ status: 422 });
 });
+
+test("concept deduplicates only byte-identical overlapping pages after validating every alias", async () => {
+  const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+  const source = await PDFDocument.create();
+  for (let i = 1; i <= 3; i++) source.addPage(i === 2 ? [842, 595] : [595, 842])
+    .drawText(`ORIGINAL PAGE ${i}`, { x: 48, y: 400 });
+  const bytes = Buffer.from(await source.save());
+  // Same page artwork and extracted text, but different complete source bytes.
+  source.setTitle("Different original metadata");
+  const different = Buffer.from(await source.save());
+  expect(bytes.equals(different)).toBe(false);
+  const attachments = [
+    { versionId: ids[0], pageStart: 1, pageEnd: 2, label: "First evidence", section: "plans" },
+    { versionId: ids[1], pageStart: 2, pageEnd: 3, label: "Alias evidence", section: "calculationAppendix" },
+    { versionId: ids[0], pageStart: 1, pageEnd: 2, label: "Same revision again", section: "calculationAppendix" },
+    { versionId: ids[2], pageStart: 1, pageEnd: 3, label: "Distinct bytes", section: "calculationAppendix" },
+  ];
+  const reads: string[] = [];
+  const input = {
+    title: "Deduplication review", version: 5, status: "proposed", projectId: "project",
+    content: "# Report\n\nUnchanged prose.\n\n## 1. Exterior-noise plans\n\nPlans.\n\n## 2. Calculation evidence\n\nEvidence.",
+    template: { id: "exterior-noise-concept", version: 1, language: "en", attachments },
+    sources: ids.map((versionId, i) => ({ versionId, fileName: "Same name.pdf", version: i + 1 })),
+    sourceVersionIds: ids,
+    readSourcePdf: async (_project: string, id: string) => {
+      reads.push(id); return id === ids[2] ? different : bytes;
+    },
+  };
+  const pdf = await artifactPdf(input);
+  expect(reads).toEqual(ids);
+  const document = await PDFDocument.load(pdf);
+  const manifest = JSON.parse(document.getSubject()!);
+  expect(manifest).toContainEqual(expect.objectContaining({ versionId: ids[1], sourcePages: [2, 2], retainedReportPage: 5 }));
+  expect(manifest).toContainEqual(expect.objectContaining({ versionId: ids[1], sourcePages: [3, 3], retainedAttachment: null }));
+  const directory = await mkdtemp(join(tmpdir(), "dedup-report-"));
+  try {
+    const path = join(directory, "report.pdf");
+    await writeFile(path, pdf);
+    const extraction = Bun.spawnSync(["pdftotext", "-layout", path, "-"]);
+    expect(extraction.exitCode).toBe(0);
+    const text = extraction.stdout.toString();
+    const pages = text.split("\f").filter(page => page.trim());
+    expect(pages).toHaveLength(12);
+    expect(pages.filter(page => page.includes("ORIGINAL PAGE"))).toHaveLength(6);
+    for (let i = 1; i <= 3; i++) expect(text.match(new RegExp(`ORIGINAL PAGE ${i}`, "g"))).toHaveLength(2);
+    expect(text).toContain("Alias evidence");
+    expect(text).toContain("Same revision again");
+    expect(text).toContain("report pages 5");
+    expect(text).toContain("report pages 4–5");
+    expect(pages[1]).toMatch(/Calculation evidence\s+6\b/);
+    expect(pages[6]).toContain("Cross-reference");
+    for (let i = 0; i < pages.length; i++) expect(pages[i]).toContain(`${i + 1} / ${pages.length}`);
+    if (process.env.PDF_DEDUP_REVIEW_PATH) await writeFile(process.env.PDF_DEDUP_REVIEW_PATH, pdf);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+  await expect(artifactPdf({ ...input, readSourcePdf: async (_p, id) => id === ids[1] ? null : bytes })).rejects.toMatchObject({ status: 422 });
+  await expect(artifactPdf({ ...input, sources: input.sources.filter(s => s.versionId !== ids[1]) })).rejects.toMatchObject({ status: 422 });
+  await expect(artifactPdf({ ...input, sourceVersionIds: [ids[0], ids[2]] })).rejects.toMatchObject({ status: 422 });
+  await expect(artifactPdf({ ...input, template: { ...input.template, attachments: attachments.map(a => a.versionId === ids[1] ? { ...a, pageEnd: 4 } : a) } })).rejects.toMatchObject({ status: 422 });
+});

@@ -6,11 +6,13 @@ import {
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
   acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
   acousticEditorialOutputSchema, acousticEditorialPacketOutputSchema, acousticEditorialCheckSchema, renderAcousticCalculationReceipts,
+  selectAcousticCalculationReportReceipts, type SourceReference, type SourceVisualRequest, type SourceVisual,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
 import { resolveCompleteRunSource } from "./source-evidence";
 import { batchSectionSources, batchSpecialistSources } from "./source-batches";
+import { consolidateAcousticConcept, type AcousticConsolidationState } from "./acoustic-consolidation";
 
 type Outline = z.infer<typeof acousticConceptOutlineSchema>;
 type Part = z.infer<typeof acousticSectionOutputSchema>;
@@ -35,6 +37,7 @@ export type AcousticDraft = {
       verbatim?: "oversized_block";
     }>;
   };
+  consolidation?: AcousticConsolidationState;
 };
 
 /** Lossless Markdown blocks: never cut tables, lists or fenced code in half. */
@@ -62,6 +65,8 @@ export async function authorAcousticConcept(input: {
   findings: unknown; sourceVersionIds: string[]; limits: AgentExecutionLimits; maxOutputTokens: number;
   calculationReceipts?: AcousticCalculationReceipt[];
   companyKnowledge?: CompanyKnowledgeReceipt[];
+  sourceDirectory?: SourceReference[];
+  visualReads?: { request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }[];
   maxParallel: number;
   inputByteBudget?: number; contextOverhead?: unknown;
   previousReview?: unknown; draft?: AcousticDraft;
@@ -77,6 +82,8 @@ export async function authorAcousticConcept(input: {
     ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
   });
   const sourceIds = new Set(input.sourceVersionIds);
+  const sourceDirectory = (input.sourceDirectory ?? []).filter(source => sourceIds.has(source.versionId));
+  const reportReceipts = selectAcousticCalculationReportReceipts(input.calculationReceipts ?? []);
   const savedFindings = z.array(z.object({
     sourceVersionIds: z.array(z.string()),
     output: z.object({ summary: z.string().optional(), rationale: z.string().optional(),
@@ -103,7 +110,8 @@ export async function authorAcousticConcept(input: {
     const outline = outlineSchema.parse(await input.call({
       documentTask: "outline", documentTemplate: { id, version: 1 }, sectionKeys: keys,
       findings: input.findings, sourceVersionIds: input.sourceVersionIds, previousReview: input.previousReview,
-      ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
+      sourceDirectory, visualReads: input.visualReads ?? [],
+      ...(reportReceipts.length ? { calculationReceipts: reportReceipts } : {}),
       ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     }, value => outlineSchema.parse(value)));
     // Normalize new outlines only: old drafts retain their batch identities on retry.
@@ -191,6 +199,7 @@ export async function authorAcousticConcept(input: {
     const byteLimit = draft.inputByteBudget === undefined ? undefined : (useFindings && saved?.inputMode !== "specialist-findings" ? undefined : saved?.byteLimit)
       ?? draft.inputByteBudget - 16384 - Buffer.byteLength(JSON.stringify({ goal: input.goal,
         contextOverhead: input.contextOverhead, ...sectionContext, sourceVersionIds: useFindings ? findingSourceIds : definition.sources.map(range => range.versionId),
+        sourceDirectory, visualReads: input.visualReads ?? [],
         batch: 1000000, batchCount: 1000000, splitOnTruncation: true }), "utf8");
     if (byteLimit !== undefined && byteLimit < 1024) invalid(["sections"], "Report context exceeds the model input budget.");
     // Historical/unknown-model drafts keep their exact batching and retry contract.
@@ -223,6 +232,8 @@ export async function authorAcousticConcept(input: {
       return partSchema.parse(await input.call({
         ...(appendix ? { ...appendixContext, inputMode: "imported-calculation-evidence",
           attachments: sectionContext.attachments.filter(a => allowed.has(a.versionId)) } : sectionContext),
+        sourceDirectory: sourceDirectory.filter(source => allowed.has(source.versionId)),
+        visualReads: (input.visualReads ?? []).filter(read => allowed.has(read.request.versionId)),
         sources: batch, sourceVersionIds: [...allowed], batch: batchNumber, batchCount,
         ...(byteLimit === undefined ? {} : { splitOnTruncation, parentBatch }),
       }, value => partSchema.parse(value)));
@@ -495,7 +506,20 @@ export async function authorAcousticConcept(input: {
   if (!editorial.check.preserved || editorial.check.issues.length)
     invalid(["editorial"], "The editorial preservation check found changed or missing evidence. Retry to revise the edit using the saved feedback.");
   await input.assertActive();
-  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: edited }, id, null)!;
+  // A separate versioned checkpoint preserves legacy author/editor identities.
+  // This stage sees bounded fragments together, never another full-report rewrite.
+  const consolidated = await consolidateAcousticConcept({
+    template: edited, sourceDirectory, visualReads: input.visualReads ?? [], state: draft.consolidation,
+    maxOutputTokens: input.maxOutputTokens,
+    inputByteBudget: input.inputByteBudget === undefined ? undefined
+      : input.inputByteBudget - 16384 - Buffer.byteLength(JSON.stringify({ goal: input.goal, contextOverhead: input.contextOverhead })),
+    assertActive: input.assertActive, call: input.call,
+    checkpoint: async state => {
+      draft!.consolidation = state;
+      await input.checkpoint(draft!, "checking_editorial", 1, 1);
+    },
+  });
+  const document = prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: consolidated }, id, null)!;
   return {
     document, citations: [...citations], decision: "accept" as const, revisions: [],
     summary: outline.language === "de" ? "Konzeptentwurf mit Quellenbelegen erstellt. Fachliche Prüfung und Freigabe stehen aus."

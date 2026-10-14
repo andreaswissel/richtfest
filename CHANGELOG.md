@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Acoustic reports now consolidate repeated fragments with a separate preservation check, retaining source associations and exact visual-inspection limits. Assumption-only calculated results without source provenance stay out of report tables without changing the ledger; PDF export shares only byte-identical source files' matching pages with provenance cross-references. Start a fresh Report to apply writing changes; completed drafts stay unchanged.
+
 - Report “Save as PDF” now downloads the selected revision directly, including its original attachments, instead of opening the browser print dialog. No new agent run is needed.
 
 - Large acoustic reports now save and verify final edits in smaller pieces, subdividing unfinished edits instead of repeating requests that exceed the output limit. Retries reuse completed edits and all drafted sections; calculation appendices stay unchanged and no longer consume editing context. Editors receive the exact section format and specific repair feedback for incomplete output or missing references. Spending limits and timeouts are unchanged.

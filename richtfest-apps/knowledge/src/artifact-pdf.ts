@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { acousticAttachmentSchema, formatSourceCitations, sourceReferenceLabel, type SourceReference } from "@richtfest/shared";
 import type { Token, Tokens } from "marked";
 
@@ -168,7 +169,9 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
   const sources = new Map(input.sources.map(s => [s.versionId.toLowerCase(), s]));
   const cited = new Set(input.sourceVersionIds.map(id => id.toLowerCase()));
   const pdfs = new Map<string, Awaited<ReturnType<typeof PDFDocument.load>>>();
-  const attachments = [];
+  const hashes = new Map<string, string>();
+  const attachments: (typeof parsed.data[number] & { source: SourceReference;
+    pdf: Awaited<ReturnType<typeof PDFDocument.load>>; hash: string })[] = [];
   for (const attachment of parsed.data) {
     const source = sources.get(attachment.versionId.toLowerCase());
     if (!source || !cited.has(attachment.versionId.toLowerCase()) || !input.readSourcePdf) throw exportError();
@@ -179,9 +182,10 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
         if (!bytes) throw exportError();
         pdf = await PDFDocument.load(bytes);
         pdfs.set(attachment.versionId, pdf);
+        hashes.set(attachment.versionId, createHash("sha256").update(bytes).digest("hex"));
       }
       if (attachment.pageEnd > pdf.getPageCount()) throw exportError();
-      attachments.push({ ...attachment, source, pdf });
+      attachments.push({ ...attachment, source, pdf, hash: hashes.get(attachment.versionId)! });
     } catch { throw exportError(); }
   }
   const fragment = async (content: string) => PDFDocument.load(await artifactPdf({
@@ -205,6 +209,31 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
     rendered.push({ title, pdf, attachments: attachments.filter(a => a.section === key) });
   }
   if (attachments.some(a => !rendered.some(s => s.attachments.includes(a)))) throw exportError();
+  // Validate every requested version above, including byte-identical aliases, before
+  // planning any omissions. Equality is of the complete original bytes, not text.
+  type Run = { attachment: typeof attachments[number]; first: number; last: number;
+    retained?: Run; pdf?: Awaited<ReturnType<typeof fragment>>; start: number };
+  const retained = new Map<string, Run>();
+  const plans = rendered.map(section => {
+    const runs: Run[] = [];
+    for (const attachment of section.attachments) {
+      for (let page = attachment.pageStart; page <= attachment.pageEnd; page++) {
+        const key = `${attachment.hash}:${page}`;
+        const target = retained.get(key);
+        let run = runs.at(-1);
+        if (!run || run.attachment !== attachment || run.retained !== target || run.last !== page - 1) {
+          run = { attachment, first: page, last: page, retained: target, start: 0 };
+          runs.push(run);
+        } else run.last = page;
+        if (!target) retained.set(key, run);
+      }
+    }
+    return { ...section, runs, start: 0 };
+  });
+  const provenance = (a: typeof attachments[number]) =>
+    `${de ? "Anlage" : "Attachment"} ${attachments.indexOf(a) + 1}: ${a.source.fileName} · v${a.source.version} · ${a.label}`
+      .replace(/\s+/g, " ").replace(/[\\`*_{}\[\]<>#|]/g, "\\$&");
+  const range = (first: number, last: number) => first === last ? `${first}` : `${first}–${last}`;
   const output = await PDFDocument.create();
   output.setTitle(safeText(input.title));
   output.setAuthor("Richtfest");
@@ -217,25 +246,57 @@ async function conceptPdf(input: ArtifactPdfInput): Promise<Buffer> {
   // Contents length can spill; calculate again until its page count stabilizes.
   let contentsCount = 1;
   let contents;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; ; attempt++) {
+    if (attempt === 10) throw exportError();
     let start = output.getPageCount() + contentsCount + 1;
-    const rows = rendered.map(s => {
-      const row = `| ${s.title} | ${start} |`;
-      start += s.pdf.getPageCount() + s.attachments.reduce((n, a) => n + a.pageEnd - a.pageStart + 1, 0);
-      return row;
+    for (const section of plans) {
+      section.start = start;
+      start += section.pdf.getPageCount();
+      for (const run of section.runs) {
+        run.start = start;
+        start += run.retained ? run.pdf?.getPageCount() ?? 1 : run.last - run.first + 1;
+      }
+    }
+    let stable = true;
+    for (const section of plans) for (const run of section.runs) {
+      if (!run.retained) continue;
+      const target = run.retained;
+      const first = target.start + run.first - target.first;
+      const reference = de
+        ? `Querverweis: ${provenance(run.attachment)} · Quellseiten ${range(run.first, run.last)}. Byte-identisches Original bereits enthalten: ${provenance(target.attachment)} · Quellseiten ${range(run.first, run.last)} · Berichtseiten ${range(first, first + run.last - run.first)}. Hier nicht erneut angehängt.`
+        : `Cross-reference: ${provenance(run.attachment)} · source pages ${range(run.first, run.last)}. Byte-identical original already included: ${provenance(target.attachment)} · source pages ${range(run.first, run.last)} · report pages ${range(first, first + run.last - run.first)}. Not attached again here.`;
+      const pdf = await fragment(reference);
+      if (pdf.getPageCount() !== (run.pdf?.getPageCount() ?? 1)) stable = false;
+      run.pdf = pdf;
+    }
+    const rows = plans.map(s => {
+      return `| ${s.title} | ${s.start} |`;
     });
     contents = await fragment(`## ${de ? "Inhaltsverzeichnis" : "Contents"}\n\n| ${de ? "Abschnitt" : "Section"} | ${de ? "Seite" : "Page"} |\n| --- | --- |\n${rows.join("\n")}`);
-    if (contents.getPageCount() === contentsCount) break;
+    if (contents.getPageCount() === contentsCount && stable) break;
     contentsCount = contents.getPageCount();
   }
+  // Stable attachment numbers connect the readable cross-references to exact
+  // immutable version IDs without exposing raw UUIDs in the report prose.
+  output.setSubject(JSON.stringify(plans.flatMap(section => section.runs.map(run => ({
+    attachment: attachments.indexOf(run.attachment) + 1,
+    versionId: run.attachment.versionId, fileName: run.attachment.source.fileName,
+    version: run.attachment.source.version, label: run.attachment.label,
+    section: section.title, sourcePages: [run.first, run.last],
+    reportPage: run.start,
+    retainedAttachment: run.retained ? attachments.indexOf(run.retained.attachment) + 1 : null,
+    retainedReportPage: run.retained ? run.retained.start + run.first - run.retained.first : run.start,
+  })))));
   await append(contents!);
   const imported = new Map<number, { label: string; band: number }>();
-  for (const section of rendered) {
+  for (const section of plans) {
     await append(section.pdf);
-    for (const a of section.attachments) {
-      const pages = await output.copyPages(a.pdf, Array.from({ length: a.pageEnd - a.pageStart + 1 }, (_, i) => a.pageStart - 1 + i));
+    for (const run of section.runs) {
+      if (run.retained) { await append(run.pdf!); continue; }
+      const a = run.attachment;
+      const pages = await output.copyPages(a.pdf, Array.from({ length: run.last - run.first + 1 }, (_, i) => run.first - 1 + i));
       pages.forEach((page, i) => {
-        const label = `${a.source.fileName} · v${a.source.version} · ${de ? "Seite" : "page"} ${a.pageStart + i} · ${a.label}`.replace(/\s+/g, " ");
+        const label = `${a.source.fileName} · v${a.source.version} · ${de ? "Seite" : "page"} ${run.first + i} · ${a.label}`.replace(/\s+/g, " ");
         if (page.getWidth() <= 96) throw exportError();
         const band = Math.max(64, 44 + Math.ceil((label.length + 29) * 8 / (page.getWidth() - 96)) * 10);
         imported.set(output.getPageCount(), { label, band });
