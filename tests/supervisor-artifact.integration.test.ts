@@ -117,7 +117,8 @@ test("authoring reconciles false inspection claims against scoped receipts witho
   expect(calls).toHaveLength(count);
 });
 
-test("appendix recovery bounds only missing evidence, retains non-prefix pieces and resumes packets without loss", async () => {
+for (const section of ["calculationAppendix", "planningLaw"] as const)
+test(`${section} recovery bounds only missing evidence, retains non-prefix pieces and resumes packets without loss`, async () => {
   const id = "exterior-noise-concept" as const, keys = acousticSectionKeys(id), versionId = crypto.randomUUID();
   const fixture = acousticConceptFixture(id, "en", versionId);
   const pages = Array.from({ length: 52 }, (_, i) => `[Page ${i + 1}] Room ${i + 1}: ${"ä| Evidence remains unverified. ".repeat(180)}\n`);
@@ -135,12 +136,12 @@ test("appendix recovery bounds only missing evidence, retains non-prefix pieces 
     checkpoint: async (value: any) => { draft = structuredClone(value); if (stopOutline) throw new Error("Outline saved"); },
     call: async (context: any) => {
       if (context.documentTask === "outline") return { id, title: "Recovery fixture", language: "en", project: fixture.project,
-        sections: keys.map(key => ({ key, sources: key === "calculationAppendix" ? [{ versionId, pageStart: 1, pageEnd: 52 }] : [] })), attachments: [] };
+        sections: keys.map(key => ({ key, sources: key === section ? [{ versionId, pageStart: 1, pageEnd: 52 }] : [] })), attachments: [] };
       const editorial = unchangedEditorial(context);
       if (editorial) return editorial;
-      expect(context.section).toBe("calculationAppendix");
+      expect(context.section).toBe(section);
       expect(Buffer.byteLength(JSON.stringify(context.sources))).toBeLessThanOrEqual(128 * 1024);
-      expect(context.inputMode).toBe("imported-calculation-evidence");
+      expect(context.inputMode).toBe(section === "calculationAppendix" ? "imported-calculation-evidence" : undefined);
       expect(context.calculationReceipts).toBeUndefined();
       if (context.batch === 2 && interrupt) { interrupt = false; throw new Error("Worker interrupted"); }
       supplied.push(...context.sources);
@@ -152,24 +153,24 @@ test("appendix recovery bounds only missing evidence, retains non-prefix pieces 
   const roots = batchSectionSources(evidence, 220000);
   expect(roots).toHaveLength(2);
   const retained = { content: roots[1]!.map(s => s.text).join(""), citations: [versionId], complete: true };
-  draft.sections = Object.fromEntries(keys.map(key => [key, key === "calculationAppendix"
+  draft.sections = Object.fromEntries(keys.map(key => [key, key === section
     ? { inputHash: createHash("sha256").update(JSON.stringify(roots)).digest("hex"), byteLimit: 220000, parts: [null, retained] }
     : { inputHash: createHash("sha256").update("[[]]").digest("hex"), parts: [{ content: `Saved ${key}`, citations: [], complete: true }] }]));
   const originals = structuredClone(draft.sections);
   await expect(authorAcousticConcept({ ...input, draft })).rejects.toThrow("Worker interrupted");
-  expect(draft.sections.calculationAppendix.fallbacks[0]).toHaveLength(1);
-  const savedPacket = structuredClone(draft.sections.calculationAppendix.fallbacks[0][0]);
+  expect(draft.sections[section].fallbacks[0]).toHaveLength(1);
+  const savedPacket = structuredClone(draft.sections[section].fallbacks[0][0]);
   const result = await authorAcousticConcept({ ...input, draft });
-  expect(draft.sections.calculationAppendix.parts[1]).toEqual(retained);
-  expect(draft.sections.calculationAppendix.fallbacks[0][0]).toEqual(savedPacket);
-  for (const key of keys.filter(k => k !== "calculationAppendix")) expect(draft.sections[key]).toEqual(originals[key]);
+  expect(draft.sections[section].parts[1]).toEqual(retained);
+  expect(draft.sections[section].fallbacks[0][0]).toEqual(savedPacket);
+  for (const key of keys.filter(k => k !== section)) expect(draft.sections[key]).toEqual(originals[key]);
   expect(supplied.map(s => s.text).join("") + retained.content).toBe(text);
   let offset = 0;
   for (const s of supplied) {
     expect(s.textRange).toEqual({ startByte: offset, endByte: offset + Buffer.byteLength(s.text), totalBytes: Buffer.byteLength(text) });
     offset += Buffer.byteLength(s.text);
   }
-  const body = (result.document.template as any).calculationAppendix;
+  const body = (result.document.template as any)[section];
   for (const page of pages) expect(body).toContain(page.trimEnd());
   const before = supplied.length;
   await authorAcousticConcept({ ...input, draft });
@@ -1111,9 +1112,10 @@ for (const scenario of ["serial", "parallel", "failure", "cancel", "context", "c
       expect(template.plans.replace(/\s/g, "")).toBe((pages[0]! + pages[7]!).replace(/\s/g, ""));
       expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
       if (longContext) {
-        // One initial section call, never an unchanged retry after truncation.
-        expect(pieceCalls.filter(call => !call.parentBatch).map(call => call.batch).sort()).toEqual(scenario === "context_multi" ? [1, 2] : [1]);
-        if (scenario === "context" || scenario === "context_multi") expect(calls).toHaveLength(scenario === "context_multi" ? 2 : 1);
+        // Large roots split before dispatch; small roots retain their first call
+        // and never repeat an unchanged request after truncation.
+        expect(pieceCalls.filter(call => !call.parentBatch).map(call => call.batch).sort()).toEqual(scenario === "context_multi" ? [] : [1]);
+        if (scenario === "context" || scenario === "context_multi") expect(calls).toHaveLength(scenario === "context_multi" ? pages.length : 1);
         else expect(pieceCalls.some(call => call.parentBatch === 1)).toBe(true);
       } else {
         // Each 2.5 KB page ends at a preferred line boundary within the 4 KB budget.

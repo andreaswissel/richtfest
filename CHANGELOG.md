@@ -2,7 +2,7 @@
 
 ## 2026-10-14
 
-- Acoustic reports now consolidate repeated fragments with a separate preservation check, retaining source associations and exact visual-inspection limits. Assumption-only calculated results without source provenance stay out of report tables without changing the ledger; PDF export shares only byte-identical source files' matching pages with provenance cross-references. Start a fresh Report to apply writing changes; completed drafts stay unchanged.
+- Acoustic reports now consolidate repeated fragments with a separate preservation check, retaining source associations and exact visual-inspection limits. Large unfinished narrative batches also use smaller, lossless writing packets; retries retain completed pieces without raising the spending cap. Assumption-only calculated results without source provenance stay out of report tables without changing the ledger; PDF export shares only byte-identical source files' matching pages with provenance cross-references. Start a fresh Report to apply prose changes to a completed report; existing drafts stay unchanged.
 
 - Report “Save as PDF” now downloads the selected revision directly, including its original attachments, instead of opening the browser print dialog. No new agent run is needed.
 

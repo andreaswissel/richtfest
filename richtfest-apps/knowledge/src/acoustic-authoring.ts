@@ -248,13 +248,13 @@ export async function authorAcousticConcept(input: {
           : "No imported calculation evidence selected for this section. This does not establish that the project contains no other calculation evidence.",
         citations: [], complete: true };
       }
-      // Context capacity is not a sensible spending target for an inventory.
+      // Context capacity is not a sensible spending target for any section.
       // Split only missing roots, keeping later saved pieces and legacy fallbacks.
-      const appendixBytes = Math.min(byteLimit ?? 128 * 1024, 128 * 1024);
-      if (appendix && !progress.fallbacks?.[index] && Buffer.byteLength(JSON.stringify(batch), "utf8") > appendixBytes) {
+      const packetBytes = Math.min(byteLimit ?? 128 * 1024, 128 * 1024);
+      if (!progress.fallbacks?.[index] && Buffer.byteLength(JSON.stringify(batch), "utf8") > packetBytes) {
         await savePiece(() => {
           (progress.fallbacks ??= {})[index] = [];
-          (progress.fallbackByteLimits ??= {})[index] = appendixBytes;
+          (progress.fallbackByteLimits ??= {})[index] = packetBytes;
         });
       }
       if (!part && !progress.fallbacks?.[index]) {
