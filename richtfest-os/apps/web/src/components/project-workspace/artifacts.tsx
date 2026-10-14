@@ -9,7 +9,6 @@ import { AffinityPdfPairing } from "./affinity-pdf-pairing";
 import {
   ArtifactSourceRegister,
   ArtifactExportActions,
-  ArtifactPrintDocument,
 } from "./artifact-export";
 import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
@@ -432,17 +431,8 @@ export function ArtifactPanel({
                 <div className="artifact-review-layout">
                   <div className="artifact-document-sheet">
                     <ArtifactExportActions
-                      artifact={
-                        artifact.data?.artifact || { title: "Artifact" }
-                      }
-                      revision={revision}
-                    />
-                    <ArtifactPrintDocument
-                      projectId={projectId}
-                      artifact={
-                        artifact.data?.artifact || { title: "Artifact" }
-                      }
-                      revision={revision}
+                      artifactId={artifactId}
+                      revisionId={revision.id}
                     />
                     <Badge>
                       {revision.status === "approved"

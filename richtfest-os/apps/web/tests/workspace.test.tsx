@@ -14,7 +14,10 @@ import { ArtifactPanel } from "../src/components/project-workspace/artifacts";
 import { Transcript } from "../src/components/project-workspace/transcript";
 import { isPositiveFeedback } from "../src/components/project-workspace/richtfest-celebration";
 import MarkdownContent from "../src/components/chat-markdown-content";
-import { ArtifactSourceRegister } from "../src/components/project-workspace/artifact-export";
+import {
+  ArtifactExportActions,
+  ArtifactSourceRegister,
+} from "../src/components/project-workspace/artifact-export";
 import { ProjectAnalytics } from "../src/components/project-workspace/analytics";
 import { ProjectWorkspace } from "../src/screens/project-workspace";
 import { formatSourceCitations } from "@richtfest/shared";
@@ -61,6 +64,24 @@ describe("registered OpenUI boundary", () => {
     expect(html).toContain(
       `href="/api/knowledge/artifacts/${artifactId}/revisions/${revisionId}/pdf" download`,
     );
+    // The review overlay must use the same download contract for any selected revision,
+    // rather than opening the device's print dialog or exporting the latest version.
+    for (const selectedRevision of [
+      revisionId,
+      "550e8400-e29b-41d4-a716-446655440004",
+    ]) {
+      const actions = render(
+        <ArtifactExportActions
+          artifactId={artifactId}
+          revisionId={selectedRevision}
+        />,
+      );
+      expect(actions).toContain(
+        `href="/api/knowledge/artifacts/${artifactId}/revisions/${selectedRevision}/pdf" download`,
+      );
+      expect(actions).toContain("Save as PDF");
+      expect(actions).toContain("Download this exact revision as a PDF");
+    }
   });
 
   test("Markdown concepts render tables, emphasis and trusted exact-version citations", () => {
