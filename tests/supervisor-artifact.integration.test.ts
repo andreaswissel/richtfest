@@ -7,6 +7,7 @@ import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
 import { acousticSectionKeys } from "../richtfest-shared/src/acoustic-concept";
 import { agentExecutionLimitsSchema } from "../richtfest-shared/src/agent-policy";
 import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
+import { exteriorNoiseFixture } from "./fixtures/exterior-noise";
 import { authorAcousticConcept } from "../richtfest-apps/knowledge/src/acoustic-authoring";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
@@ -37,6 +38,103 @@ function unchangedEditorial(context: any) {
   };
   if (context.documentTask === "editorial_check") return { preserved: true, issues: [] };
 }
+
+test("appendix recovery bounds only missing evidence, retains non-prefix pieces and resumes packets without loss", async () => {
+  const id = "exterior-noise-concept" as const, keys = acousticSectionKeys(id), versionId = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  const pages = Array.from({ length: 52 }, (_, i) => `[Page ${i + 1}] Room ${i + 1}: ${"ä| Evidence remains unverified. ".repeat(180)}\n`);
+  const text = pages.join("");
+  const evidence = [{ versionId, name: "Calculations.pdf", version: 3, text,
+    coverage: undefined, retrieval: undefined, extractionNotes: undefined }];
+  let draft: any, stopOutline = true, interrupt = true;
+  const supplied: any[] = [];
+  const input = {
+    d: { resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Calculations.pdf", version: 3 },
+      content: { status: "available", text } }) } as any,
+    projectId: crypto.randomUUID(), id, goal: "Preserve calculation evidence", findings: [], sourceVersionIds: [versionId],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 32000, maxParallel: 2, inputByteBudget: 800000,
+    assertActive: async () => {},
+    checkpoint: async (value: any) => { draft = structuredClone(value); if (stopOutline) throw new Error("Outline saved"); },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Recovery fixture", language: "en", project: fixture.project,
+        sections: keys.map(key => ({ key, sources: key === "calculationAppendix" ? [{ versionId, pageStart: 1, pageEnd: 52 }] : [] })), attachments: [] };
+      const editorial = unchangedEditorial(context);
+      if (editorial) return editorial;
+      expect(context.section).toBe("calculationAppendix");
+      expect(Buffer.byteLength(JSON.stringify(context.sources))).toBeLessThanOrEqual(128 * 1024);
+      expect(context.inputMode).toBe("imported-calculation-evidence");
+      expect(context.calculationReceipts).toBeUndefined();
+      if (context.batch === 2 && interrupt) { interrupt = false; throw new Error("Worker interrupted"); }
+      supplied.push(...context.sources);
+      return { content: context.sources.map((s: any) => s.text).join(""), citations: [versionId], complete: true };
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow("Outline saved");
+  stopOutline = false;
+  const roots = batchSectionSources(evidence, 220000);
+  expect(roots).toHaveLength(2);
+  const retained = { content: roots[1]!.map(s => s.text).join(""), citations: [versionId], complete: true };
+  draft.sections = Object.fromEntries(keys.map(key => [key, key === "calculationAppendix"
+    ? { inputHash: createHash("sha256").update(JSON.stringify(roots)).digest("hex"), byteLimit: 220000, parts: [null, retained] }
+    : { inputHash: createHash("sha256").update("[[]]").digest("hex"), parts: [{ content: `Saved ${key}`, citations: [], complete: true }] }]));
+  const originals = structuredClone(draft.sections);
+  await expect(authorAcousticConcept({ ...input, draft })).rejects.toThrow("Worker interrupted");
+  expect(draft.sections.calculationAppendix.fallbacks[0]).toHaveLength(1);
+  const savedPacket = structuredClone(draft.sections.calculationAppendix.fallbacks[0][0]);
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(draft.sections.calculationAppendix.parts[1]).toEqual(retained);
+  expect(draft.sections.calculationAppendix.fallbacks[0][0]).toEqual(savedPacket);
+  for (const key of keys.filter(k => k !== "calculationAppendix")) expect(draft.sections[key]).toEqual(originals[key]);
+  expect(supplied.map(s => s.text).join("") + retained.content).toBe(text);
+  let offset = 0;
+  for (const s of supplied) {
+    expect(s.textRange).toEqual({ startByte: offset, endByte: offset + Buffer.byteLength(s.text), totalBytes: Buffer.byteLength(text) });
+    offset += Buffer.byteLength(s.text);
+  }
+  const body = (result.document.template as any).calculationAppendix;
+  for (const page of pages) expect(body).toContain(page.trimEnd());
+  const before = supplied.length;
+  await authorAcousticConcept({ ...input, draft });
+  expect(supplied).toHaveLength(before);
+});
+
+for (const language of ["de", "en"] as const)
+test(`receipt-only appendix renders exact arithmetic and unsupported gaps without a writing call: ${language}`, async () => {
+  const id = "exterior-noise-concept" as const, versionId = crypto.randomUUID();
+  const receipt = { ...calculateAcoustics({ method: "sum_sound_levels", receiver: "North | <facade>", weighting: "A", period: "Day", uncorrelatedSources: true,
+    sources: [{ label: "Road", levelDb: 60, provenance: { kind: "source", versionId, page: 7, excerpt: "Measured: 60 dB(A)." } },
+      { label: "Plant", levelDb: 70, provenance: { kind: "assumption", reason: "Synthetic assumption; validate before use." } }],
+  }), receiptId: crypto.randomUUID() };
+  const unsupported = { ...calculateAcoustics({ ...exteriorNoiseFixture(), envelopeComplete: false }), receiptId: crypto.randomUUID() };
+  let draft: any;
+  const input = { d: {} as any, projectId: crypto.randomUUID(), id, goal: "Receipt-only report", findings: [], sourceVersionIds: [versionId],
+    calculationReceipts: [receipt, unsupported], limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 32000, maxParallel: 1,
+    assertActive: async () => {}, checkpoint: async (value: any) => { draft = structuredClone(value); },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Receipt fixture", language,
+        project: acousticConceptFixture(id, language, versionId).project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [] })), attachments: [] };
+      const editorial = unchangedEditorial(context);
+      if (editorial) return editorial;
+      expect(context.section).not.toBe("calculationAppendix");
+      return { content: "Unreviewed fixture", citations: [], complete: true };
+    },
+  };
+  const result = await authorAcousticConcept(input);
+  const body = (result.document.template as any).calculationAppendix;
+  expect(body).toContain("70.41392685158225 dB(A)");
+  expect(body).toContain(language === "de" ? "Fachlich ungeprüft" : "Not reviewed");
+  expect(body).toContain(`[${versionId}] · ${language === "de" ? "Seite" : "Page"} 7`);
+  expect(body).toContain("Synthetic assumption; validate before use.");
+  expect(body).toContain("Room exterior envelope is incomplete");
+  expect(body).toContain(language === "de" ? "Nicht unterstützt – kein Rechenergebnis" : "Unsupported – no calculated result");
+  expect(body).not.toContain(receipt.receiptId);
+  expect(body).toContain("North \\| \\<facade\\>");
+  expect(result.citations).toEqual([versionId]);
+  const resumed = await authorAcousticConcept({ ...input, draft });
+  expect(resumed.document).toEqual(result.document);
+  await expect(authorAcousticConcept({ ...input, draft, sourceVersionIds: [] })).rejects.toThrow("Calculation input cites a source outside this report");
+});
 
 for (const scenario of ["findings", "unrelated", "foreign", "receipt", "legacy", "legacy_fallback"] as const)
 test(`open issues use saved findings without widening evidence or replacing saved pieces: ${scenario}`, async () => {
@@ -399,22 +497,27 @@ test("concept sections repair omitted allowed references but reject out-of-scope
     coverage: { limited: true as const, maxEntries: 4 as const, maxCharsPerEntry: 2000 as const },
   };
   for (const citation of [undefined, versionId, receipt.receiptId, knowledge.entries[0]!.id, crypto.randomUUID()]) {
-    const result = authorAcousticConcept({ d: {} as any, projectId: crypto.randomUUID(), id: "exterior-noise-concept",
+    const result = authorAcousticConcept({ d: { resolveSource: async () => ({ status: "resolved",
+      source: { versionId, name: "Imported calculations", version: 1 },
+      content: { status: "available", text: "[Page 2] Imported unverified result: 52 dB." } }) } as any,
+      projectId: crypto.randomUUID(), id: "exterior-noise-concept",
       goal: "Document source-backed arithmetic", findings: [], sourceVersionIds: [versionId], calculationReceipts: [receipt],
       companyKnowledge: [knowledge],
       limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
       assertActive: async () => {}, checkpoint: async () => {},
       call: async context => {
-        expect(context.companyKnowledge).toEqual([knowledge]);
+        if (context.section !== "calculationAppendix") expect(context.companyKnowledge).toEqual([knowledge]);
         const editorial = unchangedEditorial(context);
         if (editorial) return editorial;
         if (context.documentTask === "outline") return { id: "exterior-noise-concept", title: "Acoustic arithmetic", language: "en",
           project: { name: "Synthetic project", number: null, client: null, designer: null, author: null, date: null },
-          sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key, sources: [] })), attachments: [],
+          sections: acousticSectionKeys("exterior-noise-concept").map(key => ({ key,
+            sources: key === "calculationAppendix" ? [{ versionId, pageStart: 2, pageEnd: 2 }] : [] })), attachments: [],
         };
         if (context.section !== "calculationAppendix") return { content: "Company acoustic guidance: Arithmetic does not establish regulatory applicability.", citations: [], complete: true };
-        const [saved] = context.calculationReceipts as typeof receipt[];
-        return { content: `Tool result: ${saved!.value.toFixed(3)} ${saved!.unit} [${citation ?? versionId}]. Inputs and applicability require review.`, citations: citation ? [citation] : [], complete: true };
+        expect(context.calculationReceipts).toBeUndefined();
+        expect(context.companyKnowledge).toBeUndefined();
+        return { content: `Imported unverified result: 52 dB [${citation ?? versionId}].`, citations: citation ? [citation] : [], complete: true };
       },
     });
     if (citation && citation !== versionId) await expect(result).rejects.toMatchObject({
@@ -423,7 +526,8 @@ test("concept sections repair omitted allowed references but reject out-of-scope
     });
     else {
       const report = await result;
-      expect(report.document.content).toContain(`70.414 dB(A) [${versionId}]`);
+      expect(report.document.content).toContain(`Imported unverified result: 52 dB [${versionId}]`);
+      expect(report.document.content).toContain("70.41392685158225 dB(A)");
       expect(report.document.content).toContain("tool calculations remain subject to specialist review");
       expect(report.document.content).toContain("Company acoustic guidance");
       expect(report.citations).toEqual([versionId]);
@@ -610,8 +714,9 @@ integration("acoustic reports preserve oversized sections and resume old charact
           await stepSupervisor(d, runId);
           const savedSections = (saved!.review as any).documentDraft.sections;
           // A sibling may finish its call but lose the lease before saving it.
-          // Retry starts at the first unsaved piece, not the failed section.
-          expect(calls.slice(before)[0]).toBe(keys.find(key => !savedSections[key]?.parts[0]));
+          // Its model-step receipt can still replay without another provider call.
+          for (const section of calls.slice(before).filter(key => keys.includes(key as any)))
+            expect(savedSections[section]?.parts[0]).toBeFalsy();
           for (const completed of ["plan", "specialist", "outline", "preliminaryRemarks"])
             expect(calls.filter(call => call === completed)).toHaveLength(1);
         }
@@ -623,7 +728,8 @@ integration("acoustic reports preserve oversized sections and resume old charact
           expect(revisions).toHaveLength(1);
           if (large) {
             expect(revisions[0]!.content.length).toBeGreaterThan(60000);
-            expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 1) * 180);
+            // The empty calculation appendix is now application-authored, not model prose.
+            expect(revisions[0]!.content.match(/Detailed evidence gap;/g)).toHaveLength((keys.length - 2) * 180);
           }
           if (scenario === "characters") {
             const components = (revisions[0]!.payload as any).template.components;

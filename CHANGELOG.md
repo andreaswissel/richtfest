@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Calculation appendices now render saved arithmetic directly, keeping exact inputs, results and review limits. Imported evidence uses smaller, saved writing packets and a lower output allowance; retries retain completed report pieces without raising spending limits or changing models.
+
 - Restored the full automated test suite with current invitation, agent recovery and source-evidence expectations. Repeated API checks no longer offboard shared demo users or share authentication rate-limit counters; application behavior is unchanged.
 
 - Parallel agent calls now wait for temporary spending reservations instead of failing, with exact waiting and stop reasons in activity and recovery previews. Unfinished report Open issues reuse saved specialist findings; outstanding visual checks remain explicit in the report without becoming unsupported section citations. Saved work and spending limits are preserved.

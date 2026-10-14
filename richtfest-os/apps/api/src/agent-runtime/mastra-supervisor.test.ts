@@ -285,6 +285,29 @@ test("concept authoring accepts outline, section, editorial and preservation con
   }
 });
 
+test("appendix inventory limits effective output reservations without changing models or other report tasks", async () => {
+  for (const maxOutputTokens of [2048, 32000]) for (const section of ["calculationAppendix", "components"]) {
+    let settings: any, prepared: any;
+    const output = { content: "Source calculations remain unverified.", citations: [], complete: true };
+    const result = await callMastraSupervisor({ ...base, phase: "review", goal: "Create exterior-noise-concept",
+      modelConfig: { modelId: "gpt-6-astra", maxOutputTokens, maxSteps: 4, reasoningEffort: "medium" },
+      context: { documentTask: "section", section, inputMode: "imported-calculation-evidence",
+        documentTemplate: { id: "exterior-noise-concept", version: 1 }, sources: [] },
+      onRequest: async value => { settings = value; }, onPrepared: async value => { prepared = value; return undefined; },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: options => {
+        expect(options.maxOutputTokens).toBe(section === "calculationAppendix" ? Math.min(maxOutputTokens, 6000) : maxOutputTokens);
+        expect(options.tools ?? []).toHaveLength(0);
+      },
+    }) });
+    expect(result).toEqual(output);
+    expect(settings.modelId).toBe("gpt-6-astra");
+    expect(settings.maxOutputTokens).toBe(section === "calculationAppendix" ? Math.min(maxOutputTokens, 6000) : maxOutputTokens);
+    expect(prepared.tools).toBeUndefined();
+    expect(settings.maxSteps).toBe(section === "calculationAppendix" ? 1 : 4);
+  }
+});
+
 test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
   const versionId = crypto.randomUUID();
   const template = {

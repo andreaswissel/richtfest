@@ -4,7 +4,7 @@ import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
   acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
-  acousticEditorialOutputSchema, acousticEditorialCheckSchema,
+  acousticEditorialOutputSchema, acousticEditorialCheckSchema, renderAcousticCalculationReceipts,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -17,7 +17,8 @@ export type AcousticDraft = {
   inputHash: string;
   outline: Outline;
   inputByteBudget?: number;
-  sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]>; inputMode?: "specialist-findings" }>;
+  sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]>;
+    fallbackByteLimits?: Record<number, number>; inputMode?: "specialist-findings" }>;
   previousReview?: unknown;
   editorial?: {
     inputHash: string;
@@ -145,9 +146,9 @@ export async function authorAcousticConcept(input: {
     }
     // Keep new arithmetic together in the appendix, separate from source claims.
     const calculationReceipts = key === "calculationAppendix" ? input.calculationReceipts ?? [] : [];
-    const calculationSourceIds = calculationReceipts.flatMap(receipt =>
-      acousticInputProvenance(receipt.input).flatMap(p => p.kind === "source" && sourceIds.has(p.versionId) ? [p.versionId] : []),
-    );
+    const appendix = key === "calculationAppendix";
+    // Keep the original context for legacy root-batch identity. Actual appendix
+    // calls below receive only imported evidence; arithmetic is rendered in code.
     const sectionContext = {
       documentTask: "section", documentTemplate: { id, version: 1 }, section: key,
       project: outline.project, language: outline.language,
@@ -176,7 +177,7 @@ export async function authorAcousticConcept(input: {
     const requestPart = async (batch: typeof batches[number], batchNumber: number, batchCount: number, splitOnTruncation: boolean, parentBatch?: number) => {
       await input.assertActive();
       if (stopped) throw new Error("Section drafting stopped after a sibling failure.");
-      const allowed = new Set([...batch.map(source => source.versionId), ...calculationSourceIds,
+      const allowed = new Set([...batch.map(source => source.versionId),
         ...(useFindings ? findingSourceIds : [])]);
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
         if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
@@ -190,15 +191,34 @@ export async function authorAcousticConcept(input: {
         // added reference already appears in the text AND this piece's evidence.
         part.citations = [...new Set([...part.citations, ...inline])];
       });
+      const { calculationReceipts: _receipts, companyKnowledge: _knowledge, ...appendixContext } = sectionContext;
       return partSchema.parse(await input.call({
-        ...sectionContext, sources: batch, sourceVersionIds: [...allowed], batch: batchNumber, batchCount,
+        ...(appendix ? { ...appendixContext, inputMode: "imported-calculation-evidence",
+          attachments: sectionContext.attachments.filter(a => allowed.has(a.versionId)) } : sectionContext),
+        sources: batch, sourceVersionIds: [...allowed], batch: batchNumber, batchCount,
         ...(byteLimit === undefined ? {} : { splitOnTruncation, parentBatch }),
       }, value => partSchema.parse(value)));
     };
     const writePiece = async (index: number) => {
       const batch = batches[index]!;
       let part: Part | undefined;
-      if (!progress.fallbacks?.[index]) {
+      if (appendix && !batch.length) {
+        // A source-free appendix needs no inference, even when receipts exist.
+        part = { content: outline.language === "de"
+          ? "Keine importierten Berechnungsnachweise für diesen Abschnitt ausgewählt. Dies belegt nicht, dass das Projekt keine weiteren Nachweise enthält."
+          : "No imported calculation evidence selected for this section. This does not establish that the project contains no other calculation evidence.",
+        citations: [], complete: true };
+      }
+      // Context capacity is not a sensible spending target for an inventory.
+      // Split only missing roots, keeping later saved pieces and legacy fallbacks.
+      const appendixBytes = Math.min(byteLimit ?? 128 * 1024, 128 * 1024);
+      if (appendix && !progress.fallbacks?.[index] && Buffer.byteLength(JSON.stringify(batch), "utf8") > appendixBytes) {
+        await savePiece(() => {
+          (progress.fallbacks ??= {})[index] = [];
+          (progress.fallbackByteLimits ??= {})[index] = appendixBytes;
+        });
+      }
+      if (!part && !progress.fallbacks?.[index]) {
         try { part = await requestPart(batch, index + 1, batches.length, byteLimit !== undefined); }
         catch (error) {
           const metadata = error as { failureCategory?: string; diagnostics?: unknown };
@@ -208,7 +228,10 @@ export async function authorAcousticConcept(input: {
         }
       }
       if (!part?.complete) {
-        const smaller = batchSpecialistSources(batch.map(source => ({ ...source, truncated: source.extractionTruncated })), legacyLimit);
+        const fallbackBytes = progress.fallbackByteLimits?.[index];
+        const smaller = fallbackBytes === undefined
+          ? batchSpecialistSources(batch.map(source => ({ ...source, truncated: source.extractionTruncated })), legacyLimit)
+          : batchSectionSources(batch.map(source => ({ ...source, truncated: source.extractionTruncated })), fallbackBytes);
         if (smaller.length < 2) invalid(["complete"], "The section piece is incomplete within its configured output budget.");
         if (!progress.fallbacks?.[index]) await savePiece(() => { (progress.fallbacks ??= {})[index] = []; });
         const parts = progress.fallbacks![index]!;
@@ -251,6 +274,14 @@ export async function authorAcousticConcept(input: {
     const progress = draft.sections[key]!;
     bodies[key] = progress.parts.map(part => part!.content).join("\n\n");
     for (const part of progress.parts) for (const citation of part!.citations) citations.add(citation);
+  }
+  if (input.calculationReceipts?.length) {
+    for (const receipt of input.calculationReceipts) for (const p of acousticInputProvenance(receipt.input)) {
+      if (p.kind !== "source") continue;
+      if (!sourceIds.has(p.versionId)) invalid(["calculationReceipts"], "Calculation input cites a source outside this report.");
+      citations.add(p.versionId);
+    }
+    bodies.calculationAppendix += `\n\n${renderAcousticCalculationReceipts(input.calculationReceipts, outline.language)}`;
   }
   const template = acousticConceptTemplateSchema.parse({ id, version: 1, language: outline.language,
     project: outline.project, attachments: outline.attachments, ...bodies });

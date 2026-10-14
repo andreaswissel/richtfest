@@ -123,3 +123,42 @@ export const acousticCalculationResultSchema = z.object({
 export type AcousticCalculationResult = z.infer<typeof acousticCalculationResultSchema>;
 export const acousticCalculationReceiptSchema = acousticCalculationResultSchema.extend({ receiptId: z.string().uuid() });
 export type AcousticCalculationReceipt = z.infer<typeof acousticCalculationReceiptSchema>;
+
+/** Render saved arithmetic, never ask a writer to recalculate or transcribe it. */
+export function renderAcousticCalculationReceipts(receipts: AcousticCalculationReceipt[], language: "de" | "en") {
+  const t = (de: string, en: string) => language === "de" ? de : en;
+  const cell = (value: unknown) => String(value ?? "—").replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ");
+  const fields = (value: unknown, path = ""): string[] => {
+    if (value && typeof value === "object") {
+      if ("kind" in value && value.kind === "source") {
+        const p = provenance.parse(value);
+        if (p.kind === "source") return [`| ${cell(path)} | [${p.versionId}] · ${t("Seite", "Page")} ${p.page ?? "—"} · ${cell(p.excerpt)} |`];
+      }
+      if ("kind" in value && value.kind === "assumption") {
+        const p = provenance.parse(value);
+        if (p.kind === "assumption") return [`| ${cell(path)} | ${t("Annahme", "Assumption")}: ${cell(p.reason)} |`];
+      }
+      return Object.entries(value).flatMap(([key, child]) => fields(child, path ? `${path}.${key}` : key));
+    }
+    return [`| ${cell(path)} | ${cell(value)} |`];
+  };
+  const table = (heading: string, rows: string[]) => `**${heading}**\n\n| ${t("Feld", "Field")} | ${t("Wert", "Value")} |\n| --- | --- |\n${rows.join("\n")}`;
+  return receipts.map((raw, index) => {
+    const receipt = acousticCalculationReceiptSchema.parse(raw);
+    return [
+      `**${t("Werkzeugberechnung", "Tool calculation")} ${index + 1} · ${cell(receipt.method)}**`,
+      `${cell(receipt.engine)} · v${receipt.version} · ${t("Fachlich ungeprüft; kein Konformitätsnachweis oder Freigabe.", "Not reviewed; not a compliance verification or approval.")}`,
+      table(t("Gespeichertes Ergebnis", "Saved result"), [
+        `| ${t("Status", "Status")} | ${receipt.status === "unsupported" ? t("Nicht unterstützt – kein Rechenergebnis", "Unsupported – no calculated result") : t("Berechnet, ungeprüft", "Calculated, unreviewed")} |`,
+        `| ${t("Ergebnis", "Result")} | ${receipt.value === null ? "—" : `${receipt.value} ${cell(receipt.unit)}`} |`,
+        `| ${t("Formel", "Formula")} | ${cell(receipt.formula)} |`,
+        `| ${t("Methodenreferenz", "Method reference")} | ${cell(receipt.reference)} |`,
+      ]),
+      table(t("Eingaben und Herkunft (gespeicherte Feldnamen)", "Inputs and provenance (saved field names)"), fields(receipt.input)),
+      ...(receipt.intermediates.length ? [table(t("Zwischenergebnisse", "Intermediate results"), receipt.intermediates.map(row =>
+        `| ${cell(row.label)} | ${row.value} ${cell(row.unit)} |`))] : []),
+      ...(receipt.exteriorNoise ? [table(t("Numerischer Vergleich (ungeprüft)", "Numerical comparison (unreviewed)"), fields(receipt.exteriorNoise))] : []),
+      `**${t("Grenzen und Prüfbedarf", "Limitations and required review")}**\n\n${receipt.limitations.map(value => `- ${cell(value)}`).join("\n")}`,
+    ].join("\n\n");
+  }).join("\n\n");
+}

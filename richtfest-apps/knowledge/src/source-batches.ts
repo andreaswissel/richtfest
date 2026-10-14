@@ -45,20 +45,22 @@ export function batchSpecialistSources<T extends { text: string; truncated?: boo
 }
 
 /** Pack complete saved pages against serialized input size, without a file-count cap. */
-export function batchSectionSources<T extends { text: string; truncated?: boolean }>(sources: T[], byteLimit: number,
+export function batchSectionSources<T extends { text: string; truncated?: boolean; textRange?: { startByte: number; endByte: number; totalBytes: number } }>(sources: T[], byteLimit: number,
   sizeOf: (batch: T[]) => number = batch => Buffer.byteLength(JSON.stringify(batch), "utf8")) {
   type Slice = ReturnType<typeof batchSpecialistSources<T>>[number][number];
   const batches: Slice[][] = [];
   let batch: Slice[] = [];
   for (const source of sources) {
     const totalBytes = Buffer.byteLength(source.text, "utf8");
+    const offset = source.textRange?.startByte ?? 0;
+    const originalBytes = source.textRange?.totalBytes ?? totalBytes;
     let startByte = 0;
     // Saved PDF extraction puts an original page marker at the start of a line.
     for (const text of source.text.split(/(?=^\[Page \d+\])/m).filter(Boolean)) {
       const endByte = startByte + Buffer.byteLength(text, "utf8");
       const page: Slice = { ...source, text, extractionTruncated: source.truncated === true,
-        truncated: source.truncated || startByte > 0 || endByte < totalBytes,
-        textRange: { startByte, endByte, totalBytes } };
+        truncated: source.truncated || offset + startByte > 0 || offset + endByte < originalBytes,
+        textRange: { startByte: offset + startByte, endByte: offset + endByte, totalBytes: originalBytes } };
       let pieces = [page];
       if (sizeOf([page]) > byteLimit) {
         // An oversized page/text-only source still needs a lossless UTF-8 split.
@@ -67,7 +69,7 @@ export function batchSectionSources<T extends { text: string; truncated?: boolea
         if (allowance < 4) throw new Error("Source metadata exceeds the model input budget.");
         pieces = batchSpecialistSources([page], allowance).flat().map(piece => ({ ...piece,
           extractionTruncated: page.extractionTruncated,
-          textRange: { startByte: startByte + piece.textRange.startByte, endByte: startByte + piece.textRange.endByte, totalBytes },
+          textRange: { startByte: offset + startByte + piece.textRange.startByte, endByte: offset + startByte + piece.textRange.endByte, totalBytes: originalBytes },
         }));
       }
       for (const piece of pieces) {
