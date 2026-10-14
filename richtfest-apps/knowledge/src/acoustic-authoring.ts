@@ -4,7 +4,7 @@ import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
   acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
-  acousticEditorialOutputSchema, acousticEditorialCheckSchema, renderAcousticCalculationReceipts,
+  acousticEditorialOutputSchema, acousticEditorialPacketOutputSchema, acousticEditorialCheckSchema, renderAcousticCalculationReceipts,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -358,12 +358,16 @@ export async function authorAcousticConcept(input: {
           delete saved.check;
         }
         const references = inlineIds(original);
-        const packetSchema = acousticEditorialOutputSchema.superRefine((edit, ctx) => {
-          if (!edit.complete || edit.sections.length !== 1 || edit.sections[0]?.key !== key)
-            ctx.addIssue({ code: "custom", path: ["sections"], message: "Return the complete requested editorial packet only." });
+        const packetSchema = acousticEditorialPacketOutputSchema(key).superRefine((edit, ctx) => {
+          if (!edit.complete)
+            ctx.addIssue({ code: "custom", path: ["complete"], message: "The editorial packet is incomplete.",
+              params: { editorial: { reason: "incomplete" } } });
           const next = inlineIds(edit);
-          if ([...references].some(ref => !next.has(ref)) || [...next].some(ref => !references.has(ref)))
-            ctx.addIssue({ code: "custom", path: ["sections"], message: "Preserve this packet's source references without adding identifiers." });
+          const missingReferences = [...references].filter(ref => !next.has(ref));
+          const addedReferences = [...next].filter(ref => !references.has(ref));
+          if (missingReferences.length || addedReferences.length)
+            ctx.addIssue({ code: "custom", path: ["sections", 0, "content"], message: "Preserve this packet's source references without adding identifiers.",
+              params: { editorial: { reason: "references", missingReferences, addedReferences } } });
           // Validate Markdown/template constraints before paying for a checker.
           prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: {
             ...template, ...Object.fromEntries(edit.sections.map(s => [s.key, s.content])),

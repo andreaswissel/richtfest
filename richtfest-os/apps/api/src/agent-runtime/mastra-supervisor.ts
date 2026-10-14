@@ -7,7 +7,7 @@ import { toStandardSchema, standardSchemaToJSONSchema } from "@mastra/core/schem
 import { z } from "zod";
 import type { AgentModelConfig, AgentPresetSnapshot } from "@richtfest/shared";
 import { agentMessagingPolicy, componentEvidencePolicy } from "@richtfest/shared";
-import { acousticEditorialOutputSchema, acousticEditorialCheckSchema } from "@richtfest/shared";
+import { acousticEditorialOutputSchema, acousticEditorialPacketOutputSchema, acousticEditorialCheckSchema, acousticSectionKeySchema } from "@richtfest/shared";
 import { agentOutputSchemas, agentExecutionLimitsSchema, prepareAgentDocument, acousticDocumentTemplateSchema, acousticConceptOutlineSchema, acousticSectionOutputSchema, acousticConceptIdSchema, requestedAcousticConcept, sourceModelEvidencePolicy, specialistRoleSchema, agentModelInputByteBudget } from "@richtfest/shared";
 import { env } from "../env";
 import { reasoningEffortForModel } from "../provider-runtime";
@@ -248,6 +248,7 @@ export async function callMastraSupervisor(
   const team = workflow?.mode === "team";
   const executionInstructions = input.phase === "review"
     ? "Report writing and preservation checks consume supplied evidence only. Do not request new source inspection; preserve uninspected targets and coverage gaps explicitly."
+      + (packetTask === "editorial" ? " Editorial packet repair: a sections count error requires exactly one section; an invalid_literal key error gives the expected section key, also in context.sectionKeys. An incomplete issue at complete means finish all supplied packet content, not merely switch the flag to true. A references issue lists missingReferences and addedReferences: restore the original claims and their exact source associations from context.original, and remove unsupported references and claims. Never append a UUID list merely to pass validation. Missing reference diagnostics authorize no new facts; added references are rejected identifiers, not source evidence. If the full faithful edit cannot be delivered, return complete=false honestly rather than claim completion." : "")
     : input.phase === "specialist" || input.phase === "independent_review"
       ? `Your saved budget is ${modelConfig?.maxSteps ?? 1} model steps. When tools are registered, the last step is reserved for the final structured answer with no tools. Complete targeted inspection before then, finish early when evidence is sufficient, and report remaining uninspected evidence honestly.` : "";
   const workflowInstructions = team
@@ -259,12 +260,15 @@ export async function callMastraSupervisor(
   const authoring = input.phase === "review" ? z.object({ documentTask: z.enum(["outline", "section", "editorial", "editorial_check"]),
     documentTemplate: z.object({ id: acousticConceptIdSchema }) }).safeParse(input.context) : undefined;
   const authoringTask = authoring?.success ? authoring.data : undefined;
+  const packetSection = packetTask === "editorial"
+    ? z.object({ sectionKeys: z.array(acousticSectionKeySchema).length(1) }).parse(input.context).sectionKeys[0]! : undefined;
   const outputSchema = team && input.phase === "review"
     ? schemas.review.extend({ document: z.null() })
     : team && input.phase === "plan" ? schemas.plan.extend({ documentTemplate: z.null() })
     : authoringTask?.documentTask === "outline"
     ? acousticConceptOutlineSchema.extend({ id: z.literal(authoringTask.documentTemplate.id) })
     : authoringTask?.documentTask === "section" ? acousticSectionOutputSchema
+    : authoringTask?.documentTask === "editorial" && packetSection ? acousticEditorialPacketOutputSchema(packetSection)
     : authoringTask?.documentTask === "editorial" ? acousticEditorialOutputSchema
     : authoringTask?.documentTask === "editorial_check" ? acousticEditorialCheckSchema
     : requireSoundInsulation

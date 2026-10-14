@@ -1,4 +1,5 @@
 import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt, SourceVisualRequest, SourceVisual } from "@richtfest/shared";
+import { acousticSectionKeySchema } from "@richtfest/shared";
 
 /** Defense in depth; adapters also remove the actual credential and known input text. */
 export function redactProviderDiagnosticText(text: string) {
@@ -47,7 +48,24 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
       const number = issue[key];
       if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 200000) limits[key] = number;
     }
+    // Preserve actionable packet errors, never rejected prose or arbitrary Zod
+    // params. Accept the sanitized form too: diagnostics cross several layers.
+    const details = (issue.params as { editorial?: unknown } | undefined)?.editorial ?? issue.editorial;
+    let editorial: { reason: "incomplete" | "references"; missingReferences?: string[]; addedReferences?: string[] } | undefined;
+    if (issue.code === "custom" && details && typeof details === "object") {
+      const data = details as Record<string, unknown>;
+      if (data.reason === "incomplete" && JSON.stringify(issue.path) === '["complete"]') editorial = { reason: "incomplete" };
+      if (data.reason === "references" && JSON.stringify(issue.path) === '["sections",0,"content"]') {
+        const refs = (value: unknown) => Array.isArray(value) ? value.slice(0, 100).filter((id): id is string => typeof id === "string"
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) : [];
+        editorial = { reason: "references", missingReferences: refs(data.missingReferences), addedReferences: refs(data.addedReferences) };
+      }
+    }
+    const sectionKey = issue.code === "invalid_literal" && issue.path[0] === "sections" && issue.path[2] === "key";
     return [{ code: issue.code as string, path: issue.path as (string | number)[], ...limits,
+      ...(editorial ? { editorial } : {}),
+      ...(sectionKey && acousticSectionKeySchema.safeParse(issue.expected).success ? { expected: issue.expected as string } : {}),
+      ...(sectionKey && acousticSectionKeySchema.safeParse(issue.received).success ? { received: issue.received as string } : {}),
       ...(issue.validation === "uuid" ? { validation: "uuid" as const } : {}),
     }];
   }) : [];

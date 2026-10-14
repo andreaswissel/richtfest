@@ -5,7 +5,7 @@ import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
 import type { AppDeps } from "@richtfest/knowledge/deps";
-import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks } from "@richtfest/knowledge/schema";
+import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks, artifacts, artifactRevisions } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
 import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, companyKnowledgeSearchSchema } from "@richtfest/shared";
@@ -316,7 +316,7 @@ test("editorial packets keep the selected model with bounded writer and checker 
     let settings: any;
     expect(await callMastraSupervisor({ ...base, phase: "review", modelConfig: {
       modelId: "gpt-6-astra", maxOutputTokens, maxSteps: 4, reasoningEffort: "medium",
-    }, context: { documentTask, inputMode: "editorial-packet", documentTemplate: { id: "exterior-noise-concept", version: 1 } },
+    }, context: { documentTask, inputMode: "editorial-packet", sectionKeys: ["components"], documentTemplate: { id: "exterior-noise-concept", version: 1 } },
     onRequest: async value => { settings = value; },
     }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
       spyStream: options => { expect(options.maxOutputTokens).toBe(Math.min(maxOutputTokens, cap)); expect(options.tools ?? []).toHaveLength(0); },
@@ -738,6 +738,86 @@ for (const failure of ["summary", "citation"] as const) test.skipIf(!process.env
     await pool.end();
   }
 });
+for (const failure of ["incomplete_references", "wrong_key", "multiple_sections"] as const)
+test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} through tracked Mastra calls without redoing saved work`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), versionId = crypto.randomUUID(), foreignId = crypto.randomUUID();
+  const id = "exterior-noise-concept" as const, fixture = acousticConceptFixture(id, "en", versionId);
+  if (fixture.id !== id) throw new Error("Expected exterior noise fixture");
+  const model = { modelId: "test-model", maxOutputTokens: 32000, maxSteps: 1 };
+  const prose = `${fixture.exteriorNoiseAssessment} [${versionId}]\n\n${"Unreviewed source claims remain uncertain. ".repeat(450)}`;
+  const writerCalls: string[] = [];
+  let repaired = false;
+  const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" }, content: { status: "available", text: "Fixture" } }),
+    executeSupervisor: async (input: any) => {
+      const context = input.context;
+      if (context.documentTask === "outline") return { status: "completed", output: { id, title: "Repair fixture", language: "en", project: fixture.project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] } };
+      if (context.documentTask === "section") return { status: "completed", output: { content: context.section === "exteriorNoiseAssessment" ? prose : (fixture as any)[context.section], citations: [versionId], complete: true } };
+      expect(context.inputMode).toBe("editorial-packet");
+      const key = context.sectionKeys[0], target = key === "exteriorNoiseAssessment";
+      if (context.documentTask === "editorial") writerCalls.push(key);
+      let output: any = context.documentTask === "editorial_check" ? { preserved: true, issues: [] }
+        : { sections: [{ key, content: context.original[key] }], complete: true };
+      if (target && context.documentTask === "editorial" && !context.outputValidationFeedback) {
+        if (failure === "incomplete_references") output = { complete: false, sections: [{ key, content: `Unsupported claim [${foreignId}]` }] };
+        if (failure === "wrong_key") output.sections[0].key = "components";
+        if (failure === "multiple_sections") output.sections.push({ ...output.sections[0] });
+      }
+      if (target && context.outputValidationFeedback) {
+        const [saved] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, input.runId));
+        expect((saved!.review as any).documentDraft.editorial.packets["preliminaryRemarks:0"].check).toEqual({ preserved: true, issues: [] });
+        const issues = context.outputValidationFeedback.issues;
+        if (failure === "incomplete_references") {
+          expect(issues).toEqual([
+            { code: "custom", path: ["complete"], editorial: { reason: "incomplete" } },
+            { code: "custom", path: ["sections", 0, "content"], editorial: { reason: "references", missingReferences: [versionId], addedReferences: [foreignId] } },
+          ]);
+        } else if (failure === "wrong_key") expect(issues).toEqual([
+          { code: "invalid_literal", path: ["sections", 0, "key"], expected: "exteriorNoiseAssessment", received: "components" },
+        ]);
+        else expect(issues).toEqual([{ code: "too_big", path: ["sections"], maximum: 1 }]);
+        repaired = true;
+      }
+      return { status: "completed", output: await callMastraSupervisor({ ...input, modelConfig: model }, "test-key", {
+        model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output, spyStream: options => {
+          if (context.documentTask === "editorial") {
+            const schema: any = options.responseFormat?.schema;
+            expect(schema.properties.sections.minItems).toBe(1);
+            expect(schema.properties.sections.maxItems).toBe(1);
+            const allowed = schema.properties.sections.items.properties.key;
+            expect(allowed.const ?? allowed.enum?.[0]).toBe(key);
+          }
+          if (target && context.outputValidationFeedback) {
+            const instructions = options.prompt.filter((m: { role: string }) => m.role === "system").map((m: { content: unknown }) => m.content).join("\n");
+            expect(instructions).toContain(JSON.stringify(context.outputValidationFeedback));
+            expect(instructions).toContain("Never append a UUID list merely to pass validation");
+          }
+        } }),
+      }) };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(), goal: "Create exterior-noise-concept", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { provider: "openai", effort: "medium", version: 1, source: "workspace", supervisor: model,
+      specialists: { source_reviewer: model, requirements_reviewer: model }, independentReviewEnabled: false, maxParallel: 1, maxTasks: 1, maxRevisions: 1 });
+    await db.update(supervisorRuns).set({ phase: "review", assignments: [{ role: "source_reviewer", runId: crypto.randomUUID(), taskId: crypto.randomUUID(), sourceVersionIds: [versionId], output: { citations: [versionId] } }] }).where(eq(supervisorRuns.runId, run!.id));
+    await stepSupervisor(d, run!.id);
+    expect(repaired).toBe(true);
+    expect(writerCalls.filter(k => k === "preliminaryRemarks")).toHaveLength(1);
+    expect(writerCalls.filter(k => k === "exteriorNoiseAssessment")).toHaveLength(2);
+    const [revision] = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+    expect(revision!.content).toContain(fixture.exteriorNoiseAssessment);
+    expect(revision!.content).not.toContain(foreignId);
+    expect((revision!.payload as any).template.calculationAppendix).toBe(fixture.calculationAppendix);
+  } finally {
+    for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks]) await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+}, 20000);
+
 test("review document survives real Mastra while only the handoff streams", async () => {
   const versionId = crypto.randomUUID();
   const review = { summary: "The concept is ready for human review.", rationale: "Evidence checked", citations: [versionId], decision: "accept", revisions: [],
@@ -913,6 +993,21 @@ test("diagnostics exclude unknown paths, messages, values and unbounded numeric 
   expect(sanitizeProviderDiagnostics({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE",
     rejectedCitations: Array(101).fill(versionId),
   }).rejectedCitations).toHaveLength(100);
+  const packet = sanitizeProviderDiagnostics({ issues: [
+    { code: "custom", path: ["complete"], params: { editorial: { reason: "incomplete", secret: "sk-secret" } } },
+    { code: "custom", path: ["sections", 0, "content"], params: { editorial: {
+      reason: "references", missingReferences: [versionId, "sk-secret"], addedReferences: Array(101).fill(versionId),
+    } } },
+    { code: "invalid_literal", path: ["sections", 0, "key"], expected: "components", received: "sk-secret" },
+    { code: "custom", path: ["sections"], params: { editorial: { reason: "references", missingReferences: [versionId] } } },
+  ] });
+  expect(packet.issues?.[0]?.editorial).toEqual({ reason: "incomplete" });
+  expect(packet.issues?.[1]?.editorial?.missingReferences).toEqual([versionId]);
+  expect(packet.issues?.[1]?.editorial?.addedReferences).toHaveLength(100);
+  expect(packet.issues?.[2]).toEqual({ code: "invalid_literal", path: ["sections", 0, "key"], expected: "components" });
+  expect(packet.issues?.[3]).toEqual({ code: "custom", path: ["sections"] });
+  expect(JSON.stringify(packet)).not.toContain("sk-secret");
+  expect(sanitizeProviderDiagnostics(sanitizeProviderDiagnostics(packet))).toEqual(packet);
 });
 
 test("provider 429 diagnostics distinguish quota from throttling without retaining bodies or arbitrary headers", async () => {

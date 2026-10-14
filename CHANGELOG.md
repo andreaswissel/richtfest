@@ -2,7 +2,7 @@
 
 ## 2026-10-14
 
-- Large acoustic reports now save and verify final edits in smaller pieces. Retries reuse completed edits and all drafted sections; calculation appendices stay unchanged and no longer consume editing context. Spending limits and timeouts are unchanged.
+- Large acoustic reports now save and verify final edits in smaller pieces. Retries reuse completed edits and all drafted sections; calculation appendices stay unchanged and no longer consume editing context. Editors receive the exact section format and specific repair feedback for incomplete output or missing references. Spending limits and timeouts are unchanged.
 
 - Calculation appendices now render saved arithmetic directly, keeping exact inputs, results and review limits. Imported evidence uses smaller, saved writing packets and a lower output allowance; retries retain completed report pieces without raising spending limits or changing models.
 

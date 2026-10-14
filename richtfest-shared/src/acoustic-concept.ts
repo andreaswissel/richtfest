@@ -82,6 +82,13 @@ export const acousticEditorialOutputSchema = z.object({
   complete: z.boolean(),
 }).strict();
 
+/** Match the provider's JSON schema to the one section a packet may edit. */
+export function acousticEditorialPacketOutputSchema(key: z.infer<typeof acousticSectionKeySchema>) {
+  return acousticEditorialOutputSchema.extend({
+    sections: z.array(acousticEditorialOutputSchema.shape.sections.element.extend({ key: z.literal(key) })).length(1),
+  });
+}
+
 export const acousticEditorialCheckSchema = z.object({
   preserved: z.boolean().describe("True only if the edit retains all substantive evidence and uncertainty without new claims or calculations."),
   issues: z.array(z.string().trim().min(1).max(2000)).max(100),
