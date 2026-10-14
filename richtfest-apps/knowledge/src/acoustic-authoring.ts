@@ -25,6 +25,12 @@ export type AcousticDraft = {
     candidate?: z.infer<typeof acousticEditorialOutputSchema>;
     check?: z.infer<typeof acousticEditorialCheckSchema>;
     feedback?: z.infer<typeof acousticEditorialCheckSchema>;
+    packets?: Record<string, {
+      inputHash: string;
+      candidate?: z.infer<typeof acousticEditorialOutputSchema>;
+      check?: z.infer<typeof acousticEditorialCheckSchema>;
+      feedback?: z.infer<typeof acousticEditorialCheckSchema>;
+    }>;
   };
 };
 
@@ -297,6 +303,10 @@ export async function authorAcousticConcept(input: {
   const editorialHash = hash(editorialContext);
   if (draft.editorial?.inputHash !== editorialHash) draft.editorial = { inputHash: editorialHash };
   const editorial = draft.editorial;
+  // The hash keeps its historical contract; immutable appendix prose is not
+  // needed in an editing request. Existing paid candidates remain reusable.
+  const { calculationAppendix: _appendix, ...editableOriginal } = template;
+  const requestContext = { ...editorialContext, original: editableOriginal };
   // A rejected edit is never published. An explicit retry may regenerate it
   // with feedback, while a timeout during checking reuses the saved candidate.
   if (editorial.check && (!editorial.check.preserved || editorial.check.issues.length)) {
@@ -316,11 +326,80 @@ export async function authorAcousticConcept(input: {
       ctx.addIssue({ code: "custom", path: ["sections"], message: "Preserve source references without introducing unknown identifiers." });
     prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: edited }, id, null);
   });
+  if (editorial.packets || (!editorial.candidate && Buffer.byteLength(JSON.stringify(requestContext)) > 16 * 1024)) {
+    editorial.packets ??= {};
+    const sections: z.infer<typeof acousticEditorialOutputSchema>["sections"] = [];
+    for (const key of editableKeys) {
+      // Split only between Markdown blocks, never through a table or paragraph.
+      // An indivisible oversized block is retained verbatim, not summarized.
+      const blocks = bodies[key]!.split(/(\n{2,})/);
+      const packets: string[] = [];
+      let packet = "";
+      for (let i = 0; i < blocks.length; i += 2) {
+        const block = blocks[i]! + (blocks[i + 1] ?? "");
+        if (packet && Buffer.byteLength(packet + block) > 16 * 1024) { packets.push(packet); packet = ""; }
+        packet += block;
+      }
+      if (packet) packets.push(packet);
+      const contents: string[] = [];
+      for (const [index, original] of packets.entries()) {
+        await input.assertActive();
+        if (Buffer.byteLength(original) > 16 * 1024) { contents.push(original); continue; }
+        const context = { documentTemplate: { id, version: 1 }, documentTask: "editorial",
+          inputMode: "editorial-packet", sectionKeys: [key], sectionDirectory: editableKeys,
+          original: { id, version: 1, language: outline.language, project: outline.project, [key]: original },
+          batch: index + 1, batchCount: packets.length };
+        const packetHash = hash(context), packetKey = `${key}:${index}`;
+        let saved = editorial.packets[packetKey];
+        if (saved?.inputHash !== packetHash) saved = editorial.packets[packetKey] = { inputHash: packetHash };
+        if (saved.check && (!saved.check.preserved || saved.check.issues.length)) {
+          saved.feedback = saved.check;
+          delete saved.candidate;
+          delete saved.check;
+        }
+        const references = inlineIds(original);
+        const packetSchema = acousticEditorialOutputSchema.superRefine((edit, ctx) => {
+          if (!edit.complete || edit.sections.length !== 1 || edit.sections[0]?.key !== key)
+            ctx.addIssue({ code: "custom", path: ["sections"], message: "Return the complete requested editorial packet only." });
+          const next = inlineIds(edit);
+          if ([...references].some(ref => !next.has(ref)) || [...next].some(ref => !references.has(ref)))
+            ctx.addIssue({ code: "custom", path: ["sections"], message: "Preserve this packet's source references without adding identifiers." });
+          // Validate Markdown/template constraints before paying for a checker.
+          prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: {
+            ...template, ...Object.fromEntries(edit.sections.map(s => [s.key, s.content])),
+          } }, id, null);
+        });
+        if (!saved.candidate) {
+          await input.checkpoint(draft, "editing_document", index, packets.length);
+          saved.candidate = packetSchema.parse(await input.call({ ...context, feedback: saved.feedback }, value => packetSchema.parse(value)));
+          await input.assertActive();
+          await input.checkpoint(draft, "editing_document", index + 1, packets.length);
+        }
+        const candidate = packetSchema.parse(saved.candidate);
+        if (!saved.check) {
+          saved.check = acousticEditorialCheckSchema.parse(await input.call({ ...context, documentTask: "editorial_check",
+            edited: { ...context.original, [key]: candidate.sections[0]!.content },
+          }, value => acousticEditorialCheckSchema.parse(value)));
+          await input.assertActive();
+          await input.checkpoint(draft, "checking_editorial", index + 1, packets.length);
+        }
+        if (!saved.check.preserved || saved.check.issues.length)
+          invalid(["editorial"], "An editorial packet changed or omitted evidence. Retry to revise only the rejected packet using its saved feedback.");
+        contents.push(candidate.sections[0]!.content);
+      }
+      sections.push({ key, content: contents.join("\n\n") });
+    }
+    editorial.candidate = editSchema.parse({ sections, complete: true });
+    // Every changed packet passed its own fresh semantic comparison. Verbatim
+    // blocks and immutable fields are copied by code, not approved by a model.
+    editorial.check = { preserved: true, issues: [] };
+    await input.checkpoint(draft, "checking_editorial", 1, 1);
+  }
   await input.assertActive();
   if (!editorial.candidate) {
     await input.checkpoint(draft, "editing_document", 0, 0);
     editorial.candidate = editSchema.parse(await input.call({
-      ...editorialContext, documentTask: "editorial", feedback: editorial.feedback,
+      ...requestContext, documentTask: "editorial", feedback: editorial.feedback,
     }, value => editSchema.parse(value)));
     await input.checkpoint(draft, "editing_document", 0, 0);
   }
@@ -331,8 +410,9 @@ export async function authorAcousticConcept(input: {
     await input.checkpoint(draft, "checking_editorial", 0, 0);
     // Separate, fresh model call. A negative verdict is valid output, not a
     // schema error to retry until the reviewer happens to return approval.
+    const { calculationAppendix: _unchanged, ...editableResult } = edited;
     editorial.check = acousticEditorialCheckSchema.parse(await input.call({
-      ...editorialContext, documentTask: "editorial_check", edited,
+      ...requestContext, documentTask: "editorial_check", edited: editableResult,
     }, value => acousticEditorialCheckSchema.parse(value)));
     await input.checkpoint(draft, "checking_editorial", 0, 0);
   }

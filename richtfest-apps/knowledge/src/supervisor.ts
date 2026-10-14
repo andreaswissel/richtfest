@@ -363,6 +363,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       let retryDeadline = sameGeneration ? checkpoint.retryDeadline : retryAt > Date.now() ? Date.now() + 600000 : undefined;
       const visualOnly = !!(context as { visualRequests?: SourceVisualRequest[] }).visualRequests;
       const appendixWriter = phase === "review" && (context as { inputMode?: string }).inputMode === "imported-calculation-evidence";
+      const editorialPacket = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-packet";
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
@@ -370,7 +371,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           ? await companyKnowledgeCategories(d) : undefined,
         acousticToolsAvailable: !visualOnly && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
-        componentCatalog: appendixWriter ? undefined : await d.componentContext?.(run.goal),
+        componentCatalog: appendixWriter || editorialPacket ? undefined : await d.componentContext?.(run.goal),
         documentReview,
         workspaceGuidance: (() => {
           // Pre-existing runs retain original defaults rather than adopting later settings.

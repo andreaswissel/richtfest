@@ -308,6 +308,26 @@ test("appendix inventory limits effective output reservations without changing m
   }
 });
 
+test("editorial packets keep the selected model with bounded writer and checker output", async () => {
+  for (const maxOutputTokens of [1024, 32000]) for (const documentTask of ["editorial", "editorial_check"] as const) {
+    const cap = documentTask === "editorial" ? 6000 : 2000;
+    const output = documentTask === "editorial" ? { sections: [{ key: "components", content: "Unverified source claims." }], complete: true }
+      : { preserved: false, issues: ["A source association changed."] };
+    let settings: any;
+    expect(await callMastraSupervisor({ ...base, phase: "review", modelConfig: {
+      modelId: "gpt-6-astra", maxOutputTokens, maxSteps: 4, reasoningEffort: "medium",
+    }, context: { documentTask, inputMode: "editorial-packet", documentTemplate: { id: "exterior-noise-concept", version: 1 } },
+    onRequest: async value => { settings = value; },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: options => { expect(options.maxOutputTokens).toBe(Math.min(maxOutputTokens, cap)); expect(options.tools ?? []).toHaveLength(0); },
+    }) })).toEqual(output);
+    expect(settings.modelId).toBe("gpt-6-astra");
+    expect(settings.reasoningEffort).toBe("medium");
+    expect(settings.maxOutputTokens).toBe(Math.min(maxOutputTokens, cap));
+    expect(settings.maxSteps).toBe(1);
+  }
+});
+
 test("sound-insulation synthesis requires the fixed template and renders rather than trusting free-form content", async () => {
   const versionId = crypto.randomUUID();
   const template = {

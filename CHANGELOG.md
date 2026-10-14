@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Large acoustic reports now save and verify final edits in smaller pieces. Retries reuse completed edits and all drafted sections; calculation appendices stay unchanged and no longer consume editing context. Spending limits and timeouts are unchanged.
+
 - Calculation appendices now render saved arithmetic directly, keeping exact inputs, results and review limits. Imported evidence uses smaller, saved writing packets and a lower output allowance; retries retain completed report pieces without raising spending limits or changing models.
 
 - Restored the full automated test suite with current invitation, agent recovery and source-evidence expectations. Repeated API checks no longer offboard shared demo users or share authentication rate-limit counters; application behavior is unchanged.

@@ -323,7 +323,8 @@ test(`${id} editorial context and checkpoint resume preserve original section pi
       if (context.documentTask === "section") return { complete: true, citations: [versionId], content: (fixture as any)[context.section] };
       expect(context.previousReview).toEqual(previousReview);
       expect(context.sectionKeys).toEqual(acousticSectionKeys(id).filter(key => key !== "calculationAppendix"));
-      expect(context.original).toEqual({ ...fixture, attachments: [] });
+      const { calculationAppendix, ...editable } = fixture;
+      expect(context.original).toEqual({ ...editable, attachments: [] });
       original = context.original;
       if (context.documentTask === "editorial") return unchangedEditorial(context);
       expect(context.edited).toEqual(context.original);
@@ -336,7 +337,7 @@ test(`${id} editorial context and checkpoint resume preserve original section pi
   expect(draft.editorial.candidate.complete).toBe(true);
   expect(draft.editorial.check).toBeUndefined();
   const result = await authorAcousticConcept({ ...input, draft });
-  expect(result.document.template).toEqual(original);
+  expect(result.document.template).toEqual({ ...original, calculationAppendix: fixture.calculationAppendix });
   expect(draft.sections).toEqual(pieces);
   expect(calls.filter(task => task === "outline")).toHaveLength(1);
   expect(calls.filter(task => task === "section")).toHaveLength(acousticSectionKeys(id).length);
@@ -350,6 +351,66 @@ test(`${id} editorial context and checkpoint resume preserve original section pi
     })) };
   } })).rejects.toThrow("Preserve source references");
   expect(draft.sections).toEqual(pieces);
+});
+
+for (const scenario of ["writer_timeout", "checker_timeout", "rejected", "foreign_reference"] as const)
+test(`large editorial recovery preserves checked packets and immutable evidence: ${scenario}`, async () => {
+  const id = "exterior-noise-concept" as const, versionId = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "de", versionId);
+  const paragraphs = ["Room A-17: 33.2 dB required; 42.1 dB available.", "Room B-93: 48.7 dB required; 39.4 dB available."]
+    .map(text => `${text} [${versionId}] ${"Ungeprüfte Quellenangaben. ".repeat(340)}`);
+  const table = `| Room | Value |\n| --- | --- |\n${Array.from({ length: 1200 }, (_, i) => `| Room ${i} | ${i + 17}.3 dB |`).join("\n")}`;
+  const components = [...paragraphs, table, `Last room: 59.7 dB; not approved [${versionId}].`].join("\n\n");
+  let draft: any, interrupted = false;
+  const writers: string[] = [], checks: string[] = [];
+  const input = { d: { resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" },
+    content: { status: "available", text: "Synthetic evidence", truncated: false } }) } as any,
+    projectId: crypto.randomUUID(), id, goal: "Recover editorial packets", findings: [],
+    sourceVersionIds: [versionId], limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 32000, maxParallel: 1,
+    assertActive: async () => {}, checkpoint: async (value: any) => { draft = structuredClone(value); },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Packet recovery", language: "de", project: fixture.project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
+      if (context.documentTask === "section") return { content: context.section === "components" ? components : (fixture as any)[context.section], citations: [versionId], complete: true };
+      expect(context.inputMode).toBe("editorial-packet");
+      expect(context.original.calculationAppendix).toBeUndefined();
+      expect(context.companyKnowledge).toBeUndefined();
+      expect(context.sectionKeys).toHaveLength(1);
+      const key = context.sectionKeys[0], text = context.original[key];
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(16 * 1024);
+      const target = text.includes("Room B-93");
+      if (context.documentTask === "editorial") {
+        writers.push(text);
+        if (target && !interrupted && scenario === "writer_timeout") { interrupted = true; throw new Error("Writer timeout"); }
+        const output = unchangedEditorial(context)!;
+        if (target && !interrupted && scenario === "rejected") output.sections[0].content = text.replace("48.7", "33.2");
+        if (target && !interrupted && scenario === "foreign_reference") { interrupted = true; output.sections[0].content += ` [${crypto.randomUUID()}]`; }
+        if (target && context.feedback) expect(context.feedback.issues).toEqual(["Room B-93 requirement changed."]);
+        return output;
+      }
+      checks.push(text);
+      if (target && !interrupted) {
+        interrupted = true;
+        if (scenario === "checker_timeout") throw new Error("Checker timeout");
+        if (scenario === "rejected") return { preserved: false, issues: ["Room B-93 requirement changed."] };
+      }
+      return { preserved: true, issues: [] };
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow();
+  const pieces = structuredClone(draft.sections);
+  expect(writers.filter(text => text.includes("Room A-17"))).toHaveLength(1);
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(draft.sections).toEqual(pieces);
+  expect(writers.filter(text => text.includes("Room A-17"))).toHaveLength(1);
+  expect(checks.filter(text => text.includes("Room A-17"))).toHaveLength(1);
+  expect(writers.filter(text => text.includes("Room B-93"))).toHaveLength(scenario === "checker_timeout" ? 1 : 2);
+  const template = result.document.template as any;
+  for (const content of [...paragraphs, table, "Last room: 59.7 dB; not approved"]) expect(template.components.includes(content.trimEnd())).toBe(true);
+  expect(template.calculationAppendix).toBe(pieces.calculationAppendix.parts[0].content);
+  const count = writers.length + checks.length;
+  await authorAcousticConcept({ ...input, draft });
+  expect(writers.length + checks.length).toBe(count);
 });
 
 for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const)
@@ -395,7 +456,7 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
         expect(context.sectionKeys).toEqual(acousticSectionKeys(id).filter(key => key !== "calculationAppendix"));
         expect(original.components).toBe(`${evidence}\n\n${evidence}`);
         expect(original.attachments).toEqual(attachments);
-        expect(original.calculationAppendix).toBe(fixture.calculationAppendix);
+        expect(original.calculationAppendix).toBeUndefined();
         const editNumber = calls.filter(call => call === "editorial").length;
         if (scenario === "rejected" && editNumber === 2) expect(context.feedback).toEqual(rejected);
         else expect(context.feedback).toBeUndefined();
@@ -471,7 +532,7 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
       expect(result!.status).toBe("needs_review");
       const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
       expect(revisions).toHaveLength(1);
-      expect((revisions[0]!.payload as any).template).toEqual({ ...original, components: evidence });
+      expect((revisions[0]!.payload as any).template).toEqual({ ...original, components: evidence, calculationAppendix: fixture.calculationAppendix });
       expect(revisions[0]!.sourceVersionIds).toEqual([versionId]);
       expect(revisions[0]!.content.match(/Room A-17:/g)).toHaveLength(1);
       await stepSupervisor(d, runId);
