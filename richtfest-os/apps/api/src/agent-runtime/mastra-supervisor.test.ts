@@ -64,6 +64,42 @@ test("visual inspection is not registered for a one-step model or planning", asy
   }
 });
 
+test("tool-capable specialists and independent reviewers reserve the last step and may finish early", async () => {
+  for (const phase of ["specialist", "independent_review"] as const) for (const maxSteps of [2, 3]) for (const early of [false, true]) {
+    const versionId = crypto.randomUUID();
+    const output = { summary: "Supplied evidence reviewed", rationale: "Unreviewed inference", citations: [versionId],
+      ...(phase === "independent_review" ? { decision: "accept", findings: [], revisions: [] } : {}) };
+    let rounds = 0, reads = 0;
+    const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+      const step = rounds++;
+      const final = early || step === maxSteps - 1;
+      if (step === maxSteps - 1) {
+        expect(options.tools ?? []).toHaveLength(0);
+        expect(options.toolChoice).toEqual({ type: "none" });
+      } else expect(options.tools?.map(tool => tool.name)).toContain("inspect_project_source");
+      expect(options.responseFormat?.type).toBe("json");
+      return { stream: new ReadableStream({ start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] });
+        if (final) {
+          controller.enqueue({ type: "text-start", id: "result" });
+          controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify(output) });
+          controller.enqueue({ type: "text-end", id: "result" });
+        } else for (const page of [1, 2]) controller.enqueue({ type: "tool-call", toolCallId: `${step}-${page}`,
+          toolName: "inspect_project_source", input: JSON.stringify({ versionId, page: step * 2 + page }) });
+        controller.enqueue({ type: "finish", finishReason: final ? "stop" : "tool-calls", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+        controller.close();
+      } }) };
+    } });
+    expect(await callMastraSupervisor({ ...base, phase,
+      modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps },
+      context: { role: "source_reviewer", sourceVersionIds: [versionId], sourceCoverage: { sliceVersionIds: [versionId] } },
+      inspectSource: async request => { reads++; return { ...request, status: "unavailable", scope: "pdf_page", reason: "Rendering unavailable" }; },
+    }, "test-key", { model })).toEqual(output);
+    expect(rounds).toBe(early ? 1 : maxSteps);
+    expect(reads).toBe(early ? 0 : 2 * (maxSteps - 1));
+  }
+});
+
 test("company search keeps Unicode validation locally without sending unsupported regex to OpenAI", async () => {
   for (const term of ["Außenschallschutz", "DIN 4109-1", "隔音", " façade "]) {
     expect(companyKnowledgeSearchSchema.parse({ terms: [term] }).terms).toEqual([term.trim()]);
@@ -236,9 +272,12 @@ test("concept authoring accepts outline, section, editorial and preservation con
     ["editorial_check", check, { preserved: "yes", issues: [] }],
   ] as const) {
     const request = { ...base, phase: "review" as const, goal: "Create Außenlärmkonzept", modelPolicy: responsePolicy,
+      modelConfig: { modelId: "test-model", maxOutputTokens: 32000, maxSteps: 4 },
+      inspectSource: async () => { throw new Error("Report authoring must consume supplied evidence, not inspect sources"); },
       context: { documentTask, documentTemplate: { id, version: 1 } } };
     expect(await callMastraSupervisor(request, "test-key", {
-      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }),
+      model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+        spyStream: options => { expect(options.tools ?? []).toHaveLength(0); } }),
     })).toEqual(output);
     await expect(callMastraSupervisor(request, "test-key", {
       model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: invalid }),

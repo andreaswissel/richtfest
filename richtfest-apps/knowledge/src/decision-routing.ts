@@ -115,21 +115,23 @@ export function selectSummaryRoute(output: unknown, minConfidence: number) {
 
 export async function classifyRun(d: AppDeps,
   run: { id: string; correlationId: string },
-  input: { state: unknown; minConfidence: number; generation: number },
+  input: { state: unknown; minConfidence: number; generation: number; leaseToken?: string; assertActive?: () => Promise<void> },
 ) {
   const started = Date.now();
   const base = { version: decisionRoutingVersion, model: "jev-1.13.0", elapsedMs: 0 };
   if (!d.executeDecision) return { ...base, outcome: "unconfigured" as const, eligible: false };
   try {
     const result = await executeTrackedProvider(d, { ...run, provider: "typesafe" },
-      { phase: "decision", generation: input.generation }, telemetry => d.executeDecision!({
+      { phase: "decision", generation: input.generation, rootRunId: input.leaseToken ? run.id : undefined,
+        leaseToken: input.leaseToken, assertActive: input.assertActive }, telemetry => d.executeDecision!({
         ...telemetry, runId: run.id, state: input.state, questions: routingQuestions,
       }));
     if (result.status !== "completed")
       return { ...base, elapsedMs: Date.now() - started, outcome: "unconfigured" as const, eligible: false };
     return { ...base, ...selectSummaryRoute(result.output, input.minConfidence),
       elapsedMs: Date.now() - started, outcome: "classified" as const };
-  } catch {
+  } catch (error) {
+    if (["budget_exhausted", "outcome_unknown"].includes(String((error as { code?: unknown })?.code))) throw error;
     // Provider diagnostics are recorded by the tracked adapter, never raw errors.
     return { ...base, elapsedMs: Date.now() - started, outcome: "fallback" as const, eligible: false };
   }

@@ -17,7 +17,7 @@ import {
 } from "./schema";
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
-import { executeTrackedProvider } from "./usage";
+import { executeTrackedProvider, interruptProviderAttempts } from "./usage";
 import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage } from "./agent-messages";
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
@@ -248,6 +248,7 @@ function checkpointHash(value: unknown) {
 export async function stepSupervisor(d: AppDeps, id: string) {
   let run: any;
   let state: any;
+  let orphaned = false;
   const token = crypto.randomUUID();
   await d.db.transaction(async (tx: any) => {
     const [parent] = await tx
@@ -268,6 +269,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       return;
     run = parent;
     state = s;
+    orphaned = (await interruptProviderAttempts(d, tx, id, "expired_supervisor_lease")) > 0;
     await tx
       .update(supervisorRuns)
       .set({ leaseToken: token, leaseUntil: new Date(Date.now() + 120000) })
@@ -290,6 +292,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     }).catch(() => undefined);
   }, 30000);
   try {
+    if (orphaned) throw Object.assign(new Error("Previous provider outcome unknown"), { code: "outcome_unknown" });
     d.requirePermission("projects:read");
     d.requirePermission("agent:run");
     d.requirePermission("knowledge:read");
@@ -468,7 +471,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             // snapshot only avoids redundant work; commit rechecks the budget.
             const candidate = known.length < 2 && !known.some(r => stepHash({ terms: r.terms, category: r.category }) === inputHash)
               ? await searchCompanyKnowledge(d, input, d.db, false, policy.knowledgeRerankingEnabled
-                ? { runId, correlationId: run.correlationId, goal: assignment.goal, generation: state.generation, signal }
+                ? { runId, correlationId: run.correlationId, goal: assignment.goal, generation: state.generation, signal, rootRunId: id, leaseToken: token, assertActive }
                 : undefined) : undefined;
             let receipt: CompanyKnowledgeReceipt | undefined;
             const saved = await commit(d, run, token, async (tx, current) => {
@@ -574,7 +577,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         }
         try {
           const response = await executeTrackedProvider(d, { ...run, id: runId }, {
-            phase, operationId: callId, attemptNumber: attempt, generation: state.generation, assertActive,
+            phase, operationId: callId, attemptNumber: attempt, generation: state.generation, rootRunId: id, leaseToken: token, assertActive,
           }, async telemetry => {
             const response = await d.executeSupervisor!({
             ...telemetry,
@@ -798,7 +801,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await sources(d, run.projectId, run.sourceVersionIds);
         const decision = saved?.output ?? (blocked
           ? { version: decisionRoutingVersion, outcome: "ineligible", eligible: false, elapsedMs: 0 }
-          : await classifyRun(d, run, { state: decisionState, minConfidence: routing.minConfidence, generation: state.generation }));
+          : await classifyRun(d, run, { state: decisionState, minConfidence: routing.minConfidence, generation: state.generation, leaseToken: token, assertActive }));
         await assertActive();
         if (decision.eligible && !blocked) {
           for (const versionId of run.sourceVersionIds) {
@@ -1675,6 +1678,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             .where(eq(tasks.id, child.taskId));
         await log(d, tx, child, "cancelled", undefined, childCancellationReason);
       }
+      await interruptProviderAttempts(d, tx, id, "supervisor_stopped");
       await log(d, tx, run, "supervisor_failed", undefined, failureReason);
     });
   } finally {

@@ -77,6 +77,7 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
 export type AppDeps = {
   db: any;
   supervisorEnabled?: boolean;
+  estimateCallCost?: (provider: ProviderUsage["provider"], settings: ProviderExecutionSettings, inputBytes: number, hasTools: boolean) => number | null;
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
@@ -210,7 +211,7 @@ export type ProviderTelemetry = {
   onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   /** Sanitized model-visible input only. A hit skips inference, not application validation. */
-  onPrepared?: (input: { version: 1; instructions: string; prompt: string; outputSchema?: unknown; tools?: unknown }) => Promise<{ output: unknown } | undefined>;
+  onPrepared?: (input: { version: 1; instructions: string; prompt: string; inputBytes?: number; outputSchema?: unknown; tools?: unknown }) => Promise<{ output: unknown } | undefined>;
 };
 export type ProviderUsage = {
   provider: AgentProvider | "typesafe";

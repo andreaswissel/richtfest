@@ -7,6 +7,7 @@ type Rate = { provider: ProviderUsage["provider"]; model: RegExp; input: number;
 
 // USD per million tokens. Keep this list limited to rates we can stand behind.
 const RATES: Rate[] = [
+  { provider: "typesafe", model: /^jev-1\.13\.0$/, input: 0.042, output: 0 },
   { provider: "openai", model: /^gpt-6-astra(?:-|$)/, input: 10, output: 50, cachedInput: 1 },
   { provider: "openai", model: /^gpt-6(?:\.1)?-sol(?:-|$)/, input: 2, output: 10, cachedInput: 0.2 },
   { provider: "openai", model: /^gpt-6-luna(?:-|$)/, input: 0.1, output: 0.5, cachedInput: 0.01 },

@@ -73,6 +73,11 @@ export const agentPresetConfigSchema = z.object({
   maxRevisions: z.number().int().min(0).max(2),
 }).strict();
 export type AgentPresetConfig = z.infer<typeof agentPresetConfigSchema>;
+// Each human authorization grants a bounded allowance; automatic retries never reset it.
+export const agentRunBudgetSchema = z.object({
+  maxCostUsd: z.number().min(0.01).max(1000).default(10),
+  maxAutomaticRetries: z.number().int().min(0).max(10).default(3),
+}).strict();
 export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
   effort: agentEffortSchema,
   provider: agentProviderSchema,
@@ -80,6 +85,7 @@ export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
   source: z.enum(["vendor", "workspace"]),
   // Absent on historical runs: preserve their original orchestration behavior.
   workflow: agentWorkflowSchema.optional(),
+  runBudget: agentRunBudgetSchema.extend({ authorizedAt: z.string().datetime() }).optional(),
 });
 export type AgentPresetSnapshot = z.infer<typeof agentPresetSnapshotSchema>;
 

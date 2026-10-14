@@ -294,7 +294,7 @@ integration(`${id} editorial publication gate: ${scenario}`, async () => {
   }
 }, 10000);
 
-test("concept appendices can cite saved arithmetic inputs without treating receipt IDs as sources", async () => {
+test("concept sections repair omitted allowed references but reject out-of-scope citations with actionable diagnostics", async () => {
   const versionId = crypto.randomUUID();
   const receipt = { ...calculateAcoustics({ method: "sum_sound_levels", receiver: "North facade", weighting: "A", period: "Day", uncorrelatedSources: true,
     sources: [60, 70].map(levelDb => ({ label: String(levelDb), levelDb,
@@ -305,7 +305,7 @@ test("concept appendices can cite saved arithmetic inputs without treating recei
       excerpt: "Arithmetic does not establish regulatory applicability.", bodyHash: "a".repeat(64) }],
     coverage: { limited: true as const, maxEntries: 4 as const, maxCharsPerEntry: 2000 as const },
   };
-  for (const citation of [versionId, receipt.receiptId, knowledge.entries[0]!.id, crypto.randomUUID()]) {
+  for (const citation of [undefined, versionId, receipt.receiptId, knowledge.entries[0]!.id, crypto.randomUUID()]) {
     const result = authorAcousticConcept({ d: {} as any, projectId: crypto.randomUUID(), id: "exterior-noise-concept",
       goal: "Document source-backed arithmetic", findings: [], sourceVersionIds: [versionId], calculationReceipts: [receipt],
       companyKnowledge: [knowledge],
@@ -321,10 +321,13 @@ test("concept appendices can cite saved arithmetic inputs without treating recei
         };
         if (context.section !== "calculationAppendix") return { content: "Company acoustic guidance: Arithmetic does not establish regulatory applicability.", citations: [], complete: true };
         const [saved] = context.calculationReceipts as typeof receipt[];
-        return { content: `Tool result: ${saved!.value.toFixed(3)} ${saved!.unit} [${citation}]. Inputs and applicability require review.`, citations: [citation], complete: true };
+        return { content: `Tool result: ${saved!.value.toFixed(3)} ${saved!.unit} [${citation ?? versionId}]. Inputs and applicability require review.`, citations: citation ? [citation] : [], complete: true };
       },
     });
-    if (citation !== versionId) await expect(result).rejects.toThrow("Cite only source versions");
+    if (citation && citation !== versionId) await expect(result).rejects.toMatchObject({
+      retryable: true, failureCategory: "validation",
+      diagnostics: { errorId: "SOURCE_CITATION_OUT_OF_SCOPE", rejectedCitations: [citation] },
+    });
     else {
       const report = await result;
       expect(report.document.content).toContain(`70.414 dB(A) [${versionId}]`);

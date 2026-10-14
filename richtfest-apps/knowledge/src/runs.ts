@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
+import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunBudgetSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
 import { companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
@@ -29,7 +29,7 @@ import {
 } from "./workspace";
 import { repairLegacyRuns } from "./run-recovery";
 import { createSupervisor } from "./supervisor";
-import { executeTrackedProvider, summarizeUsageRows } from "./usage";
+import { executeTrackedProvider, summarizeUsageRows, runAccounting, interruptProviderAttempts } from "./usage";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { resolveRunSource } from "./source-evidence";
 import { recommendMode } from "./decision-routing";
@@ -44,6 +44,7 @@ import {
 } from "./run-reasons";
 const runInput = z.object({
   effort: z.enum(["low", "medium", "high", "ultra"]).default("medium"),
+  budget: agentRunBudgetSchema.optional(),
   workflow: agentWorkflowRequestSchema.optional(),
   messageId: z.string().uuid().optional(),
   intent: z.enum(["assist", "calculation"]).default("assist"),
@@ -944,10 +945,13 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         ? await d.resolveSupervisorPreset?.(input.effort, provider)
         : undefined;
     if (workflow && !resolvedPolicy) throw conflict("Workflow model policy unavailable");
-    const modelPolicy = resolvedPolicy ? { ...resolvedPolicy, ...(workflow ? { workflow } : {}) } : undefined;
+    const modelPolicy = resolvedPolicy ? { ...resolvedPolicy, ...(workflow ? { workflow } : {}),
+      ...(useSupervisor && d.estimateCallCost
+        ? { runBudget: { ...agentRunBudgetSchema.parse(input.budget ?? {}), authorizedAt: new Date().toISOString() } } : {}),
+    } : undefined;
     if (useSupervisor && configured && !modelPolicy)
       throw conflict("Supervisor model policy unavailable");
-    const { workflow: _workflow, ...runValues } = input;
+    const { workflow: _workflow, budget: _budget, ...runValues } = input;
     const row = await d.db.transaction(async (tx: any) => {
       const [created] = await tx
         .insert(agentRuns)
@@ -1281,6 +1285,38 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       return updated;
     });
   });
+  const recoveryPreview = async (d: AppDeps, run: any, state: any, tx = d.db) => {
+    const accounting = await runAccounting(d, run.id, state?.modelPolicy?.runBudget?.authorizedAt, tx);
+    const draft = state?.review?.documentDraft;
+    const sections = Object.entries(draft?.sections ?? {}).map(([key, value]: [string, any]) => ({
+      key, savedPieces: value.parts?.filter(Boolean).length ?? 0,
+      savedFallbackPieces: Object.values(value.fallbacks ?? {}).reduce((n: number, pieces: any) => n + pieces.filter(Boolean).length, 0),
+    }));
+    return {
+      resumable: !!state && state.phase !== "done" && ["failed", "cancelled"].includes(run.status),
+      generation: state?.generation ?? run.generation,
+      checkpointHash: stepHash({ status: run.status, state, sources: run.sourceVersionIds, accounting }),
+      phase: state?.phase ?? "provider",
+      completedSpecialists: state?.assignments?.filter((a: any) => a.output).length ?? 0,
+      totalSpecialists: state?.assignments?.length ?? 0,
+      sections,
+      savedPieces: sections.reduce((n, s) => n + s.savedPieces, 0),
+      editorialCandidate: !!draft?.editorial?.candidate,
+      preservationChecked: !!draft?.editorial?.check?.preserved,
+      accounting,
+      budgetRequired: !!d.estimateCallCost,
+      budget: agentRunBudgetSchema.parse(state?.modelPolicy?.runBudget
+        ? { maxCostUsd: state.modelPolicy.runBudget.maxCostUsd, maxAutomaticRetries: state.modelPolicy.runBudget.maxAutomaticRetries } : {}),
+    };
+  };
+  route("get", "/runs/:runId/recovery", "knowledge:read", async (d, req) => {
+    const run = await getRun(d, String(req.params.runId));
+    await requireIndependentRun(d, run);
+    d.requirePermission("projects:read");
+    if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
+    const [state] = await d.db.select().from(supervisorRuns).where(and(eq(supervisorRuns.runId, run.id), eq(supervisorRuns.tenantId, d.tenantId)));
+    return recoveryPreview(d, run, state);
+  });
   const retryRun = async (d: AppDeps, req: Request, fresh: boolean) => {
     const run = await getRun(d, String(req.params.runId));
     await requireIndependentRun(d, run);
@@ -1309,6 +1345,21 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         const current = await getRun(d, run.id, tx, true);
         const [state] = await tx.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run.id)).for("update");
         if (!["failed", "cancelled"].includes(current.status) || !state || state.phase === "done") throw conflict("Run is no longer resumable");
+        let modelPolicy = state.modelPolicy;
+        if (d.estimateCallCost || req.body?.checkpointHash) {
+          const input = z.object({ checkpointHash: z.string().length(64), generation: z.number().int(),
+            budget: agentRunBudgetSchema, acknowledgeUnknownOutcomes: z.boolean().default(false) }).strict().parse(req.body);
+          const preview = await recoveryPreview(d, current, state, tx);
+          if (input.checkpointHash !== preview.checkpointHash || input.generation !== preview.generation)
+            throw conflict("Saved progress changed. Reload the recovery preview before authorizing execution.");
+          if ((preview.accounting.unknownOutcomes || preview.accounting.unpricedAttempts) && !input.acknowledgeUnknownOutcomes)
+            throw conflict("Acknowledge unknown provider outcomes and usage before authorizing recovery.");
+          modelPolicy = { ...state.modelPolicy, runBudget: { ...input.budget, authorizedAt: new Date().toISOString() } };
+          await d.auditRun(tx, "knowledge.agent_run.recovery_authorized", "agent_run", run.id, run.id, run.correlationId,
+            { checkpointHash: input.checkpointHash, generation: input.generation, budget: modelPolicy.runBudget,
+              acknowledgeUnknownOutcomes: input.acknowledgeUnknownOutcomes, accounting: preview.accounting });
+        }
+        await interruptProviderAttempts(d, tx, run.id, "human_authorized_recovery");
         await sources({ ...d, db: tx }, run.projectId, [...new Set<string>([
           ...run.sourceVersionIds, ...state.assignments.flatMap((a: any) => a.sourceVersionIds),
         ])]);
@@ -1318,9 +1369,9 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           await tx.update(tasks).set({ status: assignment.output ? "needs_review" : "in_progress" })
             .where(and(eq(tasks.id, assignment.taskId), eq(tasks.tenantId, d.tenantId)));
         }
-        await tx.update(supervisorRuns).set({ generation: state.generation + 1, leaseToken: null, leaseUntil: null })
+        await tx.update(supervisorRuns).set({ generation: state.generation + 1, leaseToken: null, leaseUntil: null, modelPolicy })
           .where(eq(supervisorRuns.runId, run.id));
-        const [updated] = await tx.update(agentRuns).set({ status: "queued", error: null, requestedBy: d.actorId,
+        const [updated] = await tx.update(agentRuns).set({ status: "queued", error: null, requestedBy: d.actorId, modelPolicy,
           startedAt: null, finishedAt: null, durationMs: null, updatedAt: new Date() }).where(eq(agentRuns.id, run.id)).returning();
         await event(d, tx, run, "resumed", undefined, "Interrupted run resumed from saved progress");
         return updated;
@@ -1384,6 +1435,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         .set({ status: "cancelled", error: userCancellationReason, updatedAt: new Date() })
         .where(eq(agentRuns.id, run.id))
         .returning();
+      await interruptProviderAttempts(d, tx, run.id, "human_cancelled_run");
       const children = await tx
         .update(agentRuns)
         .set({

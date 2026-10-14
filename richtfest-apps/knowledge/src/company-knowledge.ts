@@ -28,7 +28,7 @@ export async function companyKnowledgeCategories(d: AppDeps) {
 }
 
 export async function searchCompanyKnowledge(d: AppDeps, raw: unknown, db = d.db, limitReached = false,
-  rerank?: { runId: string; correlationId: string; goal: string; generation: number; signal?: AbortSignal },
+  rerank?: { runId: string; correlationId: string; goal: string; generation: number; signal?: AbortSignal; rootRunId?: string; leaseToken?: string; assertActive?: () => Promise<void> },
 ) {
   d.requirePermission("knowledge:read");
   rerank?.signal?.throwIfAborted();
@@ -45,14 +45,16 @@ export async function searchCompanyKnowledge(d: AppDeps, raw: unknown, db = d.db
     rerank!.signal?.throwIfAborted();
     try {
       const result = await executeTrackedProvider(d, { id: rerank!.runId, correlationId: rerank!.correlationId, provider: "typesafe" },
-        { phase: "knowledge_rerank", generation: rerank!.generation }, telemetry => d.executeDecision!({
+        { phase: "knowledge_rerank", generation: rerank!.generation, rootRunId: rerank!.rootRunId,
+          leaseToken: rerank!.leaseToken, assertActive: rerank!.assertActive }, telemetry => d.executeDecision!({
           ...telemetry, runId: rerank!.runId, signal: rerank!.signal,
           state: { version: knowledgeRerankingVersion, goal: rerank!.goal, terms,
             candidates: entries.map(({ id, title, excerpt }: CompanyKnowledgeReceipt["entries"][number]) => ({ id, title, excerpt })) },
           questions: knowledgeRelevanceQuestions(entries),
         }));
       if (result.status === "completed") entries = rankCompanyKnowledge(entries, result.output).entries;
-    } catch {
+    } catch (error) {
+      if (["budget_exhausted", "outcome_unknown"].includes(String((error as { code?: unknown })?.code))) throw error;
       // Failed/invalid decisions keep the identical deterministic top four.
       // Attempts and any reported usage remain in the run ledger.
     }

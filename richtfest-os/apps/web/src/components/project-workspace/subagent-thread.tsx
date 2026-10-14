@@ -62,6 +62,8 @@ const runReasonPhases = {
 
 const runReasonCategories = {
   provider: "workspaceRunCategoryProvider",
+  budget: "workspaceRunCategoryBudget",
+  outcome_unknown: "workspaceRunCategoryOutcomeUnknown",
   timeout: "workspaceRunCategoryTimeout",
   permission: "workspaceRunCategoryPermission",
   validation: "workspaceRunCategoryValidation",
@@ -73,6 +75,8 @@ const runReasonCategories = {
 
 const canonicalCategoryReasonPrefixes = {
   provider: "The provider call could not complete.",
+  budget: "Execution paused before another paid call:",
+  outcome_unknown: "The previous worker lost ownership with an unfinished provider attempt.",
   timeout: "The provider call exceeded its time limit.",
   permission: "A required permission is unavailable.",
   validation: "The run returned unsupported or invalid output.",

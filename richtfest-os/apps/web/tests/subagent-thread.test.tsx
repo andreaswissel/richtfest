@@ -167,6 +167,19 @@ test("persisted timeout reasons show phase and safe retry guidance in run rows a
   );
 });
 
+test("budget and uncertain-outcome stops explain the required human recovery", () => {
+  for (const [category, reason, expected] of [
+    ["budget", "Execution paused before another paid call: allowance reached.", en.workspaceRunCategoryBudget],
+    ["outcome_unknown", "The previous worker lost ownership with an unfinished provider attempt.", en.workspaceRunCategoryOutcomeUnknown],
+  ]) {
+    const failed = { ...run, status: "failed", error: `phase=review; category=${category}; ${reason}` };
+    const html = render(<SubagentThread projectId={projectId} runId={run.id} />, { run: failed, events: [] });
+    expect(html).toContain(expected!);
+    expect(html).not.toContain(en.workspaceRunNoSpecificReason);
+    expect(html).not.toContain("category=");
+  }
+});
+
 test("cancelled child timeout reasons retain supervisor cause in history and child links", () => {
   const child = {
     ...run,

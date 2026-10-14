@@ -162,8 +162,14 @@ export async function authorAcousticConcept(input: {
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
         if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
         const inline = part.content.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [];
-        if (part.citations.some(v => !allowed.has(v)) || inline.some(v => !part.citations.includes(v)))
-          ctx.addIssue({ code: "custom", path: ["citations"], message: "Cite only source versions supplied in this piece." });
+        const rejectedCitations = [...new Set([...part.citations, ...inline].filter(v => !allowed.has(v)))];
+        if (rejectedCitations.length) throw Object.assign(new Error("Section cited evidence outside this piece."), {
+          providerFailure: true, retryable: true, failureCategory: "validation",
+          diagnostics: sanitizeProviderDiagnostics({ errorId: "SOURCE_CITATION_OUT_OF_SCOPE", rejectedCitations }),
+        });
+        // Repair only the reference register, never prose or identifiers. Every
+        // added reference already appears in the text AND this piece's evidence.
+        part.citations = [...new Set([...part.citations, ...inline])];
       });
       return partSchema.parse(await input.call({
         ...sectionContext, sources: batch, sourceVersionIds: [...allowed], batch: batchNumber, batchCount,

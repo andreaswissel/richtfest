@@ -3,6 +3,7 @@ import type { AppDeps, ProviderUsage } from "@richtfest/knowledge/deps";
 import { appRevision, metadataHash } from "./provider-metadata";
 import { providerErrorDiagnostics, readProviderError } from "./provider-errors";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
+import { estimateCostUsd } from "./model-pricing";
 
 export type DecisionInput = Parameters<NonNullable<AppDeps["executeDecision"]>>[0];
 export const decisionPricingVersion = "typesafe-jev-1.13.0-2026-10-13";
@@ -44,6 +45,9 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
       maxSteps: 1, maxRetries: 0, timeoutMs, stream: false, store: null,
       instructionsHash: metadataHash(JSON.stringify(questions)), promptHash: metadataHash(body),
       outputSchemaHash: metadataHash("jev-1.13.0:choice:probabilities:confidence:v1") });
+    // Reserve before inference without adding company excerpts to the step log.
+    const reused = await input.onPrepared?.({ version: 1, instructions: "", prompt: metadataHash(body), inputBytes: Buffer.byteLength(body, "utf8") });
+    if (reused) return { status: "completed" as const, output: outputSchema.parse(reused.output), usage: undefined };
     signal.throwIfAborted();
     // Race also bounds injected fetch implementations and response-body reads that ignore abort.
     const responseBody = await new Promise<unknown>((resolve, reject) => {
@@ -71,7 +75,9 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
       totalTokens: rawUsage.success && Number.isSafeInteger(rawUsage.data.input_tokens + rawUsage.data.output_tokens)
         ? rawUsage.data.input_tokens + rawUsage.data.output_tokens : null,
       reasoningTokens: null, cachedInputTokens: null,
-      estimatedCostUsd: rawUsage.success ? rawUsage.data.input_tokens * 0.042 / 1_000_000 : null,
+      estimatedCostUsd: estimateCostUsd({ provider: "typesafe", modelId: model,
+        inputTokens: rawUsage.success ? rawUsage.data.input_tokens : null,
+        outputTokens: rawUsage.success ? rawUsage.data.output_tokens : null, cachedInputTokens: null }).estimatedCostUsd,
       pricingVersion: decisionPricingVersion };
     await input.onUsage?.(usage);
     category = "invalid_output";
@@ -87,7 +93,9 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
     await input.onResponse?.({ modelId: model, responseId: null, finishReason: "stop" });
     return { status: "completed" as const, output, usage };
   } catch (error) {
-    const value = error as { providerStatus?: number; diagnostics?: unknown } | null;
+    const value = error as { code?: unknown; providerStatus?: number; diagnostics?: unknown } | null;
+    if (value?.code === "budget_exhausted" || value?.code === "outcome_unknown")
+      throw Object.assign(new Error("Execution requires human review before inference."), { code: value.code });
     throw Object.assign(failure(options.signal?.aborted ? "cancelled" : timeout.aborted ? "timeout" : category), {
       providerStatus: value?.providerStatus,
       diagnostics: { ...sanitizeProviderDiagnostics(value?.diagnostics),

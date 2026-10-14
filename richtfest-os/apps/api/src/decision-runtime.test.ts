@@ -6,7 +6,7 @@ const input: DecisionInput = { runId: "run", state: { private: "private-source" 
   route: { type: "choice", instructions: "private-question", criteria: { yes: "Proceed", no: "Stop" } },
 } };
 const result = () => ({ model: "jev-1.13.0", answers: { route: {
-  type: "choice", choice: "yes", probabilities: { yes: 0.8, no: 0.2 }, confidence: 0.8,
+  type: "choice" as const, choice: "yes", probabilities: { yes: 0.8, no: 0.2 }, confidence: 0.8,
 } }, usage: { input_tokens: 1000, output_tokens: 8 } });
 const response = (value: unknown) => async () => Response.json(value);
 
@@ -38,9 +38,25 @@ test("decision output is typed, priced and telemetry contains only hashes/known 
 test("missing or invalid usage is unknown rather than fabricated zero", async () => {
   for (const usage of [undefined, { input_tokens: -1, output_tokens: 8 }, { input_tokens: "100", output_tokens: 8 }]) {
     const output = await callDecisionModel(input, apiKey, { fetch: response({ ...result(), usage }) });
-    expect(output.usage.inputTokens).toBeNull();
-    expect(output.usage.estimatedCostUsd).toBeNull();
+    expect(output.usage?.inputTokens).toBeNull();
+    expect(output.usage?.estimatedCostUsd).toBeNull();
   }
+});
+
+test("Jev respects pre-inference stops and reuses a saved decision without buying another call", async () => {
+  let calls = 0;
+  const options = { fetch: async () => { calls++; return response(result())(); } };
+  for (const code of ["budget_exhausted", "outcome_unknown"]) {
+    await expect(callDecisionModel({ ...input, onPrepared: async prepared => {
+      expect(prepared.inputBytes).toBeGreaterThan(100);
+      expect(JSON.stringify(prepared)).not.toContain("private-source");
+      throw Object.assign(new Error("Stop before dispatch"), { code });
+    } }, apiKey, options)).rejects.toMatchObject({ code });
+  }
+  const reused = await callDecisionModel({ ...input, onPrepared: async () => ({ output: result() }) }, apiKey, options);
+  expect(reused.output.answers).toEqual(result().answers);
+  expect(reused.usage).toBeUndefined();
+  expect(calls).toBe(0);
 });
 
 test("malformed answers are rejected but trustworthy usage is still reported", async () => {

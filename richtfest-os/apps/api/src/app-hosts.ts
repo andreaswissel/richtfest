@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { sql } from "drizzle-orm";
-import type { AgentProvider } from "@richtfest/shared";
+import { agentModelInputByteBudget, type AgentProvider } from "@richtfest/shared";
+import { estimateCostUsd } from "./model-pricing";
 import { HttpError, type Actor } from "./middleware/auth";
 import { recordAudit } from "./audit";
 import type { Database } from "./db/client";
@@ -161,6 +162,16 @@ export const knowledgeDeps = (
       return Object.fromEntries(result.rows.map((row: any) => [row.id, row.name]));
     },
     supervisorEnabled: env.AGENT_SUPERVISOR_ENABLED,
+    estimateCallCost: (provider, settings, inputBytes, hasTools) => {
+      const steps = hasTools ? settings.maxSteps : 1;
+      const contextBudget = hasTools && provider !== "typesafe" ? agentModelInputByteBudget(provider, settings.modelId, settings.maxOutputTokens) : inputBytes;
+      if (contextBudget === undefined) return null;
+      // Reserve uncached input and full output at every tool step. This is a
+      // conservative dispatch estimate, not a promise about a provider invoice.
+      return estimateCostUsd({ provider, modelId: settings.modelId,
+        inputTokens: Math.max(inputBytes, contextBudget) * steps,
+        outputTokens: settings.maxOutputTokens * steps, cachedInputTokens: 0 }).estimatedCostUsd;
+    },
     resolveSupervisorPreset: (effort, provider) => resolveAgentPreset(db, actor.tenantId, effort, provider),
     resolveActiveProvider: () => getActiveProvider(db, actor.tenantId),
     executeDecision: async (input) => {

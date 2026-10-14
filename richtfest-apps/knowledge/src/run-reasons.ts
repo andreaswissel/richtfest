@@ -13,6 +13,8 @@ export type RunFailurePhase =
 
 export type RunFailureCategory =
   | "provider"
+  | "budget"
+  | "outcome_unknown"
   | "timeout"
   | "permission"
   | "validation"
@@ -43,6 +45,8 @@ export function classifyRunFailure(
   const name = typeof value.name === "string" ? value.name : "";
   const status = typeof value.status === "number" ? value.status : undefined;
 
+  if (code === "budget_exhausted") return "budget";
+  if (code === "outcome_unknown") return "outcome_unknown";
   if (code === "cancelled" || name === "AbortError") return "cancellation";
   if (code === "timeout" || name === "TimeoutError") return "timeout";
   if (status === 401 || status === 403 || ["forbidden", "unauthorized", "permission_denied"].includes(code))
@@ -55,6 +59,8 @@ export function classifyRunFailure(
 }
 
 const actionableMessage: Record<RunFailureCategory, string> = {
+  budget: "Execution paused before another paid call: the spend or retry allowance was reached, or usage/pricing is unknown. Preview saved progress and explicitly authorize an additional allowance to resume.",
+  outcome_unknown: "The previous worker lost ownership with an unfinished provider attempt. Its outcome and usage may be unknown. Review saved progress before authorizing recovery; no automatic replacement call was started.",
   provider: "The provider call could not complete. Check the provider connection and retry.",
   timeout: "The model call exceeded its configured time limit. Retry run reuses available saved progress with the original settings. Use Run again to start fresh with current model settings.",
   permission: "A required permission is unavailable. Ask an administrator for access and retry.",
