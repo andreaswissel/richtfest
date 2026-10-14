@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-15
+
+- Astra visual-review reservations now account for images without treating their encoded data and duplicate SDK metadata as report text. Evidence, image quality, models and review checks stay unchanged; numeric admission diagnostics explain future stops. This corrects reserved estimates, not past charges, and starts no paid run automatically.
+
 ## 2026-10-14
 
 - Acoustic report editing now groups changes instead of rewriting unchanged prose, retaining saved work and independent checks for changed evidence. Edit recovery retains rejected wording alongside review feedback and rechecks changed repairs; editors distinguish missing visual receipts from contradictory evidence. Model calls reserve one actual step at a time, preserving earlier spend and cancellation safeguards without raising budgets, changing models or automatically restarting stopped runs.

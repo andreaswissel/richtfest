@@ -95,7 +95,7 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
 export type AppDeps = {
   db: any;
   supervisorEnabled?: boolean;
-  estimateCallCost?: (provider: ProviderUsage["provider"], settings: ProviderExecutionSettings, inputBytes: number, hasTools: boolean) => number | null;
+  estimateCallCost?: (provider: ProviderUsage["provider"], settings: ProviderExecutionSettings, inputBytes: number, hasTools: boolean, inputTokenUpperBound?: number) => number | null;
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
@@ -241,10 +241,12 @@ export type ProviderResponseMetadata = {
 export type ProviderTelemetry = {
   /** Await immediately before dispatch. Ordinals start at 1; bytes are the exact
    * normalized SDK request UTF-8 bytes (including schemas/tools/history).
+   * An optional model-specific token bound replaces byte-based estimation only
+   * when all native media is covered. It never changes the dispatched request.
    * Call onRequest and onPrepared first; a cache hit skips all step callbacks.
    * Steps are serial and bounded by min(maxSteps, 100). A rejection forbids
    * dispatch. Pause, do not reset, the adapter's active-time deadline while awaiting. */
-  onBeforeModelStep?: (input: { ordinal: number; inputBytes: number; hasMedia: boolean }, signal?: AbortSignal) => Promise<void>;
+  onBeforeModelStep?: (input: { ordinal: number; inputBytes: number; hasMedia: boolean; inputTokenUpperBound?: number }, signal?: AbortSignal) => Promise<void>;
   /** Await once each dispatch ends, including errors. Undefined usage is unknown,
    * not zero. Supply per-step usage with estimatedCostUsd, never cumulative usage.
    * Duplicate settlement of the same ordinal is a no-op (first result wins).

@@ -305,8 +305,8 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
   const f = await fixture({ stepAccounting: true, goals: ["A"], maxCostUsd: mode === "denial" ? 0.09 : 1 });
   let calls = 0, secondDispatches = 0;
   const estimates: any[] = [];
-  f.d.estimateCallCost = (_provider: unknown, settings: any, bytes: number, hasTools: boolean) => {
-    estimates.push({ maxSteps: settings.maxSteps, bytes, hasTools }); return costs[settings.modelId];
+  f.d.estimateCallCost = (_provider: unknown, settings: any, bytes: number, hasTools: boolean, inputTokenUpperBound?: number) => {
+    estimates.push({ maxSteps: settings.maxSteps, bytes, hasTools, inputTokenUpperBound }); return costs[settings.modelId];
   };
   f.setBehavior(async input => {
     calls++;
@@ -318,7 +318,7 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
       await f.db.update(supervisorRuns).set({ leaseUntil: new Date(0) }).where(eq(supervisorRuns.runId, f.run.id));
       await stepSupervisor(f.d, f.run.id);
     }
-    await input.onBeforeModelStep({ ordinal: 2, inputBytes: 2345, hasMedia: mode === "success" });
+    await input.onBeforeModelStep({ ordinal: 2, inputBytes: 2345, hasMedia: mode === "success", inputTokenUpperBound: 2100 });
     secondDispatches++;
     await input.onModelStepSettled({ ordinal: 2, usage: mode === "unknown" ? usage(null) : usage(0.03) });
     if (mode === "unknown") await input.onBeforeModelStep({ ordinal: 3, inputBytes: 3456, hasMedia: false });
@@ -342,7 +342,10 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
       expect(ledger.reservedCostUsd).toBeCloseTo(0.09);
       expect(ledger.budgetDecision.reason).toBe("unknown_usage");
     }
-    if (mode === "denial") expect(ledger.budgetDecision).toMatchObject({ reason: "spend_allowance", recordedUsd: 0.03, reservedUsd: 0, requestedUsd: 0.07 });
+    if (mode === "denial") {
+      expect(ledger.budgetDecision).toMatchObject({ reason: "spend_allowance", recordedUsd: 0.03, reservedUsd: 0, requestedUsd: 0.07 });
+      expect(ledger.nextStepInput).toEqual({ ordinal: 2, inputBytes: 2345, hasMedia: false, inputTokenUpperBound: 2100 });
+    }
     if (mode === "interruption") {
       expect(attempt.status).toBe("interrupted");
       expect(attempt.usageStatus).toBe("reported");
@@ -354,9 +357,10 @@ integration(`per-model dispatch accounting through supervisor provider calls: ${
     if (mode === "success") {
       await Promise.all([1, 2].map(() => recordProviderUsage(f.d, { ...f.run, id: attempt.runId }, usage(0.99), attempt.startedAt, new Date(), attempt.id)));
       expect(await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, attempt.id))).toHaveLength(1);
-      expect(estimates).toContainEqual({ maxSteps: 1, bytes: 2345, hasTools: true });
+      expect(estimates).toContainEqual({ maxSteps: 1, bytes: 2345, hasTools: true, inputTokenUpperBound: 2100 });
+      expect(ledger.stepReceipts[1].input).toEqual({ ordinal: 2, inputBytes: 2345, hasMedia: true, inputTokenUpperBound: 2100 });
     }
-    expect(estimates).toContainEqual({ maxSteps: 1, bytes: 1234, hasTools: false });
+    expect(estimates).toContainEqual({ maxSteps: 1, bytes: 1234, hasTools: false, inputTokenUpperBound: undefined });
   } finally { await f.close(); }
 }, 15000);
 

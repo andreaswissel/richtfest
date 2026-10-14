@@ -4,7 +4,8 @@ import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-ut
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
-import type { AppDeps } from "@richtfest/knowledge/deps";
+import type { AppDeps, ProviderExecutionSettings } from "@richtfest/knowledge/deps";
+import { knowledgeDeps } from "../app-hosts";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks, artifacts, artifactRevisions } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
@@ -15,23 +16,27 @@ import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noi
 import { calculateAcoustics } from "@richtfest/acoustics";
 
 const base = { provider: "openai" as const, runId: crypto.randomUUID(), goal: "Review evidence", context: {} };
-test("visual inspection reaches the same model's second step as native media with exact provenance", async () => {
+for (const modelId of ["gpt-6-astra", "test-model"])
+for (const imageCount of [1, 2])
+test(`visual inspection preserves ${imageCount} native images and bounds tokens without pricing base64 as text: ${modelId}`, async () => {
   const request = { versionId: crypto.randomUUID(), page: 2, crop: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } };
-  const data = Buffer.from("synthetic image bytes").toString("base64");
+  const data = Buffer.alloc(1024 * 1024, 71).toString("base64");
   const metadata = { ...request, status: "available" as const, scope: "pdf_page" as const, reason: "Unreviewed visual evidence" };
   let rounds = 0, inspections = 0;
   const prompts: any[] = [];
-  const admitted: { ordinal: number; inputBytes: number; hasMedia: boolean }[] = [];
+  const admitted: { ordinal: number; inputBytes: number; hasMedia: boolean; inputTokenUpperBound?: number }[] = [];
   const settled: any[] = [];
+  let settings!: ProviderExecutionSettings;
   const output = { summary: "Inspected the exact page crop.", rationale: "Visual inference, not approved measurements.", citations: [request.versionId] };
   const model = new MastraLanguageModelV2Mock({ doStream: async options => {
-    expect(admitted[rounds]!.inputBytes).toBe(Buffer.byteLength(JSON.stringify(options)));
+    const bytes = Buffer.byteLength(JSON.stringify(options));
+    expect(admitted[rounds]!.inputBytes).toBe(bytes);
     expect(settled).toHaveLength(rounds);
     prompts.push(options.prompt);
     const inspect = rounds++ === 0;
     return { stream: new ReadableStream({ start(controller) {
       controller.enqueue({ type: "stream-start", warnings: [] });
-      if (inspect) controller.enqueue({ type: "tool-call", toolCallId: "visual-1", toolName: "inspect_project_source", input: JSON.stringify(request) });
+      if (inspect) for (let i = 1; i <= imageCount; i++) controller.enqueue({ type: "tool-call", toolCallId: `visual-${i}`, toolName: "inspect_project_source", input: JSON.stringify(request) });
       else {
         controller.enqueue({ type: "text-start", id: "result" });
         controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify(output) });
@@ -42,20 +47,38 @@ test("visual inspection reaches the same model's second step as native media wit
     } }) };
   } });
   expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer", sourceVersionIds: [request.versionId] },
-    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 },
+    modelConfig: { modelId, maxOutputTokens: 2048, maxSteps: 2 },
+    onRequest: async value => { settings = value; },
     onBeforeModelStep: async step => { admitted.push(step); },
     onModelStepSettled: async step => { settled.push(step); },
     inspectSource: async input => { inspections++; expect(input).toEqual(request); return { ...metadata, image: { mediaType: "image/jpeg", data } }; },
   }, "test-key", { model })).toEqual(output);
   expect(rounds).toBe(2);
-  expect(inspections).toBe(1);
+  expect(inspections).toBe(imageCount);
   expect(admitted.map(s => [s.ordinal, s.hasMedia])).toEqual([[1, false], [2, true]]);
+  // Astra accepts at most 30,000 image patches at 1.2 tokens each, plus
+  // one token for documented rounding. Transport size is not image tokens.
+  expect(admitted[0]!.inputTokenUpperBound).toBeUndefined();
+  if (modelId === "gpt-6-astra") {
+    expect(admitted[1]!.inputTokenUpperBound).toBeGreaterThan(imageCount * 36001);
+    expect(admitted[1]!.inputTokenUpperBound).toBeLessThan(imageCount * 36001 + 25000);
+  } else expect(admitted[1]!.inputTokenUpperBound).toBeUndefined();
+  const estimate = knowledgeDeps({} as any, { actor: { id: "test", tenantId: "test" } } as any).estimateCallCost!;
+  const measured = admitted[1]!;
+  const cost = estimate("openai", { ...settings, maxSteps: 1 }, measured.inputBytes, measured.hasMedia, measured.inputTokenUpperBound);
+  if (modelId === "gpt-6-astra") {
+    expect(cost).toBeCloseTo(measured.inputTokenUpperBound! * 10 / 1_000_000 + 2048 * 50 / 1_000_000, 8);
+    expect(estimate("openai", { ...settings, maxSteps: 1 }, measured.inputBytes, true)).toBeGreaterThan(imageCount * 40);
+  } else expect(cost).toBeNull();
   expect(settled.map(s => [s.ordinal, s.usage.inputTokens, s.usage.outputTokens])).toEqual([[1, 10, 20], [2, 10, 20]]);
   const results = prompts[1].filter((message: any) => message.role === "tool").flatMap((message: any) => message.content);
+  expect(results).toHaveLength(imageCount);
   const result = results.find((part: any) => part.type === "tool-result" && part.toolCallId === "visual-1");
   expect(result.output).toEqual({ type: "content", value: [
     { type: "text", text: JSON.stringify(metadata) }, { type: "media", mediaType: "image/jpeg", data },
   ] });
+  // Estimation must not mutate either the true output or the SDK's copies.
+  expect(result.providerOptions.mastra.modelOutput).toEqual(result.output);
   expect(result.output.value.filter((part: any) => part.type === "text").map((part: any) => part.text).join("")).not.toContain(data);
 });
 

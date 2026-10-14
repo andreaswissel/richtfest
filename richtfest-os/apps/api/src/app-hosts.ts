@@ -163,14 +163,16 @@ export const knowledgeDeps = (
       return Object.fromEntries(result.rows.map((row: any) => [row.id, row.name]));
     },
     supervisorEnabled: env.AGENT_SUPERVISOR_ENABLED,
-    estimateCallCost: (provider, settings, inputBytes, hasTools) => {
+    estimateCallCost: (provider, settings, inputBytes, hasTools, inputTokenUpperBound) => {
       const steps = hasTools ? settings.maxSteps : 1;
       const contextBudget = hasTools && provider !== "typesafe" ? agentModelInputByteBudget(provider, settings.modelId, settings.maxOutputTokens) : inputBytes;
       if (contextBudget === undefined) return null;
+      if (inputTokenUpperBound !== undefined && (!Number.isSafeInteger(inputTokenUpperBound) || inputTokenUpperBound < 0)) return null;
       // Reserve uncached input and full output at every tool step. This is a
       // conservative dispatch estimate, not a promise about a provider invoice.
+      // A verified native-media bound replaces transport bytes, not evidence.
       return estimateCostUsd({ provider, modelId: settings.modelId,
-        inputTokens: Math.max(inputBytes, contextBudget) * steps,
+        inputTokens: (inputTokenUpperBound ?? Math.max(inputBytes, contextBudget)) * steps,
         outputTokens: settings.maxOutputTokens * steps, cachedInputTokens: 0 }).estimatedCostUsd;
     },
     resolveSupervisorPreset: (effort, provider) => resolveAgentPreset(db, actor.tenantId, effort, provider),

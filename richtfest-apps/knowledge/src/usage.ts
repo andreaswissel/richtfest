@@ -164,10 +164,12 @@ export async function executeTrackedProvider(
   let everDispatched = false;
   let settledCostUsd = 0;
   let nextBoundUsd = 0;
-  type Receipt = { ordinal: number; status: "in_flight" | "settled" | "unknown"; usage?: ProviderUsage };
+  type ModelStepInput = Parameters<NonNullable<ProviderTelemetry["onBeforeModelStep"]>>[0];
+  let nextStepInput: ModelStepInput | undefined;
+  type Receipt = { ordinal: number; status: "in_flight" | "settled" | "unknown"; usage?: ProviderUsage; input?: ModelStepInput };
   const receipts: Receipt[] = [];
   const stepAccounted = () => settings?.stepAccounting === "per-model-dispatch-v1";
-  const ledger = () => stepAccounted() ? { everDispatched, settledCostUsd, nextBoundUsd, nextStepOrdinal: receipts.length + 1, stepReceipts: receipts,
+  const ledger = () => stepAccounted() ? { everDispatched, settledCostUsd, nextBoundUsd, nextStepInput, nextStepOrdinal: receipts.length + 1, stepReceipts: receipts,
     reservedCostUsd: settledCostUsd + (receipts.some(r => r.status !== "settled") ? nextBoundUsd : 0) } : {};
   const aggregateUsage = (): ProviderUsage | undefined => {
     if (!receipts.length) return;
@@ -225,7 +227,7 @@ export async function executeTrackedProvider(
     });
   };
   const prepareAndAdmit = async (input: NonNullable<Parameters<NonNullable<ProviderTelemetry["onPrepared"]>>[0]>, signal?: AbortSignal,
-    modelStep?: { ordinal: number; inputBytes: number; hasMedia: boolean }) => {
+    modelStep?: ModelStepInput) => {
         signal?.throwIfAborted();
         await invocation.assertActive?.();
         if (!modelStep) {
@@ -249,7 +251,8 @@ export async function executeTrackedProvider(
           const estimate = settings && d.estimateCallCost?.(run.provider as ProviderUsage["provider"],
             modelStep ? { ...settings, maxSteps: 1 } : settings,
             modelStep?.inputBytes ?? input.inputBytes ?? Buffer.byteLength(JSON.stringify(input), "utf8"),
-            modelStep ? modelStep.hasMedia : Array.isArray(input.tools) && input.tools.length > 0);
+            modelStep ? modelStep.hasMedia : Array.isArray(input.tools) && input.tools.length > 0,
+            modelStep?.inputTokenUpperBound);
           const requestedUsd = estimate == null || !Number.isFinite(estimate) || estimate < 0 ? null : estimate;
           if (modelStep && receipts.every(r => r.status === "settled")) nextBoundUsd = requestedUsd ?? 0;
           let lastDecision = "";
@@ -267,7 +270,7 @@ export async function executeTrackedProvider(
               if (!budget) {
                 if (modelStep && receipts.some(r => r.status !== "settled"))
                   throw Object.assign(new Error("Previous model step outcome is unknown"), { code: "budget_exhausted" });
-                if (modelStep) { everDispatched = true; nextBoundUsd = requestedUsd ?? 0; receipts.push({ ordinal: modelStep.ordinal, status: "in_flight" }); }
+                if (modelStep) { everDispatched = true; nextBoundUsd = requestedUsd ?? 0; receipts.push({ ordinal: modelStep.ordinal, status: "in_flight", input: nextStepInput }); }
                 await tx.update(agentRunAttempts).set({ settings: { ...settings, ...ledger(), leaseToken: invocation.leaseToken,
                   dispatchPending: false, dispatchedAt: new Date().toISOString() } }).where(where);
                 return;
@@ -291,7 +294,7 @@ export async function executeTrackedProvider(
               if (fingerprint !== lastDecision) {
                 if (modelStep && value.state === "reserved") {
                   everDispatched = true; nextBoundUsd = requestedUsd!;
-                  receipts.push({ ordinal: modelStep.ordinal, status: "in_flight" });
+                  receipts.push({ ordinal: modelStep.ordinal, status: "in_flight", input: nextStepInput });
                 }
                 await tx.update(agentRunAttempts).set({ settings: { ...current.settings, ...settings, leaseToken: invocation.leaseToken, budgetDecision: value,
                   dispatchPending: value.state !== "reserved",
@@ -326,13 +329,18 @@ export async function executeTrackedProvider(
       onPrepared: (input, signal) => prepareAndAdmit(input, signal),
       onBeforeModelStep: async (input, signal) => {
         if (!stepAccounted() || reusedFromStepId || !prepared || !Number.isSafeInteger(input.inputBytes) || input.inputBytes < 0 ||
+          (input.inputTokenUpperBound !== undefined && (!Number.isSafeInteger(input.inputTokenUpperBound) || input.inputTokenUpperBound < 0)) ||
           input.ordinal !== receipts.length + 1 || input.ordinal > Math.min(settings!.maxSteps, 100))
           throw new Error("Invalid model step accounting contract");
         if (!invocation.rootRunId && receipts.some(r => r.status !== "settled"))
           throw Object.assign(new Error("Previous model step outcome is unknown"), { code: "budget_exhausted" });
+        // Persist numeric admission evidence only, never normalized prompts or
+        // image data. Retain the denied step as well as each dispatched receipt.
+        nextStepInput = { ordinal: input.ordinal, inputBytes: input.inputBytes, hasMedia: input.hasMedia,
+          ...(input.inputTokenUpperBound === undefined ? {} : { inputTokenUpperBound: input.inputTokenUpperBound }) };
         await prepareAndAdmit(prepared, signal, input);
         if (!invocation.rootRunId) {
-          everDispatched = true; receipts.push({ ordinal: input.ordinal, status: "in_flight" });
+          everDispatched = true; receipts.push({ ordinal: input.ordinal, status: "in_flight", input: nextStepInput });
           await d.db.update(agentRunAttempts).set({ settings: { ...settings, ...ledger() } }).where(where);
         }
       },

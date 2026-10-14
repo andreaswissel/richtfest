@@ -442,15 +442,49 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
         let step: typeof currentStep;
         if (stepAccounting) {
           abortSignal.throwIfAborted();
+          // Only native image parts in tool output qualify, never similarly
+          // shaped JSON in tool arguments, schemas, or ordinary source text.
+          const images = new Set<object>();
+          const mastraMetadata = new Set<object>();
+          for (const message of request.prompt) if (message.role === "tool" || message.role === "assistant") {
+            for (const part of message.content) {
+              const metadata = part.providerOptions?.mastra;
+              if (metadata && typeof metadata === "object") mastraMetadata.add(metadata);
+              if (part.type === "tool-result" && part.output.type === "content") {
+                for (const item of part.output.value) if (item.type === "media" && item.mediaType.startsWith("image/")) images.add(item);
+              }
+            }
+          }
           let hasMedia = false;
           const serialized = JSON.stringify(request, (_key, value) => {
             if (value && typeof value === "object" && ["image", "file", "media"].includes(value.type)) hasMedia = true;
             return value;
           });
+          // OpenAI vision docs: Astra accepts at most 30,000 patches/image,
+          // billed at 1.2 tokens/patch (+1 for documented rounding). Reserve
+          // that maximum, independent of JPEG/base64 size or image detail.
+          // https://developers.openai.com/api/docs/guides/images-vision
+          // Other models/media retain the existing conservative fallback.
+          const astra = input.provider === "openai" && /^gpt-6-astra(?:-\d{4}-\d{2}-\d{2})?$/.test(modelConfig?.modelId ?? "");
+          let inputTokenUpperBound: number | undefined;
+          if (astra && images.size > 0) {
+            let imageCount = 0, unknownMedia = false;
+            const measured = JSON.stringify(request, function (key, value) {
+              // Mastra retains modelOutput twice in part metadata. The OpenAI
+              // Responses adapter sends only tool-result.output. Leave the
+              // original request untouched; omit these copies only here.
+              if (key === "modelOutput" && mastraMetadata.has(this)) return undefined;
+              if (images.has(value)) { imageCount++; return { ...value, data: "" }; }
+              if (value && typeof value === "object" && ["image", "file", "media"].includes(value.type)) unknownMedia = true;
+              return value;
+            });
+            if (!unknownMedia) inputTokenUpperBound = Buffer.byteLength(measured) + imageCount * 36001;
+          }
           pauseDeadline();
           if (remainingMs <= 0) { resumeDeadline(); abortSignal.throwIfAborted(); }
           try {
-            await input.onBeforeModelStep!({ ordinal: ordinal + 1, inputBytes: Buffer.byteLength(serialized), hasMedia }, options.signal);
+            await input.onBeforeModelStep!({ ordinal: ordinal + 1, inputBytes: Buffer.byteLength(serialized), hasMedia,
+              ...(inputTokenUpperBound === undefined ? {} : { inputTokenUpperBound }) }, options.signal);
           } catch (error) { controlFailure = error; throw error; }
           finally { resumeDeadline(); }
           abortSignal.throwIfAborted();
