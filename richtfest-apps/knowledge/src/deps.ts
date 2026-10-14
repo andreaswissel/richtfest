@@ -138,6 +138,14 @@ export type AppDeps = {
   sourceReferences: (projectId: string, versionIds: string[]) => Promise<SourceReference[]>;
   /** Exact ready PDF version, scoped to the actor's tenant and project. */
   readSourcePdf?: (projectId: string, versionId: string) => Promise<Buffer | null>;
+  /** Eligibility of immutable PDF attachments, without downloading their bytes. */
+  sourcePdfVersionIds?: (projectId: string, versionIds: string[]) => Promise<string[]>;
+  /** Private generated exports; keys never leave the server. */
+  pdfStorage?: {
+    write: (key: string, bytes: Buffer) => Promise<void>;
+    read: (key: string) => Promise<{ stream: AsyncIterable<Uint8Array>; sizeBytes: number } | null>;
+    remove: (key: string) => Promise<void>;
+  };
   /** Targeted original visual; rendering belongs to Projects, run receipts to Knowledge. */
   inspectSource?: (projectId: string, input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual>;
   resolveSource: (

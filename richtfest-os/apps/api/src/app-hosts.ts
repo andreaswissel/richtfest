@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import { Readable } from "node:stream";
 import { sql } from "drizzle-orm";
 import { agentModelInputByteBudget, type AgentProvider } from "@richtfest/shared";
 import { estimateCostUsd } from "./model-pricing";
@@ -267,6 +268,35 @@ export const knowledgeDeps = (
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.status='ready'
         and v.id in (${sql.join([...new Set(versionIds)].map(id => sql`${id}::uuid`), sql`, `)})`);
       return result.rows as { versionId: string; fileName: string; version: number }[];
+    },
+    sourcePdfVersionIds: async (projectId, versionIds) => {
+      if (!versionIds.length) return [];
+      const result = await db.execute(sql`select v.id from projects_files f
+        join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id
+        where f.tenant_id=${actor.tenantId} and f.project_id=${projectId}
+        and f.purpose='project_evidence' and v.status='ready' and v.mime_type='application/pdf'
+        and v.id in (${sql.join([...new Set(versionIds)].map(id => sql`${id}::uuid`), sql`, `)})`);
+      return result.rows.map(row => row.id as string);
+    },
+    pdfStorage: {
+      write: async (key, bytes) => {
+        if (fileStorage.kind === "bucket") {
+          const upload = await fileStorage.initiate(key, "application/pdf", "");
+          const response = await fetch(upload.uploadUrl, { method: "PUT", headers: {
+            ...upload.headers, "content-length": String(bytes.length),
+          }, body: new Uint8Array(bytes), redirect: "error", signal: AbortSignal.timeout(120_000) });
+          if (!response.ok) throw new HttpError(502, "storage_failed", "PDF storage failed");
+        } else {
+          await fileStorage.saveStream(key, Readable.from([bytes]), "application/pdf");
+        }
+      },
+      read: async key => {
+        const metadata = await fileStorage.head(key);
+        if (!metadata) return null;
+        const stream = await fileStorage.read(key, AbortSignal.timeout(120_000));
+        return stream ? { stream, sizeBytes: metadata.sizeBytes } : null;
+      },
+      remove: key => fileStorage.remove(key),
     },
     inspectSource: async (projectId, raw, signal) => {
       if (!actor.permissions.has("projects:read") || !actor.permissions.has("agent:run"))

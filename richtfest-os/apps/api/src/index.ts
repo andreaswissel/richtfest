@@ -1,6 +1,7 @@
 import { createServer } from "./server";
 import { env } from "./env";
-import { startSupervisorWorker } from "./supervisor-worker";
+import { backgroundKnowledgeDeps, startSupervisorWorker } from "./supervisor-worker";
+import { startArtifactPdfWorker } from "@richtfest/knowledge";
 import { startLocationWorker } from "@richtfest/projects/location-worker";
 import { startSourceExtractionWorker } from "@richtfest/projects/source-extraction";
 import { startSourceModelWorker } from "@richtfest/projects/source-model";
@@ -13,6 +14,10 @@ import { publicDataWorkerDeps } from "./public-data-host";
 const { app, db, pool } = await createServer();
 const server = app.listen(env.PORT, () => console.log(`Richtfest API listening on ${env.PORT}`));
 const worker = await startSupervisorWorker(db, pool);
+const pdfWorker = startArtifactPdfWorker({
+  db, resolveDeps: (tenantId, actorId) => backgroundKnowledgeDeps(db, tenantId, actorId),
+  reportError: () => console.error("Artifact PDF preparation failed; automatic recovery is bounded"),
+});
 const publicDataWorker = env.PUBLIC_DATA_ENABLED ? await startPublicDataWorker(publicDataWorkerDeps(db)) : null;
 const locationWorker = startLocationWorker({
   db,
@@ -32,6 +37,7 @@ const modelWorker = startSourceModelWorker({
 });
 async function shutdown() {
   server.close();
+  await pdfWorker.stop();
   await modelWorker.stop();
   await extractionWorker.stop();
   await publicDataWorker?.stop();

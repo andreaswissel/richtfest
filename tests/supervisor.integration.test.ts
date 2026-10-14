@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { Readable } from "node:stream";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { and, eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
@@ -1334,6 +1335,7 @@ integration(
       projectId = crypto.randomUUID(),
       inventoryVersionId = fixture.sources[0].versionId;
     const calls: { phase: string; goal: string; context: any }[] = [];
+    const pdfs = new Map<string, Buffer>();
     let reviewCount = 0;
     let conversationId = "";
     let server: any;
@@ -1356,6 +1358,15 @@ integration(
       sourceReferences: async (_projectId, versionIds) => fixture.sources
         .filter(source => versionIds.includes(source.versionId))
         .map(source => ({ versionId: source.versionId, fileName: source.name, version: 1 })),
+      sourcePdfVersionIds: async () => [],
+      pdfStorage: {
+        write: async (key, bytes) => { pdfs.set(key, bytes); },
+        read: async key => {
+          const bytes = pdfs.get(key);
+          return bytes ? { stream: Readable.from([bytes]), sizeBytes: bytes.length } : null;
+        },
+        remove: async key => { pdfs.delete(key); },
+      },
       listProjectSources: async () => ({
         sources: [...fixture.sources],
         truncated: false,

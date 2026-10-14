@@ -1,5 +1,7 @@
 import { repairLegacyRuns } from "./run-recovery";
 import { Router, type Request } from "express";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, acousticDocumentTemplateSchema, agentBudgetDecisionSchema } from "@richtfest/shared";
@@ -18,7 +20,7 @@ import {
   tasks,
 } from "./schema";
 import { attachUsageSummaries } from "./usage";
-import { artifactPdf } from "./artifact-pdf";
+import { prepareArtifactPdf, queueArtifactPdf } from "./artifact-pdf-exports";
 import { projectAgentAnalytics } from "./analytics";
 
 export const missing = (message = "Record not found") =>
@@ -132,6 +134,7 @@ export async function createArtifact(
       createdBy: d.actorId,
     })
     .returning();
+  await queueArtifactPdf(d, tx, revision.id);
   await d.audit(tx, "knowledge.artifact.created", "artifact", artifact.id, {
     revisionId: revision.id,
     runId,
@@ -720,53 +723,30 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
         d.requirePermission("knowledge:read");
         const artifactId = z.string().uuid().parse(req.params.artifactId);
         const revisionId = z.string().uuid().parse(req.params.revisionId);
-        const [row] = await d.db
-          .select({
-            artifactId: artifacts.id,
-            projectId: artifacts.projectId,
-            title: artifactRevisions.title,
-            content: artifactRevisions.content,
-            version: artifactRevisions.version,
-            status: sql<string>`case when ${artifactRevisions.version} = (select max(r.version) from knowledge_artifact_revisions r where r.artifact_id=${artifacts.id} and r.tenant_id=${d.tenantId}) then ${artifacts.status} else 'historical revision' end`,
-            sourceVersionIds: artifactRevisions.sourceVersionIds,
-            payload: artifactRevisions.payload,
-          })
-          .from(artifactRevisions)
-          .innerJoin(artifacts, eq(artifactRevisions.artifactId, artifacts.id))
-          .where(
-            and(
-              eq(artifacts.id, artifactId),
-              eq(artifacts.tenantId, d.tenantId),
-              eq(artifactRevisions.id, revisionId),
-              eq(artifactRevisions.tenantId, d.tenantId),
-            ),
-          )
-          .limit(1);
-        if (!row || !(await d.validateProject(row.projectId)))
-          throw missing("Artifact revision not found");
-
-        const filename = `${row.title}`
+        let pdf = await prepareArtifactPdf(d, artifactId, revisionId);
+        const deadline = Date.now() + 120_000;
+        // Cold legacy exports and downloads during preparation share the worker's lease.
+        while (!pdf && Date.now() < deadline && !res.destroyed) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          pdf = await prepareArtifactPdf(d, artifactId, revisionId);
+        }
+        if (res.destroyed) return;
+        if (!pdf) throw Object.assign(new Error("PDF is still preparing. Please try again shortly."),
+          { status: 503, code: "pdf_preparing" });
+        const filename = `${pdf.title}`
           .normalize("NFKD")
           .replace(/[^\w -]/g, "")
           .trim()
           .replace(/[\s-]+/g, "-")
           .slice(0, 80) || "richtfest-artifact";
-        const sourceVersionIds = Array.isArray(row.sourceVersionIds)
-          ? row.sourceVersionIds.filter((id: unknown): id is string => typeof id === "string")
-          : [];
-        const pdf = await artifactPdf({ ...row, sourceVersionIds,
-          sources: await d.sourceReferences(row.projectId, sourceVersionIds),
-          template: row.payload?.template,
-          readSourcePdf: d.readSourcePdf,
-        });
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Length", String(pdf.length));
+        res.setHeader("Content-Length", String(pdf.sizeBytes));
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="${filename}-v${row.version}.pdf"`,
+          `attachment; filename="${filename}-v${pdf.version}.pdf"`,
         );
         res.setHeader("Cache-Control", "private, no-store");
-        return res.status(200).send(pdf);
+        await pipeline(Readable.from(pdf.stream), res);
       } catch (e) {
         return next(e);
       }
@@ -794,6 +774,8 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
         ),
       )
       .orderBy(desc(artifactRevisions.version));
+    // Warm legacy reports when opened, without restarting agents or resetting completed exports.
+    if (revisions[0]) await d.db.transaction((tx: any) => queueArtifactPdf(d, tx, revisions[0].id, false));
     const notes = await d.db
       .select({ annotation: annotations })
       .from(annotations)
@@ -853,6 +835,8 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           .update(artifacts)
           .set({ title: input.title, status: "draft" })
           .where(eq(artifacts.id, artifact.id));
+        await queueArtifactPdf(d, tx, revision.id);
+        if (last) await queueArtifactPdf(d, tx, last.id);
         await d.audit(
           tx,
           "knowledge.artifact_revision.created",

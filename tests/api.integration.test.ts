@@ -5,6 +5,8 @@ import { withProviderCredential } from "../richtfest-os/apps/api/src/ai-connecti
 import { env } from "../richtfest-os/apps/api/src/env";
 import { fileStorage } from "../richtfest-os/apps/api/src/app-hosts";
 import { startSourceExtractionWorker } from "../richtfest-apps/projects/src/source-extraction";
+import { startArtifactPdfWorker } from "../richtfest-apps/knowledge/src/artifact-pdf-exports";
+import { backgroundKnowledgeDeps } from "../richtfest-os/apps/api/src/supervisor-worker";
 
 const databaseUrl = process.env.DATABASE_URL;
 const run = databaseUrl ? test : test.skip;
@@ -764,6 +766,7 @@ describe("accepted API workflow (PostgreSQL)", () => {
         `/api/knowledge/workspaces/${projectId}`,
         `/api/knowledge/conversations/${conversationId}/messages`,
         `/api/knowledge/artifacts/${artifact.body.data.artifact.id}`,
+        `/api/knowledge/artifacts/${artifact.body.data.artifact.id}/revisions/${revision.body.data.id}/pdf`,
       ])
         expect([403, 404]).toContain(
           (await request(path, {}, outsiderCookie)).response.status,
@@ -1132,3 +1135,100 @@ describe("accepted API workflow (PostgreSQL)", () => {
     20_000,
   );
 });
+
+run("PDFs prepare before downloading and keep revision/status boundaries through cache reuse and recovery", async () => {
+  const { db, pool } = createDatabase(databaseUrl!);
+  const server = createApp(db, { allowDevAuth: true }).listen(0);
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  let worker: ReturnType<typeof startArtifactPdfWorker> | undefined;
+  let projectId: string | undefined;
+  let cookie = "";
+  const request = (path: string, body?: unknown) => fetch(base + path, {
+    method: body === undefined ? "GET" : "POST", headers: { cookie, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const json = async (path: string, body?: unknown) => {
+    const response = await request(path, body);
+    expect(response.ok).toBe(true);
+    return (await response.json()).data;
+  };
+  const saved = async (id: string) => (await pool.query(
+    "select * from knowledge_artifact_pdf_exports where revision_id=$1", [id])).rows[0];
+  const text = (bytes: Buffer) => {
+    const result = Bun.spawnSync(["pdftotext", "-", "-"], { stdin: bytes });
+    expect(result.exitCode).toBe(0);
+    return result.stdout.toString();
+  };
+  try {
+    const login = await request("/api/auth/dev-login", { email: "andreas@richtfest.local" });
+    expect(login.status).toBe(200);
+    cookie = login.headers.get("set-cookie")!.split(";")[0];
+    projectId = (await json("/api/projects", { name: "PDF cache integration" })).id;
+    const { artifact, revision } = await json("/api/knowledge/artifacts", {
+      projectId, title: "First saved report", content: "Original evidence survives.",
+    });
+    const endpoint = (id: string) => `/api/knowledge/artifacts/${artifact.id}/revisions/${id}/pdf`;
+    expect(["queued", "running", "ready"]).toContain((await saved(revision.id)).status);
+    worker = startArtifactPdfWorker({ db,
+      resolveDeps: (tenantId, actorId) => backgroundKnowledgeDeps(db, tenantId, actorId),
+      reportError: () => {},
+    });
+    const deadline = Date.now() + 15_000;
+    while ((await saved(revision.id)).status !== "ready" && Date.now() < deadline) await Bun.sleep(100);
+    expect((await saved(revision.id)).status).toBe("ready");
+    await worker.stop();
+    const before = await saved(revision.id);
+    const storedChunks: Buffer[] = [];
+    for await (const chunk of (await fileStorage.read(before.storage_key))!) storedChunks.push(Buffer.from(chunk));
+    const storedBytes = Buffer.concat(storedChunks);
+    // A new HTTP request after the worker stops must use durable bytes, not process memory.
+    const downloads = await Promise.all([request(endpoint(revision.id)), request(endpoint(revision.id))]);
+    for (const response of downloads) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/pdf");
+      expect(response.headers.get("content-disposition")).toContain("First-saved-report-v1.pdf");
+      expect(Buffer.from(await response.arrayBuffer()).equals(storedBytes)).toBe(true);
+    }
+    expect(text(storedBytes)).toContain("Status: draft");
+    expect((await saved(revision.id)).storage_key).toBe(before.storage_key);
+    expect((await fetch(base + endpoint(revision.id))).status).toBe(401);
+    expect((await request(endpoint(crypto.randomUUID()))).status).toBe(404);
+
+    await json(`/api/knowledge/artifacts/${artifact.id}/review`, { expectedRevisionId: revision.id });
+    const approved = Buffer.from(await (await request(endpoint(revision.id))).arrayBuffer());
+    expect(text(approved)).toContain("Status: approved");
+    expect(text(approved)).toContain("Original evidence survives.");
+    const second = await json(`/api/knowledge/artifacts/${artifact.id}/revisions`, {
+      title: "Changed report", content: "Different second-revision evidence.",
+    });
+    const historical = text(Buffer.from(await (await request(endpoint(revision.id))).arrayBuffer()));
+    expect(historical).toContain("Status: historical revision");
+    expect(historical).toContain("Original evidence survives.");
+    expect(historical).not.toContain("Different second-revision evidence.");
+    // Simulate interruption after claiming a job; the persisted expired lease must recover.
+    await pool.query("update knowledge_artifact_pdf_exports set status='running', lease_token=$2, lease_until=now()-interval '1 minute' where revision_id=$1",
+      [second.id, crypto.randomUUID()]);
+    const current = text(Buffer.from(await (await request(endpoint(second.id))).arrayBuffer()));
+    expect(current).toContain("Status: draft");
+    expect(current).toContain("Revision 2");
+    expect(current).toContain("Different second-revision evidence.");
+    // A lost saved object must rebuild, not deliver a successful empty download.
+    await fileStorage.remove((await saved(second.id)).storage_key);
+    const recovered = await request(endpoint(second.id));
+    expect(recovered.status).toBe(200);
+    expect(text(Buffer.from(await recovered.arrayBuffer()))).toContain("Different second-revision evidence.");
+  } finally {
+    await worker?.stop();
+    server.close();
+    if (projectId) {
+      const exports = await pool.query(`select e.storage_key from knowledge_artifact_pdf_exports e
+        join knowledge_artifact_revisions r on r.id=e.revision_id join knowledge_artifacts a on a.id=r.artifact_id where a.project_id=$1`, [projectId]);
+      for (const row of exports.rows) if (row.storage_key) await fileStorage.remove(row.storage_key);
+      await pool.query("delete from knowledge_artifact_revisions where artifact_id in (select id from knowledge_artifacts where project_id=$1)", [projectId]);
+      await pool.query("delete from knowledge_artifacts where project_id=$1", [projectId]);
+      await pool.query("delete from knowledge_drafts where project_id=$1", [projectId]);
+      await pool.query("delete from projects_projects where id=$1", [projectId]);
+    }
+    await pool.end();
+  }
+}, 30_000);

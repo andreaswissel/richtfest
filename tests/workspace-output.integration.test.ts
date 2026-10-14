@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
-import { knowledgeDeps } from "../richtfest-os/apps/api/src/app-hosts";
+import { fileStorage, knowledgeDeps } from "../richtfest-os/apps/api/src/app-hosts";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
+import { artifactPdf } from "../richtfest-apps/knowledge/src/artifact-pdf";
+import { Readable } from "node:stream";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +28,7 @@ integration("workspace returns scoped historical citation names and terminal chi
   const server = app.listen(0);
   const url = `http://127.0.0.1:${(server.address() as any).port}`;
   const directory = await mkdtemp(join(tmpdir(), "workspace-output-"));
+  const sourceKey = `${tenant}/${project}/${file}/${source}`;
   try {
     await pool.query(`insert into projects_projects(id,tenant_id,name,created_by) values($1,$3,'Own',$4),($2,$3,'Other project',$4)`, [project, otherProject, tenant, actor]);
     await pool.query(`insert into projects_files(id,tenant_id,project_id,name,source_type,created_by) values($1,$5,$3,'Schallschutz Müller.pdf','upload',$6),($2,$5,$4,'PRIVATE OTHER PROJECT.pdf','upload',$6)`, [file, otherFile, project, otherProject, tenant, actor]);
@@ -96,11 +99,36 @@ integration("workspace returns scoped historical citation names and terminal chi
       expect(failedExport.status).toBe(422);
       expect(await failedExport.json()).toEqual({ error: "invalid_pdf_attachment" });
     }
+    const original = await artifactPdf({ title: "Original evidence", content: "ORIGINAL SOURCE PAGE",
+      projectId: project, version: 1, status: "unreviewed", sourceVersionIds: [], sources: [] });
+    await fileStorage.saveStream(sourceKey, Readable.from([original]), "application/pdf");
+    await pool.query("update projects_file_versions set storage_key=$2 where id=$1", [source, sourceKey]);
+    await pool.query("update knowledge_artifact_revisions set content=$2 where id=$1",
+      [revision, "# Concept\n\nDraft only.\n\n## Exterior-noise plans\n\nOriginal plan attached."]);
+    const readPdf = async () => {
+      const response = await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`);
+      expect(response.status).toBe(200);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return Bun.spawnSync(["pdftotext", "-", "-"], { stdin: bytes }).stdout.toString();
+    };
+    expect(await readPdf()).toContain("ORIGINAL SOURCE PAGE");
+    expect(await readPdf()).toContain("ORIGINAL SOURCE PAGE");
+    // A warm export must not bypass current source eligibility or retain a stale label.
+    await pool.query("update projects_files set purpose='reference_report' where id=$1", [file]);
+    expect((await fetch(`${url}/artifacts/${artifact}/revisions/${revision}/pdf`)).status).toBe(422);
+    await pool.query("update projects_files set purpose='project_evidence', name='Renamed evidence.pdf' where id=$1", [file]);
+    const refreshed = await readPdf();
+    expect(refreshed).toContain("ORIGINAL SOURCE PAGE");
+    expect(refreshed).toContain("Renamed evidence.pdf");
+    expect(refreshed).not.toContain("Schallschutz Müller.pdf");
   } finally {
     server.close();
+    const cached = (await pool.query("select storage_key from knowledge_artifact_pdf_exports where revision_id=$1", [revision])).rows[0];
+    if (cached?.storage_key) await fileStorage.remove(cached.storage_key);
+    await fileStorage.remove(sourceKey);
     for (const table of ["os_audit_events", "knowledge_annotations", "knowledge_agent_run_events", "knowledge_agent_runs", "knowledge_messages", "knowledge_conversations", "knowledge_artifact_revisions", "knowledge_artifacts", "projects_file_versions", "projects_files", "projects_projects"])
       await pool.query(`delete from ${table} where tenant_id=$1`, [tenant]);
     await pool.end();
     await rm(directory, { recursive: true, force: true });
   }
-});
+}, 10_000);

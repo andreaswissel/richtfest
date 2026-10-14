@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { artifacts, artifactRevisions, drafts } from "./schema";
+import { queueArtifactPdf } from "./artifact-pdf-exports";
 
 type GetDeps = (req: Request) => AppDeps;
 
@@ -99,6 +100,7 @@ export function reviewsRouter(getDeps: GetDeps) {
             )
             .returning();
 
+          await queueArtifactPdf(d, tx, latest.id);
           const provenance = {
             artifactId: artifact.id,
             artifactRevisionId: latest.id,

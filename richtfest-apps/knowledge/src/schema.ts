@@ -263,6 +263,18 @@ export const artifactRevisions = pgTable("knowledge_artifact_revisions", {
     .defaultNow()
     .notNull(),
 });
+export const artifactPdfExports = pgTable("knowledge_artifact_pdf_exports", {
+  revisionId: uuid("revision_id").primaryKey().references(() => artifactRevisions.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  requestedBy: uuid("requested_by").notNull(),
+  status: text("status").notNull().default("queued"),
+  inputHash: text("input_hash"),
+  storageKey: text("storage_key"),
+  attempts: integer("attempts").notNull().default(0),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => ({ pending: index("knowledge_artifact_pdf_pending_idx").on(t.status, t.leaseUntil) }));
 export const annotations = pgTable("knowledge_annotations", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

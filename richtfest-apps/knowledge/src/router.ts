@@ -422,6 +422,7 @@ export function createRouter(getDeps: GetDeps) {
   return router;
 }
 export { dashboardSummary } from "./dashboard";
+export { startArtifactPdfWorker } from "./artifact-pdf-exports";
 
 export {
   tickSupervisors,
