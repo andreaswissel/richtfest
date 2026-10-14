@@ -28,6 +28,16 @@ export async function testRunRetry(
   let generation = 1;
   let defer: ((response: Response) => void) | undefined;
   const preview = () => ({
+    budgetDecision: {
+      state: "stopped",
+      reason: "spend_allowance",
+      limitUsd: 10,
+      recordedUsd: 1.230001,
+      reservedUsd: 8.125678,
+      requestedUsd: 1.000001,
+      retriesUsed: 2,
+      retryLimit: 3,
+    },
     resumable,
     generation,
     checkpointHash: `hash-${generation}`,
@@ -153,6 +163,17 @@ export async function testRunRetry(
     await observe?.("loading");
     await wait(() => dialog()?.textContent?.includes("Building components"));
     check(gets === 1 && posts.length === 0, "Preview was not lazy/read-only");
+    check(
+      dialog()!.textContent!.includes("Paused by budget guard") &&
+        dialog()!.textContent!.includes(
+          "The spend allowance cannot cover another paid call.",
+        ) &&
+        ["$1.230001 USD", "$8.125678 USD", "$1.000001 USD", "2/3"].every(
+          (amount) => dialog()!.textContent!.includes(amount),
+        ) &&
+        !dialog()!.textContent!.includes("spend_allowance"),
+      "Recovery budget stop or exact amounts were not explained safely",
+    );
     check(
       dialog()!.textContent!.includes("Consolidating the full report") &&
         dialog()!.textContent!.includes("Other report section") &&

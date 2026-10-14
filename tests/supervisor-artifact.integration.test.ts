@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { batchSectionSources, batchSpecialistSources } from "../richtfest-apps/knowledge/src/source-batches";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { acousticConceptFixture } from "./fixtures/acoustic-concepts";
@@ -22,6 +24,7 @@ import {
   artifactRevisions,
   agentRunEvents,
   agentRunAttempts,
+  agentRunSteps,
   agentRunUsage,
   tasks,
   annotations,
@@ -34,6 +37,96 @@ function unchangedEditorial(context: any) {
   };
   if (context.documentTask === "editorial_check") return { preserved: true, issues: [] };
 }
+
+for (const scenario of ["findings", "unrelated", "foreign", "receipt", "legacy", "legacy_fallback"] as const)
+test(`open issues use saved findings without widening evidence or replacing saved pieces: ${scenario}`, async () => {
+  const id = "exterior-noise-concept" as const, keys = acousticSectionKeys(id);
+  const versionId = crypto.randomUUID(), unrelated = crypto.randomUUID(), foreign = crypto.randomUUID(), receipt = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "en", versionId);
+  const findings = [{ sourceVersionIds: [versionId], output: {
+    summary: `Specialist found missing window specifications [${versionId}].`,
+    rationale: "Unresolved: obtain original specifications; no normative verification.",
+    citations: [versionId, foreign, receipt], limitations: ["No verified acoustic calculation"],
+  } }];
+  let draft: any, stopOutline = true, interrupted = false, reads = 0;
+  const calls: any[] = [];
+  const legacy = scenario.startsWith("legacy");
+  const text = legacy ? "Original project evidence.\n".repeat(400) : "UNRELATED RAW RANGE\n".repeat(40000);
+  const evidence = [{ versionId, name: "Evidence", version: 1, text,
+    coverage: undefined, retrieval: undefined, extractionNotes: undefined }];
+  const input = {
+    d: { resolveSource: async () => { reads++; return { status: "resolved", source: { versionId, name: "Evidence", version: 1 },
+      content: { status: "available", text } }; } } as any,
+    projectId: crypto.randomUUID(), id, goal: "Open issues report", findings, sourceVersionIds: [versionId, unrelated],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 2048, maxParallel: 1,
+    ...(scenario === "legacy_fallback" ? { inputByteBudget: 100000 } : {}),
+    assertActive: async () => {},
+    checkpoint: async (saved: any) => { draft = structuredClone(saved); if (stopOutline) throw new Error("Outline saved"); },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Open issues report", language: "en", project: fixture.project,
+        sections: keys.map(key => ({ key, sources: key === "openIssues" ? [{ versionId, pageStart: 1, pageEnd: 53 }] : [] })), attachments: [] };
+      const editorial = unchangedEditorial(context);
+      if (editorial) return editorial;
+      calls.push(context);
+      if (context.section === "openIssues") {
+        if (!legacy) {
+          expect(context.sources).toEqual([]);
+          expect(context.findings).toEqual(findings);
+          expect(context.sourceVersionIds).toEqual([versionId]);
+          expect(context.evidenceInstructions).toContain("Retain unresolved limitations");
+          if (scenario !== "findings") {
+            const rejected = scenario === "unrelated" ? unrelated : scenario === "foreign" ? foreign : receipt;
+            return { content: `Invalid reference [${rejected}]`, citations: [], complete: true };
+          }
+        } else expect(context.findings).toBeUndefined();
+        if (!interrupted) { interrupted = true; throw new Error("Interrupted open issues"); }
+        return { content: legacy ? `Legacy continuation ${context.batch}` : `${findings[0]!.output.summary}\n${findings[0]!.output.rationale}`,
+          citations: legacy ? [] : [versionId], complete: true };
+      }
+      return { content: (fixture as any)[context.section].replaceAll(versionId, "project evidence unavailable"), citations: [], complete: true };
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow("Outline saved");
+  stopOutline = false;
+  const fingerprint = draft.inputHash;
+  if (legacy) {
+    const batches = scenario === "legacy_fallback" ? batchSectionSources(evidence, 50000) : batchSpecialistSources(evidence, 4096);
+    const part = { content: "Saved legacy open issue; unresolved limitation remains.", citations: [], complete: true };
+    draft.sections.openIssues = { inputHash: createHash("sha256").update(JSON.stringify(batches)).digest("hex"),
+      parts: scenario === "legacy" ? [part] : [],
+      ...(scenario === "legacy_fallback" ? { byteLimit: 50000, fallbacks: { 0: [part] } } : {}) };
+  }
+  if (["unrelated", "foreign", "receipt"].includes(scenario)) {
+    await expect(authorAcousticConcept({ ...input, draft })).rejects.toMatchObject({
+      diagnostics: { errorId: "SOURCE_CITATION_OUT_OF_SCOPE" },
+    });
+    expect(reads).toBe(0);
+    return;
+  }
+  await expect(authorAcousticConcept({ ...input, draft })).rejects.toThrow("Interrupted open issues");
+  const saved = structuredClone(draft), before = calls.length;
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(draft.inputHash).toBe(fingerprint);
+  for (const key of keys.filter(key => key !== "openIssues" && saved.sections[key]?.parts.some(Boolean))) {
+    expect(draft.sections[key]).toEqual(saved.sections[key]);
+    expect(calls.slice(before).some(c => c.section === key)).toBe(false);
+  }
+  if (legacy) {
+    expect(reads).toBe(2);
+    expect((result.document.template as any).openIssues).toContain("Saved legacy open issue; unresolved limitation remains.");
+    expect(draft.sections.openIssues.inputMode).toBeUndefined();
+    if (scenario === "legacy_fallback") expect(draft.sections.openIssues.fallbacks[0][0]).toEqual(saved.sections.openIssues.fallbacks[0][0]);
+    else expect(draft.sections.openIssues.parts[0]).toEqual(saved.sections.openIssues.parts[0]);
+  } else {
+    expect(reads).toBe(0);
+    expect(result.citations).toEqual([versionId]);
+    expect((result.document.template as any).openIssues).toContain(findings[0]!.output.rationale);
+    expect(draft.sections.openIssues.inputMode).toBe("specialist-findings");
+    const count = calls.length;
+    await authorAcousticConcept({ ...input, draft });
+    expect(calls).toHaveLength(count);
+  }
+});
 
 for (const scenario of ["overlap", "fallback", "timeout"] as const)
 test(`concept authoring global section scheduling: ${scenario}`, async () => {
@@ -846,6 +939,7 @@ integration(
       audit: async () => {},
       resolveSource: async () => ({ status: "resolved", source: { versionId: sourceId, name: "Evidence" }, content: { status: "available", text: "Source requirements" } }),
       executeSupervisor: async (input: any) => {
+        await input.onPrepared?.({ version: 1, instructions: "", prompt: input.goal });
         providerCalls++;
         await input.onUsage?.({ provider: "openai", modelId: "test-model", inputTokens: 17, outputTokens: 3, totalTokens: 20, reasoningTokens: null, cachedInputTokens: null });
         if (providerCalls === 1) throw Object.assign(new Error("sk-do-not-persist"), {
@@ -1028,6 +1122,7 @@ integration(
         await new Promise<void>(resolve => server.close(() => resolve()));
       }
     } finally {
+      await db.delete(agentRunSteps).where(eq(agentRunSteps.tenantId, tenantId));
       await db.delete(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId));
       await db.delete(agentRunAttempts).where(eq(agentRunAttempts.tenantId, tenantId));
       await db

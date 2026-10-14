@@ -31,8 +31,7 @@ const failure = (category: Failure) => Object.assign(new Error(`Decision provide
 /** Fixed endpoint, one short non-streaming attempt; never expose upstream bodies/errors. */
 export async function callDecisionModel(input: DecisionInput, apiKey: string,
   options: { signal?: AbortSignal; fetch?: (url: string, init: RequestInit) => Promise<Response> } = {}) {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = AbortSignal.any([timeout, ...(options.signal ? [options.signal] : [])]);
+  let timeout: AbortSignal | undefined;
   let category: Failure = "invalid_input";
   try {
     const parsedApiKey = apiKeySchema.parse(apiKey);
@@ -46,8 +45,11 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
       instructionsHash: metadataHash(JSON.stringify(questions)), promptHash: metadataHash(body),
       outputSchemaHash: metadataHash("jev-1.13.0:choice:probabilities:confidence:v1") });
     // Reserve before inference without adding company excerpts to the step log.
-    const reused = await input.onPrepared?.({ version: 1, instructions: "", prompt: metadataHash(body), inputBytes: Buffer.byteLength(body, "utf8") });
+    const reused = await input.onPrepared?.({ version: 1, instructions: "", prompt: metadataHash(body), inputBytes: Buffer.byteLength(body, "utf8") }, options.signal);
     if (reused) return { status: "completed" as const, output: outputSchema.parse(reused.output), usage: undefined };
+    options.signal?.throwIfAborted();
+    timeout = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.any([timeout, ...(options.signal ? [options.signal] : [])]);
     signal.throwIfAborted();
     // Race also bounds injected fetch implementations and response-body reads that ignore abort.
     const responseBody = await new Promise<unknown>((resolve, reject) => {
@@ -96,7 +98,7 @@ export async function callDecisionModel(input: DecisionInput, apiKey: string,
     const value = error as { code?: unknown; providerStatus?: number; diagnostics?: unknown } | null;
     if (value?.code === "budget_exhausted" || value?.code === "outcome_unknown")
       throw Object.assign(new Error("Execution requires human review before inference."), { code: value.code });
-    throw Object.assign(failure(options.signal?.aborted ? "cancelled" : timeout.aborted ? "timeout" : category), {
+    throw Object.assign(failure(options.signal?.aborted ? "cancelled" : timeout?.aborted ? "timeout" : category), {
       providerStatus: value?.providerStatus,
       diagnostics: { ...sanitizeProviderDiagnostics(value?.diagnostics),
         ...providerErrorDiagnostics(error, apiKey, { state: input.state, questions: input.questions }) },

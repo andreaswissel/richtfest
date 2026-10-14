@@ -17,7 +17,7 @@ export type AcousticDraft = {
   inputHash: string;
   outline: Outline;
   inputByteBudget?: number;
-  sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]> }>;
+  sections: Record<string, { inputHash: string; parts: (Part | null)[]; byteLimit?: number; fallbacks?: Record<number, Part[]>; inputMode?: "specialist-findings" }>;
   previousReview?: unknown;
   editorial?: {
     inputHash: string;
@@ -48,6 +48,15 @@ export async function authorAcousticConcept(input: {
     ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
   });
   const sourceIds = new Set(input.sourceVersionIds);
+  const savedFindings = z.array(z.object({
+    sourceVersionIds: z.array(z.string()),
+    output: z.object({ summary: z.string().optional(), rationale: z.string().optional(),
+      citations: z.array(z.string()).optional() }).passthrough(),
+  }).passthrough()).safeParse(input.findings);
+  const findings = savedFindings.success ? savedFindings.data.filter(f =>
+    f.output.summary?.trim() || f.output.rationale?.trim()) : [];
+  const findingSourceIds = [...new Set(findings.flatMap(f => (f.output.citations ?? [])
+    .filter(v => sourceIds.has(v) && f.sourceVersionIds.includes(v))))];
   const keys = acousticSectionKeys(id);
   const invalid = (path: (string | number)[], message: string): never => {
     throw new z.ZodError([{ code: "custom", path, message }]);
@@ -115,8 +124,14 @@ export async function authorAcousticConcept(input: {
   for (const key of keys) {
     await input.assertActive();
     const definition = outline.sections.find(section => section.key === key)!;
+    const saved = draft.sections[key];
+    // Never reinterpret a legacy piece (including an interrupted fallback).
+    // Empty sections can switch without changing the overall draft fingerprint.
+    const useFindings = key === "openIssues" && findings.length > 0
+      && (saved?.inputMode === "specialist-findings"
+        || (!saved?.parts.some(Boolean) && !Object.values(saved?.fallbacks ?? {}).some(parts => parts.length)));
     const evidence = [];
-    for (const range of definition.sources) {
+    for (const range of useFindings ? [] : definition.sources) {
       const rangeKey = `${range.versionId}:${range.pageStart}:${range.pageEnd}`;
       const source = resolvedRanges.get(rangeKey) ?? await resolveCompleteRunSource(d, projectId, range, input.assertActive);
       if (source?.status !== "resolved" || source.source?.versionId !== range.versionId || source.content?.status !== "available")
@@ -137,28 +152,32 @@ export async function authorAcousticConcept(input: {
       documentTask: "section", documentTemplate: { id, version: 1 }, section: key,
       project: outline.project, language: outline.language,
       attachments: outline.attachments.filter(a => a.section === key), previousReview: draft.previousReview,
+      ...(useFindings ? { findings, inputMode: "specialist-findings",
+        evidenceInstructions: "Draft open issues from saved specialist findings, not a fresh source review. Retain unresolved limitations, missing inputs and required specialist verification explicitly. Findings are attributed reports, not verified project facts. Only supplied citations also listed in sourceVersionIds may be cited; company references and calculation receipt IDs are not project sources." } : {}),
       ...(calculationReceipts.length ? { calculationReceipts } : {}),
       ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     };
     // Reserve instructions/schema space plus the actual variable context. A byte
     // budget is conservative, not an assumed four-characters-per-token ratio.
-    const byteLimit = draft.inputByteBudget === undefined ? undefined : draft.sections[key]?.byteLimit
+    const byteLimit = draft.inputByteBudget === undefined ? undefined : (useFindings && saved?.inputMode !== "specialist-findings" ? undefined : saved?.byteLimit)
       ?? draft.inputByteBudget - 16384 - Buffer.byteLength(JSON.stringify({ goal: input.goal,
-        contextOverhead: input.contextOverhead, ...sectionContext, sourceVersionIds: definition.sources.map(range => range.versionId),
+        contextOverhead: input.contextOverhead, ...sectionContext, sourceVersionIds: useFindings ? findingSourceIds : definition.sources.map(range => range.versionId),
         batch: 1000000, batchCount: 1000000, splitOnTruncation: true }), "utf8");
     if (byteLimit !== undefined && byteLimit < 1024) invalid(["sections"], "Report context exceeds the model input budget.");
     // Historical/unknown-model drafts keep their exact batching and retry contract.
     const legacyLimit = Math.max(1024, Math.min(16000, input.maxOutputTokens * 2));
     const batches = byteLimit === undefined ? batchSpecialistSources(evidence, legacyLimit) : batchSectionSources(evidence, byteLimit);
-    const sectionHash = hash(batches);
+    const sectionHash = useFindings ? hash({ inputMode: "specialist-findings", findings, sourceVersionIds: findingSourceIds }) : hash(batches);
     const progress: AcousticDraft["sections"][string] = draft.sections[key]?.inputHash === sectionHash
-      ? draft.sections[key]! : { inputHash: sectionHash, parts: [], byteLimit };
+      ? draft.sections[key]! : { inputHash: sectionHash, parts: [], byteLimit,
+        ...(useFindings ? { inputMode: "specialist-findings" as const } : {}) };
     draft.sections[key] = progress;
     const savePiece = (update: () => void) => save(key, batches.length, update);
     const requestPart = async (batch: typeof batches[number], batchNumber: number, batchCount: number, splitOnTruncation: boolean, parentBatch?: number) => {
       await input.assertActive();
       if (stopped) throw new Error("Section drafting stopped after a sibling failure.");
-      const allowed = new Set([...batch.map(source => source.versionId), ...calculationSourceIds]);
+      const allowed = new Set([...batch.map(source => source.versionId), ...calculationSourceIds,
+        ...(useFindings ? findingSourceIds : [])]);
       const partSchema = acousticSectionOutputSchema.superRefine((part, ctx) => {
         if (!part.complete && !splitOnTruncation) ctx.addIssue({ code: "custom", path: ["complete"], message: "The section piece is incomplete; no completed report can be published." });
         const inline = part.content.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [];

@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+/** Admission estimates, not provider invoices. No prompts or credentials. */
+export const agentBudgetDecisionSchema = z.object({
+  state: z.enum(["waiting", "reserved", "stopped"]),
+  reason: z.enum(["pending_reservations", "spend_allowance", "retry_allowance", "unknown_usage",
+    "unpriced_call", "wait_expired", "nested_reservation"]).nullable(),
+  limitUsd: z.number().finite().nonnegative(),
+  recordedUsd: z.number().finite().nonnegative(),
+  reservedUsd: z.number().finite().nonnegative(),
+  requestedUsd: z.number().finite().nonnegative().nullable(),
+  retriesUsed: z.number().int().nonnegative(),
+  retryLimit: z.number().int().nonnegative(),
+});
+export type AgentBudgetDecision = z.infer<typeof agentBudgetDecisionSchema>;
+
 /** User-facing work facts, not provider reasoning, prompts or diagnostics. */
 export const agentWorkProgressSchema = z.object({
   runId: z.string().uuid(),

@@ -25,6 +25,10 @@ import {
   providerActivityMetadata,
   providerActivityExplanation,
   terminalProviderFailure,
+  terminalBudgetDecision,
+  budgetDecision,
+  budgetDescription,
+  waitingBudgetCalls,
 } from "./run-activity";
 import {
   AgentThreadMessage,
@@ -76,7 +80,8 @@ const runReasonCategories = {
 const canonicalCategoryReasonPrefixes = {
   provider: "The provider call could not complete.",
   budget: "Execution paused before another paid call:",
-  outcome_unknown: "The previous worker lost ownership with an unfinished provider attempt.",
+  outcome_unknown:
+    "The previous worker lost ownership with an unfinished provider attempt.",
   timeout: "The provider call exceeded its time limit.",
   permission: "A required permission is unavailable.",
   validation: "The run returned unsupported or invalid output.",
@@ -333,7 +338,9 @@ function activeProviderCalls(events: RecordData[]) {
       for (const call of calls.values()) call.active = false;
       return;
     }
-    if (event.eventType === "provider_call_started") {
+    if (
+      ["provider_call_started", "budget_reserved"].includes(event.eventType)
+    ) {
       calls.set(providerCallId(event, index), {
         startedAt: eventTime(event),
         active: true,
@@ -345,9 +352,12 @@ function activeProviderCalls(events: RecordData[]) {
       return;
     }
     if (
-      !["provider_call_completed", "provider_call_failed"].includes(
-        event.eventType,
-      )
+      ![
+        "provider_call_completed",
+        "provider_call_failed",
+        "budget_waiting",
+        "budget_stopped",
+      ].includes(event.eventType)
     )
       return;
     const id = providerActivityMetadata(event).callId;
@@ -393,6 +403,7 @@ function RunDiagnosis({
 }) {
   const t = useT();
   const activeCalls = status === "running" ? activeProviderCalls(events) : [];
+  const waiting = status === "running" ? waitingBudgetCalls(events) : [];
   const oldestActiveCall = activeCalls
     .filter((call) => call.startedAt !== undefined)
     .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))[0];
@@ -452,6 +463,11 @@ function RunDiagnosis({
               ` · ${t("agentRunOldestCall")}: ${formatElapsed(callElapsed)}`}
           </span>
         )}
+        {waiting.map((call) => (
+          <span key={`${call.runId}:${call.callId}:${call.attempt}`}>
+            {budgetDescription(call.budget, t)}
+          </span>
+        ))}
         {lastProgress !== undefined && (
           <span>
             {t("agentRunLastProgress")}:{" "}
@@ -518,6 +534,9 @@ export function SubagentThread({
           [
             "supervisor_planned",
             "provider_call_started",
+            "budget_waiting",
+            "budget_reserved",
+            "budget_stopped",
             "work_progress",
             "specialist_completed",
             "supervisor_revision_requested",
@@ -600,6 +619,11 @@ export function SubagentThread({
     },
   );
   const childRuns = list(query.data?.children);
+  const budgetStop = terminalBudgetDecision(
+    run,
+    activityEvents,
+    list(query.data?.attempts),
+  );
   const reason =
     terminalProviderFailure(
       run,
@@ -621,8 +645,14 @@ export function SubagentThread({
           />
           <h2>{agentName(run, t)}</h2>
           <Badge>
-            {t(`run_${currentStatus}` as Parameters<typeof t>[0]) ||
-              currentStatus}
+            {budgetStop
+              ? t("budgetStopped")
+              : waitingBudgetCalls(activityEvents).some(
+                    (call) => call.runId === run.id,
+                  ) && running
+                ? t("budgetWaiting")
+                : t(`run_${currentStatus}` as Parameters<typeof t>[0]) ||
+                  currentStatus}
           </Badge>
           <AgentRunMetrics run={run} />
         </div>
@@ -658,13 +688,31 @@ export function SubagentThread({
                               {t("runExecutionAttempt")} {attempt.attemptNumber}
                             </span>
                             <Badge>
-                              {t(
-                                `runAttemptStatus_${attempt.status}` as Parameters<
-                                  typeof t
-                                >[0],
-                              ) || attempt.status}
+                              {budgetDecision(attempt.settings?.budgetDecision)
+                                ?.state === "waiting" &&
+                              attempt.status === "running"
+                                ? t("budgetWaiting")
+                                : budgetDecision(
+                                      attempt.settings?.budgetDecision,
+                                    )?.state === "stopped"
+                                  ? t("budgetStopped")
+                                  : t(
+                                      `runAttemptStatus_${attempt.status}` as Parameters<
+                                        typeof t
+                                      >[0],
+                                    ) || attempt.status}
                             </Badge>
                           </div>
+                          {budgetDecision(attempt.settings?.budgetDecision) && (
+                            <p>
+                              {budgetDescription(
+                                budgetDecision(
+                                  attempt.settings?.budgetDecision,
+                                )!,
+                                t,
+                              )}
+                            </p>
+                          )}
                           <p>
                             {t("runExecutionModel")}:{" "}
                             {attempt.response?.modelId ||
@@ -698,40 +746,42 @@ export function SubagentThread({
                                 )}
                               </p>
                             )}
-                          {attempt.failureCategory && (
-                            <p>
-                              {t("workspaceRunReason")}:{" "}
-                              {providerActivityExplanation(
-                                activityEvents.find((event) => {
-                                  const metadata =
-                                    providerActivityMetadata(event);
-                                  return (
-                                    [
-                                      "provider_call_failed",
-                                      "provider_call_retrying",
-                                      "provider_attempt_failed",
-                                    ].includes(event.eventType) &&
-                                    metadata.callId === attempt.operationId &&
-                                    metadata.attempt ===
-                                      attempt.attemptNumber &&
-                                    metadata.runId === attempt.runId
-                                  );
-                                }) ?? {},
-                                t,
-                              ) ??
-                                t(
-                                  attempt.failureCategory === "timeout"
-                                    ? "runExecutionTimeout"
-                                    : (runReasonCategories[
-                                        attempt.failureCategory as keyof typeof runReasonCategories
-                                      ] ?? "runExecutionUnknown"),
-                                )}
-                              {Number.isInteger(attempt.providerStatus) &&
-                                attempt.providerStatus >= 100 &&
-                                attempt.providerStatus <= 599 &&
-                                ` · ${t("workspaceRunProviderHttpStatus")}: ${attempt.providerStatus}`}
-                            </p>
-                          )}
+                          {attempt.failureCategory &&
+                            budgetDecision(attempt.settings?.budgetDecision)
+                              ?.state !== "stopped" && (
+                              <p>
+                                {t("workspaceRunReason")}:{" "}
+                                {providerActivityExplanation(
+                                  activityEvents.find((event) => {
+                                    const metadata =
+                                      providerActivityMetadata(event);
+                                    return (
+                                      [
+                                        "provider_call_failed",
+                                        "provider_call_retrying",
+                                        "provider_attempt_failed",
+                                      ].includes(event.eventType) &&
+                                      metadata.callId === attempt.operationId &&
+                                      metadata.attempt ===
+                                        attempt.attemptNumber &&
+                                      metadata.runId === attempt.runId
+                                    );
+                                  }) ?? {},
+                                  t,
+                                ) ??
+                                  t(
+                                    attempt.failureCategory === "timeout"
+                                      ? "runExecutionTimeout"
+                                      : (runReasonCategories[
+                                          attempt.failureCategory as keyof typeof runReasonCategories
+                                        ] ?? "runExecutionUnknown"),
+                                  )}
+                                {Number.isInteger(attempt.providerStatus) &&
+                                  attempt.providerStatus >= 100 &&
+                                  attempt.providerStatus <= 599 &&
+                                  ` · ${t("workspaceRunProviderHttpStatus")}: ${attempt.providerStatus}`}
+                              </p>
+                            )}
                         </section>
                       ))}
                     </div>
@@ -770,7 +820,10 @@ export function SubagentThread({
                     ) : (
                       <Marker>
                         <MarkerContent>
-                          {executing ? (
+                          {executing &&
+                          !waitingBudgetCalls(activityEvents).some(
+                            (call) => call.runId === run.id,
+                          ) ? (
                             <CraneWorkingIndicator
                               label={t("agentThreadWorking")}
                             />
@@ -792,7 +845,11 @@ export function SubagentThread({
                     )}
                     {reason && (
                       <Callout
-                        tone={run.status === "failed" ? "error" : undefined}
+                        tone={
+                          run.status === "failed" && !budgetStop
+                            ? "error"
+                            : undefined
+                        }
                       >
                         <span className="agent-thread-run-reason-label">
                           {t("workspaceRunReason")}:

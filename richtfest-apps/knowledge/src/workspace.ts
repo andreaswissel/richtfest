@@ -2,7 +2,7 @@ import { repairLegacyRuns } from "./run-recovery";
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ok, acousticDocumentTemplateSchema } from "@richtfest/shared";
+import { ok, acousticDocumentTemplateSchema, agentBudgetDecisionSchema } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
 import {
@@ -215,7 +215,7 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
   const events = await d.db.select().from(agentRunEvents).where(and(
     eq(agentRunEvents.tenantId, d.tenantId),
     inArray(agentRunEvents.runId, failed.map(run => run.id)),
-    inArray(agentRunEvents.eventType, ["provider_call_failed", "provider_attempt_failed"]),
+    inArray(agentRunEvents.eventType, ["provider_call_failed", "provider_attempt_failed", "budget_stopped", "resumed", "steered"]),
   )).orderBy(desc(agentRunEvents.createdAt));
   const parsed = events.flatMap((event: any) => {
     try {
@@ -229,14 +229,20 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
   return runs.map(run => {
     if (run.status !== "failed") return run;
     const phase = /(?:^|;)\s*phase=([a-z_]+)/.exec(run.error ?? "")?.[1];
+    const budgetStopped = /(?:^|;)\s*category=budget(?:;|$)/.test(run.error ?? "");
+    const resumed = events.find((event: any) => event.runId === run.id && ["resumed", "steered"].includes(event.eventType));
     const match = parsed.find(({ event, metadata }: any) => event.runId === run.id
+      && (!resumed || event.createdAt >= resumed.createdAt)
+      && (budgetStopped ? event.eventType === "budget_stopped" : ["provider_call_failed", "provider_attempt_failed"].includes(event.eventType))
       && (!phase || event.resultSummary?.split(";")[0] === phase)
       && owners.some((owner: any) => owner.id === metadata.runId && (owner.id === run.id || owner.parentRunId === run.id)));
     if (!match) return run;
     const owner = owners.find((owner: any) => owner.id === match.metadata.runId);
+    const budget = agentBudgetDecisionSchema.safeParse(match.metadata.budget);
     return { ...run, failureRole: owner?.specialistRole ?? "supervisor", failureEvent: {
-      eventType: "provider_call_failed", resultSummary: phase ?? match.event.resultSummary?.split(";")[0],
+      eventType: budgetStopped ? "budget_stopped" : "provider_call_failed", resultSummary: phase ?? match.event.resultSummary?.split(";")[0],
       paramsSummary: JSON.stringify({ runId: owner.id, callId: match.metadata.callId, attempt: match.metadata.attempt,
+        ...(budgetStopped && budget.success ? { budget: budget.data } : {}),
         providerStatus: match.metadata.providerStatus,
         diagnostics: sanitizeProviderDiagnostics(match.metadata.diagnostics) }),
     } };

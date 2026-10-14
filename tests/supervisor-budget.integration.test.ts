@@ -1,10 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import express from "../richtfest-os/apps/api/node_modules/express";
 import { eq } from "../richtfest-os/apps/api/node_modules/drizzle-orm";
 import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import { agentRuns, supervisorRuns, tasks, agentRunEvents, agentRunUsage, agentRunAttempts, agentRunSteps } from "../richtfest-apps/knowledge/src/schema";
 import { createSupervisor, stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
+import { executeTrackedProvider } from "../richtfest-apps/knowledge/src/usage";
 
 const integration = process.env.DATABASE_URL ? test : test.skip;
 const config = { modelId: "test-model", maxOutputTokens: 1024, maxSteps: 1 };
@@ -34,7 +35,7 @@ async function fixture(options: { maxCostUsd?: number; maxAutomaticRetries?: num
     maxTasks: 4, maxRevisions: 2, runBudget: { maxCostUsd: options.maxCostUsd ?? 1,
       maxAutomaticRetries: options.maxAutomaticRetries ?? 1, authorizedAt: new Date().toISOString() } };
   const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
-    audit: async () => {},
+    audit: async () => {}, cancelExecution: () => {},
     validateProject: async (id: string) => id === projectId, providerConfigured: async () => false,
     listProjectSources: async () => ({ sources: [], truncated: false }),
     estimateCallCost: (_provider: string, settings: any) => costs[settings.modelId],
@@ -72,10 +73,10 @@ async function fixture(options: { maxCostUsd?: number; maxAutomaticRetries?: num
     } };
 }
 
-integration("pending sibling reservations share one run-wide spend allowance", async () => {
+for (const settlesCheaply of [true, false]) integration(`pending sibling reservations wait and recheck actual cost: ${settlesCheaply}`, async () => {
   const f = await fixture({ maxCostUsd: 0.10 });
   const hold = gate(); f.releases.push(hold.resolve);
-  f.setBehavior(async (input, key) => { await hold.promise; await input.onUsage(usage(costs[key]!));
+  f.setBehavior(async (input, key) => { await hold.promise; await input.onUsage(usage(settlesCheaply ? 0.02 : costs[key]!));
     return { status: "completed", output: { summary: `Saved ${key}`, rationale: "", citations: [] } }; });
   try {
     // An unavailable optional classifier never dispatched and is not unknown spend.
@@ -84,18 +85,60 @@ integration("pending sibling reservations share one run-wide spend allowance", a
       status: "unconfigured", usageStatus: "missing", completedAt: new Date() });
     await stepSupervisor(f.d, f.run.id);
     const work = stepSupervisor(f.d, f.run.id); f.pending.push(work);
-    await waitFor(async () => (await f.attempts()).some(a => (a.settings as any)?.budgetRejected));
+    await waitFor(async () => (await f.attempts()).some(a => (a.settings as any)?.budgetDecision?.state === "waiting"));
     expect(f.dispatched.filter(key => key !== "plan")).toHaveLength(1);
     const active = (await f.attempts()).filter(a => a.status === "running");
-    expect(active).toHaveLength(1);
-    const reserved = (active[0]!.settings as any).reservedCostUsd;
+    expect(active).toHaveLength(2);
+    const waiting = active.find(a => (a.settings as any).dispatchPending)!;
+    expect(waiting.attemptNumber).toBe(1);
+    expect((waiting.settings as any).reservedCostUsd).toBeUndefined();
+    const reserved = (active.find(a => !(a.settings as any).dispatchPending)!.settings as any).reservedCostUsd;
     expect([0.07, 0.04]).toContain(reserved);
     expect(reserved + 0.01 + costs[f.dispatched.includes("A") ? "B" : "A"]!).toBeGreaterThan(0.10);
     hold.resolve(); await work;
-    await stepSupervisor(f.d, f.run.id);
-    expect(f.dispatched).toHaveLength(2);
-    expect((await f.request("/recovery").then(r => r.json()) as any).data.resumable).toBe(true);
+    expect(f.dispatched).toHaveLength(settlesCheaply ? 3 : 2);
+    const settled = (await f.attempts()).find(a => a.id === waiting.id)!;
+    expect(settled.status).toBe(settlesCheaply ? "completed" : "failed");
+    expect(settled.usageStatus).toBe(settlesCheaply ? "reported" : "not_applicable");
+    expect((await f.attempts()).filter(a => a.phase === "specialist")).toHaveLength(2);
+    const preview = (await f.request("/recovery").then(r => r.json()) as any).data;
+    expect(preview.accounting.automaticRetries).toBe(0);
+    expect(preview.accounting.unpricedAttempts).toBe(0);
+    expect(preview.resumable).toBe(!settlesCheaply);
+    if (!settlesCheaply) expect(preview.budgetDecision).toMatchObject({ state: "stopped", reason: "spend_allowance", limitUsd: 0.1 });
   } finally { await f.close(); }
+});
+
+for (const action of ["cancel", "lease_loss", "expire"] as const)
+integration(`waiting reservations are bounded and not dispatched after ${action}`, async () => {
+  const f = await fixture({ maxCostUsd: 0.10 });
+  const hold = gate(); f.releases.push(hold.resolve);
+  f.setBehavior(async (input, key) => { await hold.promise; await input.onUsage(usage(0.02));
+    return { status: "completed", output: { summary: `Saved ${key}`, rationale: "", citations: [] } }; });
+  let clock: ReturnType<typeof spyOn> | undefined;
+  try {
+    await stepSupervisor(f.d, f.run.id);
+    const work = stepSupervisor(f.d, f.run.id); f.pending.push(work);
+    await waitFor(async () => (await f.attempts()).some(a => (a.settings as any)?.budgetDecision?.state === "waiting"));
+    const waiting = (await f.attempts()).find(a => (a.settings as any)?.budgetDecision?.state === "waiting")!;
+    if (action === "cancel") expect((await f.request("/cancel", {})).status).toBe(201);
+    else if (action === "lease_loss") {
+      await f.db.update(supervisorRuns).set({ leaseUntil: new Date(0) }).where(eq(supervisorRuns.runId, f.run.id));
+      await stepSupervisor(f.d, f.run.id);
+    } else {
+      const future = Date.now() + 600001;
+      await f.db.update(supervisorRuns).set({ leaseUntil: new Date(future + 120000) }).where(eq(supervisorRuns.runId, f.run.id));
+      clock = spyOn(Date, "now").mockReturnValue(future);
+    }
+    await waitFor(async () => (await f.attempts()).find(a => a.id === waiting.id)?.status !== "running");
+    clock?.mockRestore(); clock = undefined;
+    hold.resolve(); await work;
+    expect(f.dispatched).toHaveLength(2);
+    const settled = (await f.attempts()).find(a => a.id === waiting.id)!;
+    expect(settled.usageStatus).toBe("not_applicable");
+    if (action === "expire") expect((settled.settings as any).budgetDecision.reason).toBe("wait_expired");
+    else expect((settled.response as any).outcome).toBe("not_dispatched");
+  } finally { clock?.mockRestore(); await f.close(); }
 });
 
 integration("a legacy fresh-run retry keeps its models but cannot inherit an unbounded or old allowance", async () => {
@@ -112,6 +155,31 @@ integration("a legacy fresh-run retry keeps its models but cannot inherit an unb
     expect(created.modelPolicy.runBudget.authorizedAt).not.toBe((f.run.modelPolicy as any).runBudget.authorizedAt);
     expect((await f.state()).modelPolicy).toEqual(f.run.modelPolicy);
     expect(f.dispatched).toEqual([]);
+  } finally { await f.close(); }
+});
+
+integration("nested decision admission never waits on its parent reservation", async () => {
+  const f = await fixture({ maxCostUsd: 0.1, goals: ["A"] });
+  let nestedDispatches = 0;
+  f.setBehavior(async (input) => {
+    const state = await f.state();
+    await expect(executeTrackedProvider(f.d, { ...f.run, provider: "typesafe" },
+      { phase: "decision", rootRunId: f.run.id, leaseToken: state.leaseToken!, generation: 0 }, async telemetry => {
+        await telemetry.onRequest?.({ modelId: "B" } as any);
+        await telemetry.onPrepared?.({ version: 1, instructions: "", prompt: "Nested search ranking" });
+        nestedDispatches++;
+        return { status: "completed", output: {} };
+      })).rejects.toMatchObject({ code: "budget_exhausted" });
+    await input.onUsage(usage(0.02));
+    return { status: "completed", output: { summary: "Saved with deterministic search fallback", rationale: "", citations: [] } };
+  });
+  try {
+    await stepSupervisor(f.d, f.run.id); await stepSupervisor(f.d, f.run.id);
+    expect(nestedDispatches).toBe(0);
+    expect((await f.attempts()).find(a => a.phase === "decision")?.settings).toMatchObject({
+      budgetDecision: { state: "stopped", reason: "nested_reservation" }, dispatchPending: true,
+    });
+    expect((await f.state()).phase).toBe("review");
   } finally { await f.close(); }
 });
 

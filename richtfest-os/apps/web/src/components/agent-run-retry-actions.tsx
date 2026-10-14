@@ -8,8 +8,13 @@ import { Button } from "./ui/button";
 import { Callout, Field, Modal } from "./ui/primitives";
 import { Input } from "./ui/input";
 import { Checkbox } from "./ui/checkbox";
+import {
+  budgetDecision,
+  budgetDescription,
+} from "./project-workspace/run-activity";
 
 type Recovery = {
+  budgetDecision?: unknown;
   resumable: boolean;
   generation: number;
   checkpointHash: string;
@@ -234,6 +239,14 @@ function RetryActions({
               ) : (
                 <>
                   {recovery.isPending && <p>{t("loading")}</p>}
+                  {preview && budgetDecision(preview.budgetDecision) && (
+                    <Callout>
+                      {budgetDescription(
+                        budgetDecision(preview.budgetDecision)!,
+                        t,
+                      )}
+                    </Callout>
+                  )}
                   {preview &&
                     (preview.resumable ? (
                       <>

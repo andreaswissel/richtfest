@@ -407,6 +407,30 @@ test("domain specialists select their snapshotted models and cannot execute or b
   }
 });
 
+test("budget admission waits outside the provider deadline and cancellation never dispatches", async () => {
+  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+  const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => nativeTimeout(100));
+  try {
+    for (const cancel of [false, true]) {
+      const cancellation = new AbortController();
+      const result = callMastraSupervisor({ ...base, phase: "plan",
+        onPrepared: async (_input, signal) => {
+          expect(signal).toBe(cancellation.signal);
+          await Bun.sleep(150);
+          if (cancel) cancellation.abort();
+          return undefined;
+        },
+      }, "test-key", { signal: cancellation.signal,
+        model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { tasks: [
+          { role: "source_reviewer", goal: "Review evidence", sourceVersionIds: [] },
+        ] } }),
+      });
+      if (cancel) await expect(result).rejects.toMatchObject({ code: "cancelled" });
+      else expect(await result).toMatchObject({ tasks: [{ goal: "Review evidence" }] });
+    }
+  } finally { timeout.mockRestore(); }
+});
+
 test("phase deadlines abort real Mastra streams without accepting partial output or leaking contents", async () => {
   for (const phase of ["plan", "specialist", "review", "independent_review"] as const) {
     for (const cancelled of [false, true]) {

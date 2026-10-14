@@ -8,6 +8,10 @@ import {
   providerActivityMetadata,
   providerFailureExplanation,
   terminalProviderFailure,
+  budgetActivityMetadata,
+  budgetDescription,
+  waitingBudgetCalls,
+  terminalBudgetDecision,
 } from "../src/components/project-workspace/run-activity";
 import { RunActivityFeed } from "../src/components/project-workspace/run-activity-feed";
 const t = (key: keyof typeof en) => en[key];
@@ -28,6 +32,159 @@ const event = (runId = "own", extra = diagnostics) => ({
     diagnostics: extra,
   }),
 });
+
+const budget = {
+  state: "waiting",
+  reason: "pending_reservations",
+  limitUsd: 10,
+  recordedUsd: 0.001234,
+  reservedUsd: 9.125678,
+  requestedUsd: 1.000001,
+  retriesUsed: 2,
+  retryLimit: 3,
+};
+const budgetEvent = (
+  state = "waiting",
+  callId = "call",
+  reason: string | null = "pending_reservations",
+) => ({
+  id: `${state}-${callId}`,
+  eventType: `budget_${state}`,
+  resultSummary: "review",
+  paramsSummary: JSON.stringify({
+    runId: "own",
+    callId,
+    attempt: 3,
+    attemptId: "attempt",
+    budget: { ...budget, state, reason },
+  }),
+});
+test("budget waiting survives sibling activity and clears only its reservation, terminal or resume", () => {
+  const wait = budgetEvent();
+  const sibling = {
+    ...event(),
+    eventType: "provider_call_completed",
+    paramsSummary: JSON.stringify({
+      runId: "own",
+      callId: "sibling",
+      attempt: 3,
+    }),
+  };
+  expect(waitingBudgetCalls([wait, sibling])).toHaveLength(1);
+  expect(
+    waitingBudgetCalls([wait, budgetEvent("reserved", "sibling", null)]),
+  ).toHaveLength(1);
+  expect(
+    waitingBudgetCalls([wait, budgetEvent("reserved", "call", null)]),
+  ).toHaveLength(0);
+  expect(
+    waitingBudgetCalls([wait, budgetEvent("stopped", "call", "wait_expired")]),
+  ).toHaveLength(0);
+  expect(waitingBudgetCalls([wait, { eventType: "resumed" }])).toHaveLength(0);
+  expect(
+    waitingBudgetCalls([wait, { eventType: "failed", runId: "own" }]),
+  ).toHaveLength(0);
+  const html = renderToStaticMarkup(
+    <RunActivityFeed
+      active
+      run={{ id: "own", status: "running", isSupervisor: true }}
+      children={[{ id: "child", status: "running" }]}
+      events={[wait, sibling]}
+    />,
+  );
+  expect(html.split("<details")[0]).toContain(en.budgetWaiting);
+  expect(html).toContain(en.budgetNotDispatched);
+  for (const amount of [
+    "$0.001234 USD",
+    "$9.125678 USD",
+    "$1.000001 USD",
+    "$10 USD",
+    "2/3",
+  ])
+    expect(html).toContain(amount);
+  expect(html).not.toContain("paramsSummary");
+});
+test("budget stops override recovered validation errors and ignore stops from before resume", () => {
+  const run = { id: "own", status: "failed" };
+  const stop = budgetEvent("stopped", "call", "retry_allowance");
+  expect(terminalProviderFailure(run, [event(), stop], [], t)).toContain(
+    en.budgetRetryAllowance,
+  );
+  expect(
+    terminalProviderFailure(
+      run,
+      [stop, { eventType: "resumed" }, event()],
+      [],
+      t,
+    ),
+  ).toContain(en.workspaceFailureSummaryLimit);
+  expect(
+    terminalBudgetDecision({ ...run, status: "running" }, [stop]),
+  ).toBeUndefined();
+  expect(
+    terminalProviderFailure(
+      {
+        ...run,
+        error:
+          "phase=review; category=budget; Execution paused before another paid call:",
+      },
+      [event()],
+      [],
+      t,
+    ),
+  ).toBe(en.budgetStopped);
+  const attempt = {
+    runId: "own",
+    settings: {
+      budgetDecision: {
+        ...budget,
+        state: "stopped",
+        reason: "spend_allowance",
+      },
+    },
+  };
+  expect(terminalProviderFailure(run, [event()], [attempt], t)).toContain(
+    en.budgetSpendAllowance,
+  );
+});
+test("budget metadata rejects malformed, oversized and mismatched decisions", () => {
+  for (const paramsSummary of [
+    "{",
+    "x".repeat(16385),
+    "null",
+    "[]",
+    JSON.stringify({
+      runId: "own",
+      callId: "call",
+      attempt: 3,
+      budget: { ...budget, recordedUsd: -1 },
+    }),
+  ]) {
+    expect(
+      budgetActivityMetadata({ ...budgetEvent(), paramsSummary }),
+    ).toBeUndefined();
+  }
+  expect(
+    budgetActivityMetadata({ ...budgetEvent(), eventType: "budget_stopped" }),
+  ).toBeUndefined();
+  for (const reason of [
+    "spend_allowance",
+    "retry_allowance",
+    "unknown_usage",
+    "unpriced_call",
+    "wait_expired",
+    "nested_reservation",
+  ]) {
+    const decision = budgetActivityMetadata(
+      budgetEvent("stopped", "call", reason),
+    )!.budget;
+    for (const locale of [en, de]) {
+      const text = budgetDescription(decision, (key) => locale[key]);
+      expect(text).toContain(locale.budgetStopped);
+      expect(text).not.toContain(reason);
+    }
+  }
+});
 test("editorial progress uses localized stages without section summaries or batches, preserving section progress", () => {
   const run = {
     id: "550e8400-e29b-41d4-a716-446655440000",
@@ -37,10 +194,17 @@ test("editorial progress uses localized stages without section summaries or batc
   const progress = (stage: string, extra = {}) => ({
     id: stage,
     eventType: "work_progress",
-    paramsSummary: JSON.stringify({ runId: run.id, stage, sources: [], ...extra }),
+    paramsSummary: JSON.stringify({
+      runId: run.id,
+      stage,
+      sources: [],
+      ...extra,
+    }),
   });
   const section = progress("reviewing_findings", {
-    batch: 2, batchCount: 3, summary: "Report section: assessment",
+    batch: 2,
+    batchCount: 3,
+    summary: "Report section: assessment",
   });
   for (const [stage, key] of [
     ["editing_document", "workspaceWorkEditingDocument"],
@@ -57,7 +221,9 @@ test("editorial progress uses localized stages without section summaries or batc
       expect(task.text).not.toContain(stage);
       expect(task.text).not.toContain(locale.workspaceWorkBatch);
     }
-    const html = renderToStaticMarkup(<RunActivityFeed active run={run} events={[section, update]} />);
+    const html = renderToStaticMarkup(
+      <RunActivityFeed active run={run} events={[section, update]} />,
+    );
     expect(html.split("<details")[0]).toContain(en[key]);
     expect(html.split("<details")[0]).not.toContain("Report section");
   }
@@ -208,9 +374,15 @@ test("verified summary character failure is distinct from output truncation", ()
     ),
   ).toContain("field validation");
   for (const locale of [en, de]) {
-    expect(providerFailureExplanation({ errorId: diagnostics.errorId,
-      issues: [{ code: "custom", path: ["editorial"] }],
-    }, key => locale[key])).toBe(locale.workspaceFailureEditorial);
+    expect(
+      providerFailureExplanation(
+        {
+          errorId: diagnostics.errorId,
+          issues: [{ code: "custom", path: ["editorial"] }],
+        },
+        (key) => locale[key],
+      ),
+    ).toBe(locale.workspaceFailureEditorial);
   }
 });
 test("report content character limits identify stopped sections without offering token increases", () => {

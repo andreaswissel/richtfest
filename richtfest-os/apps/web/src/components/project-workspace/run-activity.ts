@@ -1,9 +1,184 @@
 import type { RecordData } from "../../api";
 import type { useT } from "../../i18n";
 import {
+  agentBudgetDecisionSchema,
   agentWorkProgressSchema,
   type AgentWorkProgress,
 } from "@richtfest/shared";
+
+/** Bound serialized metadata before parsing, and validate only the shared contract. */
+export function budgetDecision(value: unknown) {
+  const parsed = agentBudgetDecisionSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function budgetActivityMetadata(event: RecordData) {
+  if (
+    !["budget_waiting", "budget_reserved", "budget_stopped"].includes(
+      event.eventType,
+    )
+  )
+    return;
+  let value = event.paramsSummary;
+  if (typeof value === "string") {
+    if (value.length > 16384) return;
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const budget = budgetDecision(value.budget);
+  if (budget && `budget_${budget.state}` !== event.eventType) return;
+  if (
+    !budget ||
+    typeof value.runId !== "string" ||
+    value.runId.length > 128 ||
+    typeof value.callId !== "string" ||
+    !value.callId ||
+    value.callId.length > 128 ||
+    !Number.isInteger(value.attempt) ||
+    value.attempt < 1 ||
+    value.attempt > 100
+  )
+    return;
+  return {
+    runId: value.runId as string,
+    callId: value.callId as string,
+    attempt: value.attempt as number,
+    budget,
+  };
+}
+
+export function budgetDescription(
+  budget: NonNullable<ReturnType<typeof budgetDecision>>,
+  t: ReturnType<typeof useT>,
+) {
+  const reasons = {
+    pending_reservations: "budgetPendingReservations",
+    spend_allowance: "budgetSpendAllowance",
+    retry_allowance: "budgetRetryAllowance",
+    unknown_usage: "budgetUnknownUsage",
+    unpriced_call: "budgetUnpricedCall",
+    wait_expired: "budgetWaitExpired",
+    nested_reservation: "budgetNestedReservation",
+  } as const;
+  const money = (value: number) => `$${value} USD`;
+  return [
+    t(
+      budget.state === "waiting"
+        ? "budgetWaiting"
+        : budget.state === "stopped"
+          ? "budgetStopped"
+          : "budgetReserved",
+    ),
+    budget.reason
+      ? t(reasons[budget.reason as keyof typeof reasons])
+      : undefined,
+    budget.state === "waiting" ? t("budgetNotDispatched") : undefined,
+    `${t("budgetRecorded")}: ${money(budget.recordedUsd)}`,
+    `${t("budgetCommitted")}: ${money(budget.reservedUsd)}`,
+    `${t("budgetLimit")}: ${money(budget.limitUsd)}`,
+    budget.requestedUsd !== null
+      ? `${t("budgetRequested")}: ${money(budget.requestedUsd)}`
+      : undefined,
+    `${t("budgetRetries")}: ${budget.retriesUsed}/${budget.retryLimit}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+export function waitingBudgetCalls(events: RecordData[]) {
+  const waiting = new Map<
+    string,
+    NonNullable<ReturnType<typeof budgetActivityMetadata>>
+  >();
+  for (const event of events) {
+    if (["resumed", "steered"].includes(event.eventType)) {
+      waiting.clear();
+      continue;
+    }
+    const metadata = budgetActivityMetadata(event);
+    if (metadata) {
+      const key = `${metadata.runId}:${metadata.callId}:${metadata.attempt}`;
+      if (metadata.budget.state === "waiting") waiting.set(key, metadata);
+      else waiting.delete(key);
+    } else if (
+      [
+        "provider_call_started",
+        "provider_call_completed",
+        "provider_call_failed",
+      ].includes(event.eventType)
+    ) {
+      const provider = providerActivityMetadata(event);
+      for (const [key, call] of waiting) {
+        if (
+          call.callId === provider.callId &&
+          (!provider.runId || call.runId === provider.runId) &&
+          (!provider.attempt || call.attempt === provider.attempt)
+        )
+          waiting.delete(key);
+      }
+    } else if (
+      [
+        "failed",
+        "supervisor_failed",
+        "completed",
+        "cancelled",
+        "interrupted",
+      ].includes(event.eventType)
+    ) {
+      for (const [key, call] of waiting)
+        if (call.runId === event.runId) waiting.delete(key);
+    }
+  }
+  return [...waiting.values()];
+}
+
+export function terminalBudgetDecision(
+  run: RecordData,
+  events: RecordData[] = [],
+  attempts: RecordData[] = [],
+) {
+  if (run.status !== "failed") return;
+  const category = /(?:^|;)\s*category=([a-z_]+)/.exec(
+    String(run.error || run.failureReason || ""),
+  )?.[1];
+  if (category && category !== "budget") return;
+  let resumed = -1;
+  events.forEach((event, index) => {
+    if (["resumed", "steered"].includes(event.eventType)) resumed = index;
+  });
+  const stopped = events
+    .slice(resumed + 1)
+    .map(budgetActivityMetadata)
+    .filter(
+      (value) =>
+        value && value.runId === run.id && value.budget.state === "stopped",
+    )
+    .at(-1);
+  if (stopped) return stopped.budget;
+  const failureEvent =
+    run.failureEvent && budgetActivityMetadata(run.failureEvent);
+  if (failureEvent && failureEvent.budget.state === "stopped")
+    return failureEvent.budget;
+  const persisted = budgetDecision(
+    run.budgetDecision ?? run.settings?.budgetDecision,
+  );
+  if (persisted?.state === "stopped") return persisted;
+  const attempt = attempts
+    .filter(
+      (item) =>
+        item.runId === run.id &&
+        (run.generation === undefined || item.generation === run.generation) &&
+        (resumed < 0 ||
+          Date.parse(item.startedAt) >= Date.parse(events[resumed].createdAt)),
+    )
+    .at(-1);
+  const decision = budgetDecision(attempt?.settings?.budgetDecision);
+  return decision?.state === "stopped" ? decision : undefined;
+}
 
 export function agentName(run: RecordData, t: ReturnType<typeof useT>) {
   if (run.specialistRole === "source_reviewer")
@@ -32,6 +207,7 @@ export function currentRunTasks(
   events: RecordData[] = [],
 ) {
   const progress = new Map<string, AgentWorkProgress>();
+  const waiting = waitingBudgetCalls(events);
   for (const event of events) {
     if (["resumed", "steered"].includes(event.eventType)) progress.clear();
     const work = workProgressMetadata(event);
@@ -42,14 +218,21 @@ export function currentRunTasks(
     .sort(
       (a, b) => Number(a.status === "queued") - Number(b.status === "queued"),
     );
-  return (run.status !== "queued" && active.length ? active : [run]).map(
-    (agent) => {
-      const work =
-        agent.status === "queued" ? undefined : progress.get(agent.id);
-      return {
-        id: agent.id,
-        name: `${agentName(agent, t)}${agent.status === "queued" ? ` · ${t("run_queued")}` : ""}`,
-        text: work
+  return (
+    run.status !== "queued" && active.length
+      ? waiting.some((call) => call.runId === run.id)
+        ? [run, ...active]
+        : active
+      : [run]
+  ).map((agent) => {
+    const work = agent.status === "queued" ? undefined : progress.get(agent.id);
+    const budgets = waiting.filter((call) => call.runId === agent.id);
+    return {
+      id: agent.id,
+      name: `${agentName(agent, t)}${agent.status === "queued" ? ` · ${t("run_queued")}` : ""}`,
+      text: budgets.length
+        ? budgets.map((call) => budgetDescription(call.budget, t)).join(" · ")
+        : work
           ? workProgressDescription(work, t)
           : agent.status === "queued"
             ? `${t("agentRunWaitingForWorker")} · ${agent.goal}`
@@ -60,11 +243,10 @@ export function currentRunTasks(
                     : "workspaceTaskPlanning",
                 )
               : agent.goal,
-        summary: work?.summary,
-        hasProgress: Boolean(work),
-      };
-    },
-  );
+      summary: budgets.length ? undefined : work?.summary,
+      hasProgress: Boolean(work) || budgets.length > 0,
+    };
+  });
 }
 
 export function workProgressMetadata(
@@ -130,6 +312,7 @@ export function providerActivityMetadata(event: RecordData) {
   const raw = event.paramsSummary;
   let value: RecordData = {};
   if (typeof raw === "string") {
+    if (raw.length > 16384) return {};
     try {
       value = JSON.parse(raw);
     } catch {
@@ -260,6 +443,14 @@ export function providerActivityExplanation(
   event: RecordData,
   t: ReturnType<typeof useT>,
 ) {
+  const budget = budgetActivityMetadata(event);
+  if (budget) return budgetDescription(budget.budget, t);
+  if (
+    ["budget_waiting", "budget_reserved", "budget_stopped"].includes(
+      event.eventType,
+    )
+  )
+    return undefined;
   const metadata = providerActivityMetadata(event);
   let explanation =
     providerFailureExplanation(metadata.diagnostics, t) ??
@@ -270,11 +461,21 @@ export function providerActivityExplanation(
   const diagnostics = metadata.diagnostics;
   const details = [
     metadata.providerStatus ? `HTTP ${metadata.providerStatus}` : undefined,
-    diagnostics?.providerMessage ? `${t("workspaceProviderReason")}: ${diagnostics.providerMessage}` : undefined,
-    diagnostics?.providerCode || diagnostics?.providerType || diagnostics?.transportCode,
-    diagnostics?.providerParam ? `${t("workspaceProviderParameter")}: ${diagnostics.providerParam}` : undefined,
-    diagnostics?.providerRequestId ? `${t("workspaceProviderRequestId")}: ${diagnostics.providerRequestId}` : undefined,
-  ].filter(Boolean).join(" · ");
+    diagnostics?.providerMessage
+      ? `${t("workspaceProviderReason")}: ${diagnostics.providerMessage}`
+      : undefined,
+    diagnostics?.providerCode ||
+      diagnostics?.providerType ||
+      diagnostics?.transportCode,
+    diagnostics?.providerParam
+      ? `${t("workspaceProviderParameter")}: ${diagnostics.providerParam}`
+      : undefined,
+    diagnostics?.providerRequestId
+      ? `${t("workspaceProviderRequestId")}: ${diagnostics.providerRequestId}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   explanation = [explanation, details].filter(Boolean).join(" · ") || undefined;
   if (!explanation) return undefined;
   if (metadata.delayMs !== undefined)
@@ -303,13 +504,26 @@ export function terminalProviderFailure(
   t: ReturnType<typeof useT>,
 ) {
   if (run.status !== "failed") return undefined;
+  const budget = terminalBudgetDecision(run, events, attempts);
+  if (budget) return budgetDescription(budget, t);
+  if (
+    /(?:^|;)\s*category=budget(?:;|$)/.test(
+      String(run.error || run.failureReason || ""),
+    )
+  )
+    return t("budgetStopped");
   // A persisted timeout is authoritative over diagnostics from earlier attempts.
   // In particular, a prior truncation must not suggest increasing output tokens.
   const reason = String(run.error || run.failureReason || "");
   if (/(?:^|;)\s*category=timeout(?:;|$)/.test(reason)) return undefined;
   const phase = /(?:^|;)\s*phase=([a-z_]+)/.exec(reason)?.[1];
   const candidates = events.filter((event) => {
-    if (!["provider_call_failed", "provider_attempt_failed"].includes(event.eventType)) return false;
+    if (
+      !["provider_call_failed", "provider_attempt_failed"].includes(
+        event.eventType,
+      )
+    )
+      return false;
     const metadata = providerActivityMetadata(event);
     const attempt = attempts.find(
       (item) =>
@@ -331,6 +545,9 @@ export function terminalProviderFailure(
 }
 
 const activityLabels = {
+  budget_waiting: "budgetWaiting",
+  budget_reserved: "budgetReserved",
+  budget_stopped: "budgetStopped",
   work_progress: "workspaceActivityStep",
   decision_routed: "decisionRoutingPlannerRetained",
   started: "workspaceActivityRunStarted",
@@ -381,7 +598,9 @@ export function runActivityLabel(
   event: RecordData,
 ): ActivityTranslationKey | undefined {
   if (event.eventType === "decision_routed")
-    return event.resultSummary === "selected_source_summary" ? "decisionRoutingSummarySelected" : "decisionRoutingPlannerRetained";
+    return event.resultSummary === "selected_source_summary"
+      ? "decisionRoutingSummarySelected"
+      : "decisionRoutingPlannerRetained";
   if (
     ["failed", "supervisor_failed"].includes(event.eventType) &&
     typeof event.paramsSummary === "string" &&

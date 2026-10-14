@@ -75,6 +75,8 @@ import {
 import { TokenLimitAction } from "./token-limit-action";
 import {
   providerActivityExplanation,
+  terminalBudgetDecision,
+  budgetDescription,
   terminalProviderFailure,
 } from "./run-activity";
 import {
@@ -170,7 +172,19 @@ function FailedRunOutcome({
     queryFn: () => api(`/knowledge/runs/${run.id}`),
     enabled: false,
   });
+  const budgetStop = terminalBudgetDecision(
+    run,
+    list(details.data?.events),
+    list(details.data?.attempts),
+  );
+  const budgetPaused =
+    Boolean(budgetStop) ||
+    /(?:^|;)\s*category=budget(?:;|$)/.test(
+      String(run.error || run.failureReason || ""),
+    );
   const failure =
+    (budgetStop ? budgetDescription(budgetStop, t) : undefined) ??
+    (budgetPaused ? t("budgetStopped") : undefined) ??
     (run.failureEvent &&
     !/(?:^|;)\s*category=timeout(?:;|$)/.test(
       String(run.error || run.failureReason || ""),
@@ -193,8 +207,10 @@ function FailedRunOutcome({
     <Message>
       <MessageContent>
         <MessageHeader>{t("workspaceRunOutcomeTitle")}</MessageHeader>
-        <Callout tone="error">{failure}</Callout>
-        <TokenLimitAction run={run} onDescribe={onDescribe} />
+        <Callout tone={budgetPaused ? undefined : "error"}>{failure}</Callout>
+        {!budgetPaused && (
+          <TokenLimitAction run={run} onDescribe={onDescribe} />
+        )}
         <div className="flex flex-wrap items-center gap-stack">
           <Button asChild variant="link" size="sm">
             <Link to={`/projects/${projectId}?${params}`}>

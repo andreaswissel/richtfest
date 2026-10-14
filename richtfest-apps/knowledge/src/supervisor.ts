@@ -1209,8 +1209,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
           assertActive,
-          call: (context, validate) => call("review", goal, { ...context,
-            ...(outstandingVisualReads.length ? { outstandingVisualReads } : {}) }, id, validate),
+          // Coverage gaps are application-owned notices, not citation evidence
+          // for every section (whose source scope can be much narrower).
+          call: (context, validate) => call("review", goal, context, id, validate),
           checkpoint: async (documentDraft, section, batch, batchCount) => {
             const saved = await commit(d, run, token, async tx => {
               await tx.update(supervisorRuns).set({ review: { documentDraft } }).where(eq(supervisorRuns.runId, id));
@@ -1239,6 +1240,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         const notice = `${outstandingVisualReads.length} requested visual inspection(s) remain uninspected: the automatic revision budget is exhausted. This does not establish that the sources are unreadable. Human review or a focused follow-up is required.`;
         review.summary = `${notice}\n\n${review.summary}`.slice(0, limits.summaryMaxCharacters);
         review.rationale += `\n\n${notice}\n${JSON.stringify(outstandingVisualReads)}`;
+        if (conceptId && review.document?.template) {
+          const coverage = review.document.template.language === "de"
+            ? `${outstandingVisualReads.length} angeforderte Sichtprüfungen sind noch offen: Das automatische Überarbeitungskontingent ist ausgeschöpft. Dies belegt keine Unlesbarkeit der Quellen. Fachliche Prüfung oder gezielte Nachprüfung erforderlich; die genauen Quellen, Seiten und Ausschnitte stehen in den Laufdetails.`
+            : `${notice} Exact sources, pages and crops are retained in the run details.`;
+          review.document = prepareAgentDocument({ ...review.document, template: {
+            ...review.document.template, openIssues: `${review.document.template.openIssues}\n\n${coverage}`,
+          } }, conceptId, null);
+        }
       }
       await sources(d, run.projectId, review.citations);
       if (

@@ -2,6 +2,8 @@
 
 ## 2026-10-14
 
+- Parallel agent calls now wait for temporary spending reservations instead of failing, with exact waiting and stop reasons in activity and recovery previews. Unfinished report Open issues reuse saved specialist findings; outstanding visual checks remain explicit in the report without becoming unsupported section citations. Saved work and spending limits are preserved.
+
 - Agent recovery now previews saved work and requires confirmation of additional spending from both the conversation and run details. Shared spend/retry guards and explicit interrupted-attempt records prevent silent replacement calls; source inspection reserves a final answer step, and report citation feedback avoids unnecessary retries without weakening evidence checks.
 
 - Project chat now has a compact composer with attachments and optional effort/mode settings. Recommendations appear in the conversation and still require Apply then Send for Team or Report. Mobile chat puts threads, project sections, resources and workspace navigation into one hamburger menu, leaving room for the conversation. Agent execution is unchanged.

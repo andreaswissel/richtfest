@@ -211,7 +211,7 @@ export type ProviderTelemetry = {
   onResponse?: (response: ProviderResponseMetadata) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   /** Sanitized model-visible input only. A hit skips inference, not application validation. */
-  onPrepared?: (input: { version: 1; instructions: string; prompt: string; inputBytes?: number; outputSchema?: unknown; tools?: unknown }) => Promise<{ output: unknown } | undefined>;
+  onPrepared?: (input: { version: 1; instructions: string; prompt: string; inputBytes?: number; outputSchema?: unknown; tools?: unknown }, signal?: AbortSignal) => Promise<{ output: unknown } | undefined>;
 };
 export type ProviderUsage = {
   provider: AgentProvider | "typesafe";

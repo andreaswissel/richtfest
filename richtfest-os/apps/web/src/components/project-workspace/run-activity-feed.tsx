@@ -7,6 +7,8 @@ import {
   workProgressMetadata,
   workProgressDescription,
   agentName,
+  budgetActivityMetadata,
+  budgetDescription,
 } from "./run-activity";
 
 export function RunActivityFeed({
@@ -26,6 +28,7 @@ export function RunActivityFeed({
   const visibleEvents = list(events).filter((event) => runActivityLabel(event));
   const latest = visibleEvents.at(-1);
   const latestLabel = latest && runActivityLabel(latest);
+  const latestBudget = latest && budgetActivityMetadata(latest);
   const currentTasks = run
     ? currentRunTasks(run, children, t, visibleEvents)
     : [];
@@ -49,7 +52,10 @@ export function RunActivityFeed({
               {currentTasks.map((task) => (
                 <div key={task.id}>
                   <p className="font-medium text-foreground">{task.name}</p>
-                  <p className={`run-activity-current-text${task.hasProgress ? " run-activity-work-text" : ""}`} title={task.text}>
+                  <p
+                    className={`run-activity-current-text${task.hasProgress ? " run-activity-work-text" : ""}`}
+                    title={task.text}
+                  >
                     {task.text}
                   </p>
                   {task.summary && (
@@ -74,7 +80,11 @@ export function RunActivityFeed({
           ["provider_call_retrying", "provider_call_failed"].includes(
             latest?.eventType,
           )) ? (
-          <p>{t(latestLabel)}</p>
+          <p>
+            {latestBudget
+              ? budgetDescription(latestBudget.budget, t)
+              : t(latestLabel)}
+          </p>
         ) : !currentTasks.length ? (
           <p>
             {status === "queued"

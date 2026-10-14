@@ -1,6 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { agentBudgetDecisionSchema } from "@richtfest/shared";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunBudgetSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
@@ -1287,6 +1288,14 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
   });
   const recoveryPreview = async (d: AppDeps, run: any, state: any, tx = d.db) => {
     const accounting = await runAccounting(d, run.id, state?.modelPolicy?.runBudget?.authorizedAt, tx);
+    const stopped = /(?:^|;)\s*category=budget(?:;|$)/.test(run.error ?? "")
+      ? await tx.select({ settings: agentRunAttempts.settings }).from(agentRunAttempts)
+        .innerJoin(agentRuns, eq(agentRuns.id, agentRunAttempts.runId)).where(and(
+          eq(agentRunAttempts.tenantId, d.tenantId), eq(agentRuns.tenantId, d.tenantId),
+          or(eq(agentRuns.id, run.id), eq(agentRuns.parentRunId, run.id)),
+          eq(agentRunAttempts.generation, state?.generation ?? run.generation), eq(agentRunAttempts.failureCategory, "budget"),
+        )).orderBy(desc(agentRunAttempts.completedAt)).limit(1) : [];
+    const decision = agentBudgetDecisionSchema.safeParse(stopped[0]?.settings?.budgetDecision);
     const draft = state?.review?.documentDraft;
     const sections = Object.entries(draft?.sections ?? {}).map(([key, value]: [string, any]) => ({
       key, savedPieces: value.parts?.filter(Boolean).length ?? 0,
@@ -1304,6 +1313,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       editorialCandidate: !!draft?.editorial?.candidate,
       preservationChecked: !!draft?.editorial?.check?.preserved,
       accounting,
+      ...(decision.success && decision.data.state === "stopped" ? { budgetDecision: decision.data } : {}),
       budgetRequired: !!d.estimateCallCost,
       budget: agentRunBudgetSchema.parse(state?.modelPolicy?.runBudget
         ? { maxCostUsd: state.modelPolicy.runBudget.maxCostUsd, maxAutomaticRetries: state.modelPolicy.runBudget.maxAutomaticRetries } : {}),

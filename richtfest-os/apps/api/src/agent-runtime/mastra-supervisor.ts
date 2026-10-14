@@ -362,8 +362,10 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
   const timeoutMs = input.modelPolicy?.executionLimits
     ? limits.timeoutSeconds * 1000
     : input.phase === "plan" ? 60000 : 180000;
-  const deadlineSignal = AbortSignal.timeout(timeoutMs);
-  const abortSignal = options.signal ? AbortSignal.any([options.signal, deadlineSignal]) : deadlineSignal;
+  const deadline = new AbortController();
+  let deadlineSignal: AbortSignal | undefined;
+  const onDeadline = () => deadline.abort(deadlineSignal?.reason);
+  const abortSignal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
   // SDK cancellation is cooperative: do not let an open stream keep the
   // application attempt (and supervisor heartbeat) alive beyond its deadline.
   let rejectAborted!: (reason: unknown) => void;
@@ -418,8 +420,14 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       outputSchemaHash: metadataHash(JSON.stringify(standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)))) });
     const saved = await input.onPrepared?.({ version: 1, instructions: redact(instructions), prompt: redact(prompt),
       ...(toolManifest.length ? { tools: toolManifest } : {}),
-      outputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)) });
+      outputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(outputSchema)) }, options.signal);
     if (saved) return outputSchema.parse(saved.output);
+    abortSignal.throwIfAborted();
+    // Admission has its own bounded, cancellable wait. Do not spend the
+    // provider's execution deadline while another call holds a reservation.
+    deadlineSignal = AbortSignal.timeout(timeoutMs);
+    deadlineSignal.addEventListener("abort", onDeadline, { once: true });
+    if (deadlineSignal.aborted) onDeadline();
     let object: unknown;
     const stream = await untilAborted(agent.stream<Record<string, unknown>>(prompt, executionOptions));
     collectFailure = async () => {
@@ -517,7 +525,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       cancelled.code = "cancelled";
       throw cancelled;
     }
-    if (deadlineSignal.aborted) throw Object.assign(safeProviderError(false), { code: "timeout", failureCategory: "timeout", timedOut: true });
+    if (deadlineSignal?.aborted) throw Object.assign(safeProviderError(false), { code: "timeout", failureCategory: "timeout", timedOut: true });
     const metadata = providerFailureMetadata(error);
     const providerDiagnostics = providerErrorDiagnostics(error, apiKey, { goal: input.goal, context: input.context, instructions });
     throw Object.assign(safeProviderError(
@@ -527,6 +535,7 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       metadata.retryAfterMs,
     ), { diagnostics: sanitizeProviderDiagnostics({ ...safeDiagnostics, ...metadata.diagnostics, ...providerDiagnostics }) });
   } finally {
+    deadlineSignal?.removeEventListener("abort", onDeadline);
     abortSignal.removeEventListener("abort", onAbort);
     if (failed) await input.onResponse?.(responseMetadata).catch(() => undefined);
     else await input.onResponse?.(responseMetadata);

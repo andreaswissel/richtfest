@@ -132,7 +132,7 @@ integration(`visual source scope and durable citation authorization: ${scenario}
   }
 });
 
-for (const scenario of ["recover", "report", "exhausted", "ignored"] as const)
+for (const scenario of ["recover", "report", "report_exhausted", "exhausted", "ignored"] as const)
 integration(`visual budget recovery preserves findings and shares the revision limit: ${scenario}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
@@ -166,11 +166,12 @@ integration(`visual budget recovery preserves findings and shares the revision l
         { role: "requirements_reviewer", goal: "Independent requirement", sourceVersionIds: [] },
       ] } };
       if (request.phase === "review") {
+        if (context.documentTask) expect(context.outstandingVisualReads).toBeUndefined();
         if (context.documentTask === "outline") {
           reviewerCalls++;
           expect(context.findings.map((f: any) => f.output.summary)).toEqual([
             "Saved batch 1", "Saved batch 2", "Saved batch 3", "Saved batch 4",
-            "Saved batch 4; visual supplement", "Saved batch 4; visual supplement; visual supplement", "Saved sibling",
+            "Saved batch 4; visual supplement", ...(recovers ? ["Saved batch 4; visual supplement; visual supplement"] : []), "Saved sibling",
           ]);
           return { status: "completed", output: { id: "exterior-noise-concept", title: "Visual evidence report", language: "en", project: concept.project,
             sections: context.sectionKeys.map((key: string) => ({ key, sources: [{ versionId: versions[0], pageStart: 1, pageEnd: 1 }] })), attachments: [] } };
@@ -220,7 +221,7 @@ integration(`visual budget recovery preserves findings and shares the revision l
   try {
     const [run] = await db.insert(agentRuns).values({ tenantId, projectId, sourceVersionIds: versions, goal: "Budget recovery", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
     runId = run!.id;
-    await createSupervisor(d, db, run, "medium", { ...policy, maxRevisions, workflow: scenario === "report"
+    await createSupervisor(d, db, run, "medium", { ...policy, maxRevisions, workflow: scenario === "report" || scenario === "report_exhausted"
       ? { mode: "report", reportTemplate: "exterior-noise-concept" } : { mode: "team" } });
     await stepSupervisor(d, run!.id);
     const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
@@ -269,6 +270,13 @@ integration(`visual budget recovery preserves findings and shares the revision l
       expect(parent!.outputSummary).toContain("remain uninspected");
       expect(parent!.rationale).not.toContain(versions[9]!);
       for (const target of review.outstandingVisualReads) expect(parent!.rationale).toContain(target.versionId);
+    }
+    if (scenario === "report_exhausted") {
+      const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+      expect(revisions).toHaveLength(1);
+      expect(revisions[0]!.content).toContain("1 requested visual inspection(s) remain uninspected");
+      expect(revisions[0]!.content).toContain("This does not establish that the sources are unreadable");
+      expect(review.document.template.openIssues).toContain(concept.openIssues);
     }
     expect(renders).toHaveLength(recovers ? 9 : scenario === "ignored" ? 4 : 8);
   } finally {
@@ -1105,6 +1113,7 @@ integration("specialist timeouts stop unchanged retries and preserve completed s
     db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
     validateProject: async () => true, listProjectSources: async () => ({ sources: [], truncated: false }),
     executeSupervisor: async (input: any) => {
+      await input.onPrepared?.({ version: 1, instructions: "", prompt: input.goal });
       if (input.phase === "plan") return { status: "completed", output: { tasks: [
         { role: "source_reviewer", goal: "Completes", sourceVersionIds: [] },
         { role: "requirements_reviewer", goal: "Times out", sourceVersionIds: [] },
@@ -1134,7 +1143,7 @@ integration("specialist timeouts stop unchanged retries and preserve completed s
     expect(events.some(event => event.eventType === "provider_call_retrying")).toBe(false);
     expect(JSON.stringify([parent, children, attempts, events])).not.toContain("sk-secret");
   } finally {
-    for (const table of [agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+    for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }
