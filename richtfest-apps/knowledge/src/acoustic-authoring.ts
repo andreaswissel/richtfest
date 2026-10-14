@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { Lexer } from "marked";
 import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
   acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
@@ -30,9 +31,30 @@ export type AcousticDraft = {
       candidate?: z.infer<typeof acousticEditorialOutputSchema>;
       check?: z.infer<typeof acousticEditorialCheckSchema>;
       feedback?: z.infer<typeof acousticEditorialCheckSchema>;
+      fallbackByteLimit?: number;
+      verbatim?: "oversized_block";
     }>;
   };
 };
+
+/** Lossless Markdown blocks: never cut tables, lists or fenced code in half. */
+function editorialSubpackets(original: string, byteLimit: number) {
+  const blocks: string[] = [];
+  for (const token of Lexer.lex(original)) {
+    if (token.type === "space" && blocks.length) blocks[blocks.length - 1] += token.raw;
+    else blocks.push(token.raw);
+  }
+  // The lexer can normalize tabs/newlines. In that case, keep the source intact.
+  if (blocks.join("") !== original) return [original];
+  const packets: string[] = [];
+  let packet = "";
+  for (const block of blocks) {
+    if (packet && Buffer.byteLength(JSON.stringify(packet + block)) > byteLimit) { packets.push(packet); packet = ""; }
+    packet += block;
+  }
+  if (packet) packets.push(packet);
+  return packets;
+}
 
 /** Durable section authoring: source pages/annexes never consume output tokens. */
 export async function authorAcousticConcept(input: {
@@ -328,10 +350,100 @@ export async function authorAcousticConcept(input: {
   });
   if (editorial.packets || (!editorial.candidate && Buffer.byteLength(JSON.stringify(requestContext)) > 16 * 1024)) {
     editorial.packets ??= {};
+    // Keep legacy root identities, but do not send another 16 KiB rewrite into
+    // a 6,000-token response. This conservative byte bound leaves JSON/reasoning
+    // headroom; it is not a token estimate or a guarantee of model completion.
+    const proseByteLimit = Math.min(4 * 1024, Math.floor(Math.min(input.maxOutputTokens, 6000) * 2 / 3));
+    const editPacket = async (key: typeof editableKeys[number], original: string, packetKey: string, context: Record<string, unknown>): Promise<string> => {
+      await input.assertActive();
+      const packetHash = hash(context);
+      let saved = editorial.packets![packetKey];
+      if (saved?.inputHash !== packetHash) saved = editorial.packets![packetKey] = { inputHash: packetHash };
+      const savePacket = (stage: string) => input.checkpoint(draft!, stage, Number(context.batch), Number(context.batchCount));
+      if (saved.check && (!saved.check.preserved || saved.check.issues.length)) {
+        saved.feedback = saved.check;
+        delete saved.candidate;
+        delete saved.check;
+      }
+      if (saved.verbatim) return original;
+      const references = inlineIds(original);
+      const packetSchema = acousticEditorialPacketOutputSchema(key).superRefine((edit, ctx) => {
+        if (!edit.complete)
+          ctx.addIssue({ code: "custom", path: ["complete"], message: "The editorial packet is incomplete.",
+            params: { editorial: { reason: "incomplete" } } });
+        const next = inlineIds(edit);
+        const missingReferences = [...references].filter(ref => !next.has(ref));
+        const addedReferences = [...next].filter(ref => !references.has(ref));
+        if (missingReferences.length || addedReferences.length)
+          ctx.addIssue({ code: "custom", path: ["sections", 0, "content"], message: "Preserve this packet's source references without adding identifiers.",
+            params: { editorial: { reason: "references", missingReferences, addedReferences } } });
+        prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: {
+          ...template, ...Object.fromEntries(edit.sections.map(s => [s.key, s.content])),
+        } }, id, null);
+      });
+      if (!saved.candidate) {
+        if (saved.fallbackByteLimit === undefined && Buffer.byteLength(JSON.stringify(original)) > proseByteLimit) {
+          saved.fallbackByteLimit = proseByteLimit;
+          await savePacket("editing_document");
+        }
+        if (saved.fallbackByteLimit !== undefined) {
+          const smaller = editorialSubpackets(original, saved.fallbackByteLimit);
+          if (smaller.length === 1) {
+            saved.verbatim = "oversized_block";
+            await savePacket("editing_document");
+            return original;
+          }
+          const contents: string[] = [];
+          for (const [index, text] of smaller.entries()) {
+            contents.push(await editPacket(key, text, `${packetKey}:${index}`, { ...context,
+              original: { ...(context.original as object), [key]: text }, packetPath: `${packetKey}:${index}`,
+              batch: index + 1, batchCount: smaller.length,
+            }));
+          }
+          saved.candidate = packetSchema.parse({ sections: [{ key, content: contents.join("") }], complete: true });
+          // Changed children each passed a fresh check; verbatim blocks were not edited.
+          saved.check = { preserved: true, issues: [] };
+          await savePacket("checking_editorial");
+        } else {
+          const smallerLimit = Math.floor(Buffer.byteLength(JSON.stringify(original)) / 2);
+          const canSplit = editorialSubpackets(original, smallerLimit).length > 1;
+          await savePacket("editing_document");
+          try {
+            saved.candidate = packetSchema.parse(await input.call({ ...context, feedback: saved.feedback,
+              splitOnTruncation: canSplit, splitOnIncomplete: canSplit,
+            }, value => packetSchema.parse(value)));
+          } catch (error) {
+            const metadata = error as { failureCategory?: string; diagnostics?: unknown };
+            const diagnostics = sanitizeProviderDiagnostics(error instanceof z.ZodError ? { issues: error.issues } : metadata?.diagnostics);
+            const incomplete = diagnostics.issues?.some(issue => issue.editorial?.reason === "incomplete");
+            if (!canSplit || (!(error instanceof z.ZodError) && metadata?.failureCategory !== "validation")
+              || (!incomplete && diagnostics.finishReason !== "length" && diagnostics.errorId !== "STRUCTURED_OUTPUT_TRUNCATED")) throw error;
+            saved.fallbackByteLimit = smallerLimit;
+            await savePacket("editing_document");
+            return editPacket(key, original, packetKey, context);
+          }
+          await input.assertActive();
+          await savePacket("editing_document");
+        }
+      }
+      const candidate = packetSchema.parse(saved.candidate);
+      if (!saved.check) {
+        saved.check = acousticEditorialCheckSchema.parse(await input.call({ ...context, documentTask: "editorial_check",
+          edited: { ...(context.original as object), [key]: candidate.sections[0]!.content },
+        }, value => acousticEditorialCheckSchema.parse(value)));
+        await input.assertActive();
+        await savePacket("checking_editorial");
+      }
+      if (!saved.check.preserved || saved.check.issues.length)
+        invalid(["editorial"], "An editorial packet changed or omitted evidence. Retry to revise only the rejected packet using its saved feedback.");
+      // The schema trims content. Restore source separators when joining children
+      // so a heading/table/list cannot merge with its neighbor across a checkpoint.
+      return original.match(/^\s*/u)![0] + candidate.sections[0]!.content + original.match(/\s*$/u)![0];
+    };
     const sections: z.infer<typeof acousticEditorialOutputSchema>["sections"] = [];
     for (const key of editableKeys) {
-      // Split only between Markdown blocks, never through a table or paragraph.
-      // An indivisible oversized block is retained verbatim, not summarized.
+      // Preserve the historical root partition and hashes for saved paid work.
+      // New subpackets use the Markdown lexer and durable descendant identities.
       const blocks = bodies[key]!.split(/(\n{2,})/);
       const packets: string[] = [];
       let packet = "";
@@ -349,49 +461,9 @@ export async function authorAcousticConcept(input: {
           inputMode: "editorial-packet", sectionKeys: [key], sectionDirectory: editableKeys,
           original: { id, version: 1, language: outline.language, project: outline.project, [key]: original },
           batch: index + 1, batchCount: packets.length };
-        const packetHash = hash(context), packetKey = `${key}:${index}`;
-        let saved = editorial.packets[packetKey];
-        if (saved?.inputHash !== packetHash) saved = editorial.packets[packetKey] = { inputHash: packetHash };
-        if (saved.check && (!saved.check.preserved || saved.check.issues.length)) {
-          saved.feedback = saved.check;
-          delete saved.candidate;
-          delete saved.check;
-        }
-        const references = inlineIds(original);
-        const packetSchema = acousticEditorialPacketOutputSchema(key).superRefine((edit, ctx) => {
-          if (!edit.complete)
-            ctx.addIssue({ code: "custom", path: ["complete"], message: "The editorial packet is incomplete.",
-              params: { editorial: { reason: "incomplete" } } });
-          const next = inlineIds(edit);
-          const missingReferences = [...references].filter(ref => !next.has(ref));
-          const addedReferences = [...next].filter(ref => !references.has(ref));
-          if (missingReferences.length || addedReferences.length)
-            ctx.addIssue({ code: "custom", path: ["sections", 0, "content"], message: "Preserve this packet's source references without adding identifiers.",
-              params: { editorial: { reason: "references", missingReferences, addedReferences } } });
-          // Validate Markdown/template constraints before paying for a checker.
-          prepareAgentDocument({ title: outline.title, content: "Rendered from template", template: {
-            ...template, ...Object.fromEntries(edit.sections.map(s => [s.key, s.content])),
-          } }, id, null);
-        });
-        if (!saved.candidate) {
-          await input.checkpoint(draft, "editing_document", index, packets.length);
-          saved.candidate = packetSchema.parse(await input.call({ ...context, feedback: saved.feedback }, value => packetSchema.parse(value)));
-          await input.assertActive();
-          await input.checkpoint(draft, "editing_document", index + 1, packets.length);
-        }
-        const candidate = packetSchema.parse(saved.candidate);
-        if (!saved.check) {
-          saved.check = acousticEditorialCheckSchema.parse(await input.call({ ...context, documentTask: "editorial_check",
-            edited: { ...context.original, [key]: candidate.sections[0]!.content },
-          }, value => acousticEditorialCheckSchema.parse(value)));
-          await input.assertActive();
-          await input.checkpoint(draft, "checking_editorial", index + 1, packets.length);
-        }
-        if (!saved.check.preserved || saved.check.issues.length)
-          invalid(["editorial"], "An editorial packet changed or omitted evidence. Retry to revise only the rejected packet using its saved feedback.");
-        contents.push(candidate.sections[0]!.content);
+        contents.push(await editPacket(key, original, `${key}:${index}`, context));
       }
-      sections.push({ key, content: contents.join("\n\n") });
+      sections.push({ key, content: contents.join("") });
     }
     editorial.candidate = editSchema.parse({ sections, complete: true });
     // Every changed packet passed its own fresh semantic comparison. Verbatim

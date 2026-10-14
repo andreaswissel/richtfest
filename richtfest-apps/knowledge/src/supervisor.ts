@@ -651,8 +651,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           const cooldownExceedsBudget = rateLimited ? Date.now() + delayMs >= retryDeadline! : delayMs > 300000;
           const splitTruncatedSection = phase === "review" && (context as { splitOnTruncation?: boolean }).splitOnTruncation === true
             && (diagnostics.finishReason === "length" || diagnostics.errorId === "STRUCTURED_OUTPUT_TRUNCATED");
+          const splitIncompletePacket = editorialPacket && (context as { splitOnIncomplete?: boolean }).splitOnIncomplete === true
+            && diagnostics.issues?.some(issue => issue.editorial?.reason === "incomplete");
           const shouldRetry = metadata.providerFailure === true && metadata.retryable === true
-            && !splitTruncatedSection && !quotaFailure && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
+            && !splitTruncatedSection && !splitIncompletePacket && !quotaFailure && failureCategory !== "permission" && failureCategory !== "timeout" && !cooldownExceedsBudget && attempt < maxAttempts;
           retryAt = Date.now() + delayMs;
           const attemptMetadata = JSON.stringify({ callId, attempt, runId, diagnostics, providerStatus: providerFailureStatus,
             ...(shouldRetry ? { delayMs, retryAt } : {}), recoveryExhausted: cooldownExceedsBudget });

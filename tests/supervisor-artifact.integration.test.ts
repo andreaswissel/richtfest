@@ -358,9 +358,9 @@ test(`large editorial recovery preserves checked packets and immutable evidence:
   const id = "exterior-noise-concept" as const, versionId = crypto.randomUUID();
   const fixture = acousticConceptFixture(id, "de", versionId);
   const paragraphs = ["Room A-17: 33.2 dB required; 42.1 dB available.", "Room B-93: 48.7 dB required; 39.4 dB available."]
-    .map(text => `${text} [${versionId}] ${"Ungeprüfte Quellenangaben. ".repeat(340)}`);
+    .map(text => `${text} [${versionId}] ${"Ungeprüfte Quellenangaben. ".repeat(40)}`);
   const table = `| Room | Value |\n| --- | --- |\n${Array.from({ length: 1200 }, (_, i) => `| Room ${i} | ${i + 17}.3 dB |`).join("\n")}`;
-  const components = [...paragraphs, table, `Last room: 59.7 dB; not approved [${versionId}].`].join("\n\n");
+  const components = [paragraphs[0], table, paragraphs[1], `Last room: 59.7 dB; not approved [${versionId}].`].join("\n\n");
   let draft: any, interrupted = false;
   const writers: string[] = [], checks: string[] = [];
   const input = { d: { resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" },
@@ -407,10 +407,60 @@ test(`large editorial recovery preserves checked packets and immutable evidence:
   expect(writers.filter(text => text.includes("Room B-93"))).toHaveLength(scenario === "checker_timeout" ? 1 : 2);
   const template = result.document.template as any;
   for (const content of [...paragraphs, table, "Last room: 59.7 dB; not approved"]) expect(template.components.includes(content.trimEnd())).toBe(true);
+  expect(template.components).toBe(components);
   expect(template.calculationAppendix).toBe(pieces.calculationAppendix.parts[0].content);
   const count = writers.length + checks.length;
   await authorAcousticConcept({ ...input, draft });
   expect(writers.length + checks.length).toBe(count);
+});
+
+test("editorial subpackets resume checked descendants and keep Markdown, references and appendix lossless", async () => {
+  const id = "exterior-noise-concept" as const, versionId = crypto.randomUUID();
+  const fixture = acousticConceptFixture(id, "de", versionId);
+  const code = `\`\`\`text\n${"Untouched A = 17.3\n".repeat(180)}\n${"Untouched B = 42.9\n".repeat(180)}\`\`\``;
+  const table = `| Room | Source value |\n| --- | --- |\n${Array.from({ length: 220 }, (_, i) => `| Room ${i} | ${i + 17}.3 dB |`).join("\n")}`;
+  const paragraphs = Array.from({ length: 6 }, (_, i) => `Paragraph ${i}: required ${i + 31}.2 dB [${versionId}]. ${"Noch nicht geprüft. ".repeat(45)}`.trim());
+  const components = [code, table, ...paragraphs].join("\n\n");
+  let draft: any, interrupted = false, truncated = 0;
+  const writers: string[] = [], checks: string[] = [];
+  const input = { d: { resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Evidence" },
+    content: { status: "available", text: "Synthetic evidence" } }) } as any,
+    projectId: crypto.randomUUID(), id, goal: "Recover losslessly", findings: [], sourceVersionIds: [versionId],
+    limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 32000, maxParallel: 1,
+    assertActive: async () => {}, checkpoint: async (value: any) => { draft = structuredClone(value); },
+    call: async (context: any) => {
+      if (context.documentTask === "outline") return { id, title: "Lossless recovery", language: "de", project: fixture.project,
+        sections: acousticSectionKeys(id).map(key => ({ key, sources: [{ versionId, pageStart: 1, pageEnd: 1 }] })), attachments: [] };
+      if (context.documentTask === "section") return { complete: true, citations: [versionId], content: context.section === "components" ? components : (fixture as any)[context.section] };
+      const text = context.original[context.sectionKeys[0]];
+      expect(Buffer.byteLength(JSON.stringify(text))).toBeLessThanOrEqual(4000);
+      expect(text).not.toContain("Untouched");
+      expect(text).not.toContain("| Room");
+      if (context.documentTask === "editorial") {
+        writers.push(text);
+        if (text.includes("Paragraph 0") && text.includes("Paragraph 1")) {
+          truncated++;
+          throw Object.assign(new Error("Output cap"), { failureCategory: "validation",
+            diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" } });
+        }
+        return unchangedEditorial(context);
+      }
+      checks.push(text);
+      if (text.includes("Paragraph 4") && !interrupted) { interrupted = true; throw new Error("Checker disconnected"); }
+      return { preserved: true, issues: [] };
+    },
+  };
+  await expect(authorAcousticConcept(input)).rejects.toThrow("Checker disconnected");
+  const pieces = structuredClone(draft.sections), completedCalls = [...writers];
+  const checkedBefore = checks.filter(text => !text.includes("Paragraph 4"));
+  const result = await authorAcousticConcept({ ...input, draft });
+  expect(truncated).toBe(1);
+  for (const text of completedCalls) expect(writers.filter(value => value === text)).toHaveLength(1);
+  for (const text of checkedBefore) expect(checks.filter(value => value === text)).toHaveLength(1);
+  expect(Object.values(draft.editorial.packets).filter((packet: any) => packet.verbatim === "oversized_block").length).toBe(2);
+  expect(draft.sections).toEqual(pieces);
+  expect((result.document.template as any).components).toBe(components);
+  expect(result.document.template!.calculationAppendix).toBe(fixture.calculationAppendix);
 });
 
 for (const id of ["interior-noise-concept", "exterior-noise-concept"] as const)

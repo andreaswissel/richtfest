@@ -738,15 +738,19 @@ for (const failure of ["summary", "citation"] as const) test.skipIf(!process.env
     await pool.end();
   }
 });
-for (const failure of ["incomplete_references", "wrong_key", "multiple_sections"] as const)
+for (const failure of ["incomplete_references", "wrong_key", "multiple_sections", "truncated_split", "incomplete_split"] as const)
 test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} through tracked Mastra calls without redoing saved work`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), versionId = crypto.randomUUID(), foreignId = crypto.randomUUID();
   const id = "exterior-noise-concept" as const, fixture = acousticConceptFixture(id, "en", versionId);
   if (fixture.id !== id) throw new Error("Expected exterior noise fixture");
   const model = { modelId: "test-model", maxOutputTokens: 32000, maxSteps: 1 };
-  const prose = `${fixture.exteriorNoiseAssessment} [${versionId}]\n\n${"Unreviewed source claims remain uncertain. ".repeat(450)}`;
+  const splitting = failure === "truncated_split" || failure === "incomplete_split";
+  const firstPacket = splitting ? [17, 93, 42].map(room => `Room ${room}: ${fixture.exteriorNoiseAssessment} [${versionId}]`).join("\n\n")
+    : `${fixture.exteriorNoiseAssessment} [${versionId}]`;
+  const prose = `${firstPacket}\n\n${"Unreviewed source claims remain uncertain. ".repeat(450)}`.trim();
   const writerCalls: string[] = [];
+  let failedRootCalls = 0;
   let repaired = false;
   const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {}, audit: async () => {},
     validateProject: async () => true, validateSourceVersion: async () => true,
@@ -761,6 +765,18 @@ test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} thro
       if (context.documentTask === "editorial") writerCalls.push(key);
       let output: any = context.documentTask === "editorial_check" ? { preserved: true, issues: [] }
         : { sections: [{ key, content: context.original[key] }], complete: true };
+      if (target && splitting && context.documentTask === "editorial") {
+        if (!context.packetPath) {
+          failedRootCalls++;
+          if (failure === "truncated_split") throw Object.assign(new Error("Truncated output"), { providerFailure: true, retryable: true,
+            failureCategory: "validation", diagnostics: { errorId: "STRUCTURED_OUTPUT_TRUNCATED", finishReason: "length" } });
+          output.complete = false;
+        } else {
+          expect(context.outputValidationFeedback).toBeUndefined();
+          expect(firstPacket).toContain(context.original[key].trim());
+          repaired = true;
+        }
+      }
       if (target && context.documentTask === "editorial" && !context.outputValidationFeedback) {
         if (failure === "incomplete_references") output = { complete: false, sections: [{ key, content: `Unsupported claim [${foreignId}]` }] };
         if (failure === "wrong_key") output.sections[0].key = "components";
@@ -807,10 +823,14 @@ test.skipIf(!process.env.DATABASE_URL)(`editorial packet repairs ${failure} thro
     await stepSupervisor(d, run!.id);
     expect(repaired).toBe(true);
     expect(writerCalls.filter(k => k === "preliminaryRemarks")).toHaveLength(1);
-    expect(writerCalls.filter(k => k === "exteriorNoiseAssessment")).toHaveLength(2);
+    if (splitting) {
+      expect(failedRootCalls).toBe(1);
+      expect(writerCalls.filter(k => k === "exteriorNoiseAssessment").length).toBeGreaterThan(2);
+    } else expect(writerCalls.filter(k => k === "exteriorNoiseAssessment")).toHaveLength(2);
     const [revision] = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
     expect(revision!.content).toContain(fixture.exteriorNoiseAssessment);
     expect(revision!.content).not.toContain(foreignId);
+    expect((revision!.payload as any).template.exteriorNoiseAssessment).toBe(prose);
     expect((revision!.payload as any).template.calculationAppendix).toBe(fixture.calculationAppendix);
   } finally {
     for (const table of [artifactRevisions, artifacts, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks]) await db.delete(table).where(eq(table.tenantId, tenantId));
