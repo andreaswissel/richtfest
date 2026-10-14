@@ -2,7 +2,7 @@
 
 ## 2026-10-14
 
-- Acoustic report editing now groups changes instead of rewriting unchanged prose, retaining saved work and independent checks for changed evidence. Model calls reserve one actual step at a time, preserving earlier spend and cancellation safeguards without raising budgets, changing models or automatically restarting stopped runs.
+- Acoustic report editing now groups changes instead of rewriting unchanged prose, retaining saved work and independent checks for changed evidence. Edit recovery retains rejected wording alongside review feedback and rechecks changed repairs; editors distinguish missing visual receipts from contradictory evidence. Model calls reserve one actual step at a time, preserving earlier spend and cancellation safeguards without raising budgets, changing models or automatically restarting stopped runs.
 
 - Acoustic reports now consolidate repeated fragments with a separate preservation check, retaining source associations and exact visual-inspection limits. Large unfinished narrative batches also use smaller, lossless writing packets; retries retain completed pieces without raising the spending cap. Source registers use a bounded inventory-writing contract for document dates, revisions and coverage limits, without repeating technical assessments or discarding source text. Assumption-only calculated results without source provenance stay out of report tables without changing the ledger; PDF export shares only byte-identical source files' matching pages with provenance cross-references. Start a fresh Report to apply prose changes to a completed report; existing drafts stay unchanged.
 

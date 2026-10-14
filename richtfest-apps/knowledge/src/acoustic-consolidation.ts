@@ -10,7 +10,7 @@ type Template = z.infer<typeof acousticConceptTemplateSchema>;
 type Candidate = z.infer<typeof acousticConsolidationOutputSchema>;
 type Check = z.infer<typeof acousticEditorialCheckSchema>;
 type Fragment = { id: string; section: string; content: string };
-type Operation = { kind: "coverage" | "merge" | "edit"; ids: string[]; candidate?: Candidate; check?: Check; feedback?: Check; children?: Operation[] };
+type Operation = { kind: "coverage" | "merge" | "edit"; ids: string[]; candidate?: Candidate; check?: Check; feedback?: Check; rejectedCandidate?: Candidate; children?: Operation[] };
 export type AcousticConsolidationState = {
   inputHash: string;
   mode?: "patch-editorial-v1";
@@ -132,13 +132,14 @@ export async function consolidateAcousticConcept(input: {
       }
     });
     if (op.check && (!op.check.preserved || op.check.issues.length)) {
+      op.rejectedCandidate = op.candidate;
       op.feedback = op.check; delete op.check; delete op.candidate;
       await save();
     }
     const context: Record<string, unknown> = {
       documentTemplate: { id: input.template.id, version: 1 }, inputMode: "editorial-consolidation",
       operation: op.kind, original,
-      instructions: "Consolidate only genuinely duplicated evidence; preserve every unique room, value, page, association, uncertainty and definition. Null retains exact original. Empty content removes only evidence retained in the other supplied member. Preserve original whitespace separators. Never resolve ambiguous Q aliases or introduce cross-references to absent content. Visual receipts are authoritative only for the exact page/crop/revision: missing receipt means unknown, available means rendering available, not semantic review; budget_exhausted means not inspected. Unavailable rendering does not establish illegibility; never infer unreadability from a rendering failure. Coverage operations reconcile only claims about inspection, not substantive source evidence.",
+      instructions: "Consolidate only genuinely duplicated evidence; preserve every unique room, value, page, association, uncertainty and definition. Null retains exact original. Empty content removes only evidence retained in the other supplied member. Preserve original whitespace separators. Never resolve ambiguous Q aliases or introduce cross-references to absent content. Visual receipts are authoritative only for the exact page/crop/revision: missing receipt means unknown, available means rendering available, not semantic review; budget_exhausted means not inspected. An empty or missing visualReads list is not contradictory evidence: preserve previously reported availability as an attributed report, separately retaining absent visual proof and unchecked features. Never replace reported availability with unknown availability solely because this context lacks receipts, or upgrade reported availability to verified inspection. Correct an original inspection claim only when an exact scoped receipt contradicts it. Unavailable rendering does not establish illegibility; never infer unreadability from a rendering failure. Coverage operations reconcile only claims about inspection, not substantive source evidence.",
     };
     if (editing) {
       context.inputMode = "patch-editorial-v1";
@@ -157,8 +158,12 @@ export async function consolidateAcousticConcept(input: {
     context.sourceDirectory = input.sourceDirectory.filter(s => contextRefs.has(s.versionId.toLowerCase()));
     context.visualReads = input.visualReads.filter(v => contextRefs.has(v.request.versionId.toLowerCase()));
     const checkInstructions = `${context.instructions} Independently compare the original and replacement evidence semantically, including room/value/source/page associations and ambiguous aliases. Reject unsupported omissions, new claims, dangling references and incorrect inspection claims even when UUIDs and numbers are unchanged.`;
+    const writerContext = { ...context, documentTask: "consolidation", feedback: op.feedback,
+      rejectedCandidate: op.rejectedCandidate,
+      ...(op.feedback ? { instructions: `${context.instructions} Repair this operation using feedback and rejectedCandidate when supplied. The rejected candidate is diagnostic only, not source evidence or an accepted edit. Compare it with original; address the identified issues without unrelated rewrites. Null retains exact original when no faithful improvement is needed. Any changed repair must pass a fresh independent preservation check.` } : {}),
+    };
     if (input.inputByteBudget !== undefined && Math.max(
-      bytes({ ...context, documentTask: "consolidation", feedback: op.feedback }),
+      bytes(writerContext),
       bytes({ ...context, documentTask: "consolidation_check", edited: "x".repeat(limit), instructions: checkInstructions }),
     ) > input.inputByteBudget) throw new Error("Consolidation writer/checker context exceeds input byte budget before paid writer.");
     if (!op.candidate) {
@@ -175,7 +180,7 @@ export async function consolidateAcousticConcept(input: {
         return schema.parse(parsed);
       };
       try {
-        result = await input.call({ ...context, documentTask: "consolidation", feedback: op.feedback,
+        result = await input.call({ ...writerContext,
           ...(editing ? { splitOnIncomplete: op.ids.length > 1, splitOnTruncation: op.ids.length > 1 } : {}) }, validate);
         result = validate(result);
       } catch (error) {
@@ -187,7 +192,11 @@ export async function consolidateAcousticConcept(input: {
         if (!editing || op.ids.length < 2 || !(incomplete || (e.failureCategory === "validation" &&
           (e.diagnostics?.finishReason === "length" || e.diagnostics?.errorId === "STRUCTURED_OUTPUT_TRUNCATED")))) throw error;
         const middle = Math.ceil(op.ids.length / 2);
-        op.children = [op.ids.slice(0, middle), op.ids.slice(middle)].map(ids => ({ kind: "edit", ids }));
+        op.children = [op.ids.slice(0, middle), op.ids.slice(middle)].map(ids => ({ kind: "edit", ids,
+          ...(op.feedback ? { feedback: op.feedback } : {}),
+          ...(op.rejectedCandidate ? { rejectedCandidate: { ...op.rejectedCandidate,
+            replacements: op.rejectedCandidate.replacements.filter(r => ids.includes(r.id)) } } : {}),
+        }));
         await save();
         for (const child of op.children) await process(child);
         return;

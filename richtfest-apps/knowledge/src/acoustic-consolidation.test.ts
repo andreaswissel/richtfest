@@ -252,6 +252,50 @@ test("changed patch gets a fresh check and rejected evidence is never returned",
   expect(h.calls).toHaveLength(3);
 });
 
+test("rejected patch repair retains exact diagnostics across interruption and rechecks changed evidence", async () => {
+  const h = harness(), t = template();
+  if (t.id !== "exterior-noise-concept") throw new Error("Expected exterior fixture");
+  t.preliminaryRemarks = Array.from({ length: 18 }, (_, i) => `${i}: ${"Source evidence ".repeat(175)}[source:${uuid}].\n\n`).join("");
+  t.exteriorNoiseAssessment = `The source reports page 1 display available; map features remain unchecked [source:${uuid}].`;
+  t.plans = Array.from({ length: 9 }, (_, i) => `${i}: ${"Plan evidence ".repeat(175)}[source:${uuid}].\n\n`).join("");
+  await h.run(unchanged, { template: t, mode: "patch-editorial-v1" });
+  const saved = structuredClone(h.state!);
+  const target = saved.plan.find(op => op.ids.includes("exteriorNoiseAssessment:0"))!;
+  const accepted = structuredClone(saved.plan.filter(op => op !== target));
+  const rejected = { complete: true, replacements: target.ids.map(id => ({ id,
+    content: id === "exteriorNoiseAssessment:0" ? `Page 1 display availability is not established [source:${uuid}].` : null })) };
+  const rejection = { preserved: false, issues: ["Missing receipts do not contradict reported display availability; retain attribution and unchecked map features."] };
+  target.candidate = rejected;
+  target.check = rejection;
+  await expect(h.run(c => {
+    expect(c.feedback).toEqual(rejection);
+    expect(c.rejectedCandidate).toEqual(rejected);
+    throw new Error("interrupted repair");
+  }, { template: t, state: saved })).rejects.toThrow("interrupted repair");
+  const repair = { complete: true, replacements: target.ids.map(id => ({ id,
+    content: id === "exteriorNoiseAssessment:0" ? `Page 1 display was reported available by the source; map features remain unchecked [source:${uuid}].` : null })) };
+  const before = h.calls.length;
+  const result = await h.run(c => {
+    expect(c.original.map((f: any) => f.id)).toEqual(target.ids);
+    if (c.documentTask === "consolidation_check") {
+      expect(c.edited).toEqual(repair);
+      expect(c.feedback).toBeUndefined();
+      expect(c.rejectedCandidate).toBeUndefined();
+      return passed;
+    }
+    expect(c.feedback).toEqual(rejection);
+    expect(c.rejectedCandidate).toEqual(rejected);
+    return repair;
+  }, { template: t });
+  expect(h.calls.length - before).toBe(2);
+  if (result.id !== "exterior-noise-concept") throw new Error("Expected exterior result");
+  expect(result.exteriorNoiseAssessment).toBe(repair.replacements.find(r => r.content)!.content!);
+  expect(result.preliminaryRemarks).toBe(t.preliminaryRemarks);
+  expect(result.calculationAppendix).toBe(t.calculationAppendix);
+  expect(h.state!.plan.filter(op => !op.ids.includes("exteriorNoiseAssessment:0"))).toEqual(accepted);
+  expect(await h.run(() => { throw new Error("No replay"); }, { template: t })).toEqual(result);
+});
+
 test("patch subdivision resumes checked child and accepted non-prefix group", async () => {
   for (const truncation of [false, true]) {
     const h = harness();
@@ -259,11 +303,18 @@ test("patch subdivision resumes checked child and accepted non-prefix group", as
     t.preliminaryRemarks = Array.from({ length: 12 }, (_, i) => `${i}: ${"Evidence ".repeat(300)}[source:${uuid}].\n\n`).join("");
     await h.run(unchanged, { template: t, mode: "patch-editorial-v1" });
     const saved = structuredClone(h.state!);
-    delete saved.plan[0].candidate; delete saved.plan[0].check;
+    const rejected = { complete: true, replacements: saved.plan[0].ids.map(id => ({ id,
+      content: saved.fragments.find(f => f.id === id)!.content.replace("Evidence", "Verified evidence") })) };
+    const feedback = { preserved: false, issues: ["Evidence was not verified."] };
+    saved.plan[0].candidate = rejected; saved.plan[0].check = feedback;
     const later = structuredClone(saved.plan.slice(1));
     let n = 0;
     await expect(h.run(c => {
       n++;
+      if (c.documentTask === "consolidation") {
+        expect(c.feedback).toEqual(feedback);
+        expect(c.rejectedCandidate.replacements).toEqual(rejected.replacements.filter(r => c.original.some((f: any) => f.id === r.id)));
+      }
       if (n === 1) {
         if (truncation) throw Object.assign(new Error("truncated"), { failureCategory: "validation", diagnostics: { finishReason: "length" } });
         return { ...unchanged(c), complete: false };
