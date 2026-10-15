@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Acoustic workflows now combine room data across documents and clarify missing or conflicting values directly in chat. Rounded choices, plain-language questions and expandable sources keep the form simple. Answers are saved with their history; confirmed inputs produce a draft calculation sheet without another AI call. New runs wait for missing inputs before report writing; existing checkpoints keep their behavior.
+
 - Landing-page images, icons and share previews now load correctly on the main website as well as the preview URL.
 
 - Agent activity now uses compact, expandable Trace rows in conversations and run threads. Current tasks, queued work and unreviewed findings stay readable, with timestamped history and failure details on demand. Agent execution, source links and approvals are unchanged.

@@ -14,6 +14,7 @@ import { useT } from "../../i18n";
 import { useApi } from "../../query";
 import { list } from "../../api";
 import { Download, FileText } from "lucide-react";
+import { AcousticInputReview } from "./acoustic-input-review";
 import {
   Attachment,
   AttachmentAction,
@@ -68,6 +69,18 @@ function ArtifactLink({
 function ProposalStatus() {
   const t = useT();
   return <Badge>{t("workspaceProposed")}</Badge>;
+}
+function AcousticInputs({ artifactId }: { artifactId: string }) {
+  const context = useContext(ProjectContext);
+  const reply = useContext(ReplyContext);
+  return (
+    <AcousticInputReview
+      key={artifactId}
+      {...context}
+      artifactId={artifactId}
+      writable={!!reply}
+    />
+  );
 }
 function ArtifactPreview({
   artifactId,
@@ -184,6 +197,13 @@ function ArtifactPdf({
 }
 export const library = createLibrary({
   components: [
+    defineComponent({
+      name: "AcousticInputReview",
+      description:
+        "Open a server-created acoustic input review in its original conversation. Values and actions come only from the saved review; never invent a review artifact ID.",
+      props: z.object({ artifactId: z.string().uuid() }),
+      component: ({ props }) => <AcousticInputs {...props} />,
+    }),
     defineComponent({
       name: "ArtifactPdf",
       description:

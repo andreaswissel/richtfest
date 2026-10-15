@@ -427,14 +427,51 @@ unchanged; the offline ARC reproduction is not substituted for the bounded
 production engine. Neither a complete inventory calculation nor a near-zero
 rounded margin establishes professional approval. Missing data is not zero.
 
-**Current limits and next work:** extraction must find every room, and complete
-room inputs must coexist in a source packet. The implementation does not yet join
-partial fields across packets. Field-level reconciliation and an editable complete
-project inventory remain future work; scenarios below reuse the already extracted
-complete room records, not an inferred reconstruction. A final ARC-layout Nachweis and consequence-ranked
+**Current limits and next work:** extraction must still find every room. Version-2
+assignments now retain partial field observations and reconcile them across packets
+by exact room/facade/element identity; historical version-1 assignments keep their
+whole-room contract. The union of evidenced inventory entries is not independent
+proof of completeness. An editable complete project inventory and fuzzy identity
+mapping remain outside this implementation. A final ARC-layout Nachweis and consequence-ranked
 two-page Prüfbericht still require the approved exterior-noise rules (especially
 day/night), resolved FE3/geometry/component inputs, layout acceptance and Yven's
 release. No new paid run is needed to test deterministic arithmetic or rendering.
+
+### Typed input clarification belongs in the active conversation
+
+OpenUI is a presentation layer, not the authority for accepting engineering inputs.
+The original `MissingInput` component only posted conversational text. The new
+application-created `AcousticInputReview` references a saved review artifact in its
+original conversation. Its API owns fields, candidates, validation and actions;
+the model cannot invent executable controls, acceptance rules or stored responses.
+
+- Merge identical typed values from complementary packets and retain all supporting
+  quotations. Different quotations for the same value are not conflicts. Do not
+  round disagreements into agreement, infer source authority from upload order or
+  join ambiguous room aliases. A field-level evidence register accompanies results.
+- Keep inventory independent of complete inputs. An inventoried room with no area
+  or element data stays blocked rather than disappearing from coverage. Confirmation
+  records the person's explicit check against the room schedule; it is not an
+  independent guarantee that the model found every room.
+- Bind responses to an exact revision and lock writes. Stale and concurrent replies
+  must not overwrite another participant's answer or create duplicate calculations.
+  Preserve competing observations and the responder, timestamp and decision reason.
+  A selected source value stays attributed; a new human value is an assumption,
+  not a fabricated source quotation. New scenarios must also replace stale field
+  citations when they change a value.
+- Stop new runs for input clarification before buying prose/review of structurally
+  incomplete inputs. Saving responses does not wake a model. An explicit calculation
+  action creates a new unapproved sheet using the unchanged engine gates. Full-report
+  continuation and independent model review remain separate requested actions.
+- Scope review reads and writes to tenant, project, conversation and accessible
+  pinned sources. Store state in Postgres artifact revisions, not in browser memory.
+  Generic prose edits cannot preserve or forge typed review state. Load historical
+  forms on opening, not one request per old message during navigation.
+
+This is reusable beyond acoustics: extract observations, reconcile deterministically,
+ask targeted typed questions in context, then execute code against the saved revision.
+Offline tests establish reconciliation/arithmetic behavior; they do not prove live
+model extraction quality on unfamiliar plans or validate an unapproved rule package.
 
 ### Reuse approved data, not an earlier model answer
 

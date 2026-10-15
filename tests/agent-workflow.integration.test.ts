@@ -5,6 +5,7 @@ import { createDatabase } from "../richtfest-os/apps/api/src/db/client";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
 import { acousticScenariosRouter } from "../richtfest-apps/knowledge/src/acoustic-scenarios";
+import { acousticInputReviewRouter } from "../richtfest-apps/knowledge/src/acoustic-input-review";
 import { reviewsRouter } from "../richtfest-apps/knowledge/src/reviews";
 import { createArtifact, workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import { stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
@@ -13,6 +14,7 @@ import { agentRuns, agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEven
 import { agentPresetSnapshotSchema } from "../richtfest-shared/src/agent-policy";
 import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
 import { exteriorNoiseFixture } from "./fixtures/exterior-noise";
+import { exteriorNoisePackets } from "./fixtures/exterior-noise-packets";
 
 const integration = process.env.DATABASE_URL ? test : test.skip;
 // Same vendor snapshot as supervisor.integration.test.ts, including a domain role.
@@ -62,7 +64,7 @@ async function fixture() {
     validateProject: req.headers["x-other-tenant"] ? async () => false : d.validateProject,
   });
   const server = express().use(express.json()).use(runsRouter(getDeps))
-    .use(acousticScenariosRouter(getDeps)).use(reviewsRouter(getDeps)).use(workspaceRouter(getDeps))
+    .use(acousticScenariosRouter(getDeps)).use(acousticInputReviewRouter(getDeps)).use(reviewsRouter(getDeps)).use(workspaceRouter(getDeps))
     .use((error: any, _req: any, res: any, _next: any) =>
     res.status(error.status ?? (error.name === "ZodError" ? 400 : 500)).json({ error: "rejected" })).listen(0);
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -81,6 +83,7 @@ async function fixture() {
     throw new Error(`Run ${id} did not settle`);
   };
   return { d, db, projectId, sourceVersionId, audits, post, rows, stopped,
+    get: async (path: string) => { const response = await fetch(base + path); return { status: response.status, body: await response.json() }; },
     input: { projectId, goal: "Discuss the project's acoustic requirements", sourceVersionIds: [] },
     calls: () => ({ providerCalls, supervisorCalls, decisionCalls }),
     close: async () => {
@@ -276,7 +279,7 @@ integration("disabled supervisor rejects explicit team and report but permits ch
 });
 
 for (const independentReviewEnabled of [false, true])
-integration(`calculation sheet bypasses report writing and retains independent review: ${independentReviewEnabled}`, async () => {
+integration(`historical v1 calculation sheet bypasses report writing and retains independent review: ${independentReviewEnabled}`, async () => {
   const f = await fixture();
   const calls: string[] = [];
   const { method, ...room } = exteriorNoiseFixture();
@@ -306,6 +309,10 @@ integration(`calculation sheet bypasses report writing and retains independent r
       sourceVersionIds: [f.sourceVersionId], workflow: { mode: "calculation" } });
     expect(created.status).toBe(201);
     expect(created.body.data.status).toBe("queued");
+    await stepSupervisor(f.d, created.body.data.id);
+    const [planned] = await f.rows(supervisorRuns);
+    await f.db.update(supervisorRuns).set({ assignments: planned.assignments.map((a: any) => ({ ...a, exteriorNoiseExtractionVersion: 1 })) })
+      .where(eq(supervisorRuns.runId, created.body.data.id));
     for (let step = 0; step < 5; step++) await stepSupervisor(f.d, created.body.data.id);
     expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
     expect(calls).toEqual(independentReviewEnabled ? ["plan", "specialist", "independent_review"] : ["plan", "specialist"]);
@@ -322,6 +329,87 @@ integration(`calculation sheet bypasses report writing and retains independent r
   } finally { await f.close(); }
 });
 
+integration("v2 chat resolves source conflicts with revision fences and creates a model-free unapproved sheet", async () => {
+  const f = await fixture();
+  const phases: string[] = [];
+  const packets = exteriorNoisePackets(f.sourceVersionId);
+  const floor = packets[0]!.facts.find(f => f.field === "floorAreaM2")!;
+  packets[0]!.facts.push({ ...floor, value: 24, provenance: { ...packets[0]!.inventory[0]!.provenance, page: 2 } });
+  packets[1]!.facts = packets[1]!.facts.filter(f => !(f.id === "FE1" && f.field === "areaM2"));
+  const extraction = { ...packets[0]!, facts: packets.flatMap(p => p.facts),
+    blockers: [{ roomId: "A01", reason: "Original source note still needs professional review" }] };
+  f.d.calculateAcoustics = calculateAcoustics;
+  const text = packets[0]!.inventory[0]!.provenance.excerpt;
+  f.d.resolveSource = async () => ({ status: "resolved", source: { versionId: f.sourceVersionId, name: "Schedule.pdf", version: 1 },
+    content: { status: "available", text, truncated: false } });
+  f.d.executeSupervisor = async ({ phase }) => {
+    phases.push(phase);
+    if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Extract inputs", sourceVersionIds: [f.sourceVersionId] }] } };
+    if (phase === "specialist") return { status: "completed", output: { summary: "Room inputs", rationale: "Extraction", citations: [f.sourceVersionId], exteriorNoiseExtraction: extraction } };
+    throw new Error("Incomplete inputs must not buy report/review calls");
+  };
+  try {
+    const [chat] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Input review", createdBy: f.d.actorId }).returning();
+    const created = await f.post("/runs", { ...f.input, conversationId: chat.id,
+      sourceVersionIds: [f.sourceVersionId], workflow: { mode: "calculation" } });
+    expect(created.status).toBe(201);
+    for (let i = 0; i < 5; i++) await stepSupervisor(f.d, created.body.data.id);
+    expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
+    expect(phases).toEqual(["plan", "specialist"]);
+    const [artifact] = await f.rows(artifacts);
+    expect(await f.rows(artifacts)).toHaveLength(1);
+    expect((await f.rows(messages)).some((m: any) => m.openui === `root = AcousticInputReview(${JSON.stringify(artifact.id)})`)).toBe(true);
+    const path = `/conversations/${chat.id}/acoustic-inputs/${artifact.id}`;
+    const loaded = await f.get(path);
+    expect(loaded.status).toBe(200);
+    const data = loaded.body.data;
+    expect(data.fields.filter((v: any) => v.value === null)).toHaveLength(2);
+    const key = (field: string, id: string) => data.fields.find((v: any) => v.field === field && v.id === id).key;
+    const body = { expectedRevisionId: data.revisionId, action: "save", reason: "Use schedule revision 1; supplied missing window area",
+      confirmInventory: true, changes: [{ key: key("floorAreaM2", "A01"), value: 20 }, { key: key("areaM2", "FE1"), value: 2 }] };
+    expect((await f.post(path, body, { "x-other-tenant": "1" })).status).toBe(404);
+    const [otherChat] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Other", createdBy: f.d.actorId }).returning();
+    expect((await f.post(path.replace(chat.id, otherChat.id), body)).status).toBe(404);
+    expect((await f.post(path, { ...body, action: "calculate", changes: [] })).status).toBe(409);
+    expect((await f.post(path, { ...body, changes: [{ ...body.changes[1], value: -2 }] })).status).toBe(400);
+    expect((await f.post(path, { ...body, changes: [body.changes[0], body.changes[0]] })).status).toBe(409);
+    const permission = f.d.requirePermission;
+    f.d.requirePermission = p => { if (p === "knowledge:write") throw Object.assign(new Error("Forbidden"), { status: 403 }); };
+    expect((await f.post(path, body)).status).toBe(403);
+    f.d.requirePermission = permission;
+    const validate = f.d.validateSourceVersion;
+    f.d.validateSourceVersion = async () => false;
+    expect((await f.get(path)).status).toBe(404);
+    expect((await f.post(path, body)).status).toBe(404);
+    f.d.validateSourceVersion = validate;
+    const response = await f.post(path, body);
+    expect(response.status).toBe(200);
+    expect(response.body.data.blockers).toEqual([]);
+    expect(response.body.data.resolutions.map((r: any) => r.fact.provenance.kind)).toEqual(["source", "assumption"]);
+    expect((await f.get(path)).body.data.revisionId).toBe(response.body.data.revisionId);
+    expect((await f.post(path, body)).status).toBe(409);
+    const calculate = { ...body, expectedRevisionId: response.body.data.revisionId, action: "calculate", changes: [] };
+    const concurrent = await Promise.all([f.post(path, calculate), f.post(path, calculate)]);
+    expect(concurrent.map(r => r.status).sort()).toEqual([200, 409]);
+    const output = concurrent.find(r => r.status === 200)!.body.data;
+    expect(output.calculation.artifact.status).toBe("draft");
+    expect((await f.get(`/artifacts/${output.calculation.artifact.id}`)).body.data.artifact.conversationId).toBe(chat.id);
+    expect((await f.get(`/workspaces/${f.projectId}`)).body.data.artifacts
+      .find((a: any) => a.id === output.calculation.artifact.id).conversationId).toBe(chat.id);
+    const dataset = output.calculation.revision.payload.acousticDataset;
+    expect(dataset.basedOn.revisionId).toBe(output.revisionId);
+    expect(dataset.blockers).toEqual(["A01: Original source note still needs professional review"]);
+    expect(dataset.receipt.batch.rooms[0].result.value).toBeCloseTo(41.4724225, 5);
+    expect(dataset.receipt.input.rooms[0].fieldEvidence.find((e: any) => e.field === "element/FE1/areaM2").provenance.kind).toBe("assumption");
+    expect((await f.rows(artifactRevisions)).find((r: any) => r.id === data.revisionId).payload.acousticInputReview.resolutions).toEqual([]);
+    expect(phases).toEqual(["plan", "specialist"]);
+    expect(f.calls()).toEqual({ providerCalls: 0, supervisorCalls: 0, decisionCalls: 0 });
+    expect(f.audits.some(a => a[0] === "knowledge.acoustic_inputs.resolved")).toBe(true);
+  } finally { await f.close(); }
+});
+
 integration("reviewed room inputs fork model-free scenarios with immutable provenance, fresh results and approval fences", async () => {
   const f = await fixture();
   try {
@@ -329,7 +417,11 @@ integration("reviewed room inputs fork model-free scenarios with immutable prove
     const { method, ...room } = exteriorNoiseFixture();
     const p = { kind: "source" as const, versionId: f.sourceVersionId, page: 1, excerpt: "Evidence for discussion" };
     for (const record of [room.room, room.applicability, room.flanking, ...room.facades, ...room.facades.map(f => f.noise), ...room.elements]) record.provenance = p;
-    const input = { method: "exterior_noise_batch" as const, scope: "Test", inventory: [{ roomId: room.room.id, provenance: p }], rooms: [room] };
+    const fieldEvidence = [
+      ...room.facades.map(f => ({ field: `noise/${f.id}/levelDb`, provenance: p })),
+      { field: `room/${room.room.id}/floorAreaM2`, provenance: p },
+    ];
+    const input = { method: "exterior_noise_batch" as const, scope: "Test", inventory: [{ roomId: room.room.id, provenance: p }], rooms: [{ ...room, fieldEvidence }] };
     const receipt = { ...calculateAcoustics(input), receiptId: crypto.randomUUID() };
     const { acousticDatasetSchema } = await import("../richtfest-shared/src/acoustic-calculation");
     const dataset = acousticDatasetSchema.parse({ version: 1, receipt, blockers: ["Confirm assessment period"], basedOn: null });
@@ -364,6 +456,10 @@ integration("reviewed room inputs fork model-free scenarios with immutable prove
     expect(result.receipt.batch.rooms[0].result.exteriorNoise.marginDb - receipt.batch!.rooms[0]!.result!.exteriorNoise!.marginDb!).toBeCloseTo(3, 10);
     expect(result.receipt.input.rooms[0].facades[0].noise.provenance).toEqual({ kind: "assumption", reason: body.reason });
     expect(result.receipt.input.rooms[0].room.provenance).toEqual(p);
+    expect(result.receipt.input.rooms[0].fieldEvidence).toEqual([
+      fieldEvidence.at(-1),
+      ...room.facades.map(f => ({ field: `noise/${f.id}/levelDb`, provenance: { kind: "assumption", reason: body.reason } })),
+    ]);
     expect(result.blockers).toEqual(["Confirm assessment period"]);
     expect(scenario.revision.sourceVersionIds).toEqual([f.sourceVersionId]);
     expect(scenario.revision.content).toContain("| example-corner-room | wall-1 | levelDb | 70 | 67 |");

@@ -1,0 +1,92 @@
+/* Conversational treatment of the shared Nova controls, scoped to input review. */
+.acoustic-input-review .w-control-number {
+  width: var(--control-sm);
+}
+.acoustic-input-review .field > [data-slot="label"] {
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.acoustic-input-review [data-slot="input"],
+.acoustic-input-review [data-slot="native-select"] {
+  height: calc(var(--control) + 8px);
+  border-color: transparent;
+  border-radius: var(--radius-2xl);
+  background: var(--muted);
+  padding-inline: var(--stack);
+}
+.acoustic-input-review [data-slot="native-select"] {
+  padding-right: 2.5rem;
+}
+.acoustic-input-review .acoustic-input-choices {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+}
+.acoustic-input-review .acoustic-input-choices [data-slot="toggle-group-item"] {
+  flex: 1 1 8rem;
+  min-width: 0;
+  height: auto;
+  min-height: calc(var(--control) + 20px);
+  padding: 12px var(--stack);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 0;
+  border-radius: var(--radius-3xl);
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: var(--ui-sm);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.acoustic-input-review .acoustic-input-choices [data-state="on"] {
+  background: color-mix(in oklch, var(--muted), var(--foreground) 8%);
+  box-shadow: inset 0 0 0 1px var(--muted-foreground);
+}
+.acoustic-input-review .acoustic-input-evidence > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px var(--stack);
+  border-radius: var(--radius-2xl);
+  background: var(--muted);
+  cursor: pointer;
+  font-size: var(--ui-sm);
+  list-style: none;
+}
+.acoustic-input-review
+  .acoustic-input-evidence
+  > summary::-webkit-details-marker {
+  display: none;
+}
+.acoustic-input-review
+  .acoustic-input-evidence[open]
+  > summary
+  > svg:last-child {
+  transform: rotate(90deg);
+}
+.acoustic-input-review .acoustic-input-action {
+  height: calc(var(--control) + 8px);
+  padding-inline: 20px;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: var(--ui-sm);
+}
+.acoustic-input-review summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+@media (hover: hover) {
+  .acoustic-input-review .acoustic-input-evidence > summary:hover,
+  .acoustic-input-review
+    .acoustic-input-choices
+    [data-slot="toggle-group-item"]:hover {
+    background: color-mix(in oklch, var(--muted), var(--foreground) 5%);
+  }
+  .acoustic-input-review .acoustic-input-action:hover {
+    background: color-mix(in oklch, var(--foreground), var(--background) 15%);
+  }
+}

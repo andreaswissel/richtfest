@@ -23,7 +23,8 @@ import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, exteriorNoiseExtractionSchema, renderAcousticCalculationReceipts, acousticDatasetSchema, type AcousticCalculationReceipt } from "@richtfest/shared";
-import { assembleExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
+import { assembleExteriorNoiseInputs, reconcileExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
+import { createAcousticInputReview } from "./acoustic-input-review";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
@@ -66,7 +67,7 @@ export type Assignment = {
   // Absent on historical assignments: their saved batch identities stay unchanged.
   sourceInputByteBudget?: number;
   sourceBatchingVersion?: 2;
-  exteriorNoiseExtractionVersion?: 1;
+  exteriorNoiseExtractionVersion?: 1 | 2;
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
@@ -888,7 +889,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           assignments.push({ ...item, taskId: task.id, runId: child.id,
             sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
             sourceBatchingVersion: 2,
-            ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly ? { exteriorNoiseExtractionVersion: 1 as const } : {}),
+            ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly ? { exteriorNoiseExtractionVersion: 2 as const } : {}),
           });
         }
         await tx
@@ -981,7 +982,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   extractionNotes: excerpt.content.reason,
                 }),
               );
-              const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && assignment.exteriorNoiseExtractionVersion === 1 && !assignment.visualFollowup;
+              const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && !!assignment.exteriorNoiseExtractionVersion && !assignment.visualFollowup;
               const specialistSchema = extractExteriorNoise
                 ? schemas.specialist.extend({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }) : schemas.specialist;
               // Reserve the maximum accumulated findings (including JSON escaping),
@@ -1006,7 +1007,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
                 goal: assignment.goal, batches, unreadableSources,
-                ...(extractExteriorNoise ? { extractionContract: "exterior-noise-v1" } : {}),
+                ...(extractExteriorNoise ? { extractionContract: `exterior-noise-v${assignment.exteriorNoiseExtractionVersion}` } : {}),
                 ...(assignment.visualFollowup ? { visualFollowup: assignment.visualFollowup } : {}),
               })).digest("hex");
               const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
@@ -1030,7 +1031,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 if (!started) throw conflict("Supervisor no longer active");
                 const result = specialistSchema.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
-                  ...(extractExteriorNoise ? { extractExteriorNoise: true } : {}),
+                  ...(extractExteriorNoise ? { extractExteriorNoise: true, extractionVersion: assignment.exteriorNoiseExtractionVersion } : {}),
                   sourceVersionIds: batchIds,
                   ...(d.inspectSource ? { visualSourceVersionIds: assignment.visualFollowup
                     ? [...new Set(assignment.visualFollowup.requests.map(request => request.versionId))] : assignment.sourceVersionIds } : {}),
@@ -1050,6 +1051,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   if (extractExteriorNoise) {
                     const extraction = validateExteriorNoiseExtraction(z.object({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }).parse(raw).exteriorNoiseExtraction, batch);
                     const inputSources = [...extraction.inventory.map(r => r.provenance),
+                      ...(extraction.facts ?? []).map(f => f.provenance),
                       ...extraction.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
                     parsed.citations = [...new Set([...parsed.citations, ...inputSources.flatMap(p => p.kind === "source" ? [p.versionId] : [])])];
                   }
@@ -1204,15 +1206,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const reportBudgets = reportModels.map(model => agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens));
       const calculationReceipts = (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []);
       let calculationBlockers: string[] = [];
-      if ((conceptId === "exterior-noise-concept" || calculationOnly) && (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion === 1)) {
+      if ((conceptId === "exterior-noise-concept" || calculationOnly) && (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion)) {
         const extractionPackets = (state.assignments as Assignment[]).flatMap(a => {
           const completed = state.history.findLast((entry: any) => entry.runId === a.runId && entry.phase === "specialist");
           return state.history.filter((entry: any) => entry.runId === a.runId && entry.phase === "specialist_batch"
             && entry.inputHash === completed?.inputHash && entry.revision === completed?.revision)
             .flatMap((entry: any) => entry.output?.exteriorNoiseExtraction ? [entry.output.exteriorNoiseExtraction] : []);
         });
-        const assembled = assembleExteriorNoiseInputs(extractionPackets);
-        calculationBlockers = assembled.blockers;
+        const reconcile = (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion === 2);
+        const contract = reconcile ? "exterior-noise-v2" : "exterior-noise-v1";
+        const assembled = reconcile ? reconcileExteriorNoiseInputs(extractionPackets)
+          : { ...assembleExteriorNoiseInputs(extractionPackets), sourceNotes: [] };
+        const needsInput = assembled.blockers.length > 0 || !d.calculateAcoustics;
+        calculationBlockers = [...assembled.blockers, ...assembled.sourceNotes];
         const assigned = new Set((state.assignments as Assignment[]).flatMap(a => a.sourceVersionIds));
         if (!extractionPackets.length) calculationBlockers.push("No structured extraction checkpoint is available; a calculation-ready source pass is required.");
         if (assembled.input) {
@@ -1221,16 +1227,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           await sources(d, run.projectId, inputSourceIds);
         }
         if (!d.calculateAcoustics) calculationBlockers.push("The deterministic acoustic calculator is unavailable.");
-        const inputHash = stepHash({ contract: "exterior-noise-v1", extractionPackets, calculatorAvailable: !!d.calculateAcoustics });
+        const inputHash = stepHash({ contract, extractionPackets, calculatorAvailable: !!d.calculateAcoustics });
         const stepKey = `exterior-calculation:${inputHash}`;
         const saved = await commit(d, run, token, async tx => {
           const previous = await savedStep(d, id, "tool", stepKey, inputHash, tx);
           const output = previous?.output ?? {
             result: assembled.input && d.calculateAcoustics ? acousticCalculationResultSchema.parse(d.calculateAcoustics(assembled.input)) : null,
             blockers: calculationBlockers,
+            ...(reconcile ? { inputReviewArtifactId: await createAcousticInputReview(d, tx, run, extractionPackets) } : {}),
           };
           const step = previous ?? await recordStep(d, tx, { ...run, generation: state.generation }, {
-            kind: "tool", stepKey, inputHash, input: { contract: "exterior-noise-v1", extractionPackets }, output, status: "completed",
+            kind: "tool", stepKey, inputHash, input: { contract, extractionPackets }, output, status: "completed",
           });
           const savedOutput = output as { result: unknown; blockers: string[] };
           calculationBlockers = savedOutput.blockers;
@@ -1238,6 +1245,19 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           if (!previous) await log(d, tx, run, "tool_executed", "exterior_noise_batch", "Application-owned room calculation; not reviewed");
         });
         if (!saved) throw conflict("Supervisor no longer active");
+        // Do not spend on prose/review of known incomplete inputs. Responses produce a
+        // deterministic draft sheet; a subsequent full report remains an explicit action.
+        if (reconcile && needsInput && run.conversationId) {
+          await commit(d, run, token, async tx => {
+            const summary = "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet.";
+            await tx.update(agentRuns).set({ status: "needs_review", outputSummary: summary,
+              partialOutput: summary, updatedAt: new Date() }).where(eq(agentRuns.id, id));
+            await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers } })
+              .where(eq(supervisorRuns.runId, id));
+            await log(d, tx, run, "acoustic_inputs_required");
+          });
+          return;
+        }
       }
       const review = validateReview(
         calculationOnly ? {

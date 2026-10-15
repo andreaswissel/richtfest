@@ -64,6 +64,7 @@ const facadeElement = { id: label, facadeId: label, provenance,
   configuration: label.describe("Evidence for installed size, joints and operating state; ventilation at design airflow, shading in the assessed state. Include corrections in the supplied rating, not twice."),
 };
 export const exteriorNoiseFacadeSchema = exteriorNoiseRoomSchema.extend({
+  fieldEvidence: z.array(z.object({ field: label, provenance }).strict()).max(3000).optional(),
   elementsComplete: z.boolean().describe("All opaque areas, windows, doors, shading, ventilators and openings are represented without double counting."),
   flanking: z.object({ assessment: z.enum(["negligible", "required", "unknown"]), provenance }).strict(),
   elements: z.array(z.discriminatedUnion("kind", [
@@ -86,11 +87,52 @@ export const exteriorNoiseBatchSchema = z.object({
 }).strict();
 
 /** Source-reading output, never calculation results or reference answers. */
+export const exteriorNoiseFactFields: Record<string, Record<string, z.ZodType>> = {
+  room: exteriorNoiseRoomSchema.shape.room.omit({ id: true, provenance: true }).shape,
+  applicability: exteriorNoiseRoomSchema.shape.applicability.omit({ provenance: true }).shape,
+  flanking: exteriorNoiseFacadeSchema.shape.flanking.omit({ provenance: true }).shape,
+  coverage: { standard: exteriorNoiseRoomSchema.shape.standard,
+    envelopeComplete: z.boolean(), elementsComplete: z.boolean() },
+  facade: { areaM2: area },
+  noise: exteriorNoiseRoomSchema.shape.facades.element.shape.noise.omit({ provenance: true }).shape,
+  element: { ...exteriorNoiseFacadeSchema.shape.elements.element.options[0].omit({ id: true, provenance: true }).shape,
+    ...exteriorNoiseFacadeSchema.shape.elements.element.options[1].omit({ id: true, provenance: true }).shape,
+    kind: z.enum(["area", "small"]) },
+};
+export const exteriorNoiseFactSchema = z.object({
+  roomId: label,
+  target: z.enum(["room", "applicability", "flanking", "coverage", "facade", "noise", "element"]),
+  id: label,
+  field: label,
+  value: z.union([z.string(), z.number().finite(), z.boolean()]),
+  provenance,
+}).strict().superRefine((fact, ctx) => {
+  const fields = exteriorNoiseFactFields[fact.target]!;
+  if (!Object.hasOwn(fields, fact.field) || !fields[fact.field]!.safeParse(fact.value).success)
+    ctx.addIssue({ code: "custom", path: ["value"], message: "Invalid acoustic field or value" });
+  if (["room", "coverage", "applicability", "flanking"].includes(fact.target) && fact.id !== fact.roomId)
+    ctx.addIssue({ code: "custom", path: ["id"], message: "Room-level facts must use the room ID" });
+});
+export type ExteriorNoiseFact = z.infer<typeof exteriorNoiseFactSchema>;
+export const acousticFactKey = (fact: Pick<ExteriorNoiseFact, "roomId" | "target" | "id" | "field">) =>
+  JSON.stringify([fact.roomId, fact.target, fact.id, fact.field]);
+
 export const exteriorNoiseExtractionSchema = z.object({
   inventory: exteriorNoiseBatchSchema.shape.inventory.min(0),
   rooms: exteriorNoiseBatchSchema.shape.rooms,
+  facts: z.array(exteriorNoiseFactSchema).max(5000).optional(),
   blockers: z.array(z.object({ roomId: label.nullable(), reason: z.string().min(1).max(1000) }).strict()).max(100),
 }).strict();
+
+export const acousticInputReviewSchema = z.object({
+  version: z.literal(1),
+  conversationId: z.string().uuid(),
+  packets: z.array(exteriorNoiseExtractionSchema),
+  resolutions: z.array(z.object({ fact: exteriorNoiseFactSchema, reason: z.string().trim().min(1).max(1000),
+    actorId: z.string().uuid(), at: z.string().datetime() }).strict()),
+  inventoryConfirmation: z.object({ actorId: z.string().uuid(), at: z.string().datetime(), reason: z.string() }).nullable(),
+}).strict();
+export type AcousticInputReview = z.infer<typeof acousticInputReviewSchema>;
 
 const singleAcousticCalculationSchema = z.discriminatedUnion("method", [
   sumSoundLevelsSchema.extend({ method: z.literal("sum_sound_levels") }).strict(),
@@ -115,7 +157,8 @@ export function acousticInputProvenance(input: AcousticCalculationInput): z.infe
       ...input.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
     default: return [input.room.provenance, input.applicability.provenance,
       ...input.facades.flatMap(f => [f.provenance, f.noise.provenance]),
-      ...(input.method === "exterior_noise_facade" ? [input.flanking.provenance, ...input.elements.map(e => e.provenance)] : []),
+      ...(input.method === "exterior_noise_facade" ? [input.flanking.provenance, ...input.elements.map(e => e.provenance),
+        ...(input.fieldEvidence ?? []).map(e => e.provenance)] : []),
     ];
   }
 }
@@ -263,6 +306,7 @@ export function renderAcousticCalculationReceipts(receipts: AcousticCalculationR
             `${t("Grundfläche", "Floor area")} S_G = ${room.room.floorAreaM2} m²; ${t("Nutzung", "Use")}: ${terms[room.room.use]} (${t("Beleg", "Evidence")} ${cite(room.room.provenance)}).`,
             `${terms[room.applicability.assessment]}: ${cell(room.applicability.basis)} (${cite(room.applicability.provenance)}); ${t("Flanken", "Flanking")}: ${terms[room.flanking.assessment]} (${cite(room.flanking.provenance)}).`,
             `${t("Hülle vollständig", "Envelope complete")}: ${yesNo(room.envelopeComplete)}; ${t("Bauteile vollständig", "Elements complete")}: ${yesNo(room.elementsComplete)}.`,
+            ...(room.fieldEvidence?.length ? [table(t("Feldbelege", "Field evidence"), room.fieldEvidence.map(e => `| ${cell(e.field)} | ${cite(e.provenance)} |`))] : []),
             `| ${t("Fassade", "Facade")} | S_s m² | La dB | ${t("Ansatz / Belege", "Basis / evidence")} |\n| --- | --- | --- | --- |\n${room.facades.map(f => `| ${cell(f.id)} | ${f.areaM2} | ${f.noise.levelDb} | ${cell(f.noise.basis)} (${cite(f.provenance)}, ${cite(f.noise.provenance)}) |`).join("\n")}`,
             `| ${t("Bauteil / Fassade", "Element / facade")} | ${t("Fläche / Anzahl", "Area / count")} | ${t("Kennwert", "Rating")} dB | ${t("Konfiguration / Beleg", "Configuration / evidence")} |\n| --- | --- | --- | --- |\n${room.elements.map(e => `| ${cell(e.id)} / ${cell(e.facadeId)} | ${e.kind === "area" ? `${e.areaM2} m²` : `${e.count} × ${e.openingAreaM2} m²`} | ${e.kind === "area" ? `Rw ${e.rwDb}` : `Dn,e,w ${e.dnEWDb}`} | ${cell(e.configuration)}; ${terms[e.ratingBasis]}${e.kind === "area" ? `; ${terms[e.construction]}` : ""} (${cite(e.provenance)}) |`).join("\n")}`,
             ...(numeric ? [table(t("Rechenweg (ungerundete Werte)", "Calculation (unrounded values)"), r.intermediates.map(v => `| ${cell(v.label)} | ${v.value} ${cell(v.unit)} |`)),

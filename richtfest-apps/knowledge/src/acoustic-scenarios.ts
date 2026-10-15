@@ -57,6 +57,10 @@ export function acousticScenariosRouter(getDeps: (req: Request) => AppDeps) {
           record[edit.field] = edit.value;
           // A human scenario change is not a quotation from the original source.
           target.provenance = { kind: "assumption", reason: request.reason };
+          if (room.fieldEvidence) {
+            const field = `${edit.target}/${edit.id}/${edit.field}`;
+            room.fieldEvidence = [...room.fieldEvidence.filter(e => e.field !== field), { field, provenance: target.provenance }];
+          }
           changes.push({ ...edit, before, after: edit.value });
         }
         // Parse the complete input before execution, including positivity/count/rating limits.
