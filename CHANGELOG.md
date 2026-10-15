@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Project editors can now delete files from Resources or the document preview, with a confirmation covering every version. Deletion removes the stored files and extracted data, preserves conversations and reports, and records an audit event.
+
 - Acoustic extraction keeps sparse plan drawings together with bounded, page-aware packets and stable source-backed room identities. Typed input choices and exact quotation recovery reduce avoidable retries without losing source text or accepting unsupported evidence; explicit numerical inputs remain available while other decisions await clarification.
 - Blocked acoustic workflows assess independent progress once, ask focused questions and automatically save available room calculations as an unapproved partial sheet. Saving later answers advances the calculation without another extraction run or an extra Calculate action; unresolved rooms and engineering-release requirements remain visible.
 - Agent replies now validate the recipient and original message before accepting a model response. Misaddressed replies get corrective feedback instead of stopping a calculation with a misleading project-access error; delivery permissions remain unchanged.

@@ -6,6 +6,7 @@ import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
 import { AffinityPdfPairing } from "./affinity-pdf-pairing";
+import { DeleteFile } from "./delete-file";
 import { AcousticScenario } from "./acoustic-scenario";
 import {
   ArtifactSourceRegister,
@@ -56,7 +57,7 @@ export function ArtifactPanel({
     `/projects/${projectId}/files`,
     initialFiles === undefined,
   );
-  const filesData = files.data ?? initialFiles;
+  const filesData = initialFiles ?? files.data;
   const sourceVersion = params.get("sourceVersion");
   const exactSource = useApi(
     `/projects/${projectId}/source-versions/${sourceVersion}`,
@@ -265,6 +266,10 @@ export function ArtifactPanel({
                   exactSource.data?.fileName ||
                   t("source")}
               </h3>
+              {selectedFileName && (
+                <DeleteFile key={fileId} projectId={projectId} fileId={fileId} name={selectedFileName}
+                  onDeleted={() => setParams(target({ file: null, sourceVersion: null, page: null, panel: "documents" }).slice(1), { replace: true })} />
+              )}
               {version && (
                 <Field label={t("sourcePurpose")}>
                   <NativeSelect

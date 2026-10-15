@@ -1,6 +1,7 @@
 import { AgentRuns } from "../components/agent-runs";
 import { Activity } from "../components/activity";
 import { CustomerForm } from "../components/crm/customer-form";
+import { DeleteFile } from "../components/project-workspace/delete-file";
 import type { CustomerInput } from "@richtfest/shared";
 import { useMutation } from "@tanstack/react-query";
 import { uploadFiles } from "../api";
@@ -421,19 +422,26 @@ export function Sources({
               <span className="mono">
                 {file.version || file.sourceMetadata?.version || 1}
               </span>,
-              <Button asChild variant="link">
-                <a
-                  href={
-                    file.downloadUrl
-                      ? authorizedDownload(file.downloadUrl)
-                      : safeUrl(file.sourceRef)
-                  }
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {file.downloadUrl ? t("downloadFile") : t("viewSource")} ↗
-                </a>
-              </Button>,
+              <div className="inline-actions">
+                <Button asChild variant="link">
+                  <a
+                    href={
+                      file.downloadUrl
+                        ? authorizedDownload(file.downloadUrl)
+                        : safeUrl(file.sourceRef)
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {file.downloadUrl ? t("downloadFile") : t("viewSource")} ↗
+                  </a>
+                </Button>
+                <DeleteFile
+                  projectId={projectId}
+                  fileId={file.id}
+                  name={file.name}
+                />
+              </div>,
             ],
           }))}
         />

@@ -529,3 +529,75 @@ run("Affinity PDF links require confirmation and preserve exact revisions, acces
     await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();
   }
 }, 30000);
+
+run("file deletion removes every revision and derived source, respects scope, and can retry storage failures", async () => {
+  const admin = createDatabase(process.env.DATABASE_URL!);
+  const namespace = `delete_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  await admin.pool.query(`create schema ${namespace}`);
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(url.toString());
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
+  const fileId = crypto.randomUUID(), otherFileId = crypto.randomUUID();
+  const first = crypto.randomUUID(), second = crypto.randomUUID(), other = crypto.randomUUID();
+  const objects = new Map([[first, "original"], [second, "revision"], [other, "unrelated"]]);
+  let accessTenant = tenantId, allowed = true, failStorage = false;
+  const audits: any[] = [];
+  let server: ReturnType<ReturnType<typeof express>["listen"]> | undefined;
+  try {
+    await pool.query("create table projects_files (like public.projects_files including all); create table projects_file_versions (like public.projects_file_versions including all); create table projects_projects (like public.projects_projects including all)");
+    await db.insert(projects).values({ id: projectId, tenantId, name: "Deletion test", createdBy: actorId });
+    for (const migration of ["0026_source_extraction", "0027_source_model", "0037_source_representations"])
+      await pool.query(await Bun.file(new URL(`../richtfest-os/apps/api/drizzle/${migration}.sql`, import.meta.url)).text());
+    await db.insert(files).values([fileId, otherFileId].map(id => ({ id, tenantId, projectId, name: id, sourceType: "upload", createdBy: actorId })));
+    await db.insert(fileVersions).values([
+      { id: first, fileId, version: 1 }, { id: second, fileId, version: 2 }, { id: other, fileId: otherFileId, version: 1 },
+    ].map(version => ({ ...version, tenantId, status: "ready", storageKey: version.id, mimeType: "text/plain", createdBy: actorId })));
+    await db.insert(sourceExtractions).values({ versionId: first, tenantId });
+    await db.insert(sourcePages).values({ versionId: first, tenantId, page: 1, content: { status: "available", text: "original" } });
+    await db.insert(sourceModels).values({ versionId: second, tenantId });
+    await pool.query("insert into projects_source_entities(version_id, tenant_id, key, kind, name) values ($1, $2, 'wall', 'wall', 'Wall')", [second, tenantId]);
+    await pool.query("insert into projects_source_representations(original_version_id, tenant_id, pdf_version_id, confirmed_by) values ($1, $2, $3, $4)", [first, tenantId, other, actorId]);
+    const app = express(); app.use(express.json());
+    app.use("/api", createRouter(() => ({ db, tenantId: accessTenant, actorId,
+      requirePermission: (permission: string) => { if (!allowed && permission === "projects:write") throw Object.assign(new Error("Forbidden"), { status: 403 }); },
+      audit: async (_tx: any, action: string, _type: string, id: string, metadata: unknown) => { audits.push({ action, id, metadata }); },
+      fileStorage: { remove: async (key: string) => {
+        if (failStorage && key === second) throw new Error("Storage unavailable");
+        objects.delete(key);
+      } },
+    }) as any));
+    app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? 500).json({ message: error.message }));
+    server = app.listen(0);
+    const base = `http://127.0.0.1:${(server.address() as any).port}/api/projects/${projectId}`;
+    const path = `${base}/files/${fileId}`;
+    const remove = (target = path) => fetch(target, { method: "DELETE" });
+    allowed = false; expect((await remove()).status).toBe(403); allowed = true;
+    accessTenant = crypto.randomUUID(); expect((await remove()).status).toBe(404); accessTenant = tenantId;
+    expect((await remove(path.replace(projectId, crypto.randomUUID()))).status).toBe(404);
+    await db.update(fileVersions).set({ status: "pending" }).where(eq(fileVersions.id, second));
+    expect((await remove()).status).toBe(409);
+    expect(objects.size).toBe(3);
+    await db.update(fileVersions).set({ status: "ready" }).where(eq(fileVersions.id, second));
+    failStorage = true; expect((await remove()).status).toBe(500); failStorage = false;
+    expect((await (await fetch(`${path}/versions`)).json()).data).toHaveLength(2);
+    expect(audits).toHaveLength(0);
+    expect((await remove()).status).toBe(200);
+    expect([...objects.entries()]).toEqual([[other, "unrelated"]]);
+    expect((await (await fetch(`${base}/files`)).json()).data.map((file: any) => file.id)).toEqual([otherFileId]);
+    for (const endpoint of [`${path}/versions`, `${path}/versions/1/download`, `${path}/versions/2/download`, `${base}/source-versions/${first}`])
+      expect((await fetch(endpoint)).status).toBe(404);
+    expect((await fetch(`${path}/versions/initiate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mimeType: "text/plain" }) })).status).toBe(404);
+    expect((await remove()).status).toBe(404);
+    for (const table of ["projects_source_extractions", "projects_source_pages", "projects_source_models", "projects_source_entities", "projects_source_representations"])
+      expect((await pool.query(`select * from ${table}`)).rows).toHaveLength(0);
+    expect(audits).toEqual([{ action: "projects.file.deleted", id: fileId, metadata: { projectId, name: fileId, versionIds: expect.arrayContaining([first, second]) } }]);
+    // Metadata-only registered sources have no stored object to remove.
+    const linkId = crypto.randomUUID();
+    await db.insert(files).values({ id: linkId, tenantId, projectId, name: "Reference", sourceType: "link", createdBy: actorId });
+    expect((await remove(`${base}/files/${linkId}`)).status).toBe(200);
+  } finally {
+    server?.closeAllConnections(); server?.close();
+    await pool.end(); await admin.pool.query(`drop schema ${namespace} cascade`); await admin.pool.end();
+  }
+}, 30000);
