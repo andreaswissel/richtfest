@@ -59,9 +59,12 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
       const unresolvedAnchorCount=labels.filter(l=>l.geometry.quality==="anchor").length;
       const roomHypothesisCount=labels.length-unresolvedAnchorCount;
       const sourceAreaObservationCount=labels.filter(l=>Boolean((l.geometry as any).printedArea)).length;
+      const draftWallCount=footprints.filter(f=>(f.geometry as any).quality==="draft_wall").length;
+      const constructionFragmentCount=footprints.filter(f=>(f.geometry as any).quality==="construction_fragment_assembly").length;
       await tx.update(jobs).set({status:"complete",result:{...summary,phase:"complete",candidateCount,
         roomAnchorCount:unresolvedAnchorCount,roomCandidateCount:labels.length,roomHypothesisCount,unresolvedAnchorCount,
-        elementAssemblyCount:footprints.length,constructionAssemblyCount:footprints.length,
+        elementAssemblyCount:footprints.length,constructionAssemblyCount:constructionFragmentCount,
+        draftWallCount,constructionFragmentCount,
         elementFootprintCount:result.topologyCoverage.sourceFootprintCount,rawFootprintCount:result.topologyCoverage.sourceFootprintCount,
         sourceAreaObservationCount,inference:{provider:"typesafe",active:false,
           configured:classification.outcome==="classified"?true:classification.outcome==="unconfigured"?false:null,

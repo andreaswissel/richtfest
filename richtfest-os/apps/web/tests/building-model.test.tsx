@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BuildingModelBootstrap, BuildingModelMode, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
-import { adaptBuildingModel } from "../src/components/building-model/types";
+import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -302,20 +302,51 @@ test("footprint candidates retain exact polygon, layer evidence, and independent
   expect(candidateOverlaysForSource(all, 3, "version-1", "storey-1", { roomAnchors: true, footprints: true })).toHaveLength(1);
 });
 
+test("draft walls require explicit semantics and remain distinct from construction fragments and partition seams", () => {
+  const adapted = adaptBuildingModel({
+    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete" }],
+    extractionCandidates: [
+      { id: "wall-1", jobId: "job-1", entityType: "element", name: "Draft wall 1", status: "unreviewed", geometry: { quality: "draft_wall", semanticKind: "draft_wall", planRegion: { x: .2, y: .2, width: .01, height: .3 }, polygon: [{ x: .2, y: .2 }, { x: .21, y: .2 }, { x: .21, y: .5 }, { x: .2, y: .5 }], sourceFootprintKeys: ["footprint:42"], classification: { method: "elongated_rectangular_construction_fill", sourcePolygonExact: true }, limitations: "Wall identity is unreviewed." }, evidence: [{ kind: "page", sourceVersionId: "version-1", page: 3, layerId: "ocg-wall", layerName: "Construction" }] },
+      { id: "fragment-1", jobId: "job-1", entityType: "element", name: "Construction fragment", status: "unreviewed", geometry: { quality: "construction_fragment_assembly", semanticKind: "construction_fragment", planRegion: { x: .3, y: .2, width: .1, height: .1 }, polygons: [[{ x: .3, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .3 }, { x: .3, y: .3 }]] } },
+      { id: "partition-1", jobId: "job-1", entityType: "room", name: "Room partition", status: "unreviewed", geometry: { quality: "approximate_partition", semanticKind: "partition_seam", planRegion: { x: .4, y: .2, width: .2, height: .2 } } },
+    ],
+  });
+  const [wall, fragment, partition] = adapted.extractionCandidates;
+  expect(wall).toMatchObject({ candidateRole: "draft-wall", sourceVersionId: "version-1", page: 3, storeyId: "storey-1", sourceFootprintKeys: ["footprint:42"], wallThickness: null, material: null, sourceScale: null });
+  expect(wall?.classification).toMatchObject({ method: "elongated_rectangular_construction_fill", sourcePolygonExact: true });
+  expect(fragment?.candidateRole).toBe("construction-assembly");
+  expect(partition?.candidateRole).toBe("room-region");
+  expect(candidateRole({ entityType: "element", geometryQuality: "assembly", semanticType: "partition_seam" })).not.toBe("draft-wall");
+  expect(candidateOverlaysForSource(adapted.extractionCandidates, 3, "version-1", "storey-1", { draftWalls: true, assemblies: false, roomHypotheses: false })).toEqual([wall!]);
+});
+
+test("draft wall polygons render with a dedicated overlay class and no semantic claim for fragments", () => {
+  const regions = adaptBuildingModel({ extractionCandidates: [
+    { id: "wall-1", entityType: "element", name: "Draft wall 1", status: "unreviewed", sourceVersionId: "v", storeyId: "s", page: 3, geometry: { quality: "draft_wall", semanticKind: "draft_wall", planRegion: { x: .2, y: .2, width: .01, height: .3 }, polygon: [{ x: .2, y: .2 }, { x: .21, y: .2 }, { x: .21, y: .5 }, { x: .2, y: .5 }] } },
+    { id: "fragment-1", entityType: "element", name: "Construction fragment", status: "unreviewed", sourceVersionId: "v", storeyId: "s", page: 3, geometry: { quality: "construction_fragment_assembly", semanticKind: "construction_fragment", planRegion: { x: .3, y: .2, width: .1, height: .1 }, polygons: [[{ x: .3, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .3 }, { x: .3, y: .3 }]] } },
+  ] }).extractionCandidates;
+  const html = renderToStaticMarkup(<PdfEvidenceRenderer projectId={projectId} evidence={{ fileName: "Plan.pdf", pageCount: 3 }} page={3} regions={regions} layerVisibility={{}} onLayers={() => undefined} onSelect={() => undefined} labels={{ empty: "No PDF", loading: "Loading", region: "Regions", zoom: "Controls", zoomIn: "In", zoomOut: "Out", fit: "Fit" }} />);
+  expect(html).toContain("candidate draft-wall");
+  expect(html).toContain("candidate assembly");
+  expect(html).toContain("Draft wall 1 · draft-wall");
+  expect(html).toContain("Construction fragment · construction-assembly");
+});
+
 test("semantic extraction coverage names hypotheses, unresolved anchors, assemblies, and source-area observations", () => {
   const html = render({
     model: { id: "model-1", revision: 4 }, storeys: [{ id: "storey-1", name: "Ground" }], rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
     planSources: [{ id: "plan-1", storeyId: "storey-1", page: 3, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-1", version: 1, downloadUrl: "/api/projects/p/files/f/versions/1/download" } }],
-    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete", result: { candidateCount: 163, roomAnchorCount: 15, elementFootprintCount: 235, topologyCoverage: { approximateRegionCount: 76, unresolvedRegionCount: 15, assemblyCount: 72, sourceFootprintCount: 235, printedAreaCount: 90 } } }],
+    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete", result: { candidateCount: 163, roomAnchorCount: 15, elementFootprintCount: 235, draftWallCount: 41, constructionFragmentCount: 72, topologyCoverage: { approximateRegionCount: 76, unresolvedRegionCount: 15, wallCount: 41, fragmentAssemblyCount: 72, sourceFootprintCount: 235, printedAreaCount: 90 } } }],
     extractionCandidates: [{ id: "candidate-partition", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, polygon: [{ x: .1, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .3 }, { x: .1, y: .3 }], printedArea: { value: 27.32, unit: "m²", status: "unreviewed" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0", status: "unreviewed" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }],
   }, "?view=building-model&page=3");
   expect(html).toContain("<strong>76</strong><small>Room hypotheses</small>");
   expect(html).toContain("<strong>15</strong><small>Unresolved anchors</small>");
+  expect(html).toContain("<strong>41</strong><small>Draft wall candidates</small>");
   expect(html).toContain("<strong>72</strong><small>Construction assemblies</small>");
   expect(html).toContain("<strong>90</strong><small>Source area observations</small>");
   expect(html).toContain("<strong>163</strong><small>Total candidates</small>");
   expect(html).toContain("building-model-region room candidate approximate");
-  expect(html).toContain("Room hypothesis");
+  expect(html).toContain("Spatial room region");
   const adapted = adaptBuildingModel({ extractionCandidates: [{ id: "candidate-partition", entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, printedArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }] });
   expect(adapted.extractionCandidates[0]).toMatchObject({ sourceArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82 }, layerId: "98R", layerName: "01-10 Grundriss Füllflächen", algorithm: "wall_constrained_geodesic_partition" });
 });
@@ -395,4 +426,43 @@ test("canonical inspector remains the default when candidates exist", () => {
   });
   expect(html).toContain("Canonical room");
   expect(html).not.toContain("This is an extraction candidate, not an approved model object");
+});
+
+test("review status stays needs-review while any extraction candidate remains unreviewed", () => {
+  const partial = adaptBuildingModel({
+    model: { id: "model-1", revision: 10, reviewStatus: "reviewed" },
+    revisions: [{ status: "approved" }],
+    extractionCandidates: [
+      { id: "accepted", entityType: "room", name: "Accepted", status: "accepted" },
+      { id: "remaining", entityType: "room", name: "Still unreviewed", status: "unreviewed" },
+    ],
+  });
+  expect(partial.reviewStatus).toBe("needs-review");
+  const complete = adaptBuildingModel({ model: { id: "model-1", revision: 11 }, revisions: [{ status: "approved" }], extractionCandidates: [{ id: "accepted", entityType: "room", name: "Accepted", status: "accepted" }] });
+  expect(complete.reviewStatus).toBe("reviewed");
+});
+
+test("candidate sidebar and inspector stay scoped to the explicit source page, revision, and storey", () => {
+  const html = render({
+    model: { id: "model-1", revision: 4 },
+    rooms: [{ id: "room-page-3", name: "Canonical page three", storeyId: "storey-3", geometry: { source: { sourceVersionId: "version-1", page: 3 } } }],
+    elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
+    storeys: [{ id: "storey-1", name: "Page one" }, { id: "storey-3", name: "Page three" }],
+    planSources: [
+      { id: "source-1", storeyId: "storey-1", page: 1, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-1", version: 1, downloadUrl: "/plan" } },
+      { id: "source-3", storeyId: "storey-3", page: 3, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-1", version: 1, downloadUrl: "/plan" } },
+    ],
+    extractions: [
+      { id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 1, status: "complete" },
+      { id: "job-3", sourceVersionId: "version-1", storeyId: "storey-3", page: 3, status: "complete" },
+    ],
+    extractionCandidates: [
+      { id: "candidate-page-1", jobId: "job-1", entityType: "room", name: "Page one candidate", status: "unreviewed", geometry: { quality: "enclosed_region", planRegion: { x: .1, y: .1, width: .2, height: .2 } } },
+      { id: "candidate-page-3", jobId: "job-3", entityType: "room", name: "Page three candidate", status: "unreviewed", geometry: { quality: "enclosed_region", planRegion: { x: .3, y: .3, width: .2, height: .2 } } },
+    ],
+  }, "?view=building-model&page=1&sourceVersion=version-1&storey=storey-1&entity=room%3Aroom-page-3");
+  expect(html).toContain("Page one candidate");
+  expect(html).not.toContain("Page three candidate");
+  expect(html).toContain("Select a room or element");
+  expect(html).not.toContain("<h2>Canonical page three</h2>");
 });

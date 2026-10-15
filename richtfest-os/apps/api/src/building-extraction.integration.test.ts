@@ -41,12 +41,23 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     const worker={db,fileStorage:{read:async()=>createReadStream(fixture!)},audit:async()=>{audits++;},reportError:()=>{}};
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     const rows=(await pool.query("select * from projects_building_extraction_candidates")).rows;
-    const rooms=rows.filter(r=>r.entity_type==="room"),assemblies=rows.filter(r=>r.entity_type==="element");
-    expect(rooms.length).toBeGreaterThan(0);expect(assemblies.length).toBeGreaterThan(0);
+    const rooms=rows.filter(r=>r.entity_type==="room"),elements=rows.filter(r=>r.entity_type==="element");
+    const walls=elements.filter(r=>r.geometry.quality==="draft_wall"),assemblies=elements.filter(r=>r.geometry.quality==="construction_fragment_assembly");
+    expect(rooms.length).toBeGreaterThan(0);expect(elements.length).toBeGreaterThan(0);
     expect(rooms.every(r=>r.status==="unreviewed" && ["anchor","enclosed_region","approximate_partition"].includes(r.geometry.quality))).toBe(true);
     expect(rooms.some(r=>r.geometry.quality==="anchor")).toBe(true);
     expect(rooms.some(r=>r.geometry.quality==="approximate_partition")).toBe(true);
-    expect(assemblies.every(r=>r.status==="unreviewed" && r.geometry.quality==="assembly" && Array.isArray(r.geometry.polygons) && r.geometry.polygons.length>0 && r.evidence[0].layerName.includes("Konstruktion"))).toBe(true);
+    expect(walls).toHaveLength(164);expect(assemblies).toHaveLength(64);
+    expect(walls.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="draft_wall"&&Array.isArray(r.geometry.polygon)&&r.geometry.polygon.length===4
+      &&r.geometry.classification.sourcePolygonExact&&r.evidence[0].layerName.includes("Konstruktion")&&!Object.hasOwn(r.geometry,"thickness")&&!Object.hasOwn(r.geometry,"material"))).toBe(true);
+    expect(assemblies.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="construction_fragment"&&Array.isArray(r.geometry.polygons)&&r.geometry.polygons.length>0
+      &&r.evidence[0].layerName.includes("Konstruktion"))).toBe(true);
+    expect(walls.filter(r=>r.geometry.classification.evidenceTier==="high")).toHaveLength(164);
+    expect(walls.every(r=>r.geometry.classification.thicknessBandCount>=1&&r.geometry.classification.minorDimensionBand>0)).toBe(true);
+    const completedJob=(await pool.query("select result from projects_building_extractions where id=$1",[queued[0].body.data.id])).rows[0].result;
+    expect(completedJob).toMatchObject({candidateCount:319,roomCandidateCount:91,roomHypothesisCount:48,unresolvedAnchorCount:43,
+      draftWallCount:164,constructionFragmentCount:64,topologyCoverage:{area_ratio_outlier:28,wallCount:164,
+        highEvidenceWallCount:164,mediumEvidenceWallCount:0,fragmentAssemblyCount:64,sourceFootprintCount:235}});
     const agentContext=await (await fetch(base+"/agent-context")).json();
     expect(agentContext.data.entities).toHaveLength(2); // building + storey; candidates are never canonical entities
     expect(agentContext.data.missingInputs).toHaveLength(0);
@@ -78,15 +89,21 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
       expect((await pool.query("select name from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction"}]);
     }
     const revision=async()=>Number((await pool.query("select revision from projects_building_models where id=$1",[model])).rows[0].revision);
-    const footprintReview=await post(`/extraction-candidates/${assemblies[0].id}/review`,{baseRevision:await revision(),decision:"approved",name:"Reviewed assembly"});
+    const footprintReview=await post(`/extraction-candidates/${walls[0].id}/review`,{baseRevision:await revision(),decision:"approved",name:"Reviewed draft wall"});
     expect(footprintReview.status).toBe(200);
-    expect(footprintReview.body.data.entity).toMatchObject({buildingId:building,storeyId:storey,kind:"source_construction_assembly",constructionState:"unknown",geometry:{quality:"assembly"}});
-    expect(footprintReview.body.data.entity.geometry.polygons.length).toBeGreaterThan(0);
+    expect(footprintReview.body.data.entity).toMatchObject({buildingId:building,storeyId:storey,kind:"draft_wall",constructionState:"unknown",geometry:{quality:"draft_wall",semanticKind:"draft_wall"}});
+    expect(footprintReview.body.data.entity.geometry.polygon).toEqual(walls[0].geometry.polygon);
+    const fragmentReview=await post(`/extraction-candidates/${assemblies[0].id}/review`,{baseRevision:await revision(),decision:"approved",name:"Reviewed construction fragment"});
+    expect(fragmentReview.status).toBe(200);
+    expect(fragmentReview.body.data.entity).toMatchObject({buildingId:building,storeyId:storey,kind:"source_construction_fragment",
+      geometry:{quality:"construction_fragment_assembly",semanticKind:"construction_fragment"}});
+    expect(fragmentReview.body.data.entity.geometry.polygons).toEqual(assemblies[0].geometry.polygons);
     await pool.query("update projects_building_extractions set status='queued',lease_until=null");
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     expect((await pool.query("select count(*)::int as n from projects_building_extraction_candidates")).rows[0].n).toBe(rows.length);
-    expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[assemblies[0].id])).rows[0]).toEqual({name:"Reviewed assembly",status:"approved"});
-    expect((await pool.query("select name from projects_building_elements")).rows).toEqual([{name:"Reviewed assembly"}]);
+    expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[walls[0].id])).rows[0]).toEqual({name:"Reviewed draft wall",status:"approved"});
+    expect((await pool.query("select name,kind from projects_building_elements order by name")).rows).toEqual([
+      {name:"Reviewed construction fragment",kind:"source_construction_fragment"},{name:"Reviewed draft wall",kind:"draft_wall"}]);
     const room=(await pool.query("select id from projects_building_rooms")).rows[0].id;
     const child=await post(`/rooms/${room}/elements`,{baseRevision:await revision(),stableKey:"manual-child",name:"Manual child",kind:"unknown"});
     expect(child.status).toBe(201);expect(child.body.data.created.buildingId).toBe(building);

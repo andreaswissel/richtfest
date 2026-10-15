@@ -45,15 +45,20 @@
 .building-model-region.candidate.approximate::after { background: oklch(.72 .13 75); }
 .building-model-region.candidate.assembly { border: 0; border-radius: 0; background: transparent; }
 .building-model-region.candidate.assembly::after { display: none; }
+.building-model-region.candidate.draft-wall { border: 0; border-radius: 0; background: transparent; }
+.building-model-region.candidate.draft-wall::after { display: none; }
 .building-model-region.candidate.footprint { border: 0; border-radius: 0; background: transparent; }
 .building-model-region.candidate.footprint::after { display: none; }
 .building-model-region-shape { position: absolute; inset: 0; border: 1px solid color-mix(in oklch, oklch(.72 .13 75) 75%, white); border-radius: 2px; background: color-mix(in oklch, oklch(.72 .13 75) 10%, transparent); opacity: .52; pointer-events: none; }
 .building-model-region.candidate.approximate .building-model-region-shape { border-color: color-mix(in oklch, oklch(.72 .13 75) 78%, white); background: color-mix(in oklch, oklch(.72 .13 75) 12%, transparent); opacity: .72; }
 .building-model-region.candidate.assembly .building-model-region-shape { border-color: color-mix(in oklch, oklch(.68 .16 180) 70%, white); background: color-mix(in oklch, oklch(.68 .16 180) 9%, transparent); opacity: .48; }
+.building-model-region.candidate.draft-wall .building-model-region-shape { border: 1px solid color-mix(in oklch, oklch(.58 .15 28) 86%, white); border-radius: 0; background: color-mix(in oklch, oklch(.58 .15 28) 32%, transparent); opacity: .88; }
 .building-model-region.candidate.footprint:hover, .building-model-region.candidate.footprint.selected { border-color: transparent; background: transparent; box-shadow: none; }
 .building-model-region.candidate.assembly:hover, .building-model-region.candidate.assembly.selected { border-color: transparent; background: transparent; box-shadow: none; }
+.building-model-region.candidate.draft-wall:hover, .building-model-region.candidate.draft-wall.selected { border-color: transparent; background: transparent; box-shadow: none; }
 .building-model-region.candidate.footprint:hover .building-model-region-shape, .building-model-region.candidate.footprint.selected .building-model-region-shape { border-color: color-mix(in oklch, oklch(.72 .13 75) 90%, white); background: color-mix(in oklch, oklch(.72 .13 75) 22%, transparent); opacity: .9; box-shadow: 0 0 0 2px color-mix(in oklch, oklch(.72 .13 75) 35%, transparent); }
 .building-model-region.candidate.assembly:hover .building-model-region-shape, .building-model-region.candidate.assembly.selected .building-model-region-shape { border-color: color-mix(in oklch, oklch(.68 .16 180) 88%, white); background: color-mix(in oklch, oklch(.68 .16 180) 16%, transparent); opacity: .85; box-shadow: 0 0 0 2px color-mix(in oklch, oklch(.68 .16 180) 25%, transparent); }
+.building-model-region.candidate.draft-wall:hover .building-model-region-shape, .building-model-region.candidate.draft-wall.selected .building-model-region-shape { border-color: color-mix(in oklch, oklch(.58 .15 28) 92%, white); background: color-mix(in oklch, oklch(.58 .15 28) 46%, transparent); opacity: 1; box-shadow: 0 0 0 2px color-mix(in oklch, oklch(.58 .15 28) 28%, transparent); }
 .building-model-inspector { overflow: auto; }
 .building-model-inspector-header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .building-model-inspector dl { display: grid; grid-template-columns: minmax(80px, auto) 1fr; gap: 8px 12px; margin: 14px 0 0; }
@@ -61,6 +66,10 @@
 .building-model-inspector dd { min-width: 0; margin: 0; font-size: var(--ui-xs); overflow-wrap: anywhere; }
 .building-model-source-coordinates { display: block; color: var(--foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); white-space: normal; }
 .building-model-polygon-coordinates { display: block; margin-top: 4px; color: var(--muted-foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); line-height: 1.45; }
+.building-model-technical-details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.building-model-technical-details > summary, .building-model-source-polygons > summary { cursor: pointer; color: var(--muted-foreground); font-size: var(--ui-xs); }
+.building-model-source-polygons { margin-top: 5px; }
+.building-model-source-polygons code { display: block; max-height: 9rem; margin-top: 5px; overflow: auto; color: var(--muted-foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .building-model-competing-labels summary { cursor: pointer; color: var(--muted-foreground); }
 .building-model-competing-labels code { display: block; margin-top: 4px; max-height: 8rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted-foreground); }
 .building-model-id-copy { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; padding: 3px 5px; border: 1px solid transparent; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--primary); text-align: left; }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Button } from "../ui/button";
-import type { BuildingEvidence, BuildingGeometryPart, BuildingRegion, PdfEvidenceLayer } from "./types";
+import { candidateRole, type BuildingEvidence, type BuildingGeometryPart, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 
 export type PdfViewerTransform = { zoom: number; pan: { x: number; y: number } };
 
@@ -174,12 +174,15 @@ export function PdfEvidenceRenderer({
       <div className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         {source ? <canvas ref={canvas} className="building-model-pdf" aria-label={`${evidence.fileName} · page ${page}`} /> : <div className="building-model-pdf-empty"><span className="mono">PDF</span><p>{labels.empty}</p></div>}
         <div className="building-model-region-layer" aria-label={labels.region}>
-          {regions.filter((region) => region.page === page).map((region) => (
-            <button key={region.id} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${region.isCandidate && region.geometryQuality === "footprint" ? "footprint" : region.isCandidate && region.geometryQuality === "assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : ""} ${selectedId === region.id ? "selected" : ""}`} style={regionOverlayStyle(region)} onClick={() => onSelect(region.id)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${region.kind}`}>
+          {regions.filter((region) => region.page === page).map((region) => {
+            const role = region.isCandidate ? region.candidateRole || candidateRole(region) : undefined;
+            const candidateClass = role === "draft-wall" ? "draft-wall" : role === "raw-footprint" ? "footprint" : role === "construction-assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : "";
+            return (
+            <button key={region.id} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}`} style={regionOverlayStyle(region)} onClick={() => onSelect(region.id)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
               {region.isCandidate && region.parts?.length ? region.parts.map((part, index) => <span key={`${region.id}-part-${index}`} className="building-model-region-shape" style={{ ...partOverlayStyle(part, region.box), clipPath: polygonClipPath({ box: part.box, polygon: part.polygon, geometryQuality: "assembly" }) }} aria-hidden="true" />) : region.isCandidate && polygonClipPath(region) ? <span className="building-model-region-shape" style={{ clipPath: polygonClipPath(region) }} aria-hidden="true" /> : null}
               <span className="building-model-region-label">{region.label}</span>
             </button>
-          ))}
+          );})}
         </div>
       </div>
       {loading && source && <div className="building-model-pdf-loading" role="status">{labels.loading} {page}…</div>}

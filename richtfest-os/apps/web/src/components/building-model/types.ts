@@ -54,6 +54,13 @@ export type BuildingRegion = {
   layerId?: string | null;
   layerName?: string | null;
   geometryLimitations?: string | null;
+  candidateRole?: "room-region" | "unresolved-anchor" | "draft-wall" | "construction-assembly" | "raw-footprint" | "element" | null;
+  semanticType?: string | null;
+  material?: unknown;
+  wallThickness?: unknown;
+  sourceScale?: unknown;
+  sourceFootprintKeys?: string[];
+  classification?: Record<string, unknown> | null;
   properties?: Record<string, unknown>;
   evidence?: Array<{
     label: string;
@@ -123,12 +130,21 @@ export type BuildingExtractionJob = {
     unresolvedAnchorCount?: number;
     elementFootprintCount?: number;
     constructionAssemblyCount?: number;
+    constructionFragmentCount?: number;
+    semanticWallCount?: number;
+    draftWallCount?: number;
+    wallCandidateCount?: number;
     rawFootprintCount?: number;
     sourceAreaObservationCount?: number;
     topologyCoverage?: {
       approximateRegionCount?: number;
       unresolvedRegionCount?: number;
       assemblyCount?: number;
+      semanticWallCount?: number;
+      draftWallCount?: number;
+      wallCount?: number;
+      fragmentAssemblyCount?: number;
+      unsupportedFootprintCount?: number;
       sourceFootprintCount?: number;
       printedAreaCount?: number;
     } | null;
@@ -241,6 +257,31 @@ function planParts(value: unknown): BuildingRegion["parts"] {
   return parts.length ? parts : undefined;
 }
 
+function partsBox(parts: BuildingRegion["parts"]): BuildingRegion["box"] {
+  if (!parts?.length) return undefined;
+  const boxes = parts.flatMap((part) => part.box ? [part.box] : []);
+  if (!boxes.length) return undefined;
+  const x = Math.min(...boxes.map((box) => box.x));
+  const y = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+const normalizedSemanticValue = (value: unknown) => typeof value === "string" ? value.trim().toLowerCase().replaceAll("-", "_") : "";
+
+/** Wall candidates require an explicit semantic marker. Names, partition algorithms and generic source paths never qualify. */
+export function candidateRole(candidate: Pick<BuildingRegion, "entityType" | "geometryQuality" | "semanticType">): NonNullable<BuildingRegion["candidateRole"]> {
+  const quality = normalizedSemanticValue(candidate.geometryQuality);
+  const semanticType = normalizedSemanticValue(candidate.semanticType);
+  if (candidate.entityType === "room") return quality === "anchor" ? "unresolved-anchor" : "room-region";
+  if (["semantic_wall", "semantic_wall_candidate", "draft_wall", "wall_candidate", "source_wall"].includes(quality)
+    || ["semantic_wall", "draft_wall", "wall", "wall_candidate"].includes(semanticType)) return "draft-wall";
+  if (quality === "footprint" || quality === "raw_footprint") return "raw-footprint";
+  if (["assembly", "construction_assembly", "construction_fragment_assembly"].includes(quality) || semanticType === "construction_fragment") return "construction-assembly";
+  return "element";
+}
+
 function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityType?: BuildingRegion["entityType"], properties: RecordData[] = [], measurements: RecordData[] = []): BuildingRegion[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -281,9 +322,9 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
     if (!item || typeof item !== "object") return [];
     const row = item as RecordData;
     const geometry = row.geometry && typeof row.geometry === "object" ? row.geometry as RecordData : undefined;
-    const box = planBox(row.box || row.planRegion || geometry?.planRegion);
-    const polygon = planPolygon(geometry?.polygon);
-    const parts = planParts(geometry?.parts ?? geometry?.polygons);
+    const polygon = planPolygon(geometry?.polygon ?? row.polygon);
+    const parts = planParts(geometry?.parts ?? geometry?.polygons ?? geometry?.sourcePolygons ?? row.sourcePolygons);
+    const box = planBox(row.box || row.planRegion || geometry?.planRegion) || polygonBox(polygon) || partsBox(parts);
     const rawKind = row.entityType === "element" || row.kind === "element" ? "element" : row.kind === "unknown-room" ? "unknown-room" : "room";
     const sourceEvidence = Array.isArray(row.evidence) ? row.evidence : [];
     const layerEvidence = sourceEvidence.find((evidence: RecordData) => typeof evidence.layerId === "string" || typeof evidence.layerName === "string");
@@ -292,6 +333,12 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
     const topology = geometry?.topology && typeof geometry.topology === "object" ? geometry.topology as RecordData : undefined;
     const roomUseProposal = geometry?.roomUseProposal && typeof geometry.roomUseProposal === "object"
       ? geometry.roomUseProposal as BuildingRegion["roomUseProposal"] : null;
+    const semanticType = [row.semanticType, row.semanticKind, row.candidateType, row.elementType, geometry?.semanticType, geometry?.semanticKind, geometry?.candidateType, geometry?.elementType, geometry?.objectType]
+      .find((value) => typeof value === "string") as string | undefined;
+    const geometryQuality = typeof row.geometryQuality === "string" ? row.geometryQuality : (typeof geometry?.quality === "string" ? geometry.quality : null);
+    const role = candidateRole({ entityType: rawKind === "element" ? "element" : "room", geometryQuality, semanticType });
+    const source = row.source && typeof row.source === "object" ? row.source as RecordData : undefined;
+    const primaryEvidence = sourceEvidence.find((item: RecordData) => typeof item.sourceVersionId === "string" || typeof item.page === "number");
     return [{
       id: `candidate:${asString(row.id || row.candidateId, crypto.randomUUID?.() || `candidate-${Math.random()}`)}`,
       candidateId: asString(row.id || row.candidateId),
@@ -303,8 +350,8 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       roomUse: typeof row.roomUse === "string" ? row.roomUse : null,
       constructionState: typeof row.constructionState === "string" ? row.constructionState : null,
       storeyId: typeof row.storeyId === "string" ? row.storeyId : null,
-      sourceVersionId: typeof row.sourceVersionId === "string" ? row.sourceVersionId : null,
-      page: Math.max(1, asNumber(row.page || row.source?.page || row.evidence?.[0]?.page, 1)),
+      sourceVersionId: typeof row.sourceVersionId === "string" ? row.sourceVersionId : (typeof source?.sourceVersionId === "string" ? source.sourceVersionId : (typeof primaryEvidence?.sourceVersionId === "string" ? primaryEvidence.sourceVersionId : null)),
+      page: Math.max(1, asNumber(row.page || source?.page || primaryEvidence?.page, 1)),
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       box,
       polygon,
@@ -317,10 +364,17 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       layerId: typeof geometry?.layerId === "string" ? geometry.layerId : (typeof layerEvidence?.layerId === "string" ? layerEvidence.layerId : (typeof fillLayerEvidence?.layerId === "string" ? fillLayerEvidence.layerId : null)),
       layerName: typeof geometry?.layerName === "string" ? geometry.layerName : (typeof layerEvidence?.layerName === "string" ? layerEvidence.layerName : (typeof fillLayerEvidence?.layerName === "string" ? fillLayerEvidence.layerName : null)),
       geometryLimitations: typeof row.limitations === "string" ? row.limitations : (typeof geometry?.limitations === "string" ? geometry.limitations : null),
+      candidateRole: role,
+      semanticType: semanticType || null,
+      material: row.material ?? geometry?.material ?? null,
+      wallThickness: row.wallThickness ?? row.thickness ?? geometry?.wallThickness ?? geometry?.thickness ?? null,
+      sourceScale: row.sourceScale ?? row.scale ?? geometry?.sourceScale ?? geometry?.scale ?? null,
+      sourceFootprintKeys: (Array.isArray(row.sourceFootprintKeys) ? row.sourceFootprintKeys : Array.isArray(geometry?.sourceFootprintKeys) ? geometry.sourceFootprintKeys : []).filter((item): item is string => typeof item === "string"),
+      classification: geometry?.classification && typeof geometry.classification === "object" ? geometry.classification as Record<string, unknown> : (row.classification && typeof row.classification === "object" ? row.classification as Record<string, unknown> : null),
       evidence: sourceEvidence.map((item: RecordData) => ({ label: item.label || "Source page", value: String(item.value || item.quote || item.kind || "—"), page: typeof item.page === "number" ? item.page : undefined, layerId: item.layerId, layerName: item.layerName, source: "source-stated" as const })),
       measurements: Array.isArray(row.measurements) ? row.measurements : [],
       status: asString(row.status, "unreviewed"),
-      geometryQuality: typeof row.geometryQuality === "string" ? row.geometryQuality : (typeof geometry?.quality === "string" ? geometry.quality : null),
+      geometryQuality,
       uncertainty: row.uncertainty,
       match: row.match && typeof row.match === "object" ? { existingId: row.match.existingId ?? row.match.targetEntityId ?? null, confidence: typeof row.match.confidence === "number" ? row.match.confidence : null } : null,
     }];
@@ -365,6 +419,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     return [item as BuildingExtractionJob];
   }).sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
   const rawCandidates = raw.extractionCandidates || raw.candidates || rawExtraction?.candidates;
+  const hasUnreviewedCandidates = Array.isArray(rawCandidates) && rawCandidates.some((item) => item && typeof item === "object" && (!((item as RecordData).status) || (item as RecordData).status === "unreviewed"));
   const coverage = raw.extractionCoverage || rawExtraction?.coverage;
   const extractionJobsById = new Map(extractions.map((job) => [job.id, job]));
   const withPlanSourcePage = (items: BuildingRegion[]) => items.map((region) => ({
@@ -378,7 +433,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
   return {
     id: asString(source.id) || undefined,
     revision: asNumber(source.revision, 0),
-    reviewStatus: raw.conflicts?.length ? "conflict" : raw.proposals?.some((proposal: RecordData) => proposal.status === "pending") ? "needs-review" : raw.revisions?.[0]?.status === "approved" ? "reviewed" : source.reviewStatus === "reviewed" || source.reviewStatus === "needs-review" || source.reviewStatus === "conflict" ? source.reviewStatus : "draft",
+    reviewStatus: raw.conflicts?.length ? "conflict" : raw.proposals?.some((proposal: RecordData) => proposal.status === "pending") || hasUnreviewedCandidates ? "needs-review" : raw.revisions?.[0]?.status === "approved" ? "reviewed" : source.reviewStatus === "reviewed" || source.reviewStatus === "needs-review" || source.reviewStatus === "conflict" ? source.reviewStatus : "draft",
     evidence: fallbackEvidence,
     planSources,
     proposals: Array.isArray(raw.proposals) ? raw.proposals : [],

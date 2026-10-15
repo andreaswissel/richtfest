@@ -9,7 +9,7 @@ import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
 import { Copy, ExternalLink, Link2, LoaderCircle, ScanLine } from "lucide-react";
-import { adaptBuildingModel, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import "./building-model.css";
 
@@ -56,12 +56,14 @@ export type CandidateOverlayVisibility = {
   footprints?: boolean;
   roomHypotheses?: boolean;
   unresolvedAnchors?: boolean;
+  draftWalls?: boolean;
   assemblies?: boolean;
 };
 
-export function candidateOverlayBucket(candidate: Pick<BuildingExtractionCandidate, "entityType" | "geometryQuality">) {
+export function candidateOverlayBucket(candidate: Pick<BuildingExtractionCandidate, "entityType" | "geometryQuality" | "semanticType">) {
+  if (candidateRole(candidate) === "draft-wall") return "draftWalls" as const;
   if (candidate.geometryQuality === "footprint") return "footprints" as const;
-  if (candidate.geometryQuality === "assembly") return "assemblies" as const;
+  if (candidateRole(candidate) === "construction-assembly") return "assemblies" as const;
   if (candidate.geometryQuality === "anchor") return "unresolvedAnchors" as const;
   if (candidate.geometryQuality === "enclosed_region" || candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region") return "roomHypotheses" as const;
   return candidate.entityType === "room" ? "roomHypotheses" as const : "assemblies" as const;
@@ -72,9 +74,20 @@ export function candidateOverlaysForSource(candidates: BuildingExtractionCandida
     const bucket = candidateOverlayBucket(candidate);
     if (bucket === "roomHypotheses") return visibility.roomHypotheses ?? visibility.roomAnchors ?? true;
     if (bucket === "unresolvedAnchors") return visibility.unresolvedAnchors ?? visibility.roomAnchors ?? false;
+    if (bucket === "draftWalls") return visibility.draftWalls ?? true;
     if (bucket === "assemblies") return visibility.assemblies ?? visibility.footprints ?? false;
     return visibility.footprints ?? false;
   });
+}
+
+function candidateTypeLabel(candidate: BuildingExtractionCandidate, t: ReturnType<typeof useT>) {
+  const role = candidate.candidateRole || candidateRole(candidate);
+  if (role === "draft-wall") return t("buildingModelDraftWallCandidate");
+  if (role === "construction-assembly") return t("buildingModelConstructionAssembly");
+  if (role === "raw-footprint") return t("buildingModelConstructionFootprint");
+  if (role === "unresolved-anchor") return t("buildingModelUnresolvedLabelAnchor");
+  if (role === "room-region") return t("buildingModelSpatialRoomRegion");
+  return t("buildingModelElementCandidate");
 }
 
 export function automaticProcessingActive(status: string | undefined) {
@@ -123,7 +136,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [conflict, setConflict] = useState<string>();
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
   const [candidateGroupFilter, setCandidateGroupFilter] = useState("all");
-  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, assemblies: true, footprints: false });
+  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: true, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
@@ -142,26 +155,32 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const selectedBootstrapFile = projectFiles.find((file) => file.id === bootstrapFileId);
   const bootstrapVersions = useMemo(() => list(versionsQuery.data).filter((version) => version.status === undefined || version.status === "ready"), [versionsQuery.data]);
   const regions = pickRegions(model, state);
-  const selected = regions.find((region) => region.id === selectedId) || regions[0];
-  const candidates = model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed");
+  const regionMatchesView = (region: BuildingRegion) => region.page === page
+    && (!sourceStoreyId || region.storeyId === sourceStoreyId)
+    && (!sourceVersionId || region.sourceVersionId === sourceVersionId);
+  const selectedById = regions.find((region) => region.id === selectedId);
+  const explicitPage = params.has("page");
+  const selected = selectedById && (!explicitPage || regionMatchesView(selectedById)) ? selectedById : explicitPage ? regions.find(regionMatchesView) : regions[0];
+  const candidates = useMemo(() => model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed"), [model.extractionCandidates]);
+  const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
+  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId);
+  const sourceForEvidence = currentSource || model.planSources[0];
+  const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
+  const sourceCandidates = useMemo(() => candidatesForSource(candidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId), [candidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId]);
+  const candidateGroupOptions = useMemo(() => [...new Set(sourceCandidates.flatMap((candidate) => candidate.groupLabel ? [candidate.groupLabel] : []))].sort(), [sourceCandidates]);
+  const activeCandidateGroupFilter = candidateGroupFilter === "all" || candidateGroupOptions.includes(candidateGroupFilter) ? candidateGroupFilter : "all";
+  const filteredCandidates = useMemo(() => candidatesForGroup(sourceCandidates, activeCandidateGroupFilter), [sourceCandidates, activeCandidateGroupFilter]);
   const candidateGroups = useMemo(() => {
     const grouped = new Map<string, BuildingExtractionCandidate[]>();
-    for (const candidate of candidates) {
+    for (const candidate of filteredCandidates) {
       const group = candidate.groupLabel || "__ungrouped__";
-      if (candidateGroupFilter !== "all" && candidateGroupFilter !== group) continue;
       const items = grouped.get(group) || [];
       items.push(candidate);
       grouped.set(group, items);
     }
     return grouped;
-  }, [candidates, candidateGroupFilter]);
-  const candidateGroupOptions = useMemo(() => [...new Set(candidates.flatMap((candidate) => candidate.groupLabel ? [candidate.groupLabel] : []))].sort(), [candidates]);
-  const filteredCandidates = useMemo(() => candidatesForGroup(candidates, candidateGroupFilter), [candidates, candidateGroupFilter]);
-  const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
-  const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
-  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId);
-  const sourceForEvidence = currentSource || model.planSources[0];
-  const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
+  }, [filteredCandidates]);
+  const selectedCandidate = sourceCandidates.find((candidate) => candidate.id === selectedCandidateId);
   const currentAutomaticProcessing = automaticPlanProcessing.find((item) => item.sourceVersionId === evidence.sourceVersionId);
   const currentAutomaticActive = automaticProcessingActive(currentAutomaticProcessing?.status);
   const sourceLayers = pdfLayers.length ? pdfLayers : evidence.layers || [];
@@ -184,6 +203,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (selectedCandidateId && !visibleCandidates.some((candidate) => candidate.id === selectedCandidateId)) setSelectedCandidateId(undefined);
   }, [selectedCandidateId, page, currentSource?.id, sourceForEvidence?.source?.versionId]);
+  useEffect(() => {
+    if (candidateGroupFilter !== "all" && !candidateGroupOptions.includes(candidateGroupFilter)) setCandidateGroupFilter("all");
+  }, [candidateGroupFilter, candidateGroupOptions]);
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -300,6 +322,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         && (!region.sourceVersionId || source.source?.versionId === region.sourceVersionId))?.page || region.page);
     }
   };
+  const selectSourcePage = (nextPage: number, nextVersion = "", nextStorey = "") => {
+    setSelectedId(undefined);
+    setSelectedCandidateId(undefined);
+    setSourceVersionId(nextVersion);
+    setSourceStoreyId(nextStorey);
+    setPage(nextPage);
+  };
 
   return (
     <div className="building-model">
@@ -326,13 +355,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         source={currentSource}
         storeys={model.storeys}
         selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
-        onStorey={(value) => { setSourceStoreyId(value); const source = model.planSources.find((item) => item.storeyId === value); if (source) { setSourceVersionId(source.source?.versionId || ""); setPage(source.page); } }}
+        onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceStoreyId(value); } }}
         canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
         pending={startExtraction.isPending}
         onStart={() => startExtraction.mutate()}
         t={t}
       />
-      {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => { setSelectedCandidateId(undefined); setSourceVersionId(nextVersion); setSourceStoreyId(storeyId || ""); setPage(nextPage); }} t={t} />}
+      {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")} t={t} />}
       <div className="building-model-workbench">
         <aside className="building-model-sidebar" aria-label={t("buildingModelObjects")}>
           <div className="building-model-sidebar-section">
@@ -349,9 +378,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
           </div>
           <div className="building-model-sidebar-section">
             <h2>{t("buildingModelExtractionCandidates")}</h2>
-            {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={candidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
+            {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={activeCandidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
             <div className="building-model-candidate-list">
-              {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidate.geometryQuality === "footprint" ? t("buildingModelConstructionFootprint") : candidate.geometryQuality === "assembly" ? t("buildingModelConstructionAssembly") : candidate.geometryQuality === "anchor" ? t("buildingModelUnresolvedAnchor") : t("buildingModelRoomHypothesis")} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
+              {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
               {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
             </div>
           </div>
@@ -364,6 +393,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             <label className="building-model-layer">
               <input type="checkbox" checked={candidateOverlayVisibility.unresolvedAnchors ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, unresolvedAnchors: event.target.checked }))} />
               <span>{t("buildingModelUnresolvedAnchors")}</span>
+            </label>
+            <label className="building-model-layer">
+              <input type="checkbox" checked={candidateOverlayVisibility.draftWalls ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, draftWalls: event.target.checked }))} />
+              <span>{t("buildingModelDraftWalls")}</span>
             </label>
             <label className="building-model-layer">
               <input type="checkbox" checked={candidateOverlayVisibility.assemblies ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, assemblies: event.target.checked }))} />
@@ -403,7 +436,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
               const processing = automaticPlanProcessing.find((item) => item.sourceVersionId === source?.source?.versionId);
               const disposition = automaticPageDisposition(processing, pageNumber);
-              return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")}`} title={t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")} aria-pressed={page === pageNumber} onClick={() => { setSelectedCandidateId(undefined); setSourceVersionId(source?.source?.versionId || ""); setSourceStoreyId(source?.storeyId || ""); setPage(pageNumber); }}>
+              return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")}`} title={t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, source?.source?.versionId || "", source?.storeyId || "")}>
                 {pageNumber}
               </button>;
             })}
@@ -424,7 +457,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             </div>
             {!selectedCandidate && <Link className="text-ui-xs" to={referenceHref} title={t("buildingModelOpenReference")}><Link2 className="size-icon-sm" aria-hidden="true" /></Link>}
           </div>
-          {selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} /> : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} onPage={setPage} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} /> : <Empty>{t("buildingModelSelectObject")}</Empty>}
+          {selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} onPage={setPage} onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} /> : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} onPage={setPage} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} /> : <Empty>{t("buildingModelSelectObject")}</Empty>}
         </aside>
       </div>
     </div>
@@ -710,10 +743,11 @@ function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onS
     : persistedPhase === "preparing_draft" ? t("buildingModelExtractionPreparingDraft")
     : t("buildingModelExtractionExtractingGeometry");
   const topologyCoverage = result?.topologyCoverage;
-  const semanticCoverage = topologyCoverage != null || result?.roomHypothesisCount != null || result?.unresolvedAnchorCount != null || result?.constructionAssemblyCount != null || result?.sourceAreaObservationCount != null;
+  const wallCount = result?.draftWallCount ?? result?.semanticWallCount ?? result?.wallCandidateCount ?? topologyCoverage?.wallCount ?? topologyCoverage?.draftWallCount ?? topologyCoverage?.semanticWallCount;
+  const semanticCoverage = topologyCoverage != null || result?.roomHypothesisCount != null || result?.unresolvedAnchorCount != null || result?.constructionAssemblyCount != null || result?.sourceAreaObservationCount != null || wallCount != null;
   const roomCount = result?.roomHypothesisCount ?? topologyCoverage?.approximateRegionCount ?? result?.roomAnchorCount;
   const unresolvedCount = result?.unresolvedAnchorCount ?? topologyCoverage?.unresolvedRegionCount;
-  const assemblyCount = result?.constructionAssemblyCount ?? topologyCoverage?.assemblyCount ?? result?.elementFootprintCount;
+  const assemblyCount = result?.constructionFragmentCount ?? result?.constructionAssemblyCount ?? topologyCoverage?.fragmentAssemblyCount ?? topologyCoverage?.assemblyCount ?? result?.elementFootprintCount;
   const sourceAreaCount = result?.sourceAreaObservationCount ?? topologyCoverage?.printedAreaCount;
   const extractionNotes = [...new Set([result?.geometryExtraction?.limitations, coverage?.note, result?.coverage, result?.reason].filter((note): note is string => Boolean(note)))];
   return <section className="building-model-extraction" aria-label={t("buildingModelExtraction") }>
@@ -729,6 +763,7 @@ function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onS
       <div className="building-model-extraction-stat"><strong>{job ? 1 : "—"}</strong><small>{t("buildingModelCoveragePages")}</small></div>
       <div className="building-model-extraction-stat"><strong>{roomCount ?? "—"}</strong><small>{t(semanticCoverage ? "buildingModelCoverageRoomHypotheses" : "buildingModelCoverageRoomAnchors")}</small></div>
       {semanticCoverage && <div className="building-model-extraction-stat"><strong>{unresolvedCount ?? "—"}</strong><small>{t("buildingModelCoverageUnresolvedAnchors")}</small></div>}
+      {wallCount != null && <div className="building-model-extraction-stat"><strong>{wallCount}</strong><small>{t("buildingModelCoverageDraftWalls")}</small></div>}
       <div className="building-model-extraction-stat"><strong>{assemblyCount ?? "—"}</strong><small>{t(semanticCoverage ? "buildingModelCoverageAssemblies" : "buildingModelCoverageFootprints")}</small></div>
       {semanticCoverage && <div className="building-model-extraction-stat"><strong>{sourceAreaCount ?? "—"}</strong><small>{t("buildingModelCoverageSourceAreas")}</small></div>}
       <div className="building-model-extraction-stat"><strong>{result?.candidateCount ?? jobCoverage?.regions ?? coverage?.regions ?? "—"}</strong><small>{t("buildingModelCoverageTotalCandidates")}</small></div>
@@ -738,24 +773,57 @@ function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onS
   </section>;
 }
 
-function CandidateInspector({ candidate, regions, t, pending, onReview }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void }) {
+function CandidateInspector({ candidate, regions, t, pending, onPage, onReview }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onPage: (page: number) => void; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void }) {
   const [name, setName] = useState(candidate.label);
   const [targetEntityId, setTargetEntityId] = useState(candidate.match?.existingId || "");
   useEffect(() => { setName(candidate.label); setTargetEntityId(candidate.match?.existingId || ""); }, [candidate.id, candidate.label, candidate.match?.existingId]);
   const propertyEntries = Object.entries(candidate.properties || {});
-  const geometryLabel = candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "footprint" ? t("buildingModelGeometryFootprint") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : candidate.geometryQuality === "assembly" ? t("buildingModelConstructionAssembly") : candidate.geometryQuality || t("buildingModelGeometryQualityUnknown");
+  const role = candidate.candidateRole || candidateRole(candidate);
+  const geometryLabel = role === "draft-wall" ? t("buildingModelGeometryDraftWall") : role === "construction-assembly" ? t("buildingModelConstructionFragmentGeometry") : candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "footprint" ? t("buildingModelGeometryFootprint") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : candidate.geometryQuality || t("buildingModelGeometryQualityUnknown");
   const sourceLayer = candidate.layerName && candidate.layerId ? `${candidate.layerName} · ${candidate.layerId}` : candidate.layerName || candidate.layerId || t("buildingModelNoSourceLayer");
   const sourceCoordinates = candidate.box ? `x ${candidate.box.x.toFixed(5)} · y ${candidate.box.y.toFixed(5)} · w ${candidate.box.width.toFixed(5)} · h ${candidate.box.height.toFixed(5)}` : "—";
   const polygonCoordinates = candidate.polygon?.map((point) => `${point.x.toFixed(5)}, ${point.y.toFixed(5)}`).join(" · ");
+  const partPolygonCoordinates = candidate.parts?.map((part, index) => `${index + 1}: ${part.polygon.map((point) => `${point.x.toFixed(5)},${point.y.toFixed(5)}`).join(" · ")}`).join("\n");
   const geometryLimitations = candidate.geometryLimitations || (candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : t("buildingModelGeometryLimitationsUnknown"));
   const sourceArea = typeof candidate.sourceArea === "number" && Number.isFinite(candidate.sourceArea) ? `${candidate.sourceArea} m²` : candidate.sourceArea && typeof candidate.sourceArea === "object" ? (() => { const area = candidate.sourceArea as RecordData; return area.value == null ? JSON.stringify(area) : `${area.value}${area.unit ? ` ${area.unit}` : ""}`; })() : typeof candidate.sourceArea === "string" ? candidate.sourceArea : undefined;
   const roomUseProposal = candidate.roomUseProposal?.roomUse;
   const proposalConfidence = typeof candidate.roomUseProposal?.confidence === "number" ? `${Math.round(candidate.roomUseProposal.confidence * 100)}%` : undefined;
   const hasCandidateProperties = propertyEntries.length > 0 || Boolean(sourceArea) || Boolean(roomUseProposal);
   const correction = { ...(name.trim() && name.trim() !== candidate.label ? { name: name.trim() } : {}), ...(targetEntityId ? { targetEntityId } : {}) };
+  const formatUnknown = (value: unknown) => value == null || value === "" ? t("buildingModelUnknownValue") : typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value);
+  const candidateWarning = role === "draft-wall" ? t("buildingModelDraftWallWarning") : role === "unresolved-anchor" ? t("buildingModelAnchorWarning") : role === "room-region" ? t("buildingModelRoomRegionWarning") : t("buildingModelCandidateWarning");
   return <>
-    <Callout tone="warning">{t("buildingModelCandidateWarning")}</Callout>
-    <dl><dt>{t("buildingModelCandidateStatus")}</dt><dd><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></dd>{candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}<dt>{t("buildingModelGeometryQuality")}</dt><dd>{geometryLabel}</dd>{sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}{candidate.algorithm && <><dt>{t("buildingModelAlgorithm")}</dt><dd>{candidate.algorithm}</dd></>}{(candidate.competingLabels?.length ?? 0) > 0 && <><dt>{t("buildingModelCompetingLabels")}</dt><dd><details className="building-model-competing-labels"><summary>{candidate.competingLabels!.length} {t("buildingModelCompetingLabelCount")}</summary><code>{candidate.competingLabels!.join("\n")}</code></details></dd></>}{(candidate.parts?.length ?? 0) > 0 && <><dt>{t("buildingModelGeometryParts")}</dt><dd>{candidate.parts!.length}</dd></>}<dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd><dt>{t("buildingModelSourceCoordinates")}</dt><dd><code className="building-model-source-coordinates">{sourceCoordinates}</code>{polygonCoordinates && <small className="building-model-polygon-coordinates">{polygonCoordinates}</small>}</dd><dt>{t("buildingModelGeometryLimitations")}</dt><dd>{geometryLimitations}</dd>{candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse ? "building-model-unknown" : undefined}>{candidate.roomUse || t("buildingModelUnknownValue")}</dd>{roomUseProposal && <><dt>{t("buildingModelRoomUseProposal")}</dt><dd>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} <Badge>{t("buildingModelUnreviewedProposal")}</Badge></dd></>}</> : <><dt>{t("buildingModelConstructionState")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></>}<dt>{t("buildingModelMaterial")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></dl>
+    <Callout tone="warning">{candidateWarning}</Callout>
+    <dl>
+      <dt>{t("buildingModelCandidateType")}</dt><dd>{candidateTypeLabel(candidate, t)}</dd>
+      <dt>{t("buildingModelCandidateStatus")}</dt><dd><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></dd>
+      {candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}
+      {sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}
+      {candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse ? "building-model-unknown" : undefined}>{candidate.roomUse || t("buildingModelUnknownValue")}</dd>{roomUseProposal && <><dt>{t("buildingModelRoomUseProposal")}</dt><dd>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} <Badge>{t("buildingModelUnreviewedProposal")}</Badge></dd></>}</> : <>
+        <dt>{t("buildingModelWallThickness")}</dt><dd className={candidate.wallThickness == null ? "building-model-unknown" : undefined}>{formatUnknown(candidate.wallThickness)}</dd>
+        <dt>{t("buildingModelMaterial")}</dt><dd className={candidate.material == null ? "building-model-unknown" : undefined}>{formatUnknown(candidate.material)}</dd>
+        <dt>{t("buildingModelConstructionState")}</dt><dd className={!candidate.constructionState ? "building-model-unknown" : undefined}>{candidate.constructionState || t("buildingModelUnknownValue")}</dd>
+        <dt>{t("buildingModelSourceScale")}</dt><dd className={candidate.sourceScale == null ? "building-model-unknown" : undefined}>{formatUnknown(candidate.sourceScale)}</dd>
+      </>}
+      <dt>{t("buildingModelSourcePage")}</dt><dd><button type="button" className="text-primary underline underline-offset-2" onClick={() => onPage(candidate.page)}>{t("buildingModelLocateOnPage")} {candidate.page}</button></dd>
+    </dl>
+    <details className="building-model-technical-details">
+      <summary>{t("buildingModelTechnicalSourceDetails")}</summary>
+      <dl>
+        <dt>{t("buildingModelSourceVersion")}</dt><dd className="mono">{candidate.sourceVersionId || t("buildingModelUnknownValue")}</dd>
+        <dt>{t("buildingModelStorey")}</dt><dd className={!candidate.storeyId ? "building-model-unknown" : undefined}>{candidate.storeyId || t("buildingModelUnknownValue")}</dd>
+        <dt>{t("buildingModelGeometryQuality")}</dt><dd>{geometryLabel}</dd>
+        {candidate.algorithm && <><dt>{t("buildingModelAlgorithm")}</dt><dd>{candidate.algorithm}</dd></>}
+        {candidate.classification?.method != null && <><dt>{t("buildingModelClassificationMethod")}</dt><dd>{String(candidate.classification.method)}</dd></>}
+        {candidate.classification?.sourcePolygonExact != null && <><dt>{t("buildingModelSourcePolygonExact")}</dt><dd>{candidate.classification.sourcePolygonExact ? t("buildingModelYes") : t("buildingModelNo")}</dd></>}
+        {(candidate.competingLabels?.length ?? 0) > 0 && <><dt>{t("buildingModelCompetingLabels")}</dt><dd><details className="building-model-competing-labels"><summary>{candidate.competingLabels!.length} {t("buildingModelCompetingLabelCount")}</summary><code>{candidate.competingLabels!.join("\n")}</code></details></dd></>}
+        {(candidate.sourceFootprintKeys?.length ?? 0) > 0 && <><dt>{t("buildingModelSourceFootprints")}</dt><dd><code className="building-model-source-coordinates">{candidate.sourceFootprintKeys!.join(" · ")}</code></dd></>}
+        {(candidate.parts?.length ?? 0) > 0 && <><dt>{t("buildingModelGeometryParts")}</dt><dd>{candidate.parts!.length}</dd></>}
+        <dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd>
+        <dt>{t("buildingModelSourceCoordinates")}</dt><dd><code className="building-model-source-coordinates">{sourceCoordinates}</code>{polygonCoordinates && <details className="building-model-source-polygons"><summary>{t("buildingModelExactSourcePolygon")}</summary><code>{polygonCoordinates}</code></details>}{partPolygonCoordinates && <details className="building-model-source-polygons"><summary>{t("buildingModelExactSourcePolygons")}</summary><code>{partPolygonCoordinates}</code></details>}</dd>
+        <dt>{t("buildingModelGeometryLimitations")}</dt><dd>{geometryLimitations}</dd>
+      </dl>
+    </details>
     <div className="building-model-inspector-section"><h3>{t("buildingModelProperties")}</h3><Field label={t("buildingModelLabel")} hint={t("buildingModelCandidateCorrectionHint")}><Input value={name} onChange={(event) => setName(event.target.value)} disabled={pending} /></Field>{roomUseProposal && <div className="building-model-evidence-row"><span>{t("buildingModelRoomUseProposal")}</span><small>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} · {candidate.roomUseProposal?.provider || "TypeSafe"} {candidate.roomUseProposal?.model ? `/ ${candidate.roomUseProposal.model}` : ""}</small></div>}{sourceArea && <div className="building-model-evidence-row"><span>{t("buildingModelSourceArea")}</span><small>{sourceArea} · {t("buildingModelUnreviewedProposal")}</small></div>}{propertyEntries.map(([key, value]) => <div className="building-model-evidence-row" key={key}><span>{key}</span><small>{typeof value === "string" ? value : JSON.stringify(value)}</small></div>)}{!hasCandidateProperties && <p className="muted text-ui-xs">{t("buildingModelNoCandidateProperties")}</p>}</div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelMatchExisting")}</h3><Field label={candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")} hint={t("buildingModelMatchHint")}><NativeSelect value={targetEntityId} onChange={(event) => setTargetEntityId(event.target.value)} disabled={pending}><option value="">{t("buildingModelNoMatch")}</option>{regions.filter((region) => region.entityType === candidate.entityType).map((region) => <option key={region.id} value={region.id}>{region.label} · {region.id}</option>)}</NativeSelect></Field><Button size="sm" variant="outline" disabled={pending || !targetEntityId} onClick={() => onReview("approved", { targetEntityId })}>{t("buildingModelReconcile")}</Button></div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelEvidence")}</h3>{candidate.evidence?.length ? candidate.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label || t("buildingModelSourcePage")}</span><small>{item.value || "—"} {item.page ? `· ${t("buildingModelPage")} ${item.page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoEvidence")}</p>}{candidate.uncertainty != null && <p className="muted text-ui-2xs">{t("buildingModelUncertainty")}: {typeof candidate.uncertainty === "string" ? candidate.uncertainty : JSON.stringify(candidate.uncertainty)}</p>}</div>
