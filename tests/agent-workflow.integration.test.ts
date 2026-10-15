@@ -27,6 +27,17 @@ const policy = agentPresetSnapshotSchema.parse({ provider: "openai", effort: "me
   maxParallel: 2, maxTasks: 4, maxRevisions: 2 });
 const templates = ["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"] as const;
 
+function progressPlan(context: any) {
+  return { status: "completed" as const, output: {
+    summary: "Some rooms still need evidence; independent results can be prepared.",
+    questions: context.rooms.filter((r: any) => r.outcome !== "calculated").map((r: any) => ({
+      roomIds: [r.roomId], question: `Please clarify the missing or conflicting inputs for ${r.roomId}.`,
+    })),
+    independentWork: "Keep extracted inputs and independently calculated rooms for later answers.",
+    publishPartialSheet: context.calculatedRoomIds.length > 0,
+  } };
+}
+
 async function fixture() {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID();
@@ -354,6 +365,84 @@ integration(`historical v1 calculation sheet bypasses report writing and retains
   } finally { await f.close(); }
 });
 
+integration("v2 extraction bounds dense evidence and carries identities across intervening packets", async () => {
+  const f = await fixture();
+  const packets = exteriorNoisePackets(f.sourceVersionId);
+  const quote = packets[0]!.inventory[0]!.provenance.excerpt;
+  const texts = [1, 2, 3].map(page => `[Page ${page}]\n${quote}\n${"Evidence padding without additional room inputs.\n".repeat(180)}`);
+  const received: string[] = [];
+  const extractionModel = { modelId: "gpt-6-luna", maxOutputTokens: 32000, maxSteps: 4 };
+  f.d.resolveSupervisorPreset = async () => ({ ...policy,
+    specialists: { ...policy.specialists, sound_insulation: extractionModel } });
+  f.d.calculateAcoustics = calculateAcoustics;
+  f.d.resolveSource = async () => ({ status: "resolved", source: { versionId: f.sourceVersionId, name: "Schedule.pdf", version: 1 },
+    content: { status: "available", text: texts.join(""), truncated: false } });
+  f.d.executeSupervisor = async ({ phase, context }: any) => {
+    if (phase === "plan") return { status: "completed", output: {
+      tasks: [{ role: "sound_insulation", goal: "Extract room data", sourceVersionIds: [f.sourceVersionId] }],
+    } };
+    if (context.documentTask === "acoustic_progress") return progressPlan(context);
+    if (phase !== "specialist") throw new Error("Incomplete inputs must not trigger report authoring");
+    const primary = context.sources.filter((source: any) => !source.continuation);
+    expect(Buffer.byteLength(JSON.stringify(primary))).toBeLessThanOrEqual(16384);
+    received.push(...primary.map((source: any) => source.text));
+    const page = Number(primary[0].text.match(/\[Page (\d+)\]/)[1]);
+    expect(primary[0].packetPageNumbers).toEqual([page]);
+    if (page > 1) expect(context.sources.find((source: any) => source.continuation))
+      .toMatchObject({ text: texts[page - 2], packetPageNumbers: [page - 1] });
+    const prior = context.extractionIdentities?.find((entry: any) => entry.roomId === "A01");
+    const roomId = page === 2 ? "B02" : page === 1 || prior ? "A01" : "Alias A01";
+    const provenance = { ...packets[0]!.inventory[0]!.provenance, page };
+    const fields = page === 2 ? packets.flatMap(p => p.facts).filter(f => f.field !== "floorAreaM2")
+      : packets[page === 1 ? 0 : 1]!.facts;
+    const facts = fields.map(fact => ({ ...fact, roomId, id: fact.id === "A01" ? roomId : fact.id, provenance }));
+    if (page === 3) expect(prior).toMatchObject({ facadeIds: ["F1"], elementIds: [], provenance: { page: 1 } });
+    return { status: "completed", output: { summary: "Partial inputs retained", rationale: "No room names in this prose", citations: [f.sourceVersionId],
+      exteriorNoiseExtraction: { inventory: [{ roomId, provenance }], rooms: [], facts, blockers: [] },
+    } };
+  };
+  try {
+    const [chat] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Dense extraction", createdBy: f.d.actorId }).returning();
+    const created = await f.post("/runs", { ...f.input, conversationId: chat.id,
+      sourceVersionIds: [f.sourceVersionId], workflow: { mode: "calculation" } });
+    expect(created.status).toBe(201);
+    for (let i = 0; i < 5; i++) await stepSupervisor(f.d, created.body.data.id);
+    expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
+    expect(received.join("")).toBe(texts.join(""));
+    const [artifact] = await f.rows(artifacts);
+    const review = await f.get(`/conversations/${chat.id}/acoustic-inputs/${artifact.id}`);
+    expect(review.body.data.input.inventory.map((r: any) => r.roomId).sort()).toEqual(["A01", "B02"]);
+    expect(review.body.data.input.rooms).toHaveLength(1);
+    expect(review.body.data.input.rooms[0].room).toMatchObject({ id: "A01", floorAreaM2: 20 });
+    expect(review.body.data.input.rooms[0].elements.find((e: any) => e.id === "FE1")).toMatchObject({ areaM2: 2, rwDb: 35 });
+    const partial = (await f.rows(artifactRevisions)).find((r: any) => r.payload?.acousticDataset);
+    expect(partial.payload.acousticDataset.receipt.batch.complete).toBe(false);
+    expect(partial.payload.acousticDataset.receipt.batch.rooms.find((r: any) => r.roomId === "A01").status).toBe("calculated");
+    expect(partial.payload.acousticDataset.receipt.batch.rooms.find((r: any) => r.roomId === "B02").status).toBe("missing_input");
+    expect(partial.content).toContain("Teilstand");
+    expect((await f.rows(messages)).some((m: any) => m.body.includes("clarify") && m.body.includes("B02"))).toBe(true);
+    const path = `/conversations/${chat.id}/acoustic-inputs/${artifact.id}`;
+    const request = { expectedRevisionId: review.body.data.revisionId, action: "calculate",
+      reason: "Synthetic fixture; no engineering approval", confirmInventory: true, changes: [] };
+    const stillPartial = await f.post(path, request);
+    expect(stillPartial.status).toBe(200);
+    expect(stillPartial.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(false);
+    expect(stillPartial.body.data.calculation.revision.payload.acousticDataset.blockers.length).toBeGreaterThan(0);
+    const field = stillPartial.body.data.fields.find((f: any) => f.roomId === "B02" && f.field === "floorAreaM2");
+    const answered = await f.post(path, { ...request, expectedRevisionId: stillPartial.body.data.revisionId,
+      changes: [{ key: field.key, value: 21 }] });
+    expect(answered.status).toBe(200);
+    const updated = answered.body.data.calculation.revision.payload.acousticDataset;
+    expect(updated.receipt.batch.complete).toBe(true);
+    expect(updated.receipt.batch.rooms.find((r: any) => r.roomId === "A01"))
+      .toEqual(partial.payload.acousticDataset.receipt.batch.rooms.find((r: any) => r.roomId === "A01"));
+    expect(updated.receipt.input.rooms.find((r: any) => r.room.id === "B02").room.floorAreaM2).toBe(21);
+    expect(answered.body.data.calculation.artifact.status).toBe("draft");
+    expect(received.join("")).toBe(texts.join("")); // Answers did not re-extract sources.
+  } finally { await f.close(); }
+});
+
 integration("v2 chat resolves source conflicts with revision fences and creates a model-free unapproved sheet", async () => {
   const f = await fixture();
   const phases: string[] = [];
@@ -367,10 +456,11 @@ integration("v2 chat resolves source conflicts with revision fences and creates 
   const text = packets[0]!.inventory[0]!.provenance.excerpt;
   f.d.resolveSource = async () => ({ status: "resolved", source: { versionId: f.sourceVersionId, name: "Schedule.pdf", version: 1 },
     content: { status: "available", text, truncated: false } });
-  f.d.executeSupervisor = async ({ phase }) => {
+  f.d.executeSupervisor = async ({ phase, context }: any) => {
     phases.push(phase);
     if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Extract inputs", sourceVersionIds: [f.sourceVersionId] }] } };
     if (phase === "specialist") return { status: "completed", output: { summary: "Room inputs", rationale: "Extraction", citations: [f.sourceVersionId], exteriorNoiseExtraction: extraction } };
+    if (context.documentTask === "acoustic_progress") return progressPlan(context);
     throw new Error("Incomplete inputs must not buy report/review calls");
   };
   try {
@@ -381,7 +471,7 @@ integration("v2 chat resolves source conflicts with revision fences and creates 
     expect(created.status).toBe(201);
     for (let i = 0; i < 5; i++) await stepSupervisor(f.d, created.body.data.id);
     expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
-    expect(phases).toEqual(["plan", "specialist"]);
+    expect(phases).toEqual(["plan", "specialist", "review"]);
     const [artifact] = await f.rows(artifacts);
     expect(await f.rows(artifacts)).toHaveLength(1);
     expect((await f.rows(messages)).some((m: any) => m.openui === `root = AcousticInputReview(${JSON.stringify(artifact.id)})`)).toBe(true);
@@ -429,7 +519,7 @@ integration("v2 chat resolves source conflicts with revision fences and creates 
     expect(dataset.receipt.batch.rooms[0].result.value).toBeCloseTo(41.4724225, 5);
     expect(dataset.receipt.input.rooms[0].fieldEvidence.find((e: any) => e.field === "element/FE1/areaM2").provenance.kind).toBe("assumption");
     expect((await f.rows(artifactRevisions)).find((r: any) => r.id === data.revisionId).payload.acousticInputReview.resolutions).toEqual([]);
-    expect(phases).toEqual(["plan", "specialist"]);
+    expect(phases).toEqual(["plan", "specialist", "review"]);
     expect(f.calls()).toEqual({ providerCalls: 0, supervisorCalls: 0, decisionCalls: 0 });
     expect(f.audits.some(a => a[0] === "knowledge.acoustic_inputs.resolved")).toBe(true);
   } finally { await f.close(); }
@@ -454,10 +544,11 @@ for (const scenario of [
   f.d.calculateAcoustics = calculateAcoustics;
   f.d.resolveSource = async () => ({ status: "resolved", source: { versionId: f.sourceVersionId, name: "Schedule.pdf", version: 1 },
     content: { status: "available", text: extraction.inventory[0]!.provenance.excerpt, truncated: false } });
-  f.d.executeSupervisor = async ({ phase }) => {
+  f.d.executeSupervisor = async ({ phase, context }: any) => {
     phases.push(phase);
     if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Extract inputs", sourceVersionIds: [f.sourceVersionId] }] } };
     if (phase === "specialist") return { status: "completed", output: { summary: "Room inputs", rationale: "Extraction", citations: [f.sourceVersionId], exteriorNoiseExtraction: extraction } };
+    if (context.documentTask === "acoustic_progress") return progressPlan(context);
     throw new Error("Blocked calculations must not buy report/review calls");
   };
   try {
@@ -469,7 +560,7 @@ for (const scenario of [
     expect(created.status).toBe(201);
     for (let i = 0; i < 5; i++) await stepSupervisor(f.d, created.body.data.id);
     expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
-    expect(phases).toEqual(["plan", "specialist"]);
+    expect(phases).toEqual(scenario.problem === "below_target" ? ["plan", "specialist"] : ["plan", "specialist", "review"]);
     const [state] = await f.rows(supervisorRuns);
     expect(state.phase).toBe("done");
     if (scenario.problem === "below_target") {
@@ -510,7 +601,7 @@ for (const scenario of [
       expect(corrected.status).toBe(200);
       expect(corrected.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(true);
       expect(corrected.body.data.calculation.artifact.status).toBe("draft");
-      expect(phases).toEqual(["plan", "specialist"]);
+      expect(phases).toEqual(["plan", "specialist", "review"]);
     }
   } finally { await f.close(); }
 });

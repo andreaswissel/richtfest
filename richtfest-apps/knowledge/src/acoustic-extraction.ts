@@ -4,6 +4,31 @@ import { exteriorNoiseExtractionSchema, exteriorNoiseBatchSchema, acousticInputP
 import { z } from "zod";
 import { stepHash } from "./run-steps";
 
+/** Identity hints only: later packets still need their own source-backed facts. */
+export function exteriorNoiseIdentityDirectory(packets: unknown[]) {
+  const entries = new Map<string, { roomId: string; provenance: z.infer<typeof exteriorNoiseExtractionSchema>["inventory"][number]["provenance"];
+    facadeIds: Set<string>; elementIds: Set<string> }>();
+  for (const raw of packets) {
+    const packet = exteriorNoiseExtractionSchema.parse(raw);
+    for (const room of packet.inventory) {
+      const key = JSON.stringify([room.roomId, room.provenance.kind === "source" ? room.provenance.versionId : null]);
+      const entry = entries.get(key) ?? { ...room, facadeIds: new Set<string>(), elementIds: new Set<string>() };
+      for (const full of packet.rooms.filter(r => r.room.id === room.roomId)) {
+        for (const facade of full.facades) entry.facadeIds.add(facade.id);
+        for (const element of full.elements) entry.elementIds.add(element.id);
+      }
+      for (const fact of packet.facts ?? []) if (fact.roomId === room.roomId) {
+        if (fact.target === "facade" || fact.target === "noise") entry.facadeIds.add(fact.id);
+        if (fact.target === "element") entry.elementIds.add(fact.id);
+      }
+      entries.set(key, entry);
+    }
+  }
+  return [...entries.values()].map(entry => ({ ...entry,
+    facadeIds: [...entry.facadeIds].sort(), elementIds: [...entry.elementIds].sort(),
+  }));
+}
+
 /** Check source scope before an extraction is accepted into durable history. */
 export function validateExteriorNoiseExtraction(raw: unknown, sources: { versionId: string; text: string }[]) {
   const extraction = exteriorNoiseExtractionSchema.parse(raw);

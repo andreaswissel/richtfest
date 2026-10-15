@@ -23,7 +23,7 @@ import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, exteriorNoiseExtractionSchema, renderAcousticCalculationReceipts, acousticDatasetSchema, type AcousticCalculationReceipt } from "@richtfest/shared";
-import { assembleExteriorNoiseInputs, reconcileExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
+import { assembleExteriorNoiseInputs, exteriorNoiseIdentityDirectory, reconcileExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
 import { createAcousticInputReview } from "./acoustic-input-review";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
@@ -69,6 +69,8 @@ export type Assignment = {
   sourceInputByteBudget?: number;
   sourceBatchingVersion?: 2;
   exteriorNoiseExtractionVersion?: 1 | 2;
+  exteriorNoisePacketVersion?: 1;
+  sourceIdentityContext?: { inputHash: string; batch: number; identities: ReturnType<typeof exteriorNoiseIdentityDirectory> };
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
@@ -940,7 +942,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           assignments.push({ ...item, taskId: task.id, runId: child.id,
             sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
             sourceBatchingVersion: 2,
-            ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly ? { exteriorNoiseExtractionVersion: 2 as const } : {}),
+            ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly
+              ? { exteriorNoiseExtractionVersion: 2 as const, exteriorNoisePacketVersion: 1 as const } : {}),
           });
         }
         await tx
@@ -1034,12 +1037,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 }),
               );
               const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && !!assignment.exteriorNoiseExtractionVersion && !assignment.visualFollowup;
+              const boundedExtraction = extractExteriorNoise && assignment.exteriorNoiseExtractionVersion === 2 && assignment.exteriorNoisePacketVersion === 1;
               const specialistSchema = extractExteriorNoise
                 ? schemas.specialist.extend({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }) : schemas.specialist;
               // Reserve the maximum accumulated findings (including JSON escaping),
               // variable context and instructions/schema before packing whole pages.
               // Persist the chosen limit with progress so retries never repack saved work.
-              const byteLimit = assignment.sourceProgress?.byteLimit ?? (assignment.sourceInputByteBudget === undefined
+              const inputByteLimit = assignment.sourceInputByteBudget === undefined
                 ? assignment.sourceBatchingVersion === 2 ? 48 * 1024 : undefined
                 : assignment.sourceInputByteBudget - 16384 - 6 * (limits.summaryMaxCharacters + limits.rationaleMaxCharacters) - 8000
                   // Five tool schemas currently serialize to ~18 KiB; leave headroom.
@@ -1051,9 +1055,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     documentReview,
                     profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
                     budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
-                  }), "utf8"));
+                  }), "utf8");
+              // Detailed field extraction expands evidence into many quoted records.
+              // A large input context is not a suitable extraction-output budget.
+              const extractionByteLimit = Math.max(1024, Math.min(16 * 1024,
+                policy.specialists[assignment.role as keyof typeof policy.specialists]?.maxOutputTokens ?? 6000));
+              const byteLimit = assignment.sourceProgress?.byteLimit ?? (boundedExtraction
+                ? Math.min(inputByteLimit ?? 48 * 1024, extractionByteLimit) : inputByteLimit);
               if (byteLimit !== undefined && byteLimit < 1024) throw conflict("Specialist context exceeds the model input budget");
-              const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources) : batchSectionSources(specialistSources, byteLimit);
+              const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources)
+                : batchSectionSources(specialistSources, byteLimit, undefined, boundedExtraction);
               // Checkpoints can only be reused for the same goal and extracted
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
@@ -1069,11 +1080,37 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               let accumulated = progress?.output ?? assignment.visualFollowup?.previousFindings;
               for (let index = progress?.completedBatches ?? 0; index < batches.length; index++) {
                 if (stopped) throw new Error("Specialist work stopped after a sibling failure.");
-                const batch = batches[index]!;
+                const primary = batches[index]!;
+                const preceding = boundedExtraction ? batches[index - 1]?.at(-1) : undefined;
+                // A room's heading/geometry may be on the preceding page while its
+                // component table continues here. Include one exact adjacent slice,
+                // clearly marked as context rather than new source coverage.
+                const continuation = preceding && primary[0]?.versionId === preceding.versionId
+                  && primary[0].textRange.startByte === preceding.textRange.endByte ? preceding : undefined;
+                const batch = continuation ? [{ ...continuation, continuation: true }, ...primary] : primary;
                 const batchIds = [...new Set(batch.map(source => source.versionId))];
                 const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
                 const workSources = [...new Map(batch.map(({ versionId, name, version }) => [versionId, { versionId, name, version }])).values()];
-                const started = await commit(d, run, token, async (tx) => {
+                let extractionIdentities: ReturnType<typeof exteriorNoiseIdentityDirectory> = [];
+                const started = await commit(d, run, token, async (tx, current) => {
+                  if (boundedExtraction) {
+                    const frozen = (current.assignments as Assignment[]).find(a => a.runId === assignment.runId)?.sourceIdentityContext;
+                    if (frozen?.inputHash === inputHash && frozen.batch === index + 1) extractionIdentities = frozen.identities;
+                    else {
+                      const history = current.history.filter((entry: any) => entry.phase === "specialist_batch"
+                        && entry.revision === current.revision && entry.output?.exteriorNoiseExtraction);
+                      const latestHash = new Map(history.map((entry: any) => [entry.runId, entry.inputHash]));
+                      latestHash.set(assignment.runId, inputHash);
+                      extractionIdentities = exteriorNoiseIdentityDirectory(history
+                        .filter((entry: any) => entry.inputHash === latestHash.get(entry.runId))
+                        .map((entry: any) => entry.output.exteriorNoiseExtraction));
+                      // Freeze before dispatch: sibling progress must not change a
+                      // replay's call identity or purchase the same packet again.
+                      await tx.update(supervisorRuns).set({ assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
+                        ? { ...a, sourceIdentityContext: { inputHash, batch: index + 1, identities: extractionIdentities } } : a),
+                      }).where(eq(supervisorRuns.runId, id));
+                    }
+                  }
                   await logWorkProgress(d, tx, run, {
                     runId: assignment.runId, stage: "reading_sources", sources: workSources,
                     batch: index + 1, batchCount: batches.length, summary: accumulated?.summary,
@@ -1083,6 +1120,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const result = specialistSchema.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
                   ...(extractExteriorNoise ? { extractExteriorNoise: true, extractionVersion: assignment.exteriorNoiseExtractionVersion } : {}),
+                  ...(boundedExtraction ? { extractionIdentities } : {}),
                   sourceVersionIds: batchIds,
                   ...(d.inspectSource ? { visualSourceVersionIds: assignment.visualFollowup
                     ? [...new Set(assignment.visualFollowup.requests.map(request => request.versionId))] : assignment.sourceVersionIds } : {}),
@@ -1121,7 +1159,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 const saved = await commit(d, run, token, async (tx, current) => {
                   await tx.update(supervisorRuns).set({
                     assignments: (current.assignments as Assignment[]).map(a => a.runId === assignment.runId
-                      ? { ...a, sourceProgress: { inputHash, byteLimit, completedBatches: index + 1, output } } : a),
+                      ? { ...a, sourceIdentityContext: undefined, sourceProgress: { inputHash, byteLimit, completedBatches: index + 1, output } } : a),
                     history: [...current.history, {
                       phase: assignment.visualFollowup ? "specialist_visual_followup" : "specialist_batch",
                       runId: assignment.runId, revision: current.revision, inputHash,
@@ -1303,16 +1341,61 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           if (!previous) await log(d, tx, run, "tool_executed", "exterior_noise_batch", "Application-owned room calculation; not reviewed");
         });
         if (!saved) throw conflict("Supervisor no longer active");
-        // Do not spend on prose/review of known incomplete inputs. Responses produce a
-        // deterministic draft sheet; a subsequent full report remains an explicit action.
+        // Keep report authoring blocked, but assess independent progress once. The
+        // model may publish already calculated rooms; it cannot supply missing inputs.
         if (reconcile && needsInput) {
+          const batchReceipt = calculationReceipts.find(r => r.method === "exterior_noise_batch");
+          const calculatedRoomIds = batchReceipt?.batch?.rooms.filter(r => r.status === "calculated").map(r => r.roomId) ?? [];
+          const declared = new Set(assembled.input?.inventory.map(r => r.roomId));
+          const progressSchema = schemas.acousticProgress.superRefine((plan, ctx) => {
+            if (plan.publishPartialSheet && !calculatedRoomIds.length) ctx.addIssue({ code: "custom", path: ["publishPartialSheet"],
+              message: "No deterministic room result is available to publish." });
+            plan.questions.forEach((question, i) => question.roomIds.forEach((roomId, j) => {
+              if (!declared.has(roomId)) ctx.addIssue({ code: "custom", path: ["questions", i, "roomIds", j], message: "Use declared room IDs only." });
+            }));
+          });
+          const progressPlan = (state.assignments as Assignment[]).some(a => a.exteriorNoisePacketVersion === 1)
+            ? progressSchema.parse(await call("review", goal, {
+              documentTask: "acoustic_progress", calculatedRoomIds,
+              rooms: (assembled.input?.inventory ?? []).map(room => ({ roomId: room.roomId,
+                outcome: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.status ?? "missing_input",
+                calculationLimitations: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.result?.limitations ?? [],
+                unresolvedFields: "fields" in assembled ? assembled.fields.filter(f => f.roomId === room.roomId && f.value === null)
+                  .map(f => ({ target: f.target, id: f.id, field: f.field, status: f.status })) : [],
+              })),
+              findings: (state.assignments as Assignment[]).map(a => ({ role: a.role, summary: a.output?.summary })),
+              sourceNotes: assembled.sourceNotes,
+            }, id, raw => progressSchema.parse(raw))) : undefined;
           await commit(d, run, token, async tx => {
-            const summary = run.conversationId
+            const summary = progressPlan?.summary ?? (run.conversationId
               ? "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet."
-              : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.";
+              : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.");
+            let partialArtifactId: string | undefined;
+            if (progressPlan?.publishPartialSheet && batchReceipt) {
+              const dataset = acousticDatasetSchema.parse({ version: 1, receipt: batchReceipt,
+                blockers: calculationBlockers, basedOn: null });
+              const sourceVersionIds = [...new Set(acousticInputProvenance(batchReceipt.input)
+                .flatMap(p => p.kind === "source" ? [p.versionId] : []))];
+              const partial = await createArtifact(d, tx, { projectId: run.projectId, type: "draft",
+                title: "Schallschutznachweis · Außenlärm · Teilstand",
+                content: "# Schallschutznachweis · Außenlärm · Teilstand\n\nNur die ausgewiesenen Räume sind berechnet. Offene Eingaben bleiben blockiert. Keine fachliche Freigabe und kein vollständiger Nachweis.\n\n"
+                  + renderAcousticCalculationReceipts([batchReceipt], "de"), sourceVersionIds,
+              }, run.id, dataset);
+              partialArtifactId = partial.artifact.id;
+              if (run.conversationId) await tx.insert(messages).values({ tenantId: d.tenantId, conversationId: run.conversationId,
+                authorId: d.actorId, actorKind: "agent", runId: run.id, parentMessageId: run.messageId,
+                body: "Berechenbare Räume sind als Teilstand gespeichert. Offene Räume und fachliche Freigabe bleiben ausstehend.",
+                openui: `root = ArtifactPdf(${JSON.stringify(partial.artifact.id)}, ${JSON.stringify(partial.revision.id)})`, sourceVersionIds });
+            }
+            if (progressPlan && run.conversationId) await tx.insert(messages).values({ tenantId: d.tenantId,
+              conversationId: run.conversationId, authorId: d.actorId, actorKind: "agent", runId: run.id, parentMessageId: run.messageId,
+              body: [progressPlan.summary, progressPlan.independentWork,
+                ...progressPlan.questions.map((question, i) => `${i + 1}. ${question.question}`)].join("\n\n"), sourceVersionIds: [],
+            });
             await tx.update(agentRuns).set({ status: "needs_review", outputSummary: summary,
               partialOutput: summary, updatedAt: new Date() }).where(eq(agentRuns.id, id));
-            await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers } })
+            await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers,
+              ...(progressPlan ? { progressPlan, partialArtifactId } : {}) } })
               .where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "acoustic_inputs_required");
           });

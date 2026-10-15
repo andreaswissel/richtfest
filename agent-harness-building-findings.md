@@ -814,3 +814,49 @@ generation bounded at 100 and allow 1,000 combined project records. Synthetic
 multi-packet validation must assert every declared ID gets a result or blocker.
 Do not truncate or merge source aliases by guesswork; distinct extracted IDs do not
 prove distinct physical rooms, and missing fields remain unresolved.
+
+### Accepted extraction is not complete input capture (15 October)
+
+The resumed calculation reached input review at an additional recorded estimate
+of $0.187651, with all new usage settled. Its nine accepted extraction packets
+contained 57 facts and no facade/element facts. Sampled original pages explicitly
+contained room geometry, assessed levels and component quantities that were not
+retained. Generated missing-field entries are therefore not proof of missing
+source material, and must not become a mass data-entry request to the customer.
+
+The sound specialist received 80–85 pages in each of its first three packets,
+roughly 280–295 kB of text against a 32,000-token output allowance. Input capacity
+does not establish capacity for the much larger typed, quoted extraction output.
+Use small lossless packets for numerical extraction, preserve partial fields even
+when engineering applicability or installed configuration is unresolved, and
+distinguish source inputs from source-calculated answers. A source aggregate area
+is not automatically the area of one facade.
+
+Room 56 continued over a packet boundary, but complete duplicate extracted copies
+were also supplied. Thus missing dispatch alone cannot explain the omission.
+Exact duplicate extracted pages do not prove byte-identical original PDFs. Include
+bounded, marked adjacent continuation evidence rather than guessing which heading
+a continued table belongs to. Packet page metadata must describe the actual slice,
+not repeat a whole-document coverage range.
+
+Prior prose contained none of the earlier exact room identifiers. The base
+specialist schema strips the typed extraction from `previousFindings`; prose is
+not a stable identity registry. Pass a compact directory from accepted packets,
+with original identity evidence, while retaining current-packet quotation checks.
+Freeze that directory before dispatch so concurrent progress cannot change replay
+identity. Source-backed equivalence was established for the sampled aliases only;
+do not normalize all identifiers or silently merge floor/unit groups.
+
+Offline acceptance uses a nonboundary numerical page, a continued room table, and
+a contents/detail pair with differing extracted IDs. Check lossless text/page
+transport, retained partial numeric fields, stable identity handoff and preserved
+engineering blockers. Mocked tests prove transport and reconciliation, not model
+extraction quality; semantic acceptance still requires a controlled live run.
+
+When genuine input gaps remain, ask focused questions and reason about independent
+work rather than treating every missing field as a global stop. Partial numerical
+results and useful preparation must stay separate from a complete or approved
+Nachweis. Dependency reasoning cannot authorize guessed inputs or bypass the
+deterministic engine's applicability checks; completed work should survive answers
+and retries without another source pass. This is the required workflow direction,
+not evidence that the current paused run has produced a calculation sheet.

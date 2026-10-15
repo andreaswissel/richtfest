@@ -1244,6 +1244,7 @@
   "acousticInputsSaved": "Inputs saved to this conversation.",
   "acousticInputsSave": "Save details",
   "acousticInputsCalculate": "Calculate room sheet",
+  "acousticInputsCalculatePartial": "Calculate available rooms",
   "acousticInputsOpenSheet": "Open calculation sheet",
   "acousticField_floorAreaM2": "Floor area (m²)",
   "acousticField_areaM2": "Area (m²)",

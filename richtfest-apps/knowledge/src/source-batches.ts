@@ -46,7 +46,7 @@ export function batchSpecialistSources<T extends { text: string; truncated?: boo
 
 /** Pack complete saved pages against serialized input size, without a file-count cap. */
 export function batchSectionSources<T extends { text: string; truncated?: boolean; textRange?: { startByte: number; endByte: number; totalBytes: number } }>(sources: T[], byteLimit: number,
-  sizeOf: (batch: T[]) => number = batch => Buffer.byteLength(JSON.stringify(batch), "utf8")) {
+  sizeOf: (batch: T[]) => number = batch => Buffer.byteLength(JSON.stringify(batch), "utf8"), includePageNumbers = false) {
   type Slice = ReturnType<typeof batchSpecialistSources<T>>[number][number];
   const batches: Slice[][] = [];
   let batch: Slice[] = [];
@@ -60,6 +60,7 @@ export function batchSectionSources<T extends { text: string; truncated?: boolea
       const endByte = startByte + Buffer.byteLength(text, "utf8");
       const page: Slice = { ...source, text, extractionTruncated: source.truncated === true,
         truncated: source.truncated || offset + startByte > 0 || offset + endByte < originalBytes,
+        ...(includePageNumbers ? { packetPageNumbers: [...text.matchAll(/^\[Page (\d+)\]/gm)].map(match => Number(match[1])) } : {}),
         textRange: { startByte: offset + startByte, endByte: offset + endByte, totalBytes: originalBytes } };
       let pieces = [page];
       if (sizeOf([page]) > byteLimit) {

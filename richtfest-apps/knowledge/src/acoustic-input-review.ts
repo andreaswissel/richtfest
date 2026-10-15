@@ -91,18 +91,20 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
         const savedRevisionId = crypto.randomUUID();
         let calculation: Awaited<ReturnType<typeof createArtifact>> | undefined;
         if (input.action === "calculate") {
-          if (!review.inventoryConfirmation || !assembled.input || assembled.blockers.length)
-            throw conflict("Confirm the room inventory and resolve all input gaps before calculating");
+          if (!review.inventoryConfirmation || !assembled.input?.rooms.length)
+            throw conflict("Confirm the room inventory and resolve at least one room's input gaps before calculating");
           if (!d.calculateAcoustics) throw conflict("Deterministic calculator is unavailable");
           const dataset = acousticDatasetSchema.parse({ version: 1,
             receipt: { ...d.calculateAcoustics(assembled.input), receiptId: crypto.randomUUID() },
-            blockers: assembled.sourceNotes, basedOn: { artifactId, revisionId: savedRevisionId } });
+            blockers: [...assembled.blockers, ...assembled.sourceNotes], basedOn: { artifactId, revisionId: savedRevisionId } });
+          const partial = !dataset.receipt.batch?.complete;
           calculation = await createArtifact(d, tx, { projectId: chat.projectId!,
-            title: "Schallschutznachweis · Außenlärm · Geprüfte Eingaben", type: "draft",
+            title: partial ? "Schallschutznachweis · Außenlärm · Teilstand" : "Schallschutznachweis · Außenlärm · Geprüfte Eingaben", type: "draft",
             content: ["# Schallschutznachweis · Außenlärm",
-              "Aus bestätigtem Rauminventar und geklärten Eingaben. Berechnung fachlich ungeprüft; keine Freigabe.",
+              partial ? "Teilstand aus gespeicherten Eingaben. Offene Räume bleiben blockiert; kein vollständiger Nachweis und keine fachliche Freigabe."
+                : "Aus bestätigtem Rauminventar und geklärten Eingaben. Berechnung fachlich ungeprüft; keine Freigabe.",
               renderAcousticCalculationReceipts([dataset.receipt], "de"),
-              ...(assembled.sourceNotes.length ? ["## Hinweise aus der Extraktion", ...assembled.sourceNotes.map(n => `- ${n.replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ")}`)] : []),
+              ...(dataset.blockers.length ? ["## Offene Eingaben und Hinweise", ...dataset.blockers.map(n => `- ${n.replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ")}`)] : []),
             ].join("\n\n"), sourceVersionIds: revision.sourceVersionIds,
           }, artifact.runId ?? undefined, dataset);
         }

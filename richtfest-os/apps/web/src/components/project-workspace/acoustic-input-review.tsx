@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { ExteriorNoiseFact } from "@richtfest/shared";
+import type { ExteriorNoiseFact, AcousticDataset } from "@richtfest/shared";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { Input } from "../ui/input";
@@ -25,6 +25,7 @@ type ReviewField = Pick<
 };
 type Review = {
   revisionId: string;
+  input: AcousticDataset["receipt"]["input"] | null;
   fields: ReviewField[];
   blockers: string[];
   sourceNotes: string[];
@@ -182,7 +183,7 @@ function ReviewForm({
               : value,
       };
     });
-  const ready = !base.blockers.length && !changes.length;
+  const ready = !!base.input?.rooms.length && !changes.length;
   const submit = (action: "save" | "calculate") => {
     setSaved(false);
     write.mutate({
@@ -527,12 +528,11 @@ function ReviewForm({
             disabled={
               disabled ||
               !reason.trim() ||
-              !!base.blockers.length ||
               !!changes.length ||
               !(base.inventoryConfirmation || confirm)
             }
           >
-            {t("acousticInputsCalculate")}
+            {t(base.blockers.length ? "acousticInputsCalculatePartial" : "acousticInputsCalculate")}
             <ArrowRight className="size-icon-sm" aria-hidden="true" />
           </Button>
         )}

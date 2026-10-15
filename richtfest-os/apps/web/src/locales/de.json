@@ -1244,6 +1244,7 @@
   "acousticInputsSaved": "Eingaben im Gespräch gespeichert.",
   "acousticInputsSave": "Angaben speichern",
   "acousticInputsCalculate": "Raumblatt berechnen",
+  "acousticInputsCalculatePartial": "Vorhandene Räume berechnen",
   "acousticInputsOpenSheet": "Rechenblatt öffnen",
   "acousticField_floorAreaM2": "Grundfläche (m²)",
   "acousticField_areaM2": "Fläche (m²)",

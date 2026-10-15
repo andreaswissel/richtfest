@@ -452,6 +452,21 @@ test("authoring, editorial and source-review context budgets reject oversized pr
   expect(prepared).toBe(5);
 });
 
+test("acoustic dependency planning uses a bounded tool-free contract instead of report writing", async () => {
+  const output = { summary: "B02 awaits evidence; A01 is calculated.", questions: [{ question: "Confirm B02 geometry?", roomIds: ["B02"] }],
+    independentWork: "Publish the saved A01 result as an unapproved partial sheet.", publishPartialSheet: true };
+  const request = { ...base, phase: "review" as const, goal: "Schallschutznachweis", modelPolicy: responsePolicy,
+    modelConfig: { modelId: "test-model", maxOutputTokens: 32000, maxSteps: 4 },
+    context: { documentTask: "acoustic_progress", calculatedRoomIds: ["A01"] } };
+  expect(await callMastraSupervisor(request, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: options => { expect(options.tools ?? []).toHaveLength(0); } }),
+  })).toEqual(output);
+  await expect(callMastraSupervisor(request, "test-key", {
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...output, publishPartialSheet: "yes" } }),
+  })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
+});
+
 test("concept authoring accepts outline, section, editorial and preservation contracts through Mastra", async () => {
   const id = "exterior-noise-concept";
   const versionId = crypto.randomUUID();
