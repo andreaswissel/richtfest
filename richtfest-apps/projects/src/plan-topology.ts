@@ -8,6 +8,30 @@ const box = (points: Point[]) => {
   return { x, y, width: Math.max(...points.map(p => p.x)) - x, height: Math.max(...points.map(p => p.y)) - y };
 };
 const hash = (keys: string[]) => createHash("sha256").update([...keys].sort().join("|")).digest("hex");
+const polygonArea = (polygon: Point[]) => Math.abs(polygon.reduce((sum, point, index) => {
+  const next = polygon[(index + 1) % polygon.length]; return sum + point.x * next.y - point.y * next.x;
+}, 0)) / 2;
+
+/**
+ * A semantic wall proposal needs stronger evidence than mere connectivity.
+ * We accept only exact, nearly rectangular source construction fills whose
+ * page-aspect-corrected shape is clearly elongated. This deliberately misses
+ * L-shaped, curved, thick or ambiguous wall geometry instead of guessing.
+ */
+export function draftWallEvidence(footprint: PlanFootprint, pageAspectRatio = 1) {
+  const polygon = footprint.geometry.polygon, region = footprint.geometry.planRegion;
+  const aspect = Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : 1;
+  const width = region.width * aspect, height = region.height;
+  const longSide = Math.max(width, height), shortSide = Math.min(width, height);
+  const physicalAspectRatio = shortSide > 0 ? longSide / shortSide : Infinity;
+  const boundingArea = region.width * region.height;
+  const rectangularity = boundingArea > 0 ? polygonArea(polygon) / boundingArea : 0;
+  const wallLike = polygon.length === 4 && physicalAspectRatio >= 4 && rectangularity >= .9
+    && longSide >= .005 && shortSide > 0 && shortSide <= .025;
+  const minorDimensionBand = Math.round(shortSide / .0005) * .0005;
+  return { wallLike, method: "elongated_rectangular_construction_fill" as const, sourcePolygonExact: true as const,
+    pageAspectRatio: aspect, physicalAspectRatio, rectangularity, pageRelativeMinorDimension: shortSide, minorDimensionBand };
+}
 
 /** Printed areas remain observations: proximity is not a verified measurement or room use. */
 export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) {
@@ -39,9 +63,8 @@ export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) 
 export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1) {
   const n = Math.max(64, Math.min(1600, Math.floor(resolution))), size = n * n;
   const wall = new Uint8Array(size), owner = new Int32Array(size).fill(-1);
-  const parent = footprints.map((_, i) => i);
-  const root = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-  const join = (a: number, b: number) => { parent[root(a)] = root(b); };
+  const adjacency = footprints.map(() => new Set<number>());
+  const connect = (a: number, b: number) => { if (a === b) return; adjacency[a].add(b); adjacency[b].add(a); };
   // Scanline fill preserves source concavity; its grid approximation is never called exact.
   [...footprints, ...supplementary].forEach((footprint, index) => {
     const id = index < footprints.length ? index : -1;
@@ -56,26 +79,51 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       intersections.sort((a, b) => a - b);
       for (let j = 0; j + 1 < intersections.length; j += 2) for (let x = Math.max(0, Math.ceil(intersections[j] - .5)); x <= Math.min(n - 1, Math.floor(intersections[j + 1] - .5)); x++) {
         const p = y * n + x;
-        if (id >= 0 && owner[p] >= 0) join(id, owner[p]);
+        if (id >= 0 && owner[p] >= 0) connect(id, owner[p]);
         wall[p] = 1; if (id >= 0) owner[p] = id;
       }
     }
   });
   for (let p = 0; p < size; p++) if (owner[p] >= 0) {
-    if (p % n && owner[p - 1] >= 0) join(owner[p], owner[p - 1]);
-    if (p >= n && owner[p - n] >= 0) join(owner[p], owner[p - n]);
+    if (p % n && owner[p - 1] >= 0) connect(owner[p], owner[p - 1]);
+    if (p >= n && owner[p - n] >= 0) connect(owner[p], owner[p - n]);
   }
+  const wallIndexes = new Set(footprints.map((footprint, index) => draftWallEvidence(footprint, pageAspectRatio).wallLike ? index : -1).filter(index => index >= 0));
+  const wallEntries=[...wallIndexes].map(index=>({index,classification:draftWallEvidence(footprints[index],pageAspectRatio)}));
+  const bandCounts=new Map<number,number>();
+  for(const entry of wallEntries)bandCounts.set(entry.classification.minorDimensionBand,(bandCounts.get(entry.classification.minorDimensionBand)??0)+1);
+  const walls = wallEntries.map(({index,classification}, i) => {
+    const footprint = footprints[index],thicknessBandCount=bandCounts.get(classification.minorDimensionBand)??1;
+    return { sourceKey: `draft-wall:${hash([footprint.sourceKey])}`, entityType: "element" as const,
+      name: `Draft wall ${i + 1}`, quote: "Exact elongated rectangular fill from source construction layer",
+      layerId: footprint.layerId, layerName: footprint.layerName,
+      geometry: { quality: "draft_wall" as const, semanticKind: "draft_wall" as const,
+        coordinateSpace: "normalized-page" as const, polygon: footprint.geometry.polygon,
+        sourceFootprintKeys: [footprint.sourceKey], planRegion: footprint.geometry.planRegion,
+        classification:{...classification,thicknessBandCount,evidenceTier:thicknessBandCount>=3?"high" as const:"medium" as const},
+        limitations: "Unreviewed wall-like source construction fill selected only by conservative shape evidence. Exact source polygon is preserved. The repeated minor-dimension band is page-relative evidence, not a measured thickness. Wall continuity, zero-side/common-core interpretation, material, construction state, physical scale, openings and completeness are not established." } };
+  });
+  // Unsupported construction fills are grouped only through direct contact with
+  // each other. A wall-like polygon may not bridge unrelated fragments into a
+  // false assembly.
+  const fragmentIndexes = footprints.map((_, index) => index).filter(index => !wallIndexes.has(index));
+  const fragmentParent = new Map(fragmentIndexes.map(index => [index, index]));
+  const fragmentRoot = (index: number): number => { let p = fragmentParent.get(index)!; while (p !== fragmentParent.get(p)) p = fragmentParent.get(p)!; return p; };
+  for (const index of fragmentIndexes) for (const neighbor of adjacency[index]) if (fragmentParent.has(neighbor))
+    fragmentParent.set(fragmentRoot(index), fragmentRoot(neighbor));
   const groups = new Map<number, PlanFootprint[]>();
-  footprints.forEach((f, i) => { const key = root(i); groups.set(key, [...(groups.get(key) ?? []), f]); });
-  const assemblies = [...groups.values()].map((members, i) => ({
+  for (const index of fragmentIndexes) { const key = fragmentRoot(index); groups.set(key, [...(groups.get(key) ?? []), footprints[index]]); }
+  const fragmentAssemblies = [...groups.values()].map((members, i) => ({
     sourceKey: `assembly:${hash(members.map(m => m.sourceKey))}`, entityType: "element" as const,
-    name: `Construction-fragment assembly ${i + 1}`, quote: `${members.length} connected closed source paths`,
+    name: `Unsupported construction fragment ${i + 1}`, quote: `${members.length} connected non-wall source construction fills`,
     layerId: members[0].layerId, layerName: members[0].layerName,
-    geometry: { quality: "assembly" as const, coordinateSpace: "normalized-page" as const,
+    geometry: { quality: "construction_fragment_assembly" as const, semanticKind: "construction_fragment" as const,
+      coordinateSpace: "normalized-page" as const,
       polygons: members.map(m => m.geometry.polygon), sourceFootprintKeys: members.map(m => m.sourceKey),
       planRegion: box(members.flatMap(m => m.geometry.polygon)),
-      limitations: `Connectivity inferred on a ${n}×${n} grid (one-cell tolerance); member polygons are exact source footprints. Not a verified wall, material, state or physical measurement.` },
+      limitations: `Did not meet the conservative draft-wall shape test. Direct fragment connectivity is inferred on a ${n}×${n} grid; exact member polygons are preserved. Not a verified wall, material, state or physical measurement.` },
   }));
+  const assemblies = [...walls, ...fragmentAssemblies];
   const supportedFills = fillRegions.filter(f => f.fillRule === "evenodd");
   if (supportedFills.length) {
     const interior = new Uint8Array(size);
@@ -154,29 +202,61 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     return numbers.length===1?[{...word,text:`WE ${numbers[0].text}`,width:numbers[0].x+numbers[0].width-word.x}]:[];
   });
   const unitForFill = new Map(supportedFills.map(f => [f.sourceKey, [...new Set(units.filter(u => insideFill({x:u.x+u.width/2,y:u.y+u.height/2},f)).map(u=>u.text))]]));
-  const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0 };
-  const rooms = labels.map((label, i) => {
+  const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0 };
+  const preliminaryRooms = labels.map((label, i) => {
     const lr=label.geometry.planRegion;
     const containingFills=supportedFills.filter(f=>insideFill({x:lr.x+lr.width/2,y:lr.y+lr.height/2},f));
     const groupLabels=[...new Set(containingFills.flatMap(f=>unitForFill.get(f.sourceKey)??[]))];
     const id = seedRegions[i], region = id >= 0 ? regions[id] : null;
     const status = supportedFills.length&&!containingFills.length?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior" : region.seeds.length !== 1 ? "conflicting" : "enclosed";
-    counts[status]++;
     // A bounding box alone must never masquerade as the traced room boundary.
     const contour = status === "enclosed" ? traceRegion(component, n, id, region!) : status === "conflicting" ? traceRegion(partition,n,i,region!) : null;
-    const polygon=contour?.polygon;
+    const candidatePolygon=contour?.polygon;
+    const candidateBounds=candidatePolygon?box(candidatePolygon):null;
+    // Whole-apartment/sheet regions are not room proposals merely because a
+    // single source label survived. The threshold is page-relative, not a
+    // physical measurement, and deliberately leaves large spaces unresolved.
+    const oversized=Boolean(candidatePolygon&&candidateBounds&&
+      (candidateBounds.width*candidateBounds.height>.08||polygonArea(candidatePolygon)>.06));
+    const finalStatus=oversized?"oversized_unresolved":status;
+    counts[finalStatus]++;
+    const polygon=oversized?undefined:candidatePolygon;
     return { ...label, sourceKey:`topology-v3:${label.sourceKey}`, geometry: { ...label.geometry,
       ...(polygon ? { quality: status==="conflicting"?"approximate_partition" as const:"enclosed_region" as const, polygon, holes:contour?.holes, planRegion: box(polygon), labelRegion: label.geometry.planRegion } : {}),
-      topology: { status, componentId:id>=0?id:null, method:status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v3:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost },
+      topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v3:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost },
       sourceFillEvidence:containingFills.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName})),
       ...(containingFills.length===1&&groupLabels.length===1?{groupLabel:groupLabels[0],groupSourceKey:containingFills[0].sourceKey,
         groupObservation:units.filter(u=>u.text===groupLabels[0]&&insideFill({x:u.x+u.width/2,y:u.y+u.height/2},containingFills[0])).map(u=>({quote:u.text,planRegion:{x:u.x,y:u.y,width:u.width,height:u.height},provenance:"inferred"}))}:{}),
       ...(observations.has(label.sourceKey) ? { printedArea: observations.get(label.sourceKey) } : {}),
-      limitations: polygon ? `Approximate raster region seeded by source text, constrained by construction/existing-layer fills and source fill outlines. ${status==="conflicting"?"Shared free space is divided by geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } };
+      limitations: polygon ? `Approximate raster region seeded by source text, constrained by construction/existing-layer fills and source fill outlines. ${status==="conflicting"?"Shared free space is divided by geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : oversized ? "Source label only: the inferred region exceeded the conservative page-relative room-size guard and may represent multiple rooms or a whole apartment/sheet area. Room boundary remains unresolved." : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } };
   });
-  return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: supplementary.length, printedAreaCount: observations.size, resolution: n, closeRadius,
+  const effectiveRoomArea=(geometry:{polygon?:Point[];holes?:Point[][]})=>geometry.polygon
+    ?Math.max(0,polygonArea(geometry.polygon)-(geometry.holes??[]).reduce((sum,hole)=>sum+polygonArea(hole),0)):0;
+  const ratios=preliminaryRooms.flatMap(room=>{const value=room.geometry.printedArea?.value;
+    return room.geometry.polygon&&value!==undefined&&value>0?[effectiveRoomArea(room.geometry)/value]:[];}).sort((a,b)=>a-b);
+  const areaRatioMedian=ratios.length?ratios.length%2?ratios[(ratios.length-1)/2]:(ratios[ratios.length/2-1]+ratios[ratios.length/2])/2:null;
+  const rooms=preliminaryRooms.map(room=>{
+    const printedArea=room.geometry.printedArea?.value;
+    if(!room.geometry.polygon||!printedArea||!areaRatioMedian||ratios.length<5)return room;
+    const normalizedPolygonArea=effectiveRoomArea(room.geometry),ratio=normalizedPolygonArea/printedArea,relativeToMedian=ratio/areaRatioMedian;
+    const areaRatioQc={status:"unreviewed" as const,method:"page_local_polygon_to_printed_area_ratio" as const,
+      normalizedPolygonArea,printedArea,ratio,pageMedianRatio:areaRatioMedian,relativeToMedian,sampleCount:ratios.length,
+      limitations:"Page-local relative consistency check only. It does not establish scale, physical area or correctness of the printed-area association."};
+    if(relativeToMedian>=.5&&relativeToMedian<=2)return {...room,geometry:{...room.geometry,areaRatioQc}};
+    const previousStatus=room.geometry.topology.status as keyof typeof counts;
+    if(previousStatus in counts)counts[previousStatus]=Math.max(0,counts[previousStatus]-1);
+    counts.area_ratio_outlier++;
+    const {polygon:_polygon,holes:_holes,labelRegion,...remaining}=room.geometry;
+    return {...room,geometry:{...remaining,quality:"anchor" as const,planRegion:labelRegion??room.geometry.planRegion,
+      topology:{...room.geometry.topology,status:"area_ratio_outlier" as const,method:"area_ratio_outlier_guard" as const},areaRatioQc,
+      limitations:"Source label only: the inferred polygon-to-printed-area ratio was outside 0.5×–2× of this page's robust median. This relative QC flags a likely merge, split or area-association mismatch; it is not a scale or area validation. Room boundary remains unresolved."}};
+  });
+  return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
+    highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
+    fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: supplementary.length, printedAreaCount: observations.size,
+    areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius,
     relationships: "Not established: source fills alone do not distinguish doors, openings or traversable adjacency.",
-    limitations: "Source construction/existing-layer fills and even-odd filled regions constrain approximate topology. Shared components use inferred geodesic partitions; this does not establish doors or room adjacency. Missing strokes and open gaps remain uncertainty; outside/obstructed seeds remain anchors." } };
+    limitations: "Source construction/existing-layer fills and even-odd filled regions constrain approximate topology. Draft walls are conservative elongated rectangular source-fill proposals; unsupported construction fragments remain separate. Shared components use inferred geodesic partitions; this does not establish doors or room adjacency. Missing strokes and open gaps remain uncertainty; outside/obstructed seeds remain anchors." } };
 }
 
 function insideFill(p:Point,fill:PlanFillRegion) {

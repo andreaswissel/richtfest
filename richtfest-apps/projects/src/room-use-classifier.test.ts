@@ -37,5 +37,6 @@ test("room-use classifier is optional",async()=>{
 
 test("accepting candidate geometry does not implicitly approve inferred observations",()=>{
   expect(reviewedCandidateGeometry({quality:"enclosed_region",printedArea:{value:12},
+    areaRatioQc:{status:"unreviewed",printedArea:12,ratio:.002,pageMedianRatio:.001},
     roomUseProposal:{status:"unreviewed",roomUse:"bathroom"}})).toEqual({quality:"enclosed_region"});
 });

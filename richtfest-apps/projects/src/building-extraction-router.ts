@@ -67,7 +67,8 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
             // printed-area or room-use observations.
             const reviewedGeometry=reviewedCandidateGeometry(candidate.geometry as Record<string,unknown>);
             [entity]=await tx.insert(table).values({tenantId:d.tenantId,modelId:model.id,storeyId:job.storeyId,
-              ...(candidate.entityType==="element"?{buildingId:storey.buildingId,kind:reviewedGeometry.quality==="assembly"?"source_construction_assembly":"source_footprint"}:{}),
+              ...(candidate.entityType==="element"?{buildingId:storey.buildingId,
+                kind:reviewedGeometry.quality==="draft_wall"?"draft_wall":reviewedGeometry.quality==="construction_fragment_assembly"?"source_construction_fragment":"source_footprint"}:{}),
               stableKey:`extraction:${candidate.id}`,name:input.name??candidate.name,constructionState:"unknown",
               geometry:{...reviewedGeometry,source:{sourceVersionId:job.sourceVersionId,page:job.page},evidence:candidate.evidence},createdBy:d.actorId}).returning();
           }
