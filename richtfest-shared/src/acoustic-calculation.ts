@@ -82,8 +82,9 @@ export const exteriorNoiseFacadeSchema = exteriorNoiseRoomSchema.extend({
 /** The declared inventory is independent of available calculation inputs. */
 export const exteriorNoiseBatchSchema = z.object({
   scope: label,
-  inventory: z.array(z.object({ roomId: label, provenance }).strict()).min(1).max(100),
-  rooms: z.array(exteriorNoiseFacadeSchema).max(100),
+  // Project reconciliation combines multiple bounded extraction packets.
+  inventory: z.array(z.object({ roomId: label, provenance }).strict()).min(1).max(1000),
+  rooms: z.array(exteriorNoiseFacadeSchema).max(1000),
 }).strict();
 
 /** Source-reading output, never calculation results or reference answers. */
@@ -118,8 +119,8 @@ export const acousticFactKey = (fact: Pick<ExteriorNoiseFact, "roomId" | "target
   JSON.stringify([fact.roomId, fact.target, fact.id, fact.field]);
 
 export const exteriorNoiseExtractionSchema = z.object({
-  inventory: exteriorNoiseBatchSchema.shape.inventory.min(0),
-  rooms: exteriorNoiseBatchSchema.shape.rooms,
+  inventory: exteriorNoiseBatchSchema.shape.inventory.min(0).max(100),
+  rooms: exteriorNoiseBatchSchema.shape.rooms.max(100),
   facts: z.array(exteriorNoiseFactSchema).max(5000).optional(),
   blockers: z.array(z.object({ roomId: label.nullable(), reason: z.string().min(1).max(1000) }).strict()).max(100),
 }).strict();

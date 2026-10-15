@@ -806,3 +806,11 @@ not only during side effects. Check the supplied recipient/inbox pairing and
 message allowance; return bounded correction reasons while preserving the later
 transactional authorization check. Never silently retarget a reply or discard its
 reply linkage. A successful model/schema response is not successful orchestration.
+
+The saved extraction packets also contained 159 distinct room identifiers, despite
+each valid packet having at most 100. The combined project contract inherited the
+per-packet limit and would reject aggregation. Separate those capacities: keep
+generation bounded at 100 and allow 1,000 combined project records. Synthetic
+multi-packet validation must assert every declared ID gets a result or blocker.
+Do not truncate or merge source aliases by guesswork; distinct extracted IDs do not
+prove distinct physical rooms, and missing fields remain unresolved.

@@ -3,7 +3,7 @@ import { assembleExteriorNoiseInputs, reconcileExteriorNoiseInputs, validateExte
 import { exteriorNoiseFixture } from "../../../tests/fixtures/exterior-noise";
 import { exteriorNoisePackets } from "../../../tests/fixtures/exterior-noise-packets";
 import { calculateAcoustics } from "../../acoustics/src/calculations";
-import { acousticInputProvenance, scopedExteriorNoiseExtractionSchema } from "@richtfest/shared";
+import { acousticInputProvenance, scopedExteriorNoiseExtractionSchema, exteriorNoiseExtractionSchema } from "@richtfest/shared";
 import { sanitizeProviderDiagnostics } from "./deps";
 import { z } from "zod";
 
@@ -142,4 +142,18 @@ test("v2 retains undeclared coverage gaps, missing areas and false/zero values w
   expect(() => validateExteriorNoiseExtraction(packet, [{ versionId: p.versionId, text: p.excerpt }])).not.toThrow();
   packet.facts[0]!.provenance = { kind: "assumption", reason: "No source" };
   expect(() => validateExteriorNoiseExtraction(packet, [{ versionId: p.versionId, text: p.excerpt }])).toThrow("exact quotations");
+});
+
+test("project reconciliation retains rooms beyond a single extraction packet's capacity", () => {
+  const p = exteriorNoisePackets()[0]!.inventory[0]!.provenance;
+  const inventory = Array.from({ length: 159 }, (_, i) => ({ roomId: `Room ${i + 1}`, provenance: p }));
+  const packets = [inventory.slice(0, 100), inventory.slice(100)].map(inventory => ({ inventory, rooms: [], facts: [], blockers: [] }));
+  for (const packet of packets) expect(exteriorNoiseExtractionSchema.safeParse(packet).success).toBe(true);
+  expect(exteriorNoiseExtractionSchema.safeParse({ ...packets[0], inventory }).success).toBe(false);
+  const assembled = reconcileExteriorNoiseInputs(packets);
+  expect(assembled.input?.inventory).toHaveLength(159);
+  const result = calculateAcoustics(assembled.input!);
+  expect(result.batch?.complete).toBe(false);
+  expect(new Set(result.batch?.rooms.map(r => r.roomId))).toEqual(new Set(inventory.map(r => r.roomId)));
+  expect(result.batch?.rooms.every(r => r.status === "missing_input" && r.result === null)).toBe(true);
 });
