@@ -67,6 +67,7 @@ function usageFor(run: RecordData) {
       usage.approximate_cost_usd ??
       usage.costUsd ??
       usage.cost_usd,
+    recordedCostUsd: usage.recordedCostUsd,
   };
 }
 
@@ -89,6 +90,7 @@ function formatElapsed(milliseconds: number) {
 }
 
 function formatCost(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
   const cost = Number(value);
   if (!Number.isFinite(cost) || cost < 0) return undefined;
   if (cost < 0.01 && cost > 0) return `<$0.01`;
@@ -119,7 +121,9 @@ export function AgentRunMetrics({
   const inputTokens = formatTokens(usage.inputTokens);
   const outputTokens = formatTokens(usage.outputTokens);
   const reasoningTokens = formatTokens(usage.reasoningTokens);
-  const cost = formatCost(usage.estimatedCostUsd);
+  const partial = usage.estimatedCostUsd == null && usage.recordedCostUsd != null;
+  const cost = formatCost(usage.estimatedCostUsd ?? usage.recordedCostUsd);
+  const costLabel = t(partial ? "agentRunKnownCost" : "agentRunCost");
   const usageParts = [
     inputTokens ? `${t("agentRunInputTokens")} ${inputTokens}` : undefined,
     outputTokens ? `${t("agentRunOutputTokens")} ${outputTokens}` : undefined,
@@ -145,7 +149,7 @@ export function AgentRunMetrics({
           ? undefined
           : `${t("agentRunDuration")}: ${formatElapsed(elapsed)}`,
         ...usageParts,
-        cost ? `${t("agentRunCost")}: ${cost}` : undefined,
+        cost ? `${costLabel}: ${cost}` : undefined,
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -158,7 +162,7 @@ export function AgentRunMetrics({
       {usageParts.map((part) => (
         <span key={part}>{part}</span>
       ))}
-      {cost && <span>{t("agentRunCost")} {cost}</span>}
+      {cost && <span>{costLabel} {cost}</span>}
     </span>
   );
 }

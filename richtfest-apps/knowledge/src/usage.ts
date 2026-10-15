@@ -7,11 +7,21 @@ import { agentRunAttempts, agentRunEvents, agentRuns, agentRunUsage, supervisorR
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { classifyRunFailure } from "./run-reasons";
 
-export function summarizeUsageRows(rows: any[]) {
-  const sum = (key: string) => rows.length > 0 && rows.every((row) => row[key] !== null && row[key] !== undefined)
+/** Read only accounting scalars, never provider prompts or settings blobs. */
+export const usageAttemptFields = {
+  id: agentRunAttempts.id, runId: agentRunAttempts.runId, usageStatus: agentRunAttempts.usageStatus,
+  settledCostUsd: sql<number | null>`(${agentRunAttempts.settings}->>'settledCostUsd')::numeric`,
+};
+
+export function summarizeUsageRows(rows: any[], attempts: { id: string; runId: string; usageStatus?: string; settledCostUsd: number | null }[] = []) {
+  const missingTokens = attempts.some(a => a.usageStatus !== "not_applicable" && !rows.some(row => row.attemptId === a.id && row.runId === a.runId && row.inputTokens != null && row.outputTokens != null));
+  const sum = (key: string) => !missingTokens && rows.length > 0 && rows.every((row) => row[key] !== null && row[key] !== undefined)
     ? rows.reduce((total, row) => total + Number(row[key]), 0)
     : null;
-  const costsKnown = rows.length > 0 && rows.every((row) => row.estimatedCostUsd !== null && row.estimatedCostUsd !== undefined);
+  const priced = rows.filter(row => row.estimatedCostUsd != null);
+  const unmatched = attempts.filter(a => a.usageStatus !== "not_applicable" && !priced.some(row => row.attemptId === a.id && row.runId === a.runId));
+  const settled = unmatched.filter(a => a.settledCostUsd != null);
+  const costsKnown = rows.length > 0 && priced.length === rows.length && unmatched.length === 0;
   return {
     callCount: rows.length,
     inputTokens: sum("inputTokens"),
@@ -20,6 +30,9 @@ export function summarizeUsageRows(rows: any[]) {
     cachedInputTokens: sum("cachedInputTokens"),
     totalTokens: sum("totalTokens"),
     estimatedCostUsd: costsKnown ? rows.reduce((total, row) => total + Number(row.estimatedCostUsd ?? 0), 0) / 1_000_000 : null,
+    recordedCostUsd: priced.length || settled.length
+      ? priced.reduce((total, row) => total + Number(row.estimatedCostUsd), 0) / 1e6 + settled.reduce((total, a) => total + Number(a.settledCostUsd), 0)
+      : null,
     pricingVersions: [...new Set(rows.map((row) => row.pricingVersion).filter(Boolean))],
   };
 }
@@ -41,6 +54,8 @@ export async function runAccounting(d: AppDeps, rootId: string, authorizedAt?: s
   const unknown = (a: any) => !["reused", "unconfigured"].includes(a.status) && dispatched(a) &&
     !usage.some((u: any) => u.attemptId === a.id && u.estimatedCostUsd != null);
   return {
+    // Display-only subtotal. Do not use it for admission or add reservations.
+    knownCostUsd: summarizeUsageRows(usage, attempts.map((a: any) => ({ id: a.id, runId: a.runId, usageStatus: a.usageStatus, settledCostUsd: a.settings?.settledCostUsd ?? null }))).recordedCostUsd,
     recordedCostUsd: usage.reduce((n: number, u: any) => n + Number(u.estimatedCostUsd ?? 0), 0) / 1e6,
     windowCostUsd: windowUsage.reduce((n: number, u: any) => n + Number(u.estimatedCostUsd ?? 0), 0) / 1e6,
     committedCostUsd: windowAttempts.filter((a: any) => !priced.has(a.id))
@@ -403,13 +418,15 @@ export async function executeTrackedProvider(
 export async function attachUsageSummaries(d: AppDeps, runs: any[]) {
   if (!runs.length) return runs;
   const rows = await d.db.select().from(agentRunUsage).where(and(eq(agentRunUsage.tenantId, d.tenantId), inArray(agentRunUsage.runId, runs.map((run) => run.id))));
+  const attempts = await d.db.select(usageAttemptFields).from(agentRunAttempts).where(and(eq(agentRunAttempts.tenantId, d.tenantId), inArray(agentRunAttempts.runId, runs.map(run => run.id))));
   const byRun = new Map<string, any[]>();
   for (const row of rows) byRun.set(row.runId, [...(byRun.get(row.runId) ?? []), row]);
   return runs.map((run) => {
     const ownRows = byRun.get(run.id) ?? [];
     const childRows = runs.filter((child) => child.parentRunId === run.id).flatMap((child) => byRun.get(child.id) ?? []);
-    const own = summarizeUsageRows(ownRows);
-    const aggregate = summarizeUsageRows([...ownRows, ...childRows]);
+    const own = summarizeUsageRows(ownRows, attempts.filter((a: any) => a.runId === run.id));
+    const ids = [run.id, ...runs.filter(child => child.parentRunId === run.id).map(child => child.id)];
+    const aggregate = summarizeUsageRows([...ownRows, ...childRows], attempts.filter((a: any) => ids.includes(a.runId)));
     return { ...run, usage: { ...own, own, aggregate } };
   });
 }

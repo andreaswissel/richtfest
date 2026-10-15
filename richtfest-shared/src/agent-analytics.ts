@@ -35,6 +35,7 @@ export type ModelUsageAnalytics = {
   reasoningTokens: number | null;
   cachedInputTokens: number | null;
   recordedCostUsd: number | null;
+  partialCost: boolean;
   unpricedCalls: number;
   incompleteTokenCalls: number;
 };

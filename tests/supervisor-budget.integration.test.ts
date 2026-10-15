@@ -286,6 +286,7 @@ integration("recovery preview is scoped/read-only and authorizes additional allo
     const authorized = (await (await f.request("/recovery")).json() as any).data;
     expect(authorized.accounting.windowCostUsd).toBe(0);
     expect(authorized.accounting.recordedCostUsd).toBe(0.08);
+    expect(authorized.accounting.knownCostUsd).toBe(0.08);
     expect(f.dispatched).toEqual(["plan", "A", "B"]);
     f.setBehavior(async (input, key) => {
       await input.onUsage(usage(costs[key]!));
@@ -296,6 +297,7 @@ integration("recovery preview is scoped/read-only and authorizes additional allo
     const resumed = (await (await f.request("/recovery")).json() as any).data;
     expect(resumed.accounting.windowCostUsd).toBe(0.03);
     expect(resumed.accounting.recordedCostUsd).toBe(0.11);
+    expect(resumed.accounting.knownCostUsd).toBe(0.11);
     expect(resumed.completedSpecialists).toBe(3);
   } finally { await f.close(); }
 });
@@ -390,9 +392,13 @@ integration("step replacement releases only its own bound and still waits for a 
     expect(waiting.settings).toMatchObject({ everDispatched: true, settledCostUsd: 0.02, reservedCostUsd: 0.02,
       budgetDecision: { reason: "pending_reservations", reservedUsd: 0.04 } });
     expect(secondDispatched).toBe(false);
+    const preview = (await (await f.request("/recovery")).json() as any).data;
+    expect(preview.accounting.recordedCostUsd).toBe(0.01);
+    expect(preview.accounting.knownCostUsd).toBeCloseTo(0.03, 6);
     hold.resolve(); await work;
     expect(secondDispatched).toBe(true);
     const rows = await f.db.select().from(agentRunUsage).where(eq(agentRunUsage.attemptId, waiting.id));
     expect(rows).toHaveLength(1); expect(rows[0]!.estimatedCostUsd).toBe(40000);
+    expect((await (await f.request("/recovery")).json() as any).data.accounting.knownCostUsd).toBeCloseTo(0.06, 6);
   } finally { await f.close(); }
 }, 15000);

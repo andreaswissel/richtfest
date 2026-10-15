@@ -1116,12 +1116,13 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       startedAt: row.startedAt,
       completedAt: row.completedAt,
     }));
-    const ownUsage = summarizeUsageRows(usageRows.filter((row: any) => row.runId === run.id));
-    const aggregateUsage = summarizeUsageRows(usageRows);
     const attempts = await d.db.select().from(agentRunAttempts).where(and(
       eq(agentRunAttempts.tenantId, d.tenantId),
       inArray(agentRunAttempts.runId, [run.id, ...children.map((child: any) => child.id)]),
     )).orderBy(agentRunAttempts.startedAt);
+    const costAttempts = attempts.map((a: any) => ({ id: a.id, runId: a.runId, usageStatus: a.usageStatus, settledCostUsd: a.settings?.settledCostUsd ?? null }));
+    const ownUsage = summarizeUsageRows(usageRows.filter((row: any) => row.runId === run.id), costAttempts.filter((a: any) => a.runId === run.id));
+    const aggregateUsage = summarizeUsageRows(usageRows, costAttempts);
     return {
       run,
       events,

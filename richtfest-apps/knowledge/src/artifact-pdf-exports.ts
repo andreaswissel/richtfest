@@ -5,7 +5,7 @@ import { artifacts, artifactRevisions, artifactPdfExports as exports } from "./s
 import { renderArtifactPdf } from "./artifact-pdf-worker";
 
 // Bump when the renderer/layout changes; existing reports then regenerate on download.
-const rendererVersion = 1;
+const rendererVersion = 2;
 const unavailable = () => Object.assign(new Error("PDF preparation is unavailable. Please try again later."),
   { status: 503, code: "pdf_unavailable" });
 
@@ -37,7 +37,8 @@ async function pdfInput(d: AppDeps, artifactId: string, revisionId: string) {
     .sort((a, b) => a.versionId.localeCompare(b.versionId));
   if (!d.sourcePdfVersionIds) throw unavailable();
   const eligiblePdfs = (await d.sourcePdfVersionIds(row.projectId, sourceVersionIds)).sort();
-  const input = { ...row, sourceVersionIds, sources, template: row.payload?.template };
+  const input = { ...row, sourceVersionIds, sources, template: row.payload?.template,
+    acousticDataset: row.payload?.acousticDataset };
   // Include current source names/availability/purpose and status, not just the revision ID.
   const hash = createHash("sha256").update(JSON.stringify({ rendererVersion, input, eligiblePdfs })).digest("hex");
   return { input, hash };

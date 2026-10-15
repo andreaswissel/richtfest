@@ -201,6 +201,14 @@ remaining review headroom and report cumulative spend separately from additional
 recovery allowances. Cancellation in the app does not prove remote execution
 stopped or that no later provider charge can arrive.
 
+**Applied follow-through:** project/model analytics and
+run/recovery displays include the settled-step subtotal when that same attempt has
+no priced ledger row. A later priced row, including a legitimate zero, replaces
+the subtotal. Missing usage remains partial; reservations and unknown tokens are
+not added. The model breakdown must also mark a settled-only subtotal partial,
+even when no unpriced ledger row exists yet. Keep admission accounting separate
+from display reconciliation and test both states through the public API.
+
 ## 8. Make failures diagnosable without retaining secrets
 
 Persist numeric per-step admission evidence: estimator version, step ordinal,
@@ -295,6 +303,25 @@ PDFs after artifact completion and cache by immutable revision, approval labels,
 exporter version and exact source attachments. Never reuse stale permissions,
 source revisions or approval status. This background PDF workflow was already
 implemented before the current findings work; no paid agent rerun is needed.
+
+**Deterministic calculation-sheet export:** use the saved
+batch dataset for an ARC-inspired room overview, component tables, requirement
+derivation, per-element transmission contributions, explicit prognosis deduction
+and numerical reserve. The export is not another calculator. Preserve surrounding
+scenario reasons, before/after tables and source notes; only replace the exact
+server-rendered calculation section. Unmatched historical prose and full concept
+templates keep their existing export, rather than being silently reconstructed.
+
+Precede the sheet with a maximum-two-page numerical Prüfbericht: blockers first,
+negative margins next, then nonnegative margins up to 0.5 dB. Use unrounded values
+for classification and enough display precision to distinguish boundary cases.
+Overflow must state the number omitted from the short report and point to complete
+room details; no room disappears from the Nachweis. Missing inputs are not zero
+performance. Neither a negative margin nor a low reserve alone establishes which
+window to buy, whether a correction is merely administrative, or legal compliance.
+Those consequences need reviewed variants and applicability, not a prose model's
+guess. Reference typography, layout and pagination are reusable; source-author
+branding, approval marks and normative authority are not.
 
 ## 11. Validate the product, not just source preservation
 

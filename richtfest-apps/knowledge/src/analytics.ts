@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { AgentAnalyticsMember, AgentUsageAnalytics, ProjectAgentAnalytics } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentRuns, agentRunUsage, agentRunAttempts, supervisorRuns } from "./schema";
-import { summarizeUsageRows } from "./usage";
+import { summarizeUsageRows, usageAttemptFields } from "./usage";
 
 /** Page coordinators, not children: a run's complete tree is always kept together. */
 export async function projectAgentAnalytics(d: AppDeps, projectId: string, page: number): Promise<ProjectAgentAnalytics> {
@@ -45,16 +45,28 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
         from tree left join agent_totals on agent_totals.run_id=tree.id
         left join missing_attempts on missing_attempts.run_id=tree.id
         group by tree.root_id
+      ), cost_source as (
+        select provider, model_id, input_tokens, output_tokens, reasoning_tokens, cached_input_tokens,
+          estimated_cost_usd_micros::numeric as cost_micros, true as is_call from usage
+        union all
+        select a.provider, a.settings->>'modelId', null, null, null, null,
+          (a.settings->>'settledCostUsd')::numeric * 1000000, false
+        from knowledge_agent_run_attempts a join tree on tree.id=a.run_id
+        where a.tenant_id=${d.tenantId} and a.usage_status <> 'not_applicable'
+          and a.settings->>'settledCostUsd' is not null
+          and not exists (select 1 from usage u where u.attempt_id=a.id and u.run_id=a.run_id
+            and u.estimated_cost_usd_micros is not null)
       ), model_totals as (
         select provider, model_id as "modelId", grouping(provider)=1 as "isTotal",
-          count(*) as "callCount", sum(input_tokens) as "inputTokens", sum(output_tokens) as "outputTokens",
+          count(*) filter (where is_call) as "callCount", sum(input_tokens) as "inputTokens", sum(output_tokens) as "outputTokens",
           sum(coalesce(input_tokens::bigint, 0) + coalesce(output_tokens::bigint, 0))
             filter (where input_tokens is not null or output_tokens is not null) as "totalTokens",
           sum(reasoning_tokens) as "reasoningTokens", sum(cached_input_tokens) as "cachedInputTokens",
-          sum(estimated_cost_usd_micros)::numeric / 1000000 as "recordedCostUsd",
-          count(*) filter (where estimated_cost_usd_micros is null) as "unpricedCalls",
-          count(*) filter (where input_tokens is null or output_tokens is null) as "incompleteTokenCalls"
-        from usage group by grouping sets ((provider, model_id), ())
+          sum(cost_micros) / 1000000 as "recordedCostUsd",
+          coalesce(bool_or(not is_call or cost_micros is null), false) as "partialCost",
+          count(*) filter (where is_call and cost_micros is null) as "unpricedCalls",
+          count(*) filter (where is_call and (input_tokens is null or output_tokens is null)) as "incompleteTokenCalls"
+        from cost_source group by grouping sets ((provider, model_id), ())
       )
       select jsonb_build_object(
         'runCount', count(*),
@@ -93,11 +105,11 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
   const ids = members.map(run => run.id);
   const [usageRows, attempts] = await Promise.all([
     d.db.select().from(agentRunUsage).where(and(eq(agentRunUsage.tenantId, d.tenantId), inArray(agentRunUsage.runId, ids))),
-    d.db.select({ id: agentRunAttempts.id, runId: agentRunAttempts.runId }).from(agentRunAttempts)
+    d.db.select(usageAttemptFields).from(agentRunAttempts)
       .where(and(eq(agentRunAttempts.tenantId, d.tenantId), inArray(agentRunAttempts.runId, ids), ne(agentRunAttempts.usageStatus, "not_applicable"))),
   ]);
   const usageByRun = new Map<string, (typeof agentRunUsage.$inferSelect)[]>();
-  const attemptsByRun = new Map<string, { id: string; runId: string }[]>();
+  const attemptsByRun = new Map<string, { id: string; runId: string; settledCostUsd: number | null }[]>();
   for (const row of usageRows) {
     if (!usageByRun.has(row.runId)) usageByRun.set(row.runId, []);
     usageByRun.get(row.runId)!.push(row);
@@ -112,7 +124,7 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
     const reported = new Set(rows.filter(row => row.inputTokens !== null && row.outputTokens !== null).map(row => row.attemptId));
     const missingUsageAttempts = calls.filter(call => !reported.has(call.id)).length;
     const unreportedRuns = runIds.filter(id => !usageByRun.get(id)?.length).length;
-    const summary = summarizeUsageRows(rows);
+    const summary = summarizeUsageRows(rows, calls);
     const priced = rows.filter(row => row.estimatedCostUsd !== null);
     return {
       callCount: rows.length, attemptCount: calls.length, missingUsageAttempts, unreportedRuns,
@@ -120,7 +132,7 @@ export async function projectAgentAnalytics(d: AppDeps, projectId: string, page:
       inputTokens: summary.inputTokens, outputTokens: summary.outputTokens,
       reasoningTokens: summary.reasoningTokens, cachedInputTokens: summary.cachedInputTokens,
       estimatedCostUsd: missingUsageAttempts || unreportedRuns ? null : summary.estimatedCostUsd,
-      recordedCostUsd: priced.length ? priced.reduce((sum, row) => sum + Number(row.estimatedCostUsd), 0) / 1_000_000 : null,
+      recordedCostUsd: summary.recordedCostUsd,
       models: [...new Set(rows.map(row => `${row.provider} / ${row.modelId ?? "—"}`))].sort(),
     };
   };

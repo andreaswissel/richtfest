@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { acousticAttachmentSchema, formatSourceCitations, sourceReferenceLabel, type SourceReference } from "@richtfest/shared";
+import { acousticAttachmentSchema, acousticDatasetSchema, renderAcousticCalculationReceipts, formatSourceCitations, sourceReferenceLabel, type SourceReference } from "@richtfest/shared";
 import type { Token, Tokens } from "marked";
 
 export type ArtifactPdfInput = {
@@ -12,6 +12,7 @@ export type ArtifactPdfInput = {
   sourceVersionIds: string[];
   status: string;
   template?: unknown;
+  acousticDataset?: unknown;
   readSourcePdf?: (projectId: string, versionId: string) => Promise<Buffer | null>;
   /** Internal report fragment rendering; no generic wrapper. */
   bodyOnly?: boolean;
@@ -23,6 +24,18 @@ const safeText = (text: string) => text.replace(uuid, "Source unavailable");
 /** Server-only renderer. Markdown is parsed, never executed or fetched. */
 export async function artifactPdf(input: ArtifactPdfInput): Promise<Buffer> {
   const template = input.template as { id?: string; version?: number } | undefined;
+  if (!input.bodyOnly && !template && input.acousticDataset) {
+    const dataset = acousticDatasetSchema.parse(input.acousticDataset);
+    const savedSection = renderAcousticCalculationReceipts([dataset.receipt], "de");
+    // Replace only the exact server-rendered section. Preserve surrounding notes,
+    // scenario changes and historical prose; never reconstruct a dataset from text.
+    if (dataset.receipt.batch && savedSection && input.content.includes(savedSection)) {
+      const { acousticCalculationPdf } = await import("./acoustic-calculation-pdf");
+      const notes = input.content.replace(savedSection, "").trim();
+      const notesPdf = notes ? await artifactPdf({ ...input, bodyOnly: true, content: notes }) : undefined;
+      return acousticCalculationPdf(input, dataset, notesPdf);
+    }
+  }
   if (!input.bodyOnly && template?.version === 1 &&
     ["interior-noise-concept", "exterior-noise-concept"].includes(template.id ?? ""))
     return conceptPdf(input);

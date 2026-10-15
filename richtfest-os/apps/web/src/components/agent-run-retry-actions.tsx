@@ -27,6 +27,7 @@ type Recovery = {
   preservationChecked?: boolean;
   accounting: {
     recordedCostUsd: number;
+    knownCostUsd: number | null;
     unknownOutcomes: number;
     unpricedAttempts: number;
     unpricedUsage: unknown;
@@ -280,8 +281,8 @@ function RetryActions({
                         )}
                         <p>{t("runRecoveryReuse")}</p>
                         <p>
-                          {t("runRecoveryCost")}: $
-                          {preview.accounting.recordedCostUsd.toFixed(2)} USD
+                          {t("runRecoveryCost")}: {preview.accounting.knownCostUsd == null
+                            ? "—" : `$${preview.accounting.knownCostUsd.toFixed(2)} USD`}
                         </p>
                         <Callout>{t("runRecoveryIncomplete")}</Callout>
                         <Callout>{t("runRecoveryAllowance")}</Callout>

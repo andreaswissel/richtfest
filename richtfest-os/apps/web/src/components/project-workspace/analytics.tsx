@@ -259,7 +259,7 @@ export function ProjectAnalytics({ projectId }: { projectId: string }) {
                           <Cost
                             usage={{
                               recordedCostUsd: model.recordedCostUsd,
-                              estimatedCostUsd: model.unpricedCalls
+                              estimatedCostUsd: model.partialCost || model.unpricedCalls
                                 ? null
                                 : model.recordedCostUsd,
                             }}

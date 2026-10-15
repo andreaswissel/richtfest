@@ -1318,6 +1318,10 @@ integration("specialist costs belong to each child while the supervisor retains 
         id, tenantId: i ? tenantId : foreignTenant, projectId: i ? foreignProject : projectId,
         requestedBy: actorId, parentRunId: parent!.id, goal: "Must not leak", provider: "openai", correlationId: crypto.randomUUID(),
       })));
+      await db.insert(agentRunAttempts).values(foreignIds.map((runId, i) => ({
+        runId, tenantId: i ? tenantId : foreignTenant, operationId: crypto.randomUUID(), phase: "specialist", attemptNumber: 1,
+        provider: "openai", status: "interrupted", usageStatus: "missing", settings: { settledCostUsd: 99, modelId: "must-not-leak" },
+      })));
       const first = await analytics();
       expect(first.runs).toHaveLength(20);
       expect(first.hasMore).toBe(true);
@@ -1366,6 +1370,47 @@ integration("specialist costs belong to each child while the supervisor retains 
       const zero = (await analytics()).summary;
       expect(zero).toMatchObject({ averagedRunCount: 1, averageTokensPerRun: 0 });
       expect(zero.models.find((model: any) => model.provider === "anthropic")).toMatchObject({ totalTokens: 0, recordedCostUsd: 0 });
+      // A step receipt is a known subtotal, not a complete call or a reservation.
+      const [settled] = await db.insert(agentRunAttempts).values({ tenantId, runId: grandchild!.id,
+        operationId: crypto.randomUUID(), phase: "specialist", attemptNumber: 3, provider: "openai",
+        status: "interrupted", usageStatus: "missing", settings: { modelId: "partial-model", settledCostUsd: 2.405285,
+          reservedCostUsd: 90, stepReceipts: [{ status: "settled" }, { status: "unknown" }] } }).returning();
+      const known = await analytics();
+      expect(known.summary.usage.recordedCostUsd).toBeCloseTo(2.505285, 6);
+      expect(known.summary.usage.callCount).toBe(zero.usage.callCount);
+      expect(known.summary.usage.totalTokens).toBe(zero.usage.totalTokens);
+      expect(known.summary.missingUsageAttempts).toBe(zero.missingUsageAttempts + 1);
+      expect(known.summary.models.find((m: any) => m.modelId === "partial-model")).toMatchObject({
+        recordedCostUsd: 2.405285, partialCost: true, callCount: 0, totalTokens: null, unpricedCalls: 0, incompleteTokenCalls: 0,
+      });
+      expect(known.runs[0].aggregate).toMatchObject({ recordedCostUsd: 2.505285, estimatedCostUsd: null, inputTokens: null });
+      expect(known.runs[0].members.find((m: any) => m.id === grandchild!.id).usage.recordedCostUsd).toBeCloseTo(2.445285, 6);
+      expect((await analytics(2)).summary).toEqual(known.summary);
+      const detail = (await (await fetch(`${baseUrl}/runs/${grandchild!.id}`)).json() as any).data;
+      expect(detail.usage).toMatchObject({ recordedCostUsd: 2.445285, estimatedCostUsd: null, inputTokens: null, callCount: 2 });
+      const workspaceKnown = (await (await fetch(`${baseUrl}/workspaces/${projectId}`)).json() as any).data;
+      // The workspace window may omit old records, but visible rows share the same accounting contract.
+      expect(workspaceKnown.runs.find((r: any) => r.id === parent!.id).usage.aggregate.recordedCostUsd).toBe(0.06);
+      await db.insert(agentRunUsage).values({ tenantId, runId: grandchild!.id, attemptId: settled!.id,
+        provider: "openai", modelId: "partial-model", callIndex: 2, estimatedCostUsd: 3000000,
+        inputTokens: 1, outputTokens: 1, startedAt: new Date(), completedAt: new Date() });
+      const replaced = await analytics();
+      expect(replaced.summary.usage.recordedCostUsd).toBeCloseTo(3.10, 6);
+      expect(replaced.summary.models.find((m: any) => m.modelId === "partial-model")).toMatchObject({ recordedCostUsd: 3, partialCost: false, callCount: 1 });
+      expect(replaced.runs[0].aggregate.estimatedCostUsd).toBeNull(); // other unknown attempts remain unknown
+      await db.update(agentRunUsage).set({ estimatedCostUsd: 0 }).where(eq(agentRunUsage.attemptId, settled!.id));
+      expect((await analytics()).summary.usage.recordedCostUsd).toBeCloseTo(0.10, 6);
+      await db.insert(agentRunAttempts).values({ tenantId, runId: older[2]!.id, operationId: crypto.randomUUID(),
+        phase: "specialist", attemptNumber: 1, provider: "openai", status: "interrupted", usageStatus: "missing",
+        settings: { modelId: "settled-zero", settledCostUsd: 0, reservedCostUsd: 99 } });
+      const settledOnly = await analytics();
+      expect(settledOnly.summary.models.find((m: any) => m.modelId === "settled-zero")).toMatchObject({
+        recordedCostUsd: 0, partialCost: true, totalTokens: null, callCount: 0, incompleteTokenCalls: 0,
+      });
+      const pages = [settledOnly, await analytics(1), await analytics(2)];
+      expect(pages.flatMap(p => p.runs).find((r: any) => r.id === older[2]!.id).usage).toMatchObject({
+        recordedCostUsd: 0, estimatedCostUsd: null, callCount: 0, inputTokens: null,
+      });
       const empty = await (await fetch(`${baseUrl}/workspaces/${crypto.randomUUID()}/analytics`)).json() as any;
       expect(empty.data.summary).toMatchObject({ runCount: 0, averagedRunCount: 0, averageTokensPerRun: null, models: [],
         usage: { totalTokens: null, recordedCostUsd: null, callCount: 0 } });
@@ -1375,7 +1420,10 @@ integration("specialist costs belong to each child while the supervisor retains 
       d.requirePermission = () => { throw Object.assign(new Error("Forbidden"), { status: 403 }); };
       expect((await fetch(`${baseUrl}/workspaces/${projectId}/analytics`)).status).toBe(403);
     } finally {
-      for (const id of foreignIds) await db.delete(agentRuns).where(eq(agentRuns.id, id));
+      for (const id of foreignIds) {
+        await db.delete(agentRunAttempts).where(eq(agentRunAttempts.runId, id));
+        await db.delete(agentRuns).where(eq(agentRuns.id, id));
+      }
     }
   } finally {
     if (server) await new Promise<void>((resolve) => server.close(resolve));

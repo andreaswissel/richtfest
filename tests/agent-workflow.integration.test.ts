@@ -8,6 +8,8 @@ import { acousticScenariosRouter } from "../richtfest-apps/knowledge/src/acousti
 import { acousticInputReviewRouter } from "../richtfest-apps/knowledge/src/acoustic-input-review";
 import { reviewsRouter } from "../richtfest-apps/knowledge/src/reviews";
 import { createArtifact, workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
+import { prepareArtifactPdf } from "../richtfest-apps/knowledge/src/artifact-pdf-exports";
+import { Readable } from "node:stream";
 import { stepSupervisor } from "../richtfest-apps/knowledge/src/supervisor";
 import { agentRuns, agentRunSteps, agentRunAttempts, agentRunUsage, agentRunEvents,
   supervisorRuns, tasks, artifacts, artifactRevisions, annotations, conversations, messages, drafts } from "../richtfest-apps/knowledge/src/schema";
@@ -326,6 +328,29 @@ integration(`historical v1 calculation sheet bypasses report writing and retains
     expect(revisions[0].payload.acousticDataset.receipt.input.rooms).toEqual([room]);
     expect(revisions[0].payload.acousticDataset.blockers).toContain("Room Missing: Window area missing");
     expect((await f.rows(agentRunSteps)).filter((s: any) => s.stepKey.startsWith("exterior-calculation:"))).toHaveLength(1);
+    const storage = new Map<string, Buffer>();
+    f.d.sourcePdfVersionIds = async () => [];
+    f.d.sourceReferences = async () => [{ versionId: f.sourceVersionId, fileName: "Synthetic evidence.pdf", version: 1 }];
+    f.d.pdfStorage = {
+      write: async (key, bytes) => { storage.set(key, bytes); }, remove: async key => { storage.delete(key); },
+      read: async key => storage.has(key) ? { stream: Readable.from([storage.get(key)!]), sizeBytes: storage.get(key)!.length } : null,
+    };
+    // Exercise immutable revision lookup, worker transfer, cache and saved calculator output.
+    await prepareArtifactPdf(f.d, revisions[0].artifactId, revisions[0].id);
+    const prepared = await prepareArtifactPdf(f.d, revisions[0].artifactId, revisions[0].id);
+    expect(prepared).not.toBeNull();
+    const chunks: Buffer[] = [];
+    for await (const chunk of prepared!.stream) chunks.push(Buffer.from(chunk));
+    const pdf = Buffer.concat(chunks);
+    const extracted = Bun.spawnSync(["pdftotext", "-layout", "-", "-"], { stdin: pdf });
+    expect(extracted.exitCode).toBe(0);
+    const pages = extracted.stdout.toString().split("\f").filter(p => p.trim());
+    expect(pages[0]).toContain("Prüfbericht");
+    expect(pages[2]).toContain("Schallschutznachweis");
+    expect(pages.join("\n")).toContain("44,669 − 2 dB = 42,669 dB vorhanden");
+    expect(pages.join("\n")).toContain("Raum Missing");
+    expect(pages.join("\n")).toContain("Window area missing");
+    if (process.env.NACHWEIS_ENGINE_REVIEW_PATH) await Bun.write(process.env.NACHWEIS_ENGINE_REVIEW_PATH, pdf);
   } finally { await f.close(); }
 });
 

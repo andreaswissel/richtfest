@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { artifactPdf } from "./artifact-pdf";
 import { PDFDocument } from "pdf-lib";
+import { acousticDatasetSchema, renderAcousticCalculationReceipts } from "@richtfest/shared";
 
 test("renders paginated Markdown with Unicode, named revisions and safe missing citations", async () => {
   const known = "11111111-1111-4111-8111-111111111111";
@@ -164,4 +165,105 @@ test("concept deduplicates only byte-identical overlapping pages after validatin
   await expect(artifactPdf({ ...input, sources: input.sources.filter(s => s.versionId !== ids[1]) })).rejects.toMatchObject({ status: 422 });
   await expect(artifactPdf({ ...input, sourceVersionIds: [ids[0], ids[2]] })).rejects.toMatchObject({ status: 422 });
   await expect(artifactPdf({ ...input, template: { ...input.template, attachments: attachments.map(a => a.versionId === ids[1] ? { ...a, pageEnd: 4 } : a) } })).rejects.toMatchObject({ status: 422 });
+});
+
+test("Nachweis PDF preserves saved arithmetic, boundary signs, blocked rooms and scenario notes", async () => {
+  const versionId = "11111111-1111-4111-8111-111111111111";
+  const provenance = { kind: "source", versionId, page: 12, excerpt: "Synthetic input schedule, not project evidence." };
+  // S_s = 0.8 S_G; base requirement 35, allowance 2. Single-element Rw = total Rw.
+  const rooms = [36.9999, 37, 37.5, 37.5001].map((rwDb, i) => ({
+    standard: "DIN 4109-1/-2:2018-01", room: { id: `R${i + 1}`, use: "residential_accommodation_classroom", floorAreaM2: 10, provenance },
+    applicability: { assessment: "standard_exterior_noise", basis: "Synthetic applicability", provenance },
+    envelopeComplete: true, elementsComplete: true, flanking: { assessment: "negligible", provenance },
+    facades: [{ id: "F1", areaM2: 8, provenance, noise: { metric: "La", levelDb: 65, basis: "Synthetic assessed La", provenance } }],
+    elements: [{ kind: "area", id: "W1", facadeId: "F1", areaM2: 8, rwDb, construction: "window_or_door",
+      ratingBasis: "installed_configuration", configuration: "Synthetic installed window", provenance }],
+  }));
+  rooms.push({ ...structuredClone(rooms[0]!), room: { ...rooms[0]!.room, id: "Unsupported" }, flanking: { assessment: "required", provenance } });
+  const inventory = [...rooms.map(r => ({ roomId: r.room.id, provenance })), { roomId: "Missing", provenance }];
+  const common = { engine: "richtfest-acoustics", version: 1, unit: "dB", reviewStatus: "not_reviewed",
+    formula: "R_w,ges = -10 log10(sum(n_i * 10^(-R_e,i,w/10)))", reference: "https://example.invalid/method",
+    intermediates: [], limitations: [] };
+  // Saved results are independent fixtures: the exporter must not recalculate them.
+  const results = rooms.map((room, i) => ({ roomId: room.room.id, status: i === 4 ? "unsupported" : "calculated", result: {
+    ...common, input: { ...room, method: "exterior_noise_facade" }, method: "exterior_noise_facade",
+    status: i === 4 ? "unsupported" : "calculated", value: i === 4 ? null : room.elements[0]!.rwDb,
+    limitations: i === 4 ? ["Flanking is required or unresolved."] : [],
+    ...(i === 4 ? {} : { exteriorNoise: { baseRequiredDb: 35, geometryCorrectionDb: 0, prognosisUncertaintyDb: 2, targetRwDb: 37,
+      marginDb: [-0.0001, 0, 0.5, 0.5001][i], comparison: i === 0 ? "below_numeric_target" : "meets_numeric_target" } }),
+  } }));
+  const dataset = acousticDatasetSchema.parse({ version: 1, basedOn: { artifactId: crypto.randomUUID(), revisionId: crypto.randomUUID() },
+    blockers: ["Confirm the source geometry before release."], receipt: {
+      ...common, method: "exterior_noise_batch", status: "unsupported", value: null,
+      input: { method: "exterior_noise_batch", scope: "Synthetic verification · not a customer project", inventory, rooms },
+      batch: { complete: false, issues: ["Missing: calculation inputs are missing."], rooms: [...results, { roomId: "Missing", status: "missing_input", result: null }] },
+      receiptId: crypto.randomUUID(),
+    },
+  });
+  const input = { title: "Schallschutznachweis · Synthetische Prüfvariante", version: 3, status: "draft", projectId: "project",
+    acousticDataset: dataset, sourceVersionIds: [versionId], sources: [{ versionId, fileName: "Synthetic inputs.pdf", version: 2 }],
+    content: `# Variantenänderungen\n\nGrund: synthetic scenario reason retained.\n\n| Feld | Bisher | Variante |\n| --- | --- | --- |\n| window Rw | 36 | 36.9999 |\n\n${renderAcousticCalculationReceipts([dataset.receipt], "de")}\n\nAfterword retained.`,
+  };
+  const pdf = await artifactPdf(input);
+  const directory = await mkdtemp(join(tmpdir(), "nachweis-pdf-"));
+  try {
+    const path = join(directory, "report.pdf"); await writeFile(path, pdf);
+    const extraction = Bun.spawnSync(["pdftotext", "-layout", path, "-"]);
+    expect(extraction.exitCode).toBe(0);
+    const text = extraction.stdout.toString();
+    const pages = text.split("\f").filter(p => p.trim());
+    expect(pages[0]).toContain("Prüfbericht");
+    expect(pages[1]).toContain("Prüfbericht");
+    expect(pages[2]).toContain("Schallschutznachweis · Außenlärm");
+    const review = pages.slice(0, 2).join("\n");
+    expect(review).toContain("6 deklarierte Räume");
+    expect(review).toContain("2 offen"); expect(review).toContain("1 unter Ziel");
+    expect(review).toMatch(/2 mit 0–0,5 dB\s+Reserve/);
+    expect(review).toMatch(/R1 · Unter Ziel · Reserve -0,000100 dB/);
+    expect(review.indexOf("Missing · Nicht berechenbar")).toBeLessThan(review.indexOf("R1 · Unter Ziel"));
+    expect(review.indexOf("R1 · Unter Ziel")).toBeLessThan(review.indexOf("R2 · Reserve"));
+    for (const id of ["R1", "R2", "R3", "R4", "Unsupported", "Missing"]) expect(text).toContain(`Raum ${id}`);
+    expect(text).toContain("35,000"); expect(text).toContain("36.9999");
+    expect(text).toContain("Flanking is required or unresolved");
+    expect(text).toContain("Berechnungseingaben fehlen");
+    expect(text).toContain("Synthetic inputs.pdf"); expect(text).toContain("Seite 12");
+    expect(text).toContain("synthetic scenario reason retained"); expect(text).toContain("Afterword retained");
+    expect(text).not.toContain("Source unavailable"); expect(text).not.toContain(versionId);
+    for (const [i, p] of pages.entries()) expect(p).toContain(`${i + 1} / ${pages.length}`);
+    for (const match of review.matchAll(/(R\d) ·[^\n]*Seite (\d+)/g))
+      expect(pages[Number(match[2]) - 1]).toContain(`Raum ${match[1]}`);
+    if (process.env.NACHWEIS_REVIEW_PATH) await writeFile(process.env.NACHWEIS_REVIEW_PATH, pdf);
+    // Unmatched historical prose is never silently replaced by a different dataset.
+    const historical = await artifactPdf({ ...input, content: "Historical prose retained without reconstruction." });
+    await writeFile(path, historical);
+    const legacyText = Bun.spawnSync(["pdftotext", path, "-"]).stdout.toString();
+    expect(legacyText).toContain("Historical prose retained"); expect(legacyText).not.toContain("Prüfbericht");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("two-page Prüfbericht overflows explicitly while the Nachweis retains all 100 declared rooms", async () => {
+  const provenance = { kind: "assumption", reason: "Synthetic missing-input inventory" };
+  const inventory = Array.from({ length: 100 }, (_, i) => ({ roomId: `ROOM-${String(i + 1).padStart(3, "0")}`, provenance }));
+  const dataset = acousticDatasetSchema.parse({ version: 1, blockers: [], basedOn: null, receipt: {
+    engine: "richtfest-acoustics", version: 1, unit: "dB", reviewStatus: "not_reviewed", method: "exterior_noise_batch",
+    status: "unsupported", value: null, formula: "No aggregate dB result", reference: "https://example.invalid/method", intermediates: [], limitations: [],
+    input: { method: "exterior_noise_batch", scope: "Overflow fixture", inventory, rooms: [] },
+    batch: { complete: false, issues: ["Calculation inputs are missing."],
+      rooms: inventory.map(({ roomId }) => ({ roomId, status: "missing_input", result: null })) }, receiptId: crypto.randomUUID(),
+  } });
+  const pdf = await artifactPdf({ title: "Overflow verification", content: renderAcousticCalculationReceipts([dataset.receipt], "de"),
+    version: 1, status: "historical revision", projectId: "project", sourceVersionIds: [], sources: [], acousticDataset: dataset });
+  const directory = await mkdtemp(join(tmpdir(), "nachweis-overflow-"));
+  try {
+    const path = join(directory, "report.pdf"); await writeFile(path, pdf);
+    const extraction = Bun.spawnSync(["pdftotext", "-layout", path, "-"]);
+    expect(extraction.exitCode).toBe(0);
+    const text = extraction.stdout.toString(), pages = text.split("\f").filter(p => p.trim());
+    expect(pages[2]).toContain("Schallschutznachweis · Außenlärm");
+    expect(pages[1]).toMatch(/\d+ von 100 priorisierten Raumbefunden/);
+    expect(pages[1]).toMatch(/\d+ weitere Befunde/);
+    for (const r of inventory) expect(text).toContain(`Raum ${r.roomId}`);
+    for (const [i, p] of pages.entries()) expect(p).toContain(`historical revision · Revision 1 · ${i + 1} / ${pages.length}`);
+    if (process.env.NACHWEIS_OVERFLOW_REVIEW_PATH) await writeFile(process.env.NACHWEIS_OVERFLOW_REVIEW_PATH, pdf);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

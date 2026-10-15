@@ -2,6 +2,9 @@
 
 ## 2026-10-15
 
+- Agent cost displays now include known settled charges from interrupted calls without double counting later totals. Partial costs stay visibly incomplete; reservations are not charges.
+- Calculation-sheet PDFs now include an ARC-inspired room overview and calculation details, plus a two-page numerical Prüfbericht highlighting blockers, shortfalls and low reserves. Sources, scenario notes and every declared room remain traceable; engineering rules and approval requirements are unchanged.
+
 - Exterior-noise workflows now pause before further AI work when room calculations are blocked, including runs outside chat. Saved reasons distinguish incomplete inputs from calculated results below target; explicitly requested model-free sheets can still show unsupported-room outcomes.
 
 - Acoustic extraction failures now retain safe field-level diagnostics for correction attempts, including larger room-fact packets and nested source references. Validation rules, models and spending/retry allowances remain unchanged; no run restarts automatically.
