@@ -3,6 +3,7 @@ import { acousticCalculationSchema, acousticCalculationResultSchema, type Acoust
 /** Bounded acoustic arithmetic, not a DIN/ISO compliance assessment. */
 export function calculateAcoustics(raw: unknown): AcousticCalculationResult {
   const input = acousticCalculationSchema.parse(raw);
+  if (input.method === "exterior_noise_batch") return calculateExteriorNoiseBatch(input);
   if (input.method === "exterior_noise_room_requirement" || input.method === "exterior_noise_facade")
     return calculateExteriorNoise(input);
   const common = {
@@ -50,6 +51,40 @@ export function calculateAcoustics(raw: unknown): AcousticCalculationResult {
       : "Interval Leq values over non-overlapping intervals covering the whole period only; no Lmax averaging or regulatory time penalties.",
       "All inputs must already use the same frequency weighting and 20 µPa reference; no weighting conversion is performed.",
       "Inputs, source interpretation and applicability require specialist review. No approval or normative verification."],
+  });
+}
+
+function calculateExteriorNoiseBatch(input: Extract<AcousticCalculationInput, { method: "exterior_noise_batch" }>): AcousticCalculationResult {
+  const expected = new Set(input.inventory.map(r => r.roomId));
+  const supplied = new Map(input.rooms.map(r => [r.room.id, r]));
+  const issues: string[] = [];
+  if (expected.size !== input.inventory.length) issues.push("Declared room IDs must be unique.");
+  if (supplied.size !== input.rooms.length) issues.push("Calculation room IDs must be unique.");
+  for (const id of supplied.keys()) if (!expected.has(id)) issues.push(`Calculation room ${id} is outside the declared inventory.`);
+  const invalid = issues.length > 0;
+  const rooms = input.inventory.map(({ roomId }) => {
+    if (invalid) return { roomId, status: "invalid_inventory", result: null };
+    const room = supplied.get(roomId);
+    if (!room) {
+      issues.push(`Room ${roomId}: calculation inputs are missing.`);
+      return { roomId, status: "missing_input", result: null };
+    }
+    const result = calculateExteriorNoise({ ...room, method: "exterior_noise_facade" });
+    if (result.status === "unsupported") issues.push(`Room ${roomId}: ${result.limitations[0]}`);
+    return { roomId, status: result.status, result };
+  });
+  const complete = !invalid && rooms.every(r => r.status === "calculated");
+  return acousticCalculationResultSchema.parse({
+    engine: "richtfest-acoustics", version: 1, method: input.method, input,
+    status: complete ? "calculated" : "unsupported", value: null, unit: "dB",
+    formula: "Execute exterior_noise_facade v1 for every room in the declared inventory; no aggregate dB result.",
+    reference: "https://bauleitplaene-mv.de/download/07_DIN%204109-1-863150.pdf#page=18",
+    intermediates: [], batch: { complete, issues, rooms }, reviewStatus: "not_reviewed",
+    limitations: [
+      "Coverage refers only to the supplied room inventory, not independently verified project completeness.",
+      "Complete means every declared room was calculated, not that targets are met or a person approved the inputs, rules or results.",
+      "Existing exterior-noise applicability, geometry, installed-rating and flanking checks remain in force. No day/night selection or noise-source corrections are performed.",
+    ],
   });
 }
 

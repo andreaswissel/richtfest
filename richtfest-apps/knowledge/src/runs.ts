@@ -922,8 +922,8 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           reportTemplate: input.workflow.reportTemplate ?? requestedAcousticConcept(input.goal) ?? "sound-insulation-review" })
       : input.workflow;
     if (workflow && workflow.mode !== "chat" && !d.supervisorEnabled)
-      throw conflict("Team and Report require supervisor execution to be enabled");
-    if (workflow?.mode === "report" && !input.sourceVersionIds.length) {
+      throw conflict("Team, Report and Calculation require supervisor execution to be enabled");
+    if ((workflow?.mode === "report" || workflow?.mode === "calculation") && !input.sourceVersionIds.length) {
       const inventory = await d.listProjectSources(input.projectId);
       if (inventory.truncated)
         throw conflict("Project evidence exceeds the automatic selection limit. Narrow the evidence scope before starting a report.");
@@ -935,7 +935,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     }
     await sources(d, input.projectId, input.sourceVersionIds);
     const provider = providerOverride ?? await d.resolveActiveProvider?.() ?? "openai";
-    const calculation = input.intent === "calculation";
+    const calculation = input.intent === "calculation" && workflow?.mode !== "calculation";
     const configured = calculation
       ? false
       : await d.providerConfigured(provider);

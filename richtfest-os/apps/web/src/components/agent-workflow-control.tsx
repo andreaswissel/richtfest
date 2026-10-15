@@ -7,6 +7,7 @@ import type {
 import { api } from "../api";
 import { useT } from "../i18n";
 import { Button } from "./ui/button";
+import { NativeSelect } from "./ui/native-select";
 import { Callout, Field, Segmented } from "./ui/primitives";
 
 // Suggest is a composer choice, not an executable or persisted run workflow.
@@ -146,18 +147,64 @@ export function AgentWorkflowControl({
                 label: t("agentModeReport"),
                 disabled: !supervisorEnabled,
               },
+              {
+                value: "calculation",
+                label: t("agentModeCalculation"),
+                disabled: !supervisorEnabled,
+              },
             ]}
             value={value.mode}
             onChange={(mode) =>
               onChange(
                 mode === "report"
                   ? { mode: "report" }
-                  : { mode: mode as "suggest" | "chat" | "team" },
+                  : {
+                      mode: mode as "suggest" | "chat" | "team" | "calculation",
+                    },
               )
             }
           />
         </Field>
       )}
+      {!steering &&
+        presentation !== "recommendation" &&
+        value.mode === "report" && (
+          <Field label={t("agentReportFormat")}>
+            <NativeSelect
+              value={value.reportTemplate ?? "_auto"}
+              onChange={(event) =>
+                onChange({
+                  mode: "report",
+                  reportTemplate:
+                    event.target.value === "_auto"
+                      ? undefined
+                      : (event.target.value as Extract<
+                          AgentWorkflowRequest,
+                          { mode: "report" }
+                        >["reportTemplate"]),
+                })
+              }
+            >
+              <option value="_auto">{t("agentReportFormatAuto")}</option>
+              <option value="interior-noise-concept">
+                {t("agentReportFormatInterior")}
+              </option>
+              <option value="exterior-noise-concept">
+                {t("agentReportFormatExterior")}
+              </option>
+              <option value="sound-insulation-review">
+                {t("agentReportFormatReview")}
+              </option>
+            </NativeSelect>
+          </Field>
+        )}
+      {!steering &&
+        presentation !== "recommendation" &&
+        value.mode === "calculation" && (
+          <p className="text-ui-xs text-muted-foreground">
+            {t("agentCalculationScope")}
+          </p>
+        )}
       {presentation === "all" && (
         <Button
           type="button"
@@ -178,12 +225,14 @@ export function AgentWorkflowControl({
                 {t("agentSuggestDefaultHint")}
               </span>
             )}
-            {["team", "report"].includes(value.mode) && !supervisorEnabled && (
-              <Callout>{t("agentTeamUnavailable")}</Callout>
-            )}
-            {value.mode === "report" && !sourceVersionIds.length && (
-              <Callout>{t("agentReportAutomaticEvidence")}</Callout>
-            )}
+            {["team", "report", "calculation"].includes(value.mode) &&
+              !supervisorEnabled && (
+                <Callout>{t("agentTeamUnavailable")}</Callout>
+              )}
+            {(value.mode === "report" || value.mode === "calculation") &&
+              !sourceVersionIds.length && (
+                <Callout>{t("agentReportAutomaticEvidence")}</Callout>
+              )}
             {(decision.error || (decision.result && !actionable)) && (
               <Callout>{t("agentSuggestionUnavailable")}</Callout>
             )}

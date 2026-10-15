@@ -22,7 +22,8 @@ import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessa
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
-import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, type AcousticCalculationReceipt } from "@richtfest/shared";
+import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, exteriorNoiseExtractionSchema, renderAcousticCalculationReceipts, acousticDatasetSchema, type AcousticCalculationReceipt } from "@richtfest/shared";
+import { assembleExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
@@ -65,6 +66,7 @@ export type Assignment = {
   // Absent on historical assignments: their saved batch identities stay unchanged.
   sourceInputByteBudget?: number;
   sourceBatchingVersion?: 2;
+  exteriorNoiseExtractionVersion?: 1;
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
   calculationEvidenceHash?: string;
@@ -362,7 +364,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
         companyKnowledgeCategories: !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? await companyKnowledgeCategories(d) : undefined,
-        acousticToolsAvailable: !visualOnly && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
+        acousticToolsAvailable: !visualOnly && !(context as { extractExteriorNoise?: boolean }).extractExteriorNoise
+          && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
         ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
         componentCatalog: appendixWriter || editorialPacket || consolidation ? undefined : await d.componentContext?.(run.goal),
         documentReview,
@@ -512,15 +515,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             await assertActive();
             const input = acousticCalculationSchema.parse(raw);
             const allowed = new Set((context as { sourceVersionIds?: string[] }).sourceVersionIds ?? []);
+            const calculationSourceIds = new Set<string>();
             for (const provenance of acousticInputProvenance(input)) {
               if (provenance.kind === "source") {
                 if (!allowed.has(provenance.versionId)) throw conflict("Calculation source is outside the current readable batch");
                 const excerpt = (context as { sources: { versionId: string; text: string }[] }).sources
                   .find(source => source.versionId === provenance.versionId && source.text.includes(provenance.excerpt));
                 if (!excerpt) throw conflict("Calculation quotation is absent from the current source text");
-                await sources(d, run.projectId, [provenance.versionId]);
+                calculationSourceIds.add(provenance.versionId);
               }
             }
+            if (calculationSourceIds.size) await sources(d, run.projectId, [...calculationSourceIds]);
             const inputHash = stepHash({ engine: "richtfest-acoustics", version: 1, input });
             const stepKey = `acoustics:${callKey}:${inputHash}`;
             let receipt: AcousticCalculationReceipt | undefined;
@@ -699,14 +704,15 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
     const plannedTemplate = state.history.findLast((entry: any) => entry.phase === "plan")?.output?.documentTemplate;
     const workflow = policy.workflow;
+    const calculationOnly = workflow?.mode === "calculation";
     const conceptId = workflow
       ? workflow.mode === "report" ? acousticConceptIdSchema.safeParse(workflow.reportTemplate).data : undefined
       : requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
         ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
-    const readCompleteSources = !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
+    const readCompleteSources = calculationOnly || !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
     if (state.phase === "plan") {
       const sourceInventory = await d.listProjectSources(run.projectId);
-      if (workflow?.mode === "report") {
+      if (workflow?.mode === "report" || calculationOnly) {
         await sources(d, run.projectId, run.sourceVersionIds);
         // Report evidence is pinned at creation, not expanded by later uploads.
         sourceInventory.sources = sourceInventory.sources.filter(source => run.sourceVersionIds.includes(source.versionId));
@@ -770,9 +776,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         sourceInventory,
         // New reports start from their request and evidence, not an earlier answer
         // or a quoted comparison report already present in conversation history.
-        history: (workflow?.mode === "report" ? [] : history).slice(0, 20)
+        history: (workflow?.mode === "report" || calculationOnly ? [] : history).slice(0, 20)
           .map((m: any) => ({ ...m, body: m.body.slice(0, 1000) })).reverse(),
-        artifacts: workflow?.mode === "report" ? [] : recentArtifacts,
+        artifacts: workflow?.mode === "report" || calculationOnly ? [] : recentArtifacts,
       };
       let fastSummary = false;
       const routing = policy.decisionRouting;
@@ -833,7 +839,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         assertConfiguredAssignments(parsed, policy);
         if (parsed.tasks.some(task => task.sourceVersionIds.some(v => !availableSourceIds.has(v))))
           throw conflict("Assignment exceeds source scope");
-        if (workflow?.mode === "report" && run.sourceVersionIds.some((versionId: string) =>
+        if ((workflow?.mode === "report" || calculationOnly) && run.sourceVersionIds.some((versionId: string) =>
           !parsed.tasks.some(task => task.sourceVersionIds.includes(versionId))))
           throw conflict("Report plan must cover every selected source version");
         return parsed;
@@ -882,6 +888,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           assignments.push({ ...item, taskId: task.id, runId: child.id,
             sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
             sourceBatchingVersion: 2,
+            ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly ? { exteriorNoiseExtractionVersion: 1 as const } : {}),
           });
         }
         await tx
@@ -974,6 +981,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   extractionNotes: excerpt.content.reason,
                 }),
               );
+              const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && assignment.exteriorNoiseExtractionVersion === 1 && !assignment.visualFollowup;
+              const specialistSchema = extractExteriorNoise
+                ? schemas.specialist.extend({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }) : schemas.specialist;
               // Reserve the maximum accumulated findings (including JSON escaping),
               // variable context and instructions/schema before packing whole pages.
               // Persist the chosen limit with progress so retries never repack saved work.
@@ -996,6 +1006,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
                 goal: assignment.goal, batches, unreadableSources,
+                ...(extractExteriorNoise ? { extractionContract: "exterior-noise-v1" } : {}),
                 ...(assignment.visualFollowup ? { visualFollowup: assignment.visualFollowup } : {}),
               })).digest("hex");
               const progress = assignment.sourceProgress?.inputHash === inputHash ? assignment.sourceProgress : undefined;
@@ -1017,15 +1028,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   });
                 });
                 if (!started) throw conflict("Supervisor no longer active");
-                const result = schemas.specialist.parse(await call("specialist", assignment.goal, {
+                const result = specialistSchema.parse(await call("specialist", assignment.goal, {
                   role: assignment.role,
+                  ...(extractExteriorNoise ? { extractExteriorNoise: true } : {}),
                   sourceVersionIds: batchIds,
                   ...(d.inspectSource ? { visualSourceVersionIds: assignment.visualFollowup
                     ? [...new Set(assignment.visualFollowup.requests.map(request => request.versionId))] : assignment.sourceVersionIds } : {}),
                   ...(assignment.visualFollowup ? { visualRequests: assignment.visualFollowup.requests } : {}),
                   sources: batch,
                   unreadableSources,
-                  previousFindings: accumulated,
+                  previousFindings: accumulated ? schemas.specialist.parse(accumulated) : undefined,
                   documentTemplate: conceptId ? { id: conceptId, version: 1 } : undefined,
                   sourceCoverage: {
                     batch: index + 1,
@@ -1034,7 +1046,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     readableVersionCount: readableSourceIds.size,
                   },
                 }, assignment.runId, (raw, visualVersionIds = []) => {
-                  const parsed = schemas.specialist.parse(raw);
+                  const parsed = specialistSchema.parse(raw);
+                  if (extractExteriorNoise) {
+                    const extraction = validateExteriorNoiseExtraction(z.object({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }).parse(raw).exteriorNoiseExtraction, batch);
+                    const inputSources = [...extraction.inventory.map(r => r.provenance),
+                      ...extraction.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
+                    parsed.citations = [...new Set([...parsed.citations, ...inputSources.flatMap(p => p.kind === "source" ? [p.versionId] : [])])];
+                  }
                   for (const versionId of visualVersionIds) allowedCitations.add(versionId);
                   const rejected = parsed.citations.flatMap((versionId, index) => allowedCitations.has(versionId) ? [] : [{ versionId, index }]);
                   if (rejected.length) throw Object.assign(new Error("Specialist citation validation failed."), {
@@ -1159,12 +1177,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           summary: (state.assignments as Assignment[]).map(a => a.output?.summary).filter(Boolean).join("\n\n"),
         });
       });
-      const requireSoundInsulation = workflow
+      const requireSoundInsulation = calculationOnly ? false : workflow
         ? workflow.mode === "report" && workflow.reportTemplate === "sound-insulation-review"
         : (state.assignments as Assignment[]).some(a => a.role === "sound_insulation");
       // Only application-assembled concepts are exempt from the per-response cap.
       const reviewSchema = schemas.review.extend({
-        document: (conceptId ? agentDocumentSchema : schemas.review.shape.document).nullish(),
+        document: (conceptId || calculationOnly ? agentDocumentSchema : schemas.review.shape.document).nullish(),
       });
       const validateReview = (raw: unknown) => {
         const review = reviewSchema.parse(raw);
@@ -1172,7 +1190,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           throw conflict("Team returns findings in chat, not a report artifact");
         if (workflow?.mode === "report" && review.document?.template?.id !== workflow.reportTemplate)
           throw conflict("Report must use the selected template");
-        review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId ? null : limits.documentMaxCharacters);
+        review.document = prepareAgentDocument(review.document, conceptId ?? requireSoundInsulation, conceptId || calculationOnly ? null : limits.documentMaxCharacters);
         const allowedCitations = (state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []);
         if (review.citations.some(v => !allowedCitations.includes(v))) throw conflict("Review introduced unsupported citations");
         assertDocumentCitations(review.document, review.citations);
@@ -1184,8 +1202,56 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       // retain the conservative historical packing instead of borrowing capacity.
       const reportModels = [policy.supervisor, ...(policy.writer ? [policy.writer] : [])];
       const reportBudgets = reportModels.map(model => agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens));
+      const calculationReceipts = (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []);
+      let calculationBlockers: string[] = [];
+      if ((conceptId === "exterior-noise-concept" || calculationOnly) && (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion === 1)) {
+        const extractionPackets = (state.assignments as Assignment[]).flatMap(a => {
+          const completed = state.history.findLast((entry: any) => entry.runId === a.runId && entry.phase === "specialist");
+          return state.history.filter((entry: any) => entry.runId === a.runId && entry.phase === "specialist_batch"
+            && entry.inputHash === completed?.inputHash && entry.revision === completed?.revision)
+            .flatMap((entry: any) => entry.output?.exteriorNoiseExtraction ? [entry.output.exteriorNoiseExtraction] : []);
+        });
+        const assembled = assembleExteriorNoiseInputs(extractionPackets);
+        calculationBlockers = assembled.blockers;
+        const assigned = new Set((state.assignments as Assignment[]).flatMap(a => a.sourceVersionIds));
+        if (!extractionPackets.length) calculationBlockers.push("No structured extraction checkpoint is available; a calculation-ready source pass is required.");
+        if (assembled.input) {
+          const inputSourceIds = [...new Set(acousticInputProvenance(assembled.input).flatMap(p => p.kind === "source" ? [p.versionId] : []))];
+          if (inputSourceIds.some(v => !assigned.has(v))) throw conflict("Extracted calculation source is outside the assignment scope");
+          await sources(d, run.projectId, inputSourceIds);
+        }
+        if (!d.calculateAcoustics) calculationBlockers.push("The deterministic acoustic calculator is unavailable.");
+        const inputHash = stepHash({ contract: "exterior-noise-v1", extractionPackets, calculatorAvailable: !!d.calculateAcoustics });
+        const stepKey = `exterior-calculation:${inputHash}`;
+        const saved = await commit(d, run, token, async tx => {
+          const previous = await savedStep(d, id, "tool", stepKey, inputHash, tx);
+          const output = previous?.output ?? {
+            result: assembled.input && d.calculateAcoustics ? acousticCalculationResultSchema.parse(d.calculateAcoustics(assembled.input)) : null,
+            blockers: calculationBlockers,
+          };
+          const step = previous ?? await recordStep(d, tx, { ...run, generation: state.generation }, {
+            kind: "tool", stepKey, inputHash, input: { contract: "exterior-noise-v1", extractionPackets }, output, status: "completed",
+          });
+          const savedOutput = output as { result: unknown; blockers: string[] };
+          calculationBlockers = savedOutput.blockers;
+          if (savedOutput.result) calculationReceipts.push({ ...acousticCalculationResultSchema.parse(savedOutput.result), receiptId: step.id });
+          if (!previous) await log(d, tx, run, "tool_executed", "exterior_noise_batch", "Application-owned room calculation; not reviewed");
+        });
+        if (!saved) throw conflict("Supervisor no longer active");
+      }
       const review = validateReview(
-        conceptId ? await authorAcousticConcept({
+        calculationOnly ? {
+          document: { title: "Schallschutznachweis · Außenlärm · Rechenblatt",
+            content: ["# Schallschutznachweis · Außenlärm\n\nRechenblatt zur fachlichen Prüfung; keine Freigabe. Unterstützt werden die ausgewiesenen Außenlärm-Rechenfälle, kein allgemeiner Innenlärm- oder Flankennachweis.",
+              renderAcousticCalculationReceipts(calculationReceipts, "de"),
+              ...(calculationBlockers.length ? ["## Offene Berechnungseingaben\n\n" + calculationBlockers
+                .map(reason => `- ${reason.replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ")}`).join("\n")] : []),
+            ].filter(Boolean).join("\n\n") },
+          citations: [...new Set(calculationReceipts.flatMap(r => acousticInputProvenance(r.input).flatMap(p => p.kind === "source" ? [p.versionId] : [])))],
+          decision: "accept", revisions: [],
+          summary: "Rechenblatt mit Raumergebnissen und offenen Eingaben erstellt. Fachliche Prüfung und Freigabe stehen aus.",
+          rationale: "Deterministisch aus gespeicherten Eingaben berechnet; keine Berichtserstellung oder redaktionelle Überarbeitung.",
+        } : conceptId ? await authorAcousticConcept({
           d, projectId: run.projectId, id: conceptId, goal, limits,
           maxOutputTokens: Math.min(...reportModels.map(model => model.maxOutputTokens)),
           maxParallel: policy.maxParallel,
@@ -1204,9 +1270,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             return entries.filter((entry: any) => entry.phase === "specialist_batch"
               ? entry.revision === (completed?.revision ?? state.revision) && (!completed?.inputHash || entry.inputHash === completed.inputHash)
               : entry.phase === "specialist_visual_followup" && entry.revision > (completed?.revision ?? -1))
-              .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: entry.output }));
+              .map((entry: any) => ({ sourceVersionIds: entry.sourceVersionIds, output: { ...entry.output, exteriorNoiseExtraction: undefined } }));
           }),
-          calculationReceipts: (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []),
+          calculationReceipts,
+          calculationBlockers,
           companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
           sourceDirectory: await d.sourceReferences(run.projectId,
@@ -1239,6 +1306,11 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           documentTemplate: requireSoundInsulation ? { id: "sound-insulation-review", version: 1 } : undefined,
         }, id, validateReview),
       );
+      const batchReceipt = calculationReceipts.find(r => r.method === "exterior_noise_batch");
+      const acousticDataset = batchReceipt ? acousticDatasetSchema.parse({ version: 1,
+        receipt: batchReceipt, blockers: calculationBlockers, basedOn: null }) : undefined;
+      // Retained across independent review, but never sent as duplicate model context.
+      if (acousticDataset) Object.assign(review, { acousticDataset });
       if (outstandingVisualReads.length) {
         // A model's "accept" cannot erase application-observed missing reads.
         review.decision = "revise";
@@ -1357,6 +1429,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               sourceVersionIds: review.citations,
             },
             id,
+            acousticDataset,
           );
           const resultReference = resultArtifact ? {
             kind: "supervisor_result",
@@ -1591,7 +1664,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             content: `${firstPassReview?.document?.content ?? firstPassReview?.summary ?? summary}\n\nReview rationale\n\n${rationale}${unresolved ? "\n\nRevision limit reached. Unresolved independent-review issues require human review." : ""}`,
             payload: { kind: "summary", data: [{ summary, rationale }], template: firstPassReview?.document?.template },
             sourceVersionIds: reviewCitations,
-          }, id);
+          }, id, firstPassReview?.acousticDataset);
           const resultReference = resultArtifact ? {
             kind: "supervisor_result",
             artifactId: resultArtifact.artifact.id,

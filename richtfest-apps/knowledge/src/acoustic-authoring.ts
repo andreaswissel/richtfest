@@ -65,6 +65,7 @@ export async function authorAcousticConcept(input: {
   d: AppDeps; projectId: string; id: AcousticConceptId; goal: string;
   findings: unknown; sourceVersionIds: string[]; limits: AgentExecutionLimits; maxOutputTokens: number;
   calculationReceipts?: AcousticCalculationReceipt[];
+  calculationBlockers?: string[];
   companyKnowledge?: CompanyKnowledgeReceipt[];
   sourceDirectory?: SourceReference[];
   visualReads?: { request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }[];
@@ -81,12 +82,28 @@ export async function authorAcousticConcept(input: {
   // Preserve the fingerprint contract so drafts saved under the old aggregate cap resume.
   const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens,
     ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
+    ...(input.calculationBlockers?.length ? { calculationBlockers: input.calculationBlockers } : {}),
     ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     ...(input.modelPolicy ? { modelPolicy: input.modelPolicy } : {}),
   });
   const sourceIds = new Set(input.sourceVersionIds);
   const sourceDirectory = (input.sourceDirectory ?? []).filter(source => sourceIds.has(source.versionId));
   const reportReceipts = selectAcousticCalculationReportReceipts(input.calculationReceipts ?? []);
+  // Models interpret outcomes; the application retains and renders full arithmetic.
+  const calculationContext = reportReceipts.map(r => !r.batch ? r : {
+    receiptId: r.receiptId, method: r.method, reviewStatus: r.reviewStatus, limitations: r.limitations,
+    complete: r.batch.complete, issues: r.batch.issues,
+    rooms: r.batch.rooms.map(row => {
+      const sourceVersionIds = row.result ? [...new Set(acousticInputProvenance(row.result.input).flatMap(p => p.kind === "source" ? [p.versionId] : []))] : [];
+      const result = sourceVersionIds.length ? row.result : null;
+      return { roomId: row.roomId, status: row.status,
+        rwDb: result?.value ?? null, ...result?.exteriorNoise,
+        blockers: row.status === "unsupported" ? row.result?.limitations
+          : row.result && !result ? ["Assumption-only result withheld; no source evidence."] : [],
+        sourceVersionIds,
+      };
+    }),
+  });
   const savedFindings = z.array(z.object({
     sourceVersionIds: z.array(z.string()),
     output: z.object({ summary: z.string().optional(), rationale: z.string().optional(),
@@ -114,7 +131,8 @@ export async function authorAcousticConcept(input: {
       documentTask: "outline", documentTemplate: { id, version: 1 }, sectionKeys: keys,
       findings: input.findings, sourceVersionIds: input.sourceVersionIds, previousReview: input.previousReview,
       sourceDirectory, visualReads: input.visualReads ?? [],
-      ...(reportReceipts.length ? { calculationReceipts: reportReceipts } : {}),
+      ...(reportReceipts.length ? { calculationReceipts: calculationContext } : {}),
+      ...(input.calculationBlockers?.length ? { calculationBlockers: input.calculationBlockers } : {}),
       ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     }, value => outlineSchema.parse(value)));
     // Normalize new outlines only: old drafts retain their batch identities on retry.
@@ -194,7 +212,10 @@ export async function authorAcousticConcept(input: {
       attachments: outline.attachments.filter(a => a.section === key), previousReview: draft.previousReview,
       ...(useFindings ? { findings, inputMode: "specialist-findings",
         evidenceInstructions: "Draft open issues from saved specialist findings, not a fresh source review. Retain unresolved limitations, missing inputs and required specialist verification explicitly. Findings are attributed reports, not verified project facts. Only supplied citations also listed in sourceVersionIds may be cited; company references and calculation receipt IDs are not project sources." } : {}),
-      ...(calculationReceipts.length ? { calculationReceipts } : {}),
+      ...(calculationReceipts.length ? { calculationReceipts: calculationReceipts.some(r => r.batch) ? calculationContext : calculationReceipts } : {}),
+      ...(["exteriorNoiseAssessment", "openIssues"].includes(key) && calculationContext.length
+        ? { calculationResults: calculationContext } : {}),
+      ...(input.calculationBlockers?.length && key === "openIssues" ? { calculationBlockers: input.calculationBlockers } : {}),
       ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
     };
     // Reserve instructions/schema space plus the actual variable context. A byte
@@ -324,6 +345,11 @@ export async function authorAcousticConcept(input: {
       citations.add(p.versionId);
     }
     bodies.calculationAppendix += `\n\n${renderAcousticCalculationReceipts(input.calculationReceipts, outline.language)}`;
+  }
+  if (input.calculationBlockers?.length) {
+    const escape = (s: string) => s.replace(/[\\`*_{}<>#!|\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ");
+    bodies.calculationAppendix += `\n\n**${outline.language === "de" ? "Offene Berechnungseingaben" : "Unresolved calculation inputs"}**\n\n`
+      + input.calculationBlockers.map(reason => `- ${escape(reason)}`).join("\n");
   }
   const template = acousticConceptTemplateSchema.parse({ id, version: 1, language: outline.language,
     project: outline.project, attachments: outline.attachments, ...bodies });

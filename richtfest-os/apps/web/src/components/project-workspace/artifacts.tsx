@@ -6,6 +6,7 @@ import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { SubagentList } from "./subagent-thread";
 import { AffinityPdfPairing } from "./affinity-pdf-pairing";
+import { AcousticScenario } from "./acoustic-scenario";
 import {
   ArtifactSourceRegister,
   ArtifactExportActions,
@@ -84,6 +85,8 @@ export function ArtifactPanel({
   const revision = list(artifact.data?.revisions).find(
     (r) => r.id === revisionId,
   );
+  const approvedRevisionId = artifact.data?.artifact?.status === "approved"
+    ? list(artifact.data?.revisions)[0]?.id : undefined;
   useEffect(() => {
     setDocumentSelection(undefined);
     setActiveNote(undefined);
@@ -422,7 +425,7 @@ export function ArtifactPanel({
                   </option>
                   {list(artifact.data?.revisions).map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.revision || r.version} · {r.status || t("draft")}
+                      {r.revision || r.version} · {r.id === approvedRevisionId ? t("approved") : r.status || t("draft")}
                     </option>
                   ))}
                 </NativeSelect>
@@ -435,10 +438,26 @@ export function ArtifactPanel({
                       revisionId={revision.id}
                     />
                     <Badge>
-                      {revision.status === "approved"
+                      {revision.id === approvedRevisionId
                         ? t("approved")
                         : t("draft")}
                     </Badge>
+                    <AcousticScenario
+                      key={revision.id}
+                      projectId={projectId}
+                      artifactId={artifactId}
+                      revisionId={revision.id}
+                      title={revision.title}
+                      payload={revision.payload?.acousticDataset}
+                      approved={revision.id === approvedRevisionId}
+                      onCreated={(id, revisionId) =>
+                        setParams(
+                          target({ artifact: id, revision: revisionId }).slice(
+                            1,
+                          ),
+                        )
+                      }
+                    />
                     {revision.format === "openui" ||
                     artifact.data?.artifact?.type === "openui" ? (
                       <LazyOpenUI
@@ -469,7 +488,7 @@ export function ArtifactPanel({
                       projectId={projectId}
                       revision={revision}
                     />
-                    {artifact.data?.artifact?.status === "approved" ? (
+                    {revision.id === approvedRevisionId ? (
                       <Callout tone="success">
                         {t("workspaceReviewedFinding")} ·{" "}
                         <Link to={`/projects/${projectId}?view=knowledge`}>

@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ok, acousticDocumentTemplateSchema, agentBudgetDecisionSchema } from "@richtfest/shared";
+import { ok, acousticDocumentTemplateSchema, agentBudgetDecisionSchema, acousticDatasetSchema, type AcousticDataset } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
 import {
@@ -108,6 +108,7 @@ export async function createArtifact(
   tx: any,
   input: z.infer<typeof artifactInput>,
   runId?: string,
+  acousticDataset?: AcousticDataset,
 ) {
   const [artifact] = await tx
     .insert(artifacts)
@@ -129,7 +130,8 @@ export async function createArtifact(
       version: 1,
       title: input.title,
       content: input.content,
-      payload: input.payload,
+      // Only server-owned workflows can attach executable inputs; generic edits cannot forge them.
+      payload: acousticDataset ? { ...input.payload, acousticDataset: acousticDatasetSchema.parse(acousticDataset) } : input.payload,
       sourceVersionIds: input.sourceVersionIds,
       createdBy: d.actorId,
     })

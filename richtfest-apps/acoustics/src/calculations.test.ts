@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { calculateAcoustics } from "./calculations";
 import { exteriorNoiseFixture } from "../../../tests/fixtures/exterior-noise";
-import { renderAcousticCalculationReceipts, selectAcousticCalculationReportReceipts, type AcousticCalculationReceipt } from "../../../richtfest-shared/src/acoustic-calculation";
+import { acousticInputProvenance, renderAcousticCalculationReceipts, selectAcousticCalculationReportReceipts, type AcousticCalculationReceipt } from "../../../richtfest-shared/src/acoustic-calculation";
 
 const provenance = { kind: "assumption", reason: "Synthetic arithmetic verification, not project evidence" } as const;
 const observation = (levelDb: number) => ({ label: `Level ${levelDb}`, levelDb, provenance });
@@ -12,6 +12,56 @@ const receipt = (input: Parameters<typeof calculateAcoustics>[0]): AcousticCalcu
   ...calculateAcoustics(input), receiptId: "11111111-1111-4111-8111-111111111111",
 });
 const sourceProvenance = { kind: "source", versionId: "22222222-2222-4222-8222-222222222222", page: 3, excerpt: "Measured source level" } as const;
+
+test("batch calculations preserve every declared room, numeric sign, blockers and input provenance", () => {
+  const rooms = Array.from({ length: 62 }, (_, i) => {
+    const { method, ...input } = exteriorNoiseFixture();
+    input.room.id = `Room ${i + 1}`;
+    input.room.provenance = sourceProvenance;
+    if (i === 1) input.facades.forEach(f => { f.noise.levelDb += 0.04; });
+    if (i === 2) input.envelopeComplete = false;
+    return input;
+  });
+  const inventory = rooms.map(r => ({ roomId: r.room.id, provenance: sourceProvenance }));
+  const input = { method: "exterior_noise_batch", scope: "Synthetic 62-room inventory", inventory, rooms: rooms.slice(0, 61).reverse() };
+  const result = receipt(input as any);
+  expect(result).toMatchObject({ status: "unsupported", value: null, batch: { complete: false } });
+  expect(result.batch!.rooms.map(r => r.roomId)).toEqual(inventory.map(r => r.roomId));
+  expect(result.batch!.rooms.filter(r => r.status === "calculated")).toHaveLength(60);
+  expect(result.batch!.rooms[0]!.result?.value).toBeCloseTo(44.66896537322387, 10);
+  expect(result.batch!.rooms[1]!.result?.exteriorNoise).toMatchObject({ comparison: "below_numeric_target" });
+  expect(result.batch!.rooms[1]!.result?.exteriorNoise?.marginDb).toBeCloseTo(-0.020687791448087654, 10);
+  expect(result.batch!.rooms[2]).toMatchObject({ status: "unsupported", result: { value: null } });
+  expect(result.batch!.rooms[61]).toMatchObject({ status: "missing_input", result: null });
+  expect(acousticInputProvenance(result.input).filter(p => p.kind === "source")).toHaveLength(123);
+  for (const language of ["en", "de"] as const) {
+    const rendered = renderAcousticCalculationReceipts([result], language);
+    expect(rendered).toContain("60/62");
+    expect(rendered).toContain("| Room 2 | 44.690 | 44.669 | -0.021 |");
+    expect(rendered).toContain(language === "en" ? "Below target" : "Unter Ziel");
+    expect(rendered).toContain("| Room 62 | — | — | — |");
+    expect(rendered).toContain(sourceProvenance.versionId);
+    expect(rendered).not.toContain(result.receiptId);
+  }
+  const complete = calculateAcoustics({ ...input, inventory: inventory.slice(0, 2), rooms: rooms.slice(0, 2) });
+  expect(complete.batch?.complete).toBe(true); // Calculated does not mean every room meets its target.
+  expect(complete.batch?.rooms[1]?.result?.exteriorNoise?.comparison).toBe("below_numeric_target");
+  for (const invalid of [
+    { ...input, inventory: [...inventory, inventory[0]] },
+    { ...input, rooms: [rooms[0], rooms[0]] },
+    { ...input, inventory: inventory.slice(0, 1) },
+  ]) {
+    const blocked = calculateAcoustics(invalid);
+    expect(blocked.batch?.complete).toBe(false);
+    expect(blocked.batch?.rooms.every(r => r.status === "invalid_inventory" && r.result === null)).toBe(true);
+  }
+  const assumptionOnly = exteriorNoiseFixture();
+  const { method, ...assumptionRoom } = assumptionOnly;
+  const mixed = receipt({ method: "exterior_noise_batch", scope: "Mixed evidence", inventory: [
+    inventory[0]!, { roomId: assumptionRoom.room.id, provenance },
+  ], rooms: [rooms[0]!, assumptionRoom] });
+  expect(renderAcousticCalculationReceipts([mixed], "en")).toContain(`| ${assumptionRoom.room.id} | — | — | — | Assumptions only |`);
+});
 
 test("project reports preserve source-backed zero and mixed provenance with exact saved fields", () => {
   const zero = receipt({ ...sum, sources: [{ ...observation(0), provenance: sourceProvenance }] });

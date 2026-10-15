@@ -2,6 +2,10 @@
 
 ## 2026-10-15
 
+- Project conversations can request a calculation-only Schallschutznachweis or select a full concept format. New exterior-noise workflows extract source-backed room inputs, automatically calculate every declared room, and save a result or blocker without optional agent arithmetic calls. Calculation sheets skip report writing and editorial passes; configured independent review and human release remain separate.
+- Added an offline room-by-room exterior-noise reference comparison and deterministic room tables with calculation details. Missing inputs and conflicting evidence stay visible; matching a reference does not grant compliance approval. Existing runs keep their saved behavior; no paid run starts automatically.
+- Approved room-input revisions can now serve as the basis for calculation scenarios. Planners adjust numeric inputs and save a new draft without AI calls or repeated source extraction; original inputs, change reasons, source versions and review boundaries remain traceable.
+
 - Reports can use a separate writing model without changing their reviewers. Independent checks now distinguish omitted packet sections from missing chapters and no longer demand that assembled reports fit a single-response length limit. Existing runs keep their model settings; no paid run starts automatically.
 
 - Astra report calls now cache shared context separately from changing writing packets, without reducing evidence or review checks. Patch editing no longer receives the unrelated component catalogue. Cache-write costs are included in new call estimates and reservations; actual savings depend on provider reuse. No paid run restarts automatically.

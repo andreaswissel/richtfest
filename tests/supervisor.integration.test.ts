@@ -230,7 +230,7 @@ integration(`visual budget recovery preserves findings and shares the revision l
     await stepSupervisor(d, run!.id);
     const [planned] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
     // Legacy small batches exercise saved findings across several normal calls.
-    await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, sourceBatchingVersion, ...a }) => a) }).where(eq(supervisorRuns.runId, run!.id));
+    await db.update(supervisorRuns).set({ assignments: (planned!.assignments as any[]).map(({ sourceInputByteBudget, sourceBatchingVersion, exteriorNoiseExtractionVersion, ...a }) => a) }).where(eq(supervisorRuns.runId, run!.id));
     await stepSupervisor(d, run!.id);
     const sourceReadsBeforeFollowup = sourceCalls.length;
     const receipts = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));

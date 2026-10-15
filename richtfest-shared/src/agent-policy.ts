@@ -2,13 +2,14 @@ import { z } from "zod";
 
 export const agentEffortSchema = z.enum(["low", "medium", "high", "ultra"]);
 export type AgentEffort = z.infer<typeof agentEffortSchema>;
-export const agentWorkflowModeSchema = z.enum(["chat", "team", "report"]);
+export const agentWorkflowModeSchema = z.enum(["chat", "team", "report", "calculation"]);
 export type AgentWorkflowMode = z.infer<typeof agentWorkflowModeSchema>;
 export const agentReportTemplateSchema = z.enum(["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"]);
 export const agentWorkflowSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("chat") }).strict(),
   z.object({ mode: z.literal("team") }).strict(),
   z.object({ mode: z.literal("report"), reportTemplate: agentReportTemplateSchema }).strict(),
+  z.object({ mode: z.literal("calculation") }).strict(),
 ]);
 export type AgentWorkflow = z.infer<typeof agentWorkflowSchema>;
 // Requests can leave the format to the application; persisted policies remain exact.
@@ -16,6 +17,7 @@ export const agentWorkflowRequestSchema = z.discriminatedUnion("mode", [
   agentWorkflowSchema.options[0],
   agentWorkflowSchema.options[1],
   agentWorkflowSchema.options[2].partial({ reportTemplate: true }),
+  agentWorkflowSchema.options[3],
 ]);
 export type AgentWorkflowRequest = z.infer<typeof agentWorkflowRequestSchema>;
 export const agentModeRecommendationSchema = z.object({

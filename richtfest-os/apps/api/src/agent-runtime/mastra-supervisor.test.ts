@@ -322,6 +322,18 @@ test("Mastra specialists execute all acoustic tools before returning structured 
   expect(prepared.tools.map((tool: any) => tool.name)).toEqual([...new Set(calls.map(call => call.name))]);
 });
 
+test("exterior source extraction returns structured inputs without exposing arithmetic tools", async () => {
+  const output = { summary: "Room geometry missing", rationale: "No inference", citations: [],
+    exteriorNoiseExtraction: { inventory: [], rooms: [], blockers: [{ roomId: null, reason: "No room schedule in this source packet" }] } };
+  const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true },
+    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 4 },
+    calculateAcoustics: async () => { throw new Error("Arithmetic belongs to the application stage"); },
+  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+    spyStream: request => { expect(request.tools ?? []).toHaveLength(0); },
+  }) });
+  expect(result).toEqual(output);
+});
+
 test("acoustic tools are absent for other roles and insufficient model steps", async () => {
   for (const [role, maxSteps] of [["sound_insulation", 1], ["source_reviewer", 4], ["construction_law", 4]] as const) {
     const output = { summary: "No arithmetic tool is available", rationale: "Configuration limit", citations: [] };

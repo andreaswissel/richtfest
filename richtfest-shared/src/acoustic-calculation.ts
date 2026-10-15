@@ -78,12 +78,30 @@ export const exteriorNoiseFacadeSchema = exteriorNoiseRoomSchema.extend({
   ])).min(1).max(100),
 }).strict();
 
-export const acousticCalculationSchema = z.discriminatedUnion("method", [
+/** The declared inventory is independent of available calculation inputs. */
+export const exteriorNoiseBatchSchema = z.object({
+  scope: label,
+  inventory: z.array(z.object({ roomId: label, provenance }).strict()).min(1).max(100),
+  rooms: z.array(exteriorNoiseFacadeSchema).max(100),
+}).strict();
+
+/** Source-reading output, never calculation results or reference answers. */
+export const exteriorNoiseExtractionSchema = z.object({
+  inventory: exteriorNoiseBatchSchema.shape.inventory.min(0),
+  rooms: exteriorNoiseBatchSchema.shape.rooms,
+  blockers: z.array(z.object({ roomId: label.nullable(), reason: z.string().min(1).max(1000) }).strict()).max(100),
+}).strict();
+
+const singleAcousticCalculationSchema = z.discriminatedUnion("method", [
   sumSoundLevelsSchema.extend({ method: z.literal("sum_sound_levels") }).strict(),
   equivalentSoundLevelSchema.extend({ method: z.literal("equivalent_sound_level") }).strict(),
   compositeSoundReductionSchema.extend({ method: z.literal("composite_sound_reduction") }).strict(),
   exteriorNoiseRoomSchema.extend({ method: z.literal("exterior_noise_room_requirement") }).strict(),
   exteriorNoiseFacadeSchema.extend({ method: z.literal("exterior_noise_facade") }).strict(),
+]);
+export const acousticCalculationSchema = z.discriminatedUnion("method", [
+  ...singleAcousticCalculationSchema.options,
+  exteriorNoiseBatchSchema.extend({ method: z.literal("exterior_noise_batch") }).strict(),
 ]);
 export type AcousticCalculationInput = z.infer<typeof acousticCalculationSchema>;
 
@@ -93,6 +111,8 @@ export function acousticInputProvenance(input: AcousticCalculationInput): z.infe
     case "sum_sound_levels": return input.sources.map(o => o.provenance);
     case "equivalent_sound_level": return input.intervals.map(o => o.provenance);
     case "composite_sound_reduction": return input.elements.map(o => o.provenance);
+    case "exterior_noise_batch": return [...input.inventory.map(r => r.provenance),
+      ...input.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
     default: return [input.room.provenance, input.applicability.provenance,
       ...input.facades.flatMap(f => [f.provenance, f.noise.provenance]),
       ...(input.method === "exterior_noise_facade" ? [input.flanking.provenance, ...input.elements.map(e => e.provenance)] : []),
@@ -100,11 +120,11 @@ export function acousticInputProvenance(input: AcousticCalculationInput): z.infe
   }
 }
 
-export const acousticCalculationResultSchema = z.object({
+const singleAcousticCalculationResultSchema = z.object({
   engine: z.literal("richtfest-acoustics"),
   version: z.literal(1),
   method: z.enum(["sum_sound_levels", "equivalent_sound_level", "composite_sound_reduction", "exterior_noise_room_requirement", "exterior_noise_facade"]),
-  input: acousticCalculationSchema,
+  input: singleAcousticCalculationSchema,
   status: z.enum(["calculated", "unsupported"]).default("calculated"),
   value: z.number().finite().nullable(),
   unit: z.enum(["dB", "dB(A)", "dB(C)", "dB(Z)"]),
@@ -120,9 +140,48 @@ export const acousticCalculationResultSchema = z.object({
   limitations: z.array(z.string()),
   reviewStatus: z.literal("not_reviewed"),
 }).strict();
+export const acousticCalculationResultSchema = singleAcousticCalculationResultSchema.extend({
+  method: z.enum(["sum_sound_levels", "equivalent_sound_level", "composite_sound_reduction", "exterior_noise_room_requirement", "exterior_noise_facade", "exterior_noise_batch"]),
+  input: acousticCalculationSchema,
+  batch: z.object({
+    complete: z.boolean(),
+    issues: z.array(z.string()),
+    rooms: z.array(z.object({
+      roomId: label,
+      status: z.enum(["calculated", "unsupported", "missing_input", "invalid_inventory"]),
+      result: singleAcousticCalculationResultSchema.nullable(),
+    }).strict()),
+  }).strict().optional(),
+}).strict();
 export type AcousticCalculationResult = z.infer<typeof acousticCalculationResultSchema>;
 export const acousticCalculationReceiptSchema = acousticCalculationResultSchema.extend({ receiptId: z.string().uuid() });
 export type AcousticCalculationReceipt = z.infer<typeof acousticCalculationReceiptSchema>;
+
+/** Server-saved input/result pair. Approval belongs to its exact artifact revision. */
+export const acousticDatasetSchema = z.object({
+  version: z.literal(1),
+  receipt: acousticCalculationReceiptSchema.extend({
+    method: z.literal("exterior_noise_batch"),
+    input: exteriorNoiseBatchSchema.extend({ method: z.literal("exterior_noise_batch") }),
+  }),
+  blockers: z.array(z.string()),
+  basedOn: z.object({ artifactId: z.string().uuid(), revisionId: z.string().uuid() }).nullable(),
+}).strict();
+export type AcousticDataset = z.infer<typeof acousticDatasetSchema>;
+
+export const acousticScenarioInputSchema = z.object({
+  expectedRevisionId: z.string().uuid(),
+  title: z.string().trim().min(1).max(300),
+  reason: z.string().trim().min(1).max(1000),
+  adjustments: z.array(z.object({
+    roomId: label,
+    target: z.enum(["room", "facade", "noise", "element"]),
+    id: label,
+    field: z.enum(["floorAreaM2", "areaM2", "levelDb", "rwDb", "dnEWDb", "count", "openingAreaM2"]),
+    value: z.number().finite(),
+  }).strict()).max(1000),
+}).strict();
+export type AcousticScenarioInput = z.infer<typeof acousticScenarioInputSchema>;
 
 /** Project-report context only; the durable execution ledger remains unchanged.
  * Keep unsupported attempts so writers can explain their blocking reasons.
@@ -159,6 +218,77 @@ export function renderAcousticCalculationReceipts(receipts: AcousticCalculationR
   ) : "";
   return [exclusionNotice, ...reportReceipts.map((raw, index) => {
     const receipt = acousticCalculationReceiptSchema.parse(raw);
+    if (receipt.input.method === "exterior_noise_batch" && receipt.batch) {
+      const batch = receipt.batch;
+      const evidence = new Map<string, number>();
+      const evidenceRows: string[] = [];
+      const cite = (p: z.infer<typeof provenance>) => {
+        const key = JSON.stringify(p);
+        if (!evidence.has(key)) {
+          const n = evidence.size + 1;
+          evidence.set(key, n);
+          evidenceRows.push(`| ${n} | ${p.kind === "source" ? `[${p.versionId}] · ${t("Seite", "Page")} ${p.page ?? "—"} · ${cell(p.excerpt)}` : `${t("Annahme", "Assumption")}: ${cell(p.reason)}`} |`);
+        }
+        return evidence.get(key)!;
+      };
+      const display = (n: number | null | undefined) => n == null ? "—" : n.toFixed(3);
+      const terms: Record<string, string> = {
+        hospital_bedroom: t("Bettenraum", "Hospital bedroom"),
+        residential_accommodation_classroom: t("Wohn-, Übernachtungs- oder Unterrichtsraum", "Residential, accommodation or classroom"),
+        office: t("Büro", "Office"),
+        standard_exterior_noise: t("Regelfall Außenlärm", "Standard exterior noise"),
+        special_assessment_required: t("Sonderbeurteilung erforderlich", "Special assessment required"),
+        unknown: t("Ungeklärt", "Unknown"), negligible: t("Vernachlässigbar", "Negligible"),
+        required: t("Zu berücksichtigen", "Required"),
+        installed_configuration: t("Einbausituation berücksichtigt", "Installed configuration"),
+        unadjusted_lab: t("Unkorrigierter Laborwert", "Unadjusted laboratory rating"),
+        massive: t("Massiv", "Massive"), lightweight: t("Leichtbau", "Lightweight"),
+        window_or_door: t("Fenster oder Tür", "Window or door"),
+      };
+      const yesNo = (value: boolean) => value ? t("Ja", "Yes") : t("Nein", "No");
+      const details: string[] = [];
+      const summary = batch.rooms.map(row => {
+        const r = row.result;
+        const eligible = r && (r.status === "unsupported" || acousticInputProvenance(r.input).some(p => p.kind === "source"));
+        const numeric = eligible && r.status === "calculated" ? r.exteriorNoise : undefined;
+        const margin = numeric?.marginDb;
+        const status = r && !eligible ? t("Nur Annahmen", "Assumptions only")
+          : !numeric || margin == null ? t("Offen", "Blocked")
+          : margin < 0 ? t("Unter Ziel", "Below target")
+          : margin <= 0.5 ? t("Reserve ≤ 0,5 dB", "Reserve ≤ 0.5 dB") : t("Ziel erreicht", "Target met");
+        if (r?.input.method === "exterior_noise_facade") {
+          const room = r.input;
+          details.push([
+            `**${t("Raum", "Room")} ${cell(row.roomId)}**`,
+            `${t("Grundfläche", "Floor area")} S_G = ${room.room.floorAreaM2} m²; ${t("Nutzung", "Use")}: ${terms[room.room.use]} (${t("Beleg", "Evidence")} ${cite(room.room.provenance)}).`,
+            `${terms[room.applicability.assessment]}: ${cell(room.applicability.basis)} (${cite(room.applicability.provenance)}); ${t("Flanken", "Flanking")}: ${terms[room.flanking.assessment]} (${cite(room.flanking.provenance)}).`,
+            `${t("Hülle vollständig", "Envelope complete")}: ${yesNo(room.envelopeComplete)}; ${t("Bauteile vollständig", "Elements complete")}: ${yesNo(room.elementsComplete)}.`,
+            `| ${t("Fassade", "Facade")} | S_s m² | La dB | ${t("Ansatz / Belege", "Basis / evidence")} |\n| --- | --- | --- | --- |\n${room.facades.map(f => `| ${cell(f.id)} | ${f.areaM2} | ${f.noise.levelDb} | ${cell(f.noise.basis)} (${cite(f.provenance)}, ${cite(f.noise.provenance)}) |`).join("\n")}`,
+            `| ${t("Bauteil / Fassade", "Element / facade")} | ${t("Fläche / Anzahl", "Area / count")} | ${t("Kennwert", "Rating")} dB | ${t("Konfiguration / Beleg", "Configuration / evidence")} |\n| --- | --- | --- | --- |\n${room.elements.map(e => `| ${cell(e.id)} / ${cell(e.facadeId)} | ${e.kind === "area" ? `${e.areaM2} m²` : `${e.count} × ${e.openingAreaM2} m²`} | ${e.kind === "area" ? `Rw ${e.rwDb}` : `Dn,e,w ${e.dnEWDb}`} | ${cell(e.configuration)}; ${terms[e.ratingBasis]}${e.kind === "area" ? `; ${terms[e.construction]}` : ""} (${cite(e.provenance)}) |`).join("\n")}`,
+            ...(numeric ? [table(t("Rechenweg (ungerundete Werte)", "Calculation (unrounded values)"), r.intermediates.map(v => `| ${cell(v.label)} | ${v.value} ${cell(v.unit)} |`)),
+              `Rw = ${r.value} dB; ${t("Ziel", "Target")} = ${numeric.targetRwDb} dB; ${t("Reserve", "Margin")} = ${margin} dB.`]
+              : [`${status}: ${r.status === "unsupported" ? cell(r.limitations[0]) : t("Ohne Quellenbeleg kein Projektergebnis.", "No project result without source evidence.")}`]),
+          ].join("\n\n"));
+        }
+        return `| ${cell(row.roomId)} | ${display(numeric?.targetRwDb)} | ${display(numeric ? r?.value : null)} | ${display(margin)} | ${status} |`;
+      });
+      const inventory = receipt.input.inventory.map(r => `${cell(r.roomId)} (${cite(r.provenance)})`).join(", ");
+      const methods = [...new Set(batch.rooms.flatMap(r => r.result ? [r.result.formula] : []))];
+      const limitations = [...new Set([...receipt.limitations, ...batch.rooms.flatMap(r => r.result?.limitations ?? [])])];
+      return [
+        `**${t("Außenlärm – Raumberechnung", "Exterior noise – room calculations")}: ${cell(receipt.input.scope)}**`,
+        `${receipt.engine} · v${receipt.version} · ${t("Fachlich ungeprüft; Freigabe ausstehend.", "Not reviewed; release pending.")}`,
+        `${t("Deklariertes Rauminventar", "Declared room inventory")}: ${inventory}.`,
+        `${t("Berechnungsabdeckung", "Calculation coverage")}: ${batch.rooms.filter(r => r.status === "calculated").length}/${batch.rooms.length}; ${batch.complete ? t("deklariertes Inventar berechnet", "declared inventory calculated") : t("unvollständig", "incomplete")}.`,
+        `| ${t("Raum", "Room")} | ${t("Ziel inkl. 2 dB", "Target incl. 2 dB")} | Rw dB | ${t("Reserve", "Margin")} dB | ${t("Numerischer Status", "Numeric status")} |\n| --- | --- | --- | --- | --- |\n${summary.join("\n")}`,
+        t("Übersicht auf drei Dezimalstellen gerundet; Status und Reservebewertung verwenden ungerundete Werte. Zielerreichung ist keine fachliche Freigabe.", "Overview rounded to three decimals; status and margin assessment use unrounded values. Meeting a target is not professional approval."),
+        ...(batch.issues.length ? [table(t("Offene Berechnungspunkte", "Calculation blockers"), batch.issues.map((issue, i) => `| ${i + 1} | ${cell(issue)} |`))] : []),
+        ...methods.map(formula => `${t("Formel", "Formula")}: ${cell(formula)}`),
+        ...details,
+        table(t("Eingabebelege", "Input evidence"), evidenceRows),
+        `**${t("Geltungsbereich und Prüfbedarf", "Scope and review requirements")}**\n\n${limitations.map(v => `- ${cell(v)}`).join("\n")}`,
+      ].join("\n\n");
+    }
     return [
       `**${t("Werkzeugberechnung", "Tool calculation")} ${index + 1} · ${cell(receipt.method)}**`,
       `${cell(receipt.engine)} · v${receipt.version} · ${t("Fachlich ungeprüft; kein Konformitätsnachweis oder Freigabe.", "Not reviewed; not a compliance verification or approval.")}`,

@@ -796,9 +796,17 @@ integration("acoustic reports preserve oversized sections and resume old charact
       let permitted = true;
       let runId = "";
       const calls: string[] = [];
+      let calculations = 0;
+      const { method, ...room } = exteriorNoiseFixture();
+      const provenance = { kind: "source" as const, versionId, page: 1, excerpt: "Component detail." };
+      for (const record of [room.room, room.applicability, room.flanking, ...room.facades, ...room.facades.map(f => f.noise), ...room.elements])
+        record.provenance = provenance;
+      const extraction = { inventory: [{ roomId: room.room.id, provenance }, { roomId: "Missing room", provenance }],
+        rooms: [room], blockers: [{ roomId: "Missing room", reason: "Window area is absent." }] };
       const componentCatalog = { status: "available", items: [{ name: "Reference wall", conditions: "Unverified project applicability" }] };
       const d: any = {
         db, tenantId, actorId, supervisorEnabled: true,
+        calculateAcoustics: (input: any) => { calculations++; return calculateAcoustics(input); },
         requirePermission: () => { if (!permitted) throw Object.assign(new Error("Forbidden"), { status: 403 }); }, auditRun: async () => {},
         audit: async () => {}, providerConfigured: async () => false,
         componentContext: async () => componentCatalog,
@@ -825,7 +833,9 @@ integration("acoustic reports preserve oversized sections and resume old charact
           if (phase === "plan") output = { tasks: [{ role: "source_reviewer", goal: "Read report evidence", sourceVersionIds: [versionId] }] };
           else if (phase === "specialist") {
             expect(context.sources.map((s: any) => s.text).join("\n")).toContain("Last room: required 33.2 dB");
-            output = { summary: "Three pages: plan page 2, calculation page 3. Last room: required 33.2 dB; available 42.1 dB.", rationale: "Unverified source results", citations: [versionId] };
+            expect(context.extractExteriorNoise).toBe(true);
+            expect(context.acousticToolsAvailable).toBe(false);
+            output = { summary: "Three pages: plan page 2, calculation page 3. Last room: required 33.2 dB; available 42.1 dB.", rationale: "Unverified source results", citations: [versionId], exteriorNoiseExtraction: extraction };
           } else if (phase === "independent_review") {
             expect(context.sourceExcerpts[0].resolution.content.text).toContain("Last room: required 33.2 dB");
             expect(context.firstPassReview.document.content).toContain("Last room: required 33.2 dB");
@@ -930,6 +940,14 @@ integration("acoustic reports preserve oversized sections and resume old charact
         }
         const [result] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
         const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
+        expect(calculations).toBe(1); // Application stage runs without a model tool call and reuses the saved receipt after interruption.
+        const calculationSteps = (await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, runId)))
+          .filter(step => step.stepKey.startsWith("exterior-calculation:"));
+        expect(calculationSteps).toHaveLength(1);
+        expect((calculationSteps[0]!.output as any).result.batch.rooms).toMatchObject([
+          { roomId: room.room.id, status: "calculated", result: { value: expect.closeTo(44.66896537322387, 10) } },
+          { roomId: "Missing room", status: "missing_input", result: null },
+        ]);
         if (scenario === "resume" || scenario === "timeout" || scenario === "characters" || large) {
           expect(interrupted).toBe(["resume", "timeout", "legacy_limit", "legacy_piece_limit"].includes(scenario));
           expect(result!.status).toBe("needs_review");
@@ -948,7 +966,10 @@ integration("acoustic reports preserve oversized sections and resume old charact
             expect(components.match(/Unverified, retain for review/g)).toHaveLength(pieces);
           }
           expect(revisions[0]!.content).toContain("Last room: required 33.2 dB; available 42.1 dB.");
-          expect(revisions[0]!.content.match(/Component detail\./g)).toHaveLength(800);
+          expect(revisions[0]!.content).toContain("| Missing room | — | — | — | Blocked |");
+          expect(revisions[0]!.content).toContain("Window area is absent.");
+          expect(revisions[0]!.content).toContain("Rw = 44.66896537322387 dB");
+          expect((revisions[0]!.payload as any).template.components.match(/Component detail\./g)).toHaveLength(800);
           expect(revisions[0]!.content.match(/No further preliminaryRemarks evidence/g)).toHaveLength(1);
           expect((revisions[0]!.payload as any).template.id).toBe("exterior-noise-concept");
           expect((revisions[0]!.payload as any).template.attachments.map((a: any) => a.pageStart)).toEqual([2, 3]);
