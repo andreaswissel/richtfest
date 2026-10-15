@@ -3,13 +3,20 @@ import type { SourceExtractionDeps } from "./deps";
 import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, fileVersions } from "./schema";
 import { extractPlanLabels } from "./plan-extraction";
 import { proposeRoomUses } from "./room-use-classifier";
+import { ensureAutomaticPlanExtractions } from "./automatic-building-model";
 
 export async function runBuildingExtraction(d: SourceExtractionDeps, signal: AbortSignal) {
+  // Upload-time source extraction/classification and plan geometry use separate
+  // durable workers. Bridge one terminal source into its page-scoped jobs before
+  // claiming ordinary extraction work; a planner failure must not starve jobs
+  // that were already queued manually or by a previous pass.
+  try { await ensureAutomaticPlanExtractions(d, signal); } catch { d.reportError(); }
   const token = crypto.randomUUID();
   const job = await d.db.transaction(async (tx: any) => {
     const [row] = await tx.select().from(jobs).where(and(inArray(jobs.status,["queued","running"]),sql`(${jobs.leaseUntil} is null or ${jobs.leaseUntil} < now())`)).orderBy(jobs.createdAt).limit(1).for("update",{skipLocked:true});
     if (!row) return null;
-    await tx.update(jobs).set({status:"running",attempts:row.attempts+1,leaseToken:token,leaseUntil:new Date(Date.now()+10*60_000),updatedAt:new Date()}).where(eq(jobs.id,row.id));
+    await tx.update(jobs).set({status:"running",attempts:row.attempts+1,leaseToken:token,leaseUntil:new Date(Date.now()+10*60_000),
+      result:{phase:"extracting_geometry",inference:{provider:"typesafe",active:false,configured:null}},updatedAt:new Date()}).where(eq(jobs.id,row.id));
     await d.audit(tx,row.tenantId,"projects.building.extraction.started",row.sourceVersionId,{jobId:row.id}); return row;
   });
   if (!job) return false;
@@ -28,6 +35,8 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
       const row=current.get(label.sourceKey) as any;
       return !row || (row.status==="unreviewed" && !(row.geometry as any)?.roomUseProposal);
     });
+    await d.db.update(jobs).set({result:{phase:"preparing_draft",candidateCount:result.labels.length+result.footprints.length,
+      inference:{provider:"typesafe",active:Boolean(d.executeDecision && eligibleLabels.length),configured:null}},updatedAt:new Date()}).where(owned);
     const classification = await proposeRoomUses({tenantId:job.tenantId,actorId:job.createdBy,
       labels:eligibleLabels,signal:bounded,executeDecision:d.executeDecision});
     const classified = new Map(classification.labels.map(label=>[label.sourceKey,label]));
@@ -47,7 +56,16 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
           eq(candidates.sourceKey,label.sourceKey),eq(candidates.status,"unreviewed")));
       const {labels,footprints,...summary}=result;
       const candidateCount=labels.length+footprints.length;
-      await tx.update(jobs).set({status:"complete",result:{...summary,candidateCount,roomAnchorCount:labels.filter(l=>l.geometry.quality==="anchor").length,roomCandidateCount:labels.length,elementAssemblyCount:footprints.length,elementFootprintCount:result.topologyCoverage.sourceFootprintCount},leaseToken:null,leaseUntil:null,updatedAt:new Date()}).where(owned);
+      const unresolvedAnchorCount=labels.filter(l=>l.geometry.quality==="anchor").length;
+      const roomHypothesisCount=labels.length-unresolvedAnchorCount;
+      const sourceAreaObservationCount=labels.filter(l=>Boolean((l.geometry as any).printedArea)).length;
+      await tx.update(jobs).set({status:"complete",result:{...summary,phase:"complete",candidateCount,
+        roomAnchorCount:unresolvedAnchorCount,roomCandidateCount:labels.length,roomHypothesisCount,unresolvedAnchorCount,
+        elementAssemblyCount:footprints.length,constructionAssemblyCount:footprints.length,
+        elementFootprintCount:result.topologyCoverage.sourceFootprintCount,rawFootprintCount:result.topologyCoverage.sourceFootprintCount,
+        sourceAreaObservationCount,inference:{provider:"typesafe",active:false,
+          configured:classification.outcome==="classified"?true:classification.outcome==="unconfigured"?false:null,
+          outcome:classification.outcome}},leaseToken:null,leaseUntil:null,updatedAt:new Date()}).where(owned);
       await d.audit(tx,job.tenantId,"projects.building.extraction.completed",job.sourceVersionId,{jobId:job.id,candidateCount,
         roomUseClassification:{outcome:classification.outcome,uniqueLabelCount:classification.uniqueLabelCount,
           classifiedLabelCount:classification.classifiedLabelCount,provider:"typesafe",model:"jev-1.13.0",usage:classification.usage}});
@@ -56,7 +74,9 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
     await d.db.transaction(async (tx:any) => {
       const status = signal.aborted || job.attempts < 2 ? "queued" : "failed";
       const updated = await tx.update(jobs).set({status,leaseToken:null,leaseUntil:status==="queued"?new Date(Date.now()+5000):null,
-        result:{reason:"PDF analysis could not complete: source, page, processing tools or deadline unavailable. Original evidence is unchanged; automatic recovery is bounded."},updatedAt:new Date()}).where(owned).returning();
+        result:{phase:status==="queued"?"retrying":"failed",retryable:status==="queued",attempts:job.attempts+1,
+          inference:{provider:"typesafe",active:false,configured:null},
+          reason:"PDF analysis could not complete: source, page, processing tools or deadline unavailable. Original evidence is unchanged; automatic recovery is bounded."},updatedAt:new Date()}).where(owned).returning();
       if (updated.length) await d.audit(tx,job.tenantId,`projects.building.extraction.${status}`,job.sourceVersionId,{jobId:job.id});
     });
   }

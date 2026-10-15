@@ -40,6 +40,15 @@ export type BuildingRegion = {
   parts?: BuildingGeometryPart[];
   groupLabel?: string | null;
   sourceArea?: unknown;
+  roomUseProposal?: {
+    status?: string;
+    provider?: string;
+    model?: string;
+    version?: string;
+    roomUse?: string;
+    confidence?: number;
+    probabilities?: Record<string, number>;
+  } | null;
   algorithm?: string | null;
   competingLabels?: string[];
   layerId?: string | null;
@@ -101,6 +110,9 @@ export type BuildingExtractionJob = {
   createdAt?: string | null;
   updatedAt?: string | null;
   result?: {
+    phase?: string;
+    retryable?: boolean;
+    inference?: { provider?: string; active?: boolean; configured?: boolean | null; outcome?: string | null } | null;
     pageCount?: number;
     method?: string;
     coverage?: string;
@@ -113,6 +125,13 @@ export type BuildingExtractionJob = {
     constructionAssemblyCount?: number;
     rawFootprintCount?: number;
     sourceAreaObservationCount?: number;
+    topologyCoverage?: {
+      approximateRegionCount?: number;
+      unresolvedRegionCount?: number;
+      assemblyCount?: number;
+      sourceFootprintCount?: number;
+      printedAreaCount?: number;
+    } | null;
     geometryExtraction?: {
       status?: string;
       constructionFilledPaths?: number;
@@ -125,6 +144,27 @@ export type BuildingExtractionJob = {
     } | null;
     reason?: string | null;
   } | null;
+};
+
+export type BuildingAutomaticPlanProcessing = {
+  fileId?: string;
+  fileName: string;
+  sourceVersionId: string;
+  status: "reading_source" | "classifying_pages" | "planning" | "queued" | "extracting" | "complete" | "partial" | "unresolved" | string;
+  currentPhase?: "reading_plan" | "identifying_floors" | "extracting_geometry" | "preparing_draft" | "complete" | "partial" | "unsupported" | string;
+  inference?: { provider?: string; active?: boolean; configured?: boolean | null } | null;
+  renderableSource?: { mimeType?: string | null; downloadUrl?: string | null } | null;
+  sourceStatus?: string | null;
+  classificationStatus?: string | null;
+  pageCount?: number | null;
+  registeredPageCount?: number;
+  coverageTruncated?: boolean;
+  floorPlanPages: number[];
+  nonFloorPlanPages: Array<{ page: number; pageType?: string | null; confidence?: number | null }>;
+  unresolvedPages: number[];
+  reason?: string | null;
+  jobStatuses?: Record<string, number>;
+  errors?: Array<{ jobId?: string; page?: number; status?: string; retryable?: boolean; attempts?: number; reason?: string | null }>;
 };
 
 export type BuildingExtractionCandidate = BuildingRegion & {
@@ -145,6 +185,7 @@ export type BuildingModel = {
   extractions: BuildingExtractionJob[];
   extractionCandidates: BuildingExtractionCandidate[];
   extractionCoverage?: BuildingExtractionCoverage | null;
+  automaticPlanProcessing: BuildingAutomaticPlanProcessing[];
   storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
   updatedAt?: string;
@@ -186,6 +227,11 @@ function planParts(value: unknown): BuildingRegion["parts"] {
   if (!Array.isArray(value)) return undefined;
   const parts = value.flatMap((part) => {
     if (!part || typeof part !== "object") return [];
+    if (Array.isArray(part)) {
+      const polygon = planPolygon(part);
+      const box = polygonBox(polygon);
+      return polygon && box ? [{ polygon, box }] : [];
+    }
     const item = part as RecordData;
     const polygon = planPolygon(item.polygon || (item.geometry && typeof item.geometry === "object" ? (item.geometry as RecordData).polygon : undefined));
     if (!polygon || polygon.length < 3) return [];
@@ -204,6 +250,7 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
     const entityProperties = properties.filter((property) => property.entityId === row.id);
     const entityMeasurements = measurements.filter((measurement) => measurement.entityId === row.id);
     const geometrySource = row.geometry && typeof row.geometry === "object" && (row.geometry as RecordData).source && typeof (row.geometry as RecordData).source === "object" ? (row.geometry as RecordData).source as RecordData : undefined;
+    const geometry = row.geometry && typeof row.geometry === "object" ? row.geometry as RecordData : undefined;
     const sourcePage = asNumber(geometrySource?.page, 1);
     const fieldEvidence: RecordData[] = entityProperties.flatMap((property) => property.current?.evidence || []).map((item: RecordData) => ({ ...item, value: item.value || item.quote || item.kind || "—", source: item.source || "source-stated", label: item.label || propertyLabel(entityProperties) }));
     const geometryEvidence: RecordData[] = geometrySource?.sourceVersionId ? [{ label: "Plan source", value: String(geometrySource.sourceVersionId), page: sourcePage, source: "source-stated" }] : [];
@@ -217,7 +264,9 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
       storeyId: typeof geometrySource?.storeyId === "string" ? geometrySource.storeyId : (typeof row.storeyId === "string" ? row.storeyId : null),
       sourceVersionId: typeof geometrySource?.sourceVersionId === "string" ? geometrySource.sourceVersionId : (typeof row.sourceVersionId === "string" ? row.sourceVersionId : null),
       page: Math.max(1, asNumber(geometrySource?.page, asNumber(row.page, 1))),
-      box: planBox(row.planRegion),
+      box: planBox(row.planRegion || geometry?.planRegion),
+      polygon: planPolygon(geometry?.polygon),
+      parts: planParts(geometry?.parts ?? geometry?.polygons),
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       evidence: Array.isArray(row.evidence) ? row.evidence : fieldEvidence.concat(geometryEvidence),
       measurements: Array.isArray(row.measurements) ? row.measurements : entityMeasurements.map((item) => ({ key: item.id, label: item.label || item.quantity || "Measurement", semanticQuantity: item.quantity, value: item.value == null ? null : Number(item.value), sourceValue: item.method === "manual" ? null : item.value ?? item.quantity, calibratedValue: item.method === "manual" ? item.value : item.calibratedValue, unit: item.unit, sourcePage: item.evidence?.[0]?.page, method: item.method, uncertainty: item.uncertainty, evidence: item.evidence })),
@@ -234,10 +283,15 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
     const geometry = row.geometry && typeof row.geometry === "object" ? row.geometry as RecordData : undefined;
     const box = planBox(row.box || row.planRegion || geometry?.planRegion);
     const polygon = planPolygon(geometry?.polygon);
-    const parts = planParts(geometry?.parts);
+    const parts = planParts(geometry?.parts ?? geometry?.polygons);
     const rawKind = row.entityType === "element" || row.kind === "element" ? "element" : row.kind === "unknown-room" ? "unknown-room" : "room";
     const sourceEvidence = Array.isArray(row.evidence) ? row.evidence : [];
     const layerEvidence = sourceEvidence.find((evidence: RecordData) => typeof evidence.layerId === "string" || typeof evidence.layerName === "string");
+    const sourceFillEvidence = Array.isArray(geometry?.sourceFillEvidence) ? geometry.sourceFillEvidence as RecordData[] : [];
+    const fillLayerEvidence = sourceFillEvidence.find((evidence) => typeof evidence.layerId === "string" || typeof evidence.layerName === "string");
+    const topology = geometry?.topology && typeof geometry.topology === "object" ? geometry.topology as RecordData : undefined;
+    const roomUseProposal = geometry?.roomUseProposal && typeof geometry.roomUseProposal === "object"
+      ? geometry.roomUseProposal as BuildingRegion["roomUseProposal"] : null;
     return [{
       id: `candidate:${asString(row.id || row.candidateId, crypto.randomUUID?.() || `candidate-${Math.random()}`)}`,
       candidateId: asString(row.id || row.candidateId),
@@ -256,11 +310,12 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       polygon,
       parts,
       groupLabel: typeof row.groupLabel === "string" ? row.groupLabel : (typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null),
-      sourceArea: row.sourceArea ?? geometry?.sourceArea ?? null,
-      algorithm: typeof row.algorithm === "string" ? row.algorithm : (typeof geometry?.algorithm === "string" ? geometry.algorithm : null),
-      competingLabels: Array.isArray(row.competingLabels) ? row.competingLabels.filter((item): item is string => typeof item === "string") : (Array.isArray(geometry?.competingLabels) ? geometry.competingLabels.filter((item): item is string => typeof item === "string") : []),
-      layerId: typeof geometry?.layerId === "string" ? geometry.layerId : (typeof layerEvidence?.layerId === "string" ? layerEvidence.layerId : null),
-      layerName: typeof geometry?.layerName === "string" ? geometry.layerName : (typeof layerEvidence?.layerName === "string" ? layerEvidence.layerName : null),
+      sourceArea: row.sourceArea ?? geometry?.sourceArea ?? geometry?.printedArea ?? null,
+      roomUseProposal,
+      algorithm: typeof row.algorithm === "string" ? row.algorithm : (typeof geometry?.algorithm === "string" ? geometry.algorithm : (typeof topology?.method === "string" ? topology.method : null)),
+      competingLabels: Array.isArray(row.competingLabels) ? row.competingLabels.filter((item): item is string => typeof item === "string") : (Array.isArray(geometry?.competingLabels) ? geometry.competingLabels.filter((item): item is string => typeof item === "string") : (Array.isArray(topology?.competingSourceKeys) ? topology.competingSourceKeys.filter((item): item is string => typeof item === "string") : [])),
+      layerId: typeof geometry?.layerId === "string" ? geometry.layerId : (typeof layerEvidence?.layerId === "string" ? layerEvidence.layerId : (typeof fillLayerEvidence?.layerId === "string" ? fillLayerEvidence.layerId : null)),
+      layerName: typeof geometry?.layerName === "string" ? geometry.layerName : (typeof layerEvidence?.layerName === "string" ? layerEvidence.layerName : (typeof fillLayerEvidence?.layerName === "string" ? fillLayerEvidence.layerName : null)),
       geometryLimitations: typeof row.limitations === "string" ? row.limitations : (typeof geometry?.limitations === "string" ? geometry.limitations : null),
       evidence: sourceEvidence.map((item: RecordData) => ({ label: item.label || "Source page", value: String(item.value || item.quote || item.kind || "—"), page: typeof item.page === "number" ? item.page : undefined, layerId: item.layerId, layerName: item.layerName, source: "source-stated" as const })),
       measurements: Array.isArray(row.measurements) ? row.measurements : [],
@@ -334,6 +389,20 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
       return { ...candidate, storeyId: candidate.storeyId || job?.storeyId || null, sourceVersionId: candidate.sourceVersionId || job?.sourceVersionId || null, page: candidate.page || job?.page || 1 };
     }),
     extractionCoverage: coverage && typeof coverage === "object" ? coverage as BuildingExtractionCoverage : undefined,
+    automaticPlanProcessing: Array.isArray(raw.automaticPlanProcessing) ? raw.automaticPlanProcessing.flatMap((item: unknown) => {
+      if (!item || typeof item !== "object") return [];
+      const row = item as RecordData;
+      if (typeof row.sourceVersionId !== "string") return [];
+      return [{
+        ...row,
+        fileName: asString(row.fileName, "Building plan.pdf"),
+        sourceVersionId: row.sourceVersionId,
+        status: asString(row.status, "planning"),
+        floorPlanPages: Array.isArray(row.floorPlanPages) ? row.floorPlanPages.filter((page): page is number => typeof page === "number") : [],
+        nonFloorPlanPages: Array.isArray(row.nonFloorPlanPages) ? row.nonFloorPlanPages.filter((page): page is { page: number; pageType?: string | null; confidence?: number | null } => Boolean(page) && typeof page === "object" && typeof page.page === "number") : [],
+        unresolvedPages: Array.isArray(row.unresolvedPages) ? row.unresolvedPages.filter((page): page is number => typeof page === "number") : [],
+      } as BuildingAutomaticPlanProcessing];
+    }) : [],
     storeys: Array.isArray(raw.storeys) ? raw.storeys.flatMap((item: unknown) => {
       if (!item || typeof item !== "object") return [];
       const row = item as RecordData;

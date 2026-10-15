@@ -15,7 +15,9 @@ const box = z.object({ left: probability, right: probability, top: probability, 
 const wireAnswers = z.record(z.discriminatedUnion("type", [
   z.object({ type: z.literal("choice"), choice: z.string(), probabilities: z.record(probability), confidence: probability }).strict(),
   z.object({ type: z.literal("noul"), noul: probability }).strict(),
-  z.object({ type: z.literal("box"), box, confidence: probability }).strict(),
+  // The experimental image contract may omit provider confidence while still
+  // returning a valid normalized box. Presence remains our safety gate.
+  z.object({ type: z.literal("box"), box, confidence: probability.nullable() }).strict(),
 ]));
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const usageSchema = z.object({ input_tokens: count, output_tokens: count });

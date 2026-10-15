@@ -34,6 +34,8 @@ import {
   fileVersions,
   files,
   projects,
+  sourceExtractions,
+  sourceModels,
 } from "./schema";
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
@@ -142,9 +144,19 @@ const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string
 };
 
 const readModel = async (d: AppDeps, model: any) => {
-  const [extractions, extractionCandidates] = await Promise.all([
+  const [extractions, extractionCandidates, automaticSources] = await Promise.all([
     d.db.select().from(buildingExtractionJobs).where(and(eq(buildingExtractionJobs.modelId, model.id), eq(buildingExtractionJobs.tenantId, d.tenantId))),
     d.db.select().from(buildingExtractionCandidates).where(and(eq(buildingExtractionCandidates.modelId, model.id), eq(buildingExtractionCandidates.tenantId, d.tenantId))),
+    d.db.select({ fileId: files.id, fileName: files.name, sourceVersionId: fileVersions.id,
+      version: fileVersions.version, mimeType: fileVersions.mimeType,
+      sourceStatus: sourceExtractions.status, sourceResult: sourceExtractions.result,
+      classificationStatus: sourceModels.status, classificationMetadata: sourceModels.metadata })
+      .from(files)
+      .innerJoin(fileVersions, and(eq(fileVersions.fileId, files.id), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready")))
+      .innerJoin(sourceExtractions, and(eq(sourceExtractions.versionId, fileVersions.id), eq(sourceExtractions.tenantId, d.tenantId)))
+      .innerJoin(sourceModels, and(eq(sourceModels.versionId, fileVersions.id), eq(sourceModels.tenantId, d.tenantId)))
+      .where(and(eq(files.projectId, model.projectId), eq(files.tenantId, d.tenantId), eq(files.purpose, "project_evidence"),
+        sql`(${fileVersions.mimeType} = 'application/pdf' or ${files.name} ~* '\\.pdf$')`)),
   ]);
   const [buildings, storeys, rooms, elements, properties, propertyVersions, measurements, planSources, placementRows, relationships, conflicts, proposals, revisions, alternatives] = await Promise.all([
     d.db.select().from(buildingBuildings).where(eq(buildingBuildings.modelId, model.id)).orderBy(asc(buildingBuildings.createdAt)),
@@ -173,6 +185,45 @@ const readModel = async (d: AppDeps, model: any) => {
   }
   const propertiesWithCurrent = (properties as any[]).map(property => ({ ...property, current: latestByProperty.get(property.id) ?? null, reviewed: reviewedByProperty.get(property.id) ?? null }));
   const withPlanRegion = (rows: any[]) => rows.map(row => ({ ...row, planRegion: row.geometry && typeof row.geometry === "object" && row.geometry.planRegion && typeof row.geometry.planRegion === "object" ? row.geometry.planRegion : null }));
+  const extractionJobsBySource = new Map<string, any[]>();
+  for (const extraction of extractions as any[]) extractionJobsBySource.set(extraction.sourceVersionId,
+    [...(extractionJobsBySource.get(extraction.sourceVersionId) ?? []), extraction]);
+  const automaticPlanProcessing = (automaticSources as any[]).map(source => {
+    const metadata = source.classificationMetadata?.automaticBuildingModel ?? null;
+    const extractionJobs = extractionJobsBySource.get(source.sourceVersionId) ?? [];
+    const jobStatuses = extractionJobs.reduce((counts: Record<string, number>, job: any) => {
+      counts[job.status] = (counts[job.status] ?? 0) + 1; return counts;
+    }, {});
+    const hasUnresolvedCoverage = metadata?.status === "partial" || (metadata?.unresolvedPages?.length ?? 0) > 0;
+    const status = extractionJobs.some((job: any) => job.status === "running") ? "extracting"
+      : extractionJobs.some((job: any) => job.status === "queued") ? "queued"
+      : hasUnresolvedCoverage && extractionJobs.length ? "partial"
+      : extractionJobs.length && extractionJobs.every((job: any) => job.status === "complete") ? "complete"
+      : extractionJobs.some((job: any) => job.status === "failed") ? "partial"
+      : metadata?.status === "unresolved" ? "unresolved"
+      : ["queued", "running"].includes(source.sourceStatus) ? "reading_source"
+      : ["queued", "running"].includes(source.classificationStatus) ? "classifying_pages"
+      : metadata?.status ?? "planning";
+    const activeJob = extractionJobs.find((job: any) => job.status === "running");
+    const currentPhase = ["queued", "running"].includes(source.sourceStatus) ? "reading_plan"
+      : ["queued", "running"].includes(source.classificationStatus) ? "identifying_floors"
+      : !metadata || metadata.status === "processing" ? "identifying_floors"
+      : activeJob?.result?.phase ?? (extractionJobs.some((job: any) => job.status === "queued") ? "extracting_geometry"
+        : status === "complete" ? "complete" : status === "partial" ? "partial"
+        : status === "unresolved" ? "unsupported" : "preparing_draft");
+    const activeInference = extractionJobs.find((job: any) => job.result?.inference?.active === true)?.result?.inference ?? null;
+    const errors = extractionJobs.filter((job: any) => job.status === "failed" || job.result?.phase === "retrying")
+      .map((job: any) => ({ jobId: job.id, page: job.page, status: job.status, retryable: job.result?.retryable ?? false,
+        attempts: job.attempts, reason: job.result?.reason ?? null }));
+    return { fileId: source.fileId, fileName: source.fileName, sourceVersionId: source.sourceVersionId, status,
+      currentPhase, inference: activeInference ?? { provider: "typesafe", active: false, configured: null },
+      sourceStatus: source.sourceStatus, classificationStatus: source.classificationStatus,
+      renderableSource: { mimeType: source.mimeType, downloadUrl: `/api/projects/${model.projectId}/files/${source.fileId}/versions/${source.version}/download` },
+      pageCount: metadata?.pageCount ?? source.sourceResult?.pages ?? null,
+      registeredPageCount: metadata?.registeredPageCount ?? 0, coverageTruncated: metadata?.coverageTruncated ?? false,
+      floorPlanPages: metadata?.floorPlanPages ?? [], nonFloorPlanPages: metadata?.nonFloorPlanPages ?? [],
+      unresolvedPages: metadata?.unresolvedPages ?? [], reason: metadata?.reason ?? null, jobStatuses, errors };
+  });
   return {
     model,
     extractions,
@@ -190,6 +241,7 @@ const readModel = async (d: AppDeps, model: any) => {
     proposals,
     revisions,
     alternatives,
+    automaticPlanProcessing,
     summary: {
       projectId: model.projectId, modelId: model.id, revision: model.revision,
       buildings: buildings.length, storeys: storeys.length, rooms: rooms.length, elements: elements.length,
@@ -298,6 +350,14 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const projectId = uuid.parse(id(req.params.projectId)); const row = await modelForProject(d, projectId);
       if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       const data = await readModel(d, row.model);
+      const eligibleJobs = await d.db.select({ id: buildingExtractionJobs.id }).from(buildingExtractionJobs)
+        .innerJoin(fileVersions, and(eq(fileVersions.id, buildingExtractionJobs.sourceVersionId), eq(fileVersions.tenantId, d.tenantId)))
+        .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId)))
+        .where(and(eq(buildingExtractionJobs.modelId, row.model.id), eq(buildingExtractionJobs.tenantId, d.tenantId),
+          eq(files.projectId, projectId), eq(files.purpose, "project_evidence")));
+      const eligibleJobIds = new Set(eligibleJobs.map((job: { id: string }) => job.id));
+      const draftCandidates = (data.extractionCandidates as any[])
+        .filter(candidate => candidate.status === "unreviewed" && eligibleJobIds.has(candidate.jobId));
       return res.json(ok({ projectId, modelId: row.model.id, revision: row.model.revision, summary: data.summary,
         entities: [
           ...(data.buildings as any[]).map(entity => ({ ...entity, entityType: "building" as const })),
@@ -306,6 +366,19 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           ...(data.elements as any[]).map(entity => ({ ...entity, entityType: "element" as const })),
         ].map((entity: any) => ({ id: entity.id, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, deepLink: buildingDeepLink(projectId, entity.entityType, entity.id) })),
         missingInputs: (data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
+        draftCandidates: draftCandidates.slice(0, 500).map(candidate => {
+          const evidence = Array.isArray(candidate.evidence) ? candidate.evidence.find((item: any) => item?.kind === "page") : null;
+          const geometry = candidate.geometry && typeof candidate.geometry === "object" ? candidate.geometry : {};
+          return { candidateId: candidate.id, entityType: candidate.entityType, name: candidate.name,
+            reviewStatus: "unreviewed", sourceKey: candidate.sourceKey, sourceVersionId: evidence?.sourceVersionId ?? null,
+            page: evidence?.page ?? null, geometry: { quality: geometry.quality ?? "unknown",
+              planRegion: geometry.planRegion ?? null, method: geometry.method ?? null,
+              limitations: geometry.limitations ?? geometry.topologyCoverage?.limitations ?? null,
+              polygonCount: Array.isArray(geometry.polygons) ? geometry.polygons.length : geometry.polygon ? 1 : 0 },
+            evidence: candidate.evidence, deepLink: `/projects/${projectId}?view=building-model` };
+        }),
+        draftCandidatesTruncated: draftCandidates.length > 500,
+        automaticPlanProcessing: data.automaticPlanProcessing,
         proposals: (data.proposals as any[]).filter(p => p.status === "pending").map(p => ({ ...p, deepLink: p.deepLink ?? buildingDeepLink(projectId, p.targetEntityType ?? "building", p.targetEntityId ?? row.model.id) })),
       }));
     } catch (e) { return next(e); }

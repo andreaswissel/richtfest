@@ -377,11 +377,8 @@ export function Sources({
         setUploadResults,
       );
     },
-    onSuccess: (results) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries();
-      if (results.every((result) => result.status === "uploaded")) {
-        setMode(null);
-      }
     },
   });
   const files = list(query.data || initial.files, "files");
@@ -524,6 +521,14 @@ export function Sources({
                     </li>
                   ))}
                 </ul>
+                {uploadResults.some((result) => result.status === "uploaded" && /\.pdf$/i.test(result.name)) && uploadResults.every((result) => result.status !== "uploading") && (
+                  <Callout>
+                    <div className="grid gap-stack">
+                      <div><strong>{t("uploadPlanAnalysisStarted")}</strong><p className="muted text-ui-xs">{t("uploadPlanAnalysisDescription")}</p></div>
+                      <Button asChild variant="outline"><Link to={`/projects/${projectId}?view=building-model`}>{t("uploadOpenBuildingModel")}</Link></Button>
+                    </div>
+                  </Callout>
+                )}
               </div>
             )}
             {!uploadResults.length && selectedFileCount <= 1 && (

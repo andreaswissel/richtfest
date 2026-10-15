@@ -35,7 +35,7 @@ export const sourceImageAnswersSchema = z.record(id, z.discriminatedUnion("type"
   z.object({ type: z.literal("choice"), choice: id, probabilities: z.record(id, probability), confidence: probability }).strict(),
   z.object({ type: z.literal("noul"), noul: probability }).strict(),
   z.object({ type: z.literal("box"), box: z.object({ left: probability, right: probability, top: probability, bottom: probability })
-    .strict().refine(b => b.left < b.right && b.top < b.bottom).nullable(), confidence: probability,
+    .strict().refine(b => b.left < b.right && b.top < b.bottom).nullable(), confidence: probability.nullable(),
     presenceProbability: probability }).strict(),
 ]));
 export type SourceImageAnswers = z.infer<typeof sourceImageAnswersSchema>;

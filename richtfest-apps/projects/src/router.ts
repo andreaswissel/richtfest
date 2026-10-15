@@ -12,6 +12,7 @@ import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
 import { readPdfRepresentations } from "./source-representations";
 import { createBuildingModelRouter } from "./building-model-router";
+import { bootstrapAutomaticBuildingModel } from "./automatic-building-model";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -726,6 +727,8 @@ export function createRouter(getDeps: GetDeps) {
             });
           await tx.insert(sourceExtractions).values({ versionId: updated.id, tenantId: d.tenantId });
           await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId });
+          if (updated.mimeType === "application/pdf" || /\.pdf$/i.test(row.file.name))
+            await bootstrapAutomaticBuildingModel(tx, d, { projectId, sourceVersionId: updated.id, fileName: row.file.name });
           await d.audit(tx, "projects.file.upload.completed", "file", fileId, {
             projectId,
             versionId: row.version.id,

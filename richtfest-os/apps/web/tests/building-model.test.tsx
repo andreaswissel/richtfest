@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BuildingModelBootstrap, BuildingModelMode, candidateOverlaysForSource, candidatesForSource, copyStableObjectId, regionsForSource } from "../src/components/building-model";
+import { BuildingModelBootstrap, BuildingModelMode, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel } from "../src/components/building-model/types";
@@ -84,10 +84,67 @@ test("clipboard denial resolves calmly without an unhandled rejection", async ()
 
 test("empty backend payload remains an explicit empty model instead of crashing the project view", () => {
   const html = render(undefined);
-  expect(html).toContain("Set up the first plan source");
-  expect(html).toContain("Loading project PDFs…");
-  expect(html).toContain("Building name");
-  expect(html).toContain("The PDF revision and page stay attached as source evidence.");
+  expect(html).toContain("Preparing the building model");
+  expect(html).toContain("Checking project PDF uploads");
+  expect(html).not.toContain("Manual source setup");
+});
+
+test("automatic upload processing replaces setup as the primary durable state", () => {
+  const html = render({
+    model: { id: "model-automatic", revision: 1 }, rooms: [], elements: [], storeys: [], planSources: [],
+    properties: [], measurements: [], proposals: [], conflicts: [], revisions: [], extractions: [], extractionCandidates: [],
+    automaticPlanProcessing: [{ fileId: "file-1", fileName: "Uploaded plan.pdf", sourceVersionId: "version-1", status: "classifying_pages", currentPhase: "identifying_floors", inference: { provider: "typesafe", active: false, configured: null }, renderableSource: { downloadUrl: "/api/projects/p/files/file-1/versions/1/download", mimeType: "application/pdf" }, pageCount: 9, registeredPageCount: 0, floorPlanPages: [], nonFloorPlanPages: [], unresolvedPages: [], reason: "Page classification is running." }],
+  });
+  expect(html).toContain("Preparing the building model");
+  expect(html).toContain("Identifying floor-plan pages");
+  expect(html).toContain("Processing continues as a saved job after navigation or reload.");
+  expect(html).not.toContain("Manual source setup");
+  expect(automaticProcessingActive("extracting")).toBe(true);
+  expect(automaticProcessingActive("complete")).toBe(false);
+});
+
+test("provider wording appears only for an actually active configured inference stage", () => {
+  const base = { model: { id: "model-automatic", revision: 1 }, rooms: [], elements: [], storeys: [], planSources: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [], extractions: [], extractionCandidates: [] };
+  const deterministic = render({ ...base, automaticPlanProcessing: [{ fileName: "Plan.pdf", sourceVersionId: "v", status: "extracting", currentPhase: "extracting_geometry", inference: { provider: "typesafe", active: false, configured: true }, floorPlanPages: [1], nonFloorPlanPages: [], unresolvedPages: [] }] });
+  expect(deterministic).toContain("Extracting rooms and construction geometry");
+  expect(deterministic).not.toContain("configured TypeSafe inference");
+  const inferred = render({ ...base, automaticPlanProcessing: [{ fileName: "Plan.pdf", sourceVersionId: "v", status: "extracting", currentPhase: "preparing_draft", inference: { provider: "typesafe", active: true, configured: true }, floorPlanPages: [1], nonFloorPlanPages: [], unresolvedPages: [] }] });
+  expect(inferred).toContain("Classifying room labels with configured TypeSafe inference");
+});
+
+test("automatic page coverage distinguishes floor, non-plan, and unresolved pages without claiming walls", () => {
+  const automatic = { fileId: "file-1", fileName: "Plan packet.pdf", sourceVersionId: "version-1", status: "complete", pageCount: 3, registeredPageCount: 3, floorPlanPages: [1], nonFloorPlanPages: [{ page: 2, pageType: "elevation", confidence: .94 }], unresolvedPages: [3], reason: "One floor-plan page produced unreviewed draft geometry.", jobStatuses: { complete: 1 } };
+  const html = render({
+    model: { id: "model-1", revision: 2 }, rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
+    storeys: [{ id: "storey-1", name: "Plan page 1 (draft)" }],
+    planSources: [1, 2, 3].map((page) => ({ id: `plan-${page}`, storeyId: page === 1 ? "storey-1" : null, page, pageCount: 3, source: { fileId: "file-1", fileName: "Plan packet.pdf", versionId: "version-1", version: 1, downloadUrl: "/api/projects/p/files/file-1/versions/1/download" } })),
+    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 1, status: "complete", result: { candidateCount: 2, roomHypothesisCount: 1, constructionAssemblyCount: 1, phase: "complete", geometryExtraction: { limitations: "Observed source construction; not a verified wall." } } }],
+    extractionCandidates: [
+      { id: "room-1", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 1, entityType: "room", name: "Room draft", groupLabel: "WE 1", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .3, height: .3 }, polygon: [{ x: .1, y: .1 }, { x: .4, y: .1 }, { x: .4, y: .4 }, { x: .1, y: .4 }] } },
+      { id: "assembly-1", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 1, entityType: "element", name: "Construction assembly", groupLabel: "WE 1", status: "unreviewed", geometry: { quality: "assembly", planRegion: { x: .2, y: .2, width: .1, height: .1 }, polygons: [[{ x: .2, y: .2 }, { x: .3, y: .2 }, { x: .3, y: .3 }, { x: .2, y: .3 }]], limitations: "Observed source construction; not a verified wall." } },
+    ],
+    automaticPlanProcessing: [automatic],
+  }, "?view=building-model&page=1");
+  expect(html).toContain("PDF page coverage");
+  expect(html).toContain("Floor plan detected");
+  expect(html).toContain("Non-floor-plan page · elevation");
+  expect(html).toContain("Unresolved page");
+  expect(html).toContain("building-model-region element candidate assembly");
+  expect(html).toContain("not a verified wall");
+  expect(html).not.toContain("Walls detected");
+  expect(automaticPageDisposition(automatic, 1)).toBe("floor_plan");
+  expect(automaticPageDisposition(automatic, 2)).toBe("non_floor_plan");
+  expect(automaticPageDisposition(automatic, 3)).toBe("unresolved");
+});
+
+test("source group filtering constrains the rendered overlay candidates", () => {
+  const candidates = [
+    { id: "candidate:a", isCandidate: true as const, status: "unreviewed" as const, kind: "room" as const, entityType: "room" as const, label: "A", groupLabel: "WE 1", page: 1, storeyId: "storey-1", sourceVersionId: "version-1" },
+    { id: "candidate:b", isCandidate: true as const, status: "unreviewed" as const, kind: "room" as const, entityType: "room" as const, label: "B", groupLabel: "WE 2", page: 1, storeyId: "storey-1", sourceVersionId: "version-1" },
+  ];
+  const filtered = candidatesForGroup(candidates, "WE 2");
+  expect(filtered.map((candidate) => candidate.label)).toEqual(["B"]);
+  expect(candidateOverlaysForSource(filtered, 1, "version-1", "storey-1", { roomHypotheses: true })).toHaveLength(1);
 });
 
 test("bootstrap exposes real uploaded revision and exact source page workflow", () => {
@@ -249,8 +306,8 @@ test("semantic extraction coverage names hypotheses, unresolved anchors, assembl
   const html = render({
     model: { id: "model-1", revision: 4 }, storeys: [{ id: "storey-1", name: "Ground" }], rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
     planSources: [{ id: "plan-1", storeyId: "storey-1", page: 3, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-1", version: 1, downloadUrl: "/api/projects/p/files/f/versions/1/download" } }],
-    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete", result: { candidateCount: 163, roomHypothesisCount: 76, unresolvedAnchorCount: 15, constructionAssemblyCount: 72, sourceAreaObservationCount: 90 } }],
-    extractionCandidates: [{ id: "candidate-partition", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, polygon: [{ x: .1, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .3 }, { x: .1, y: .3 }] } }],
+    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete", result: { candidateCount: 163, roomAnchorCount: 15, elementFootprintCount: 235, topologyCoverage: { approximateRegionCount: 76, unresolvedRegionCount: 15, assemblyCount: 72, sourceFootprintCount: 235, printedAreaCount: 90 } } }],
+    extractionCandidates: [{ id: "candidate-partition", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, polygon: [{ x: .1, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .3 }, { x: .1, y: .3 }], printedArea: { value: 27.32, unit: "m²", status: "unreviewed" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0", status: "unreviewed" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }],
   }, "?view=building-model&page=3");
   expect(html).toContain("<strong>76</strong><small>Room hypotheses</small>");
   expect(html).toContain("<strong>15</strong><small>Unresolved anchors</small>");
@@ -259,6 +316,8 @@ test("semantic extraction coverage names hypotheses, unresolved anchors, assembl
   expect(html).toContain("<strong>163</strong><small>Total candidates</small>");
   expect(html).toContain("building-model-region room candidate approximate");
   expect(html).toContain("Room hypothesis");
+  const adapted = adaptBuildingModel({ extractionCandidates: [{ id: "candidate-partition", entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, printedArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }] });
+  expect(adapted.extractionCandidates[0]).toMatchObject({ sourceArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82 }, layerId: "98R", layerName: "01-10 Grundriss Füllflächen", algorithm: "wall_constrained_geodesic_partition" });
 });
 
 test("candidate overlays require the rendered page, source revision, and storey", () => {
@@ -284,6 +343,45 @@ test("canonical geometry keeps its persisted source revision and page", () => {
   expect(room?.page).toBe(7);
   expect(regionsForSource(adapted.states.existing, 7, "version-2", "storey-1")).toHaveLength(1);
   expect(regionsForSource(adapted.states.existing, 3, "version-1", "storey-1")).toHaveLength(0);
+});
+
+test("assembly polygon arrays and accepted source polygons survive API adaptation", () => {
+  const adapted = adaptBuildingModel({
+    model: { id: "model-1", revision: 3 }, storeys: [{ id: "storey-1", name: "Ground" }],
+    rooms: [{ id: "room-1", name: "Accepted room", storeyId: "storey-1", geometry: { planRegion: { x: .1, y: .1, width: .2, height: .2 }, polygon: [{ x: .1, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .3 }, { x: .1, y: .3 }], source: { sourceVersionId: "version-1", page: 3 } } }],
+    elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
+    extractionCandidates: [{ id: "assembly-1", entityType: "element", name: "Assembly", status: "unreviewed", geometry: { quality: "assembly", planRegion: { x: .4, y: .4, width: .2, height: .1 }, polygons: [
+      [{ x: .4, y: .4 }, { x: .45, y: .4 }, { x: .45, y: .45 }, { x: .4, y: .45 }],
+      [{ x: .5, y: .45 }, { x: .6, y: .45 }, { x: .6, y: .5 }, { x: .5, y: .5 }],
+    ] } }],
+  });
+  expect(adapted.states.existing[0]?.polygon).toHaveLength(4);
+  expect(adapted.extractionCandidates[0]?.parts).toHaveLength(2);
+  const secondBox = adapted.extractionCandidates[0]?.parts?.[1]?.box;
+  expect(secondBox?.x).toBeCloseTo(.5);
+  expect(secondBox?.y).toBeCloseTo(.45);
+  expect(secondBox?.width).toBeCloseTo(.1);
+  expect(secondBox?.height).toBeCloseTo(.05);
+});
+
+test("deep-linked entity source wins over another storey on the same page", () => {
+  const sources = [
+    { id: "source-a", storeyId: "storey-a", page: 3, source: { fileId: "f-a", fileName: "A.pdf", versionId: "version-a", version: 1, downloadUrl: "/a" } },
+    { id: "source-b", storeyId: "storey-b", page: 3, source: { fileId: "f-b", fileName: "B.pdf", versionId: "version-b", version: 1, downloadUrl: "/b" } },
+  ];
+  const selected = { storeyId: "storey-b", sourceVersionId: "version-b", page: 3 };
+  expect(planSourceForView(sources, 3, "", selected)?.id).toBe("source-b");
+  expect(planSourceForView(sources, 3, "storey-a", selected)?.id).toBe("source-a");
+  expect(planSourceForView(sources, 3, "storey-a", selected, "version-b")?.id).toBe("source-b");
+});
+
+test("explicit page navigation can leave the selected storey for a non-plan or unresolved source page", () => {
+  const sources = [
+    { id: "source-floor", storeyId: "storey-a", page: 1, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-a", version: 1, downloadUrl: "/a" } },
+    { id: "source-elevation", storeyId: null, page: 2, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-a", version: 1, downloadUrl: "/a" } },
+  ];
+  const selected = { storeyId: "storey-a", sourceVersionId: "version-a", page: 1 };
+  expect(planSourceForView(sources, 2, "storey-a", selected)?.id).toBe("source-elevation");
 });
 
 test("canonical inspector remains the default when candidates exist", () => {

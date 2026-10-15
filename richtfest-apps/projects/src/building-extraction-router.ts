@@ -30,9 +30,11 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
         const identity=and(eq(jobs.modelId,model.id),eq(jobs.sourceVersionId,input.sourceVersionId),eq(jobs.storeyId,input.storeyId),eq(jobs.page,input.page));
         const [existing]=await tx.select().from(jobs).where(identity);
         if(existing){
-          if(existing.extractorVersion!=="topology-v3"&&existing.status==="complete"){
-            const [upgraded]=await tx.update(jobs).set({extractorVersion:"topology-v3",status:"queued",attempts:0,updatedAt:new Date()}).where(eq(jobs.id,existing.id)).returning();
-            await d.audit(tx,"projects.building.extraction.geometry_queued","building_extraction",existing.id,{projectId});return upgraded;
+          if(!["queued","running"].includes(existing.status)){
+            const [requeued]=await tx.update(jobs).set({extractorVersion:"topology-v3",status:"queued",attempts:0,
+              leaseToken:null,leaseUntil:null,result:null,updatedAt:new Date()}).where(eq(jobs.id,existing.id)).returning();
+            await d.audit(tx,"projects.building.extraction.requeued","building_extraction",existing.id,
+              {projectId,previousStatus:existing.status,upgrade:existing.extractorVersion!=="topology-v3"});return requeued;
           }
           return existing;
         }

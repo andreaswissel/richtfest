@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
@@ -8,12 +8,13 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
-import { Copy, ExternalLink, Link2, ScanLine } from "lucide-react";
-import { adaptBuildingModel, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { Copy, ExternalLink, Link2, LoaderCircle, ScanLine } from "lucide-react";
+import { adaptBuildingModel, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
+const emptyLayerVisibility: Record<string, boolean> = {};
 
 export async function copyStableObjectId(value: string, clipboard?: { writeText: (text: string) => Promise<void> }) {
   const target = clipboard ?? (typeof navigator !== "undefined" ? navigator.clipboard : undefined);
@@ -46,6 +47,10 @@ export function candidatesForSource(candidates: BuildingExtractionCandidate[], p
   return candidates.filter((candidate) => candidate.page === page && (!storeyId || candidate.storeyId === storeyId) && (!sourceVersionId || candidate.sourceVersionId === sourceVersionId));
 }
 
+export function candidatesForGroup(candidates: BuildingExtractionCandidate[], group: string) {
+  return group === "all" ? candidates : candidates.filter((candidate) => candidate.groupLabel === group);
+}
+
 export type CandidateOverlayVisibility = {
   roomAnchors?: boolean;
   footprints?: boolean;
@@ -72,8 +77,36 @@ export function candidateOverlaysForSource(candidates: BuildingExtractionCandida
   });
 }
 
+export function automaticProcessingActive(status: string | undefined) {
+  return status === "reading_source" || status === "classifying_pages" || status === "planning" || status === "queued" || status === "extracting" || status === "processing";
+}
+
+export function automaticPageDisposition(processing: BuildingAutomaticPlanProcessing | undefined, page: number) {
+  if (!processing) return "unresolved" as const;
+  if (processing.floorPlanPages.includes(page)) return "floor_plan" as const;
+  if (processing.nonFloorPlanPages.some((item) => item.page === page)) return "non_floor_plan" as const;
+  return "unresolved" as const;
+}
+
 export function regionsForSource(regions: BuildingRegion[], page: number, sourceVersionId?: string, storeyId?: string | null) {
   return regions.filter((region) => region.page === page && (!storeyId || region.storeyId === storeyId) && (!sourceVersionId || region.sourceVersionId === sourceVersionId));
+}
+
+export function planSourceForView(sources: BuildingPlanSource[], page: number, explicitStoreyId?: string | null,
+  selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">, explicitSourceVersionId?: string | null) {
+  const explicitVersionPage = explicitSourceVersionId ? sources.find((source) => source.source?.versionId === explicitSourceVersionId && source.page === page) : undefined;
+  if (explicitVersionPage) return explicitVersionPage;
+  const explicitPage = explicitStoreyId ? sources.find((source) => source.storeyId === explicitStoreyId && source.page === page) : undefined;
+  if (explicitPage) return explicitPage;
+  const selectedPageSource = selected?.page === page ? sources.find((source) => source.storeyId === selected.storeyId
+    && source.page === selected.page && (!selected.sourceVersionId || source.source?.versionId === selected.sourceVersionId))
+    || sources.find((source) => source.storeyId === selected.storeyId && source.page === selected.page) : undefined;
+  if (selectedPageSource) return selectedPageSource;
+  const pageSource = sources.find((source) => source.page === page);
+  if (pageSource) return pageSource;
+  const explicit = explicitStoreyId ? sources.find((source) => source.storeyId === explicitStoreyId) : undefined;
+  const selectedSource = selected ? sources.find((source) => source.storeyId === selected.storeyId) : undefined;
+  return explicit || selectedSource || sources[0];
 }
 
 export function BuildingModelMode({ projectId }: { projectId: string }) {
@@ -82,6 +115,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [state, setState] = useState<BuildingModelState>((params.get("modelState") as BuildingModelState) || "existing");
   const [page, setPage] = useState(Math.max(1, Number(params.get("page") || 1)));
   const [sourceStoreyId, setSourceStoreyId] = useState(params.get("storey") || "");
+  const [sourceVersionId, setSourceVersionId] = useState(params.get("sourceVersion") || "");
   const deepLinkedEntity = params.get("entity")?.split(":").slice(1).join(":");
   const [selectedId, setSelectedId] = useState<string | undefined>(deepLinkedEntity || undefined);
   const [layers, setLayers] = useState<Record<string, boolean>>({});
@@ -89,16 +123,22 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [conflict, setConflict] = useState<string>();
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
   const [candidateGroupFilter, setCandidateGroupFilter] = useState("all");
-  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, assemblies: false, footprints: false });
+  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, assemblies: true, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
   const model = useMemo(() => adaptBuildingModel(modelQuery.data), [modelQuery.data]);
-  const needsBootstrap = (modelQuery.isError && modelError instanceof ApiError && modelError.status === 404) || (!modelQuery.isError && (!modelQuery.data || !model.planSources.length));
-  const filesQuery = useApi(`/projects/${projectId}/files`, needsBootstrap);
+  const missingModelOrSource = (modelQuery.isError && modelError instanceof ApiError && modelError.status === 404) || (!modelQuery.isError && (!modelQuery.data || !model.planSources.length));
+  const filesQuery = useApi(`/projects/${projectId}/files`, missingModelOrSource);
   const [bootstrapFileId, setBootstrapFileId] = useState("");
-  const versionsQuery = useApi(`/projects/${projectId}/files/${bootstrapFileId}/versions`, needsBootstrap && !!bootstrapFileId);
+  const versionsQuery = useApi(`/projects/${projectId}/files/${bootstrapFileId}/versions`, missingModelOrSource && !!bootstrapFileId);
   const projectFiles = useMemo(() => list(filesQuery.data, "files").filter((file) => /\.pdf$/i.test(String(file.name || "")) || String(file.mimeType || "").toLowerCase() === "application/pdf"), [filesQuery.data]);
+  const automaticPlanProcessing = model.automaticPlanProcessing;
+  const hasAutomaticWork = automaticPlanProcessing.length > 0;
+  const automaticWorkActive = automaticPlanProcessing.some((item) => automaticProcessingActive(item.status));
+  const automaticLookupPending = missingModelOrSource && filesQuery.isLoading;
+  const hasUploadedPdfAwaitingModel = missingModelOrSource && !filesQuery.isLoading && projectFiles.length > 0;
+  const needsBootstrap = missingModelOrSource && !automaticLookupPending && !automaticWorkActive && !hasAutomaticWork && !hasUploadedPdfAwaitingModel;
   const selectedBootstrapFile = projectFiles.find((file) => file.id === bootstrapFileId);
   const bootstrapVersions = useMemo(() => list(versionsQuery.data).filter((version) => version.status === undefined || version.status === "ready"), [versionsQuery.data]);
   const regions = pickRegions(model, state);
@@ -116,27 +156,30 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     return grouped;
   }, [candidates, candidateGroupFilter]);
   const candidateGroupOptions = useMemo(() => [...new Set(candidates.flatMap((candidate) => candidate.groupLabel ? [candidate.groupLabel] : []))].sort(), [candidates]);
+  const filteredCandidates = useMemo(() => candidatesForGroup(candidates, candidateGroupFilter), [candidates, candidateGroupFilter]);
   const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId);
   const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
-  const currentSource = model.planSources.find((source) => source.storeyId && source.storeyId === sourceStoreyId && source.page === page) || model.planSources.find((source) => source.page === page) || model.planSources.find((source) => source.storeyId && source.storeyId === sourceStoreyId) || model.planSources.find((source) => source.storeyId && source.storeyId === selected?.storeyId) || model.planSources[0];
+  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId);
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
+  const currentAutomaticProcessing = automaticPlanProcessing.find((item) => item.sourceVersionId === evidence.sourceVersionId);
+  const currentAutomaticActive = automaticProcessingActive(currentAutomaticProcessing?.status);
   const sourceLayers = pdfLayers.length ? pdfLayers : evidence.layers || [];
   const allExtractions = model.extraction && !model.extractions.some((job) => job.id === model.extraction?.id) ? [...model.extractions, model.extraction] : model.extractions;
   const displayedExtraction = allExtractions.find((job) => job.sourceVersionId === sourceForEvidence?.source?.versionId && job.page === page && job.storeyId === currentSource?.storeyId);
   const activeExtraction = displayedExtraction as BuildingExtractionJob | undefined;
   const pollingExtractionIds = allExtractions.filter((job) => job.status === "queued" || job.status === "running").map((job) => job.id).join(",");
   useEffect(() => {
-    if (!pollingExtractionIds) return;
+    if (!pollingExtractionIds && !automaticWorkActive && !hasUploadedPdfAwaitingModel) return;
     const timer = window.setInterval(() => { void queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }); }, 2000);
     return () => window.clearInterval(timer);
-  }, [pollingExtractionIds, projectId]);
+  }, [pollingExtractionIds, automaticWorkActive, hasUploadedPdfAwaitingModel, projectId]);
   useEffect(() => {
     if (activeExtraction && (activeExtraction.status === "complete" || activeExtraction.status === "failed")) {
       void queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
     }
   }, [activeExtraction?.id, activeExtraction?.status, projectId]);
-  const visibleCandidates = candidateOverlaysForSource(candidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, candidateOverlayVisibility);
+  const visibleCandidates = candidateOverlaysForSource(filteredCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, candidateOverlayVisibility);
   const visibleRegions = regionsForSource(regions, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId);
   useEffect(() => {
     if (selectedCandidateId && !visibleCandidates.some((candidate) => candidate.id === selectedCandidateId)) setSelectedCandidateId(undefined);
@@ -146,7 +189,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
     if (currentSource && page !== currentSource.page && !params.get("page")) setPage(currentSource.page);
     if (!sourceStoreyId && currentSource?.storeyId) setSourceStoreyId(currentSource.storeyId);
-  }, [selected?.id, selectedId, currentSource?.id, sourceStoreyId]);
+    if (!sourceVersionId && currentSource?.source?.versionId) setSourceVersionId(currentSource.source.versionId);
+  }, [selected?.id, selectedId, currentSource?.id, sourceStoreyId, sourceVersionId]);
   useEffect(() => {
     const next = new URLSearchParams(params);
     next.set("modelState", state);
@@ -155,9 +199,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     else next.delete("entity");
     if (sourceStoreyId) next.set("storey", sourceStoreyId);
     else next.delete("storey");
+    if (sourceVersionId) next.set("sourceVersion", sourceVersionId);
+    else next.delete("sourceVersion");
     next.delete("object");
     setParams(next, { replace: true });
-  }, [state, page, selected?.id, sourceStoreyId]);
+  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId]);
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
@@ -220,11 +266,39 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     />;
   }
 
+
+  if (missingModelOrSource && (automaticLookupPending || hasAutomaticWork || hasUploadedPdfAwaitingModel)) {
+    return <AutomaticBuildingModelPreparation
+      projectId={projectId}
+      processing={automaticPlanProcessing}
+      files={projectFiles}
+      filesLoading={filesQuery.isLoading}
+      manualFallback={<BuildingModelBootstrap
+        projectId={projectId}
+        modelRevision={model.revision || 0}
+        files={projectFiles}
+        fileId={bootstrapFileId}
+        onFileId={setBootstrapFileId}
+        versions={bootstrapVersions}
+        filesLoading={filesQuery.isLoading || versionsQuery.isLoading}
+        error={filesQuery.error || versionsQuery.error}
+        onComplete={async (sourcePage) => { await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }); setPage(sourcePage); }}
+        t={t}
+      />}
+      t={t}
+    />;
+  }
+
   const selectRegion = (id: string) => {
     const region = regions.find((item) => item.id === id);
     setSelectedCandidateId(undefined);
     setSelectedId(id);
-    if (region) setPage(model.planSources.find((source) => source.storeyId && source.storeyId === region.storeyId)?.page || region.page);
+    if (region) {
+      setSourceVersionId(region.sourceVersionId || "");
+      setSourceStoreyId(region.storeyId || "");
+      setPage(model.planSources.find((source) => source.storeyId && source.storeyId === region.storeyId
+        && (!region.sourceVersionId || source.source?.versionId === region.sourceVersionId))?.page || region.page);
+    }
   };
 
   return (
@@ -252,12 +326,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         source={currentSource}
         storeys={model.storeys}
         selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
-        onStorey={(value) => { setSourceStoreyId(value); const source = model.planSources.find((item) => item.storeyId === value); if (source) setPage(source.page); }}
+        onStorey={(value) => { setSourceStoreyId(value); const source = model.planSources.find((item) => item.storeyId === value); if (source) { setSourceVersionId(source.source?.versionId || ""); setPage(source.page); } }}
         canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
         pending={startExtraction.isPending}
         onStart={() => startExtraction.mutate()}
         t={t}
       />
+      {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => { setSelectedCandidateId(undefined); setSourceVersionId(nextVersion); setSourceStoreyId(storeyId || ""); setPage(nextPage); }} t={t} />}
       <div className="building-model-workbench">
         <aside className="building-model-sidebar" aria-label={t("buildingModelObjects")}>
           <div className="building-model-sidebar-section">
@@ -276,8 +351,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             <h2>{t("buildingModelExtractionCandidates")}</h2>
             {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={candidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
             <div className="building-model-candidate-list">
-              {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); if (candidate.storeyId) setSourceStoreyId(candidate.storeyId); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidate.geometryQuality === "footprint" ? t("buildingModelConstructionFootprint") : candidate.geometryQuality === "assembly" ? t("buildingModelConstructionAssembly") : candidate.geometryQuality === "anchor" ? t("buildingModelUnresolvedAnchor") : t("buildingModelRoomHypothesis")} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
-              {!candidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
+              {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidate.geometryQuality === "footprint" ? t("buildingModelConstructionFootprint") : candidate.geometryQuality === "assembly" ? t("buildingModelConstructionAssembly") : candidate.geometryQuality === "anchor" ? t("buildingModelUnresolvedAnchor") : t("buildingModelRoomHypothesis")} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
+              {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
             </div>
           </div>
           <div className="building-model-sidebar-section" aria-label={t("buildingModelCandidateOverlayControls")}>
@@ -323,15 +398,23 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>
           <div className="building-model-page-strip" aria-label={t("buildingModelPages")}>
             <span className="muted text-ui-2xs">{evidence.fileName}</span>
-            {(model.planSources.length ? [...new Set(model.planSources.map((source) => source.page))] : [1]).map((pageNumber) => (
-              <button key={pageNumber} type="button" aria-pressed={page === pageNumber} onClick={() => { setSelectedCandidateId(undefined); setPage(pageNumber); }}>
+            {currentAutomaticProcessing && <Badge>{automaticPhaseLabel(currentAutomaticProcessing, t)}</Badge>}
+            {(model.planSources.length ? [...new Set(model.planSources.filter((source) => !evidence.sourceVersionId || source.source?.versionId === evidence.sourceVersionId).map((source) => source.page))] : [1]).map((pageNumber) => {
+              const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
+              const processing = automaticPlanProcessing.find((item) => item.sourceVersionId === source?.source?.versionId);
+              const disposition = automaticPageDisposition(processing, pageNumber);
+              return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")}`} title={t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")} aria-pressed={page === pageNumber} onClick={() => { setSelectedCandidateId(undefined); setSourceVersionId(source?.source?.versionId || ""); setSourceStoreyId(source?.storeyId || ""); setPage(pageNumber); }}>
                 {pageNumber}
-              </button>
-            ))}
+              </button>;
+            })}
           </div>
-          <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
-            <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => id.startsWith("candidate:") ? setSelectedCandidateId(id) : selectRegion(id)} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView") }} />
-          </Suspense>
+          <div className="building-model-automatic-canvas">
+            <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
+              <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => id.startsWith("candidate:") ? setSelectedCandidateId(id) : selectRegion(id)} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView") }} />
+            </Suspense>
+            {currentAutomaticActive && <div className="building-model-scan-sweep" aria-hidden="true" />}
+          </div>
+          {currentAutomaticProcessing && <p className="building-model-stage-status muted text-ui-2xs" aria-live="polite" aria-atomic="true">{automaticPhaseLabel(currentAutomaticProcessing, t)} · {t("buildingModelAutomaticNoFakeProgress")}</p>}
         </section>
         <aside className="building-model-inspector" aria-label={t("buildingModelInspector")}>
           <div className="building-model-inspector-header">
@@ -346,6 +429,110 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       </div>
     </div>
   );
+}
+
+function automaticStatusLabel(status: string, t: ReturnType<typeof useT>) {
+  const labels: Record<string, keyof typeof import("../../locales/en.json")> = {
+    reading_source: "buildingModelAutomaticReadingSource",
+    classifying_pages: "buildingModelAutomaticClassifyingPages",
+    planning: "buildingModelAutomaticPlanning",
+    processing: "buildingModelAutomaticPlanning",
+    queued: "buildingModelAutomaticQueued",
+    extracting: "buildingModelAutomaticExtracting",
+    complete: "buildingModelAutomaticComplete",
+    partial: "buildingModelAutomaticPartial",
+    unresolved: "buildingModelAutomaticUnresolved",
+  };
+  return t(labels[status] || "buildingModelAutomaticPlanning");
+}
+
+function automaticPhaseLabel(processing: BuildingAutomaticPlanProcessing | undefined, t: ReturnType<typeof useT>) {
+  if (!processing) return t("buildingModelAutomaticReadingSource");
+  if (processing.inference?.active) return t("buildingModelExtractionClassifyingRoomLabels");
+  const labels: Record<string, keyof typeof import("../../locales/en.json")> = {
+    reading_plan: "buildingModelAutomaticReadingSource",
+    identifying_floors: "buildingModelAutomaticClassifyingPages",
+    extracting_geometry: "buildingModelExtractionExtractingGeometry",
+    preparing_draft: "buildingModelExtractionPreparingDraft",
+    complete: "buildingModelAutomaticComplete",
+    partial: "buildingModelAutomaticPartial",
+    unsupported: "buildingModelAutomaticUnresolved",
+  };
+  return processing.currentPhase && labels[processing.currentPhase] ? t(labels[processing.currentPhase]!) : automaticStatusLabel(processing.status, t);
+}
+
+export function AutomaticBuildingModelPreparation({ projectId, processing, files, filesLoading, manualFallback, t }: {
+  projectId: string;
+  processing: BuildingAutomaticPlanProcessing[];
+  files: RecordData[];
+  filesLoading: boolean;
+  manualFallback: ReactElement;
+  t: ReturnType<typeof useT>;
+}) {
+  const active = filesLoading || processing.some((item) => automaticProcessingActive(item.status)) || (!processing.length && files.length > 0);
+  const unresolved = processing.length > 0 && processing.every((item) => item.status === "unresolved" || item.status === "partial");
+  const primaryProcessing = processing[0];
+  const sourceFile = files.find((file) => file.id === primaryProcessing?.fileId || file.versionId === primaryProcessing?.sourceVersionId) || files[0];
+  const [previewPage, setPreviewPage] = useState(1);
+  const [previewTransform, setPreviewTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const previewPageCount = Math.max(1, primaryProcessing?.pageCount || sourceFile?.pageCount || 1);
+  const previewEvidence = sourceFile || primaryProcessing?.renderableSource?.downloadUrl ? { fileName: String(sourceFile?.name || primaryProcessing?.fileName || "Building plan.pdf"), fileId: typeof sourceFile?.id === "string" ? sourceFile.id : primaryProcessing?.fileId, sourceVersionId: typeof sourceFile?.versionId === "string" ? sourceFile.versionId : primaryProcessing?.sourceVersionId, version: typeof sourceFile?.version === "number" ? sourceFile.version : 1, pageCount: previewPageCount, pdfUrl: typeof primaryProcessing?.renderableSource?.downloadUrl === "string" ? primaryProcessing.renderableSource.downloadUrl : typeof sourceFile?.downloadUrl === "string" ? sourceFile.downloadUrl : undefined } : undefined;
+  const stage = automaticPhaseLabel(primaryProcessing, t);
+  return <section className="building-model-automatic-preparation" aria-label={t("buildingModelAutomaticTitle")}>
+    <div className="building-model-automatic-heading">
+      <div className="building-model-automatic-icon" aria-hidden="true"><LoaderCircle /></div>
+      <div><p className="eyebrow">{t("buildingModelSection")}</p><h2>{active ? t("buildingModelAutomaticTitle") : t("buildingModelAutomaticNeedsReview")}</h2><p>{active ? t("buildingModelAutomaticDescription") : t("buildingModelAutomaticUnresolvedDescription")}</p></div>
+    </div>
+    {active && <div className="building-model-automatic-meter" role="status"><span /><small>{t("buildingModelAutomaticDurableHint")}</small></div>}
+    <div className="building-model-automatic-sources">
+      {processing.map((item) => <div className="building-model-automatic-source" key={item.sourceVersionId}><div><strong>{item.fileName}</strong><small>{item.reason || t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{automaticPhaseLabel(item, t)}</Badge></div>)}
+      {!processing.length && files.map((file) => <div className="building-model-automatic-source" key={file.id}><div><strong>{String(file.name)}</strong><small>{t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{filesLoading ? t("loading") : t("buildingModelAutomaticReadingSource")}</Badge></div>)}
+      {filesLoading && !processing.length && !files.length && <div className="building-model-automatic-source"><div><strong>{t("buildingModelAutomaticCheckingUploads")}</strong><small>{t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{t("loading")}</Badge></div>}
+    </div>
+    {previewEvidence && <div className={`building-model-automatic-preview${active ? " is-active" : ""}`}>
+      <div className="building-model-automatic-preview-bar"><div><Badge>{stage}</Badge><span>{previewEvidence.fileName}</span></div>{previewPageCount > 1 && <NativeSelect aria-label={t("buildingModelPage")} value={String(previewPage)} onChange={(event) => setPreviewPage(Number(event.target.value))}>{Array.from({ length: previewPageCount }, (_, index) => <option key={index + 1} value={index + 1}>{t("buildingModelPage")} {index + 1}</option>)}</NativeSelect>}</div>
+      <div className="building-model-automatic-canvas">
+        <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
+          <LazyPdfEvidenceRenderer projectId={projectId} evidence={previewEvidence} page={previewPage} regions={[]} layerVisibility={emptyLayerVisibility} transform={previewTransform} onTransform={setPreviewTransform} onLayers={() => undefined} onSelect={() => undefined} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView") }} />
+        </Suspense>
+        {active && <div className="building-model-scan-sweep" aria-hidden="true" />}
+      </div>
+      <p className="muted text-ui-2xs" aria-live="polite" aria-atomic="true">{stage} · {t("buildingModelAutomaticNoFakeProgress")}</p>
+    </div>}
+    {unresolved && <Callout tone="warning">{t("buildingModelAutomaticUnresolvedDescription")}</Callout>}
+    {processing.flatMap((item) => item.errors || []).map((error, index) => <Callout tone="error" key={`${error.jobId || "automatic"}-${index}`}>{error.reason || t("buildingModelExtractionFailed")} {error.page ? `· ${t("buildingModelPage")} ${error.page}` : ""} {error.retryable ? `· ${t("buildingModelAutomaticRetryScheduled")}` : ""}</Callout>)}
+    <div className="building-model-automatic-actions"><Button asChild><Link to={`/projects/${projectId}?view=building-model`}>{t("buildingModelOpen")}</Link></Button><small>{t("buildingModelAutomaticCanLeave")}</small></div>
+    {!active && <details className="building-model-manual-fallback"><summary>{t("buildingModelManualFallback")}</summary><p className="muted text-ui-xs">{t("buildingModelManualFallbackHint")}</p>{manualFallback}</details>}
+  </section>;
+}
+
+export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, t }: {
+  processing: BuildingAutomaticPlanProcessing[];
+  sources: BuildingPlanSource[];
+  storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
+  selectedPage: number;
+  selectedSourceVersionId?: string;
+  onPage: (selection: { page: number; sourceVersionId: string; storeyId: string | null }) => void;
+  t: ReturnType<typeof useT>;
+}) {
+  return <section className="building-model-page-coverage" aria-label={t("buildingModelPageCoverage")}>
+    <div className="building-model-page-coverage-heading"><div><h2>{t("buildingModelPageCoverage")}</h2><p>{t("buildingModelPageCoverageHint")}</p></div><div className="building-model-page-legend"><span className="is-floor-plan">{t("buildingModelPageFloorPlan")}</span><span className="is-non-floor-plan">{t("buildingModelPageNonPlan")}</span><span className="is-unresolved">{t("buildingModelPageUnresolved")}</span></div></div>
+    {processing.map((item) => {
+      const pages = Array.from({ length: Math.max(0, item.registeredPageCount || item.pageCount || 0) }, (_, index) => index + 1);
+      return <div className="building-model-page-coverage-source" key={item.sourceVersionId}>
+        <div className="building-model-page-coverage-meta"><strong>{item.fileName}</strong><Badge>{automaticStatusLabel(item.status, t)}</Badge><small>{item.reason}</small></div>
+        <div className="building-model-page-coverage-pages">{pages.map((pageNumber) => {
+          const disposition = automaticPageDisposition(item, pageNumber);
+          const nonPlan = item.nonFloorPlanPages.find((entry) => entry.page === pageNumber);
+          const pageSource = sources.find((source) => source.source?.versionId === item.sourceVersionId && source.page === pageNumber);
+          const storeyName = storeys.find((storey) => storey.id === pageSource?.storeyId)?.name;
+          const label = disposition === "floor_plan" ? `${t("buildingModelPageFloorPlan")}${storeyName ? ` · ${storeyName}` : ""}` : disposition === "non_floor_plan" ? `${t("buildingModelPageNonPlan")}${nonPlan?.pageType ? ` · ${nonPlan.pageType.replaceAll("_", " ")}` : ""}` : t("buildingModelPageUnresolved");
+          return <button type="button" key={pageNumber} className={`is-${disposition.replaceAll("_", "-")}`} aria-pressed={selectedSourceVersionId === item.sourceVersionId && selectedPage === pageNumber} title={label} onClick={() => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId, storeyId: pageSource?.storeyId || null })}><span>{pageNumber}</span><small>{label}</small></button>;
+        })}</div>
+        {item.coverageTruncated && <Callout tone="warning">{t("buildingModelCoverageTruncated")}</Callout>}
+      </div>;
+    })}
+  </section>;
 }
 
 type BuildingModelBootstrapProps = {
@@ -517,25 +704,33 @@ function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onS
   const complete = job?.status === "complete" || job?.status === "succeeded";
   const jobCoverage = job?.coverage;
   const result = job?.result;
-  const semanticCoverage = result?.roomHypothesisCount != null || result?.unresolvedAnchorCount != null || result?.constructionAssemblyCount != null || result?.sourceAreaObservationCount != null;
-  const roomCount = result?.roomHypothesisCount ?? result?.roomAnchorCount;
-  const assemblyCount = result?.constructionAssemblyCount ?? result?.elementFootprintCount;
+  const persistedPhase = result?.phase || job?.phase;
+  const runningLabel = job?.status === "queued" ? t("buildingModelExtractionQueued")
+    : result?.inference?.active ? t("buildingModelExtractionClassifyingRoomLabels")
+    : persistedPhase === "preparing_draft" ? t("buildingModelExtractionPreparingDraft")
+    : t("buildingModelExtractionExtractingGeometry");
+  const topologyCoverage = result?.topologyCoverage;
+  const semanticCoverage = topologyCoverage != null || result?.roomHypothesisCount != null || result?.unresolvedAnchorCount != null || result?.constructionAssemblyCount != null || result?.sourceAreaObservationCount != null;
+  const roomCount = result?.roomHypothesisCount ?? topologyCoverage?.approximateRegionCount ?? result?.roomAnchorCount;
+  const unresolvedCount = result?.unresolvedAnchorCount ?? topologyCoverage?.unresolvedRegionCount;
+  const assemblyCount = result?.constructionAssemblyCount ?? topologyCoverage?.assemblyCount ?? result?.elementFootprintCount;
+  const sourceAreaCount = result?.sourceAreaObservationCount ?? topologyCoverage?.printedAreaCount;
   const extractionNotes = [...new Set([result?.geometryExtraction?.limitations, coverage?.note, result?.coverage, result?.reason].filter((note): note is string => Boolean(note)))];
   return <section className="building-model-extraction" aria-label={t("buildingModelExtraction") }>
     <div className="building-model-extraction-heading">
       <div><h2>{t("buildingModelExtraction")}</h2><p className="muted text-ui-2xs">{source?.source ? `${source.source.fileName} · ${t("buildingModelPage")} ${source.page}` : t("buildingModelExtractionChooseSource")}</p></div>
-      <Button size="sm" variant="outline" type="button" disabled={!canStart || pending || active} onClick={onStart}>{pending ? t("buildingModelExtractionStarting") : active ? t("buildingModelExtractionRunning") : t("buildingModelExtractCandidates")}</Button>
+      <Button size="sm" variant="outline" type="button" disabled={!canStart || pending || active} onClick={onStart}>{pending ? t("buildingModelExtractionStarting") : active ? runningLabel : failed ? t("buildingModelRetryExtraction") : t("buildingModelExtractCandidates")}</Button>
     </div>
     {storeys.length > 1 && <Field label={t("buildingModelBootstrapStorey")}><NativeSelect value={selectedStoreyId} onChange={(event) => onStorey(event.target.value)}><option value="">{t("buildingModelBootstrapStorey")}</option>{storeys.map((storey) => <option key={storey.id} value={storey.id}>{storey.name || storey.id}</option>)}</NativeSelect></Field>}
-    {active && <div className="building-model-status-line" role="status"><Badge>{t("buildingModelExtractionRunning")}</Badge><small>{job?.phase || t("buildingModelExtractionInProgress")} {typeof job?.progress === "number" ? `· ${Math.round(job.progress * (job.progress <= 1 ? 100 : 1))}%` : ""}</small></div>}
+    {active && <div className="building-model-status-line" role="status" aria-live="polite" aria-atomic="true"><Badge>{runningLabel}</Badge><small>{t("buildingModelExtractionInProgress")} {typeof job?.progress === "number" ? `· ${Math.round(job.progress * (job.progress <= 1 ? 100 : 1))}%` : ""}</small></div>}
     {failed && <Callout tone="error">{job.error || t("buildingModelExtractionFailed")}</Callout>}
     {complete && <div className="building-model-status-line"><Badge>{t("buildingModelExtractionComplete")}</Badge><small>{job?.result?.method || t("buildingModelExtractionMethodUnknown")} · {job?.result?.geometryQuality ? `${t("buildingModelGeometryQuality")}: ${job.result.geometryQuality}` : t("buildingModelGeometryQualityUnknown")}</small></div>}
     {complete && <div className="building-model-extraction-grid" aria-label={t("buildingModelSourceCoverage")}>
       <div className="building-model-extraction-stat"><strong>{job ? 1 : "—"}</strong><small>{t("buildingModelCoveragePages")}</small></div>
       <div className="building-model-extraction-stat"><strong>{roomCount ?? "—"}</strong><small>{t(semanticCoverage ? "buildingModelCoverageRoomHypotheses" : "buildingModelCoverageRoomAnchors")}</small></div>
-      {semanticCoverage && <div className="building-model-extraction-stat"><strong>{result?.unresolvedAnchorCount ?? "—"}</strong><small>{t("buildingModelCoverageUnresolvedAnchors")}</small></div>}
+      {semanticCoverage && <div className="building-model-extraction-stat"><strong>{unresolvedCount ?? "—"}</strong><small>{t("buildingModelCoverageUnresolvedAnchors")}</small></div>}
       <div className="building-model-extraction-stat"><strong>{assemblyCount ?? "—"}</strong><small>{t(semanticCoverage ? "buildingModelCoverageAssemblies" : "buildingModelCoverageFootprints")}</small></div>
-      {semanticCoverage && <div className="building-model-extraction-stat"><strong>{result?.sourceAreaObservationCount ?? "—"}</strong><small>{t("buildingModelCoverageSourceAreas")}</small></div>}
+      {semanticCoverage && <div className="building-model-extraction-stat"><strong>{sourceAreaCount ?? "—"}</strong><small>{t("buildingModelCoverageSourceAreas")}</small></div>}
       <div className="building-model-extraction-stat"><strong>{result?.candidateCount ?? jobCoverage?.regions ?? coverage?.regions ?? "—"}</strong><small>{t("buildingModelCoverageTotalCandidates")}</small></div>
     </div>}
     {extractionNotes.length > 0 && <p className="muted text-ui-2xs">{extractionNotes.join(" ")}</p>}
@@ -554,11 +749,14 @@ function CandidateInspector({ candidate, regions, t, pending, onReview }: { cand
   const polygonCoordinates = candidate.polygon?.map((point) => `${point.x.toFixed(5)}, ${point.y.toFixed(5)}`).join(" · ");
   const geometryLimitations = candidate.geometryLimitations || (candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : t("buildingModelGeometryLimitationsUnknown"));
   const sourceArea = typeof candidate.sourceArea === "number" && Number.isFinite(candidate.sourceArea) ? `${candidate.sourceArea} m²` : candidate.sourceArea && typeof candidate.sourceArea === "object" ? (() => { const area = candidate.sourceArea as RecordData; return area.value == null ? JSON.stringify(area) : `${area.value}${area.unit ? ` ${area.unit}` : ""}`; })() : typeof candidate.sourceArea === "string" ? candidate.sourceArea : undefined;
+  const roomUseProposal = candidate.roomUseProposal?.roomUse;
+  const proposalConfidence = typeof candidate.roomUseProposal?.confidence === "number" ? `${Math.round(candidate.roomUseProposal.confidence * 100)}%` : undefined;
+  const hasCandidateProperties = propertyEntries.length > 0 || Boolean(sourceArea) || Boolean(roomUseProposal);
   const correction = { ...(name.trim() && name.trim() !== candidate.label ? { name: name.trim() } : {}), ...(targetEntityId ? { targetEntityId } : {}) };
   return <>
     <Callout tone="warning">{t("buildingModelCandidateWarning")}</Callout>
-    <dl><dt>{t("buildingModelCandidateStatus")}</dt><dd><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></dd>{candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}<dt>{t("buildingModelGeometryQuality")}</dt><dd>{geometryLabel}</dd>{sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}{candidate.algorithm && <><dt>{t("buildingModelAlgorithm")}</dt><dd>{candidate.algorithm}</dd></>}{candidate.competingLabels?.length && <><dt>{t("buildingModelCompetingLabels")}</dt><dd>{candidate.competingLabels.join(" · ")}</dd></>}{candidate.parts?.length && <><dt>{t("buildingModelGeometryParts")}</dt><dd>{candidate.parts.length}</dd></>}<dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd><dt>{t("buildingModelSourceCoordinates")}</dt><dd><code className="building-model-source-coordinates">{sourceCoordinates}</code>{polygonCoordinates && <small className="building-model-polygon-coordinates">{polygonCoordinates}</small>}</dd><dt>{t("buildingModelGeometryLimitations")}</dt><dd>{geometryLimitations}</dd>{candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse ? "building-model-unknown" : undefined}>{candidate.roomUse || t("buildingModelUnknownValue")}</dd></> : <><dt>{t("buildingModelConstructionState")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></>}<dt>{t("buildingModelMaterial")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></dl>
-    <div className="building-model-inspector-section"><h3>{t("buildingModelProperties")}</h3><Field label={t("buildingModelLabel")} hint={t("buildingModelCandidateCorrectionHint")}><Input value={name} onChange={(event) => setName(event.target.value)} disabled={pending} /></Field>{propertyEntries.length ? propertyEntries.map(([key, value]) => <div className="building-model-evidence-row" key={key}><span>{key}</span><small>{typeof value === "string" ? value : JSON.stringify(value)}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoCandidateProperties")}</p>}</div>
+    <dl><dt>{t("buildingModelCandidateStatus")}</dt><dd><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></dd>{candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}<dt>{t("buildingModelGeometryQuality")}</dt><dd>{geometryLabel}</dd>{sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}{candidate.algorithm && <><dt>{t("buildingModelAlgorithm")}</dt><dd>{candidate.algorithm}</dd></>}{(candidate.competingLabels?.length ?? 0) > 0 && <><dt>{t("buildingModelCompetingLabels")}</dt><dd><details className="building-model-competing-labels"><summary>{candidate.competingLabels!.length} {t("buildingModelCompetingLabelCount")}</summary><code>{candidate.competingLabels!.join("\n")}</code></details></dd></>}{(candidate.parts?.length ?? 0) > 0 && <><dt>{t("buildingModelGeometryParts")}</dt><dd>{candidate.parts!.length}</dd></>}<dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd><dt>{t("buildingModelSourceCoordinates")}</dt><dd><code className="building-model-source-coordinates">{sourceCoordinates}</code>{polygonCoordinates && <small className="building-model-polygon-coordinates">{polygonCoordinates}</small>}</dd><dt>{t("buildingModelGeometryLimitations")}</dt><dd>{geometryLimitations}</dd>{candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse ? "building-model-unknown" : undefined}>{candidate.roomUse || t("buildingModelUnknownValue")}</dd>{roomUseProposal && <><dt>{t("buildingModelRoomUseProposal")}</dt><dd>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} <Badge>{t("buildingModelUnreviewedProposal")}</Badge></dd></>}</> : <><dt>{t("buildingModelConstructionState")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></>}<dt>{t("buildingModelMaterial")}</dt><dd className="building-model-unknown">{t("buildingModelUnknownValue")}</dd></dl>
+    <div className="building-model-inspector-section"><h3>{t("buildingModelProperties")}</h3><Field label={t("buildingModelLabel")} hint={t("buildingModelCandidateCorrectionHint")}><Input value={name} onChange={(event) => setName(event.target.value)} disabled={pending} /></Field>{roomUseProposal && <div className="building-model-evidence-row"><span>{t("buildingModelRoomUseProposal")}</span><small>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} · {candidate.roomUseProposal?.provider || "TypeSafe"} {candidate.roomUseProposal?.model ? `/ ${candidate.roomUseProposal.model}` : ""}</small></div>}{sourceArea && <div className="building-model-evidence-row"><span>{t("buildingModelSourceArea")}</span><small>{sourceArea} · {t("buildingModelUnreviewedProposal")}</small></div>}{propertyEntries.map(([key, value]) => <div className="building-model-evidence-row" key={key}><span>{key}</span><small>{typeof value === "string" ? value : JSON.stringify(value)}</small></div>)}{!hasCandidateProperties && <p className="muted text-ui-xs">{t("buildingModelNoCandidateProperties")}</p>}</div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelMatchExisting")}</h3><Field label={candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")} hint={t("buildingModelMatchHint")}><NativeSelect value={targetEntityId} onChange={(event) => setTargetEntityId(event.target.value)} disabled={pending}><option value="">{t("buildingModelNoMatch")}</option>{regions.filter((region) => region.entityType === candidate.entityType).map((region) => <option key={region.id} value={region.id}>{region.label} · {region.id}</option>)}</NativeSelect></Field><Button size="sm" variant="outline" disabled={pending || !targetEntityId} onClick={() => onReview("approved", { targetEntityId })}>{t("buildingModelReconcile")}</Button></div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelEvidence")}</h3>{candidate.evidence?.length ? candidate.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label || t("buildingModelSourcePage")}</span><small>{item.value || "—"} {item.page ? `· ${t("buildingModelPage")} ${item.page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoEvidence")}</p>}{candidate.uncertainty != null && <p className="muted text-ui-2xs">{t("buildingModelUncertainty")}: {typeof candidate.uncertainty === "string" ? candidate.uncertainty : JSON.stringify(candidate.uncertainty)}</p>}</div>
     <div className="building-model-candidate-actions"><Button size="sm" disabled={pending} onClick={() => onReview("approved", correction)}>{t("buildingModelAcceptCandidate")}</Button><Button size="sm" variant="outline" disabled={pending} onClick={() => onReview("rejected")}>{t("buildingModelRejectCandidate")}</Button></div>

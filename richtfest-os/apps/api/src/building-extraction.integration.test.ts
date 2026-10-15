@@ -23,7 +23,7 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
   const post=async(path:string,body:unknown,headers:Record<string,string>={})=>{const r=await fetch(base+path,{method:"POST",headers:{"content-type":"application/json",...headers},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
   try {
     // Clone definitions into a disposable namespace; existing local fixtures are untouched.
-    for(const table of ["projects_projects","projects_files","projects_file_versions",...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r=>r.tablename)]) {
+    for(const table of ["projects_projects","projects_files","projects_file_versions","projects_source_extractions","projects_source_models",...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r=>r.tablename)]) {
       if(!/^projects_[a-z_]+$/.test(table))throw new Error("Unexpected test table");
       await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
     }
@@ -41,38 +41,52 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     const worker={db,fileStorage:{read:async()=>createReadStream(fixture!)},audit:async()=>{audits++;},reportError:()=>{}};
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     const rows=(await pool.query("select * from projects_building_extraction_candidates")).rows;
-    const anchors=rows.filter(r=>r.entity_type==="room"),footprints=rows.filter(r=>r.entity_type==="element");
-    expect(anchors.length).toBeGreaterThan(0);expect(footprints.length).toBeGreaterThan(0);
-    expect(anchors.every(r=>r.status==="unreviewed" && r.geometry.quality==="anchor")).toBe(true);
-    expect(footprints.every(r=>r.status==="unreviewed" && r.geometry.quality==="footprint" && r.evidence[0].layerName.includes("Konstruktion"))).toBe(true);
-    const candidate=anchors[0],review={baseRevision:0,decision:"approved",name:"Reviewed correction"};
+    const rooms=rows.filter(r=>r.entity_type==="room"),assemblies=rows.filter(r=>r.entity_type==="element");
+    expect(rooms.length).toBeGreaterThan(0);expect(assemblies.length).toBeGreaterThan(0);
+    expect(rooms.every(r=>r.status==="unreviewed" && ["anchor","enclosed_region","approximate_partition"].includes(r.geometry.quality))).toBe(true);
+    expect(rooms.some(r=>r.geometry.quality==="anchor")).toBe(true);
+    expect(rooms.some(r=>r.geometry.quality==="approximate_partition")).toBe(true);
+    expect(assemblies.every(r=>r.status==="unreviewed" && r.geometry.quality==="assembly" && Array.isArray(r.geometry.polygons) && r.geometry.polygons.length>0 && r.evidence[0].layerName.includes("Konstruktion"))).toBe(true);
+    const agentContext=await (await fetch(base+"/agent-context")).json();
+    expect(agentContext.data.entities).toHaveLength(2); // building + storey; candidates are never canonical entities
+    expect(agentContext.data.missingInputs).toHaveLength(0);
+    expect(agentContext.data.draftCandidates).toHaveLength(rows.length);
+    expect(agentContext.data.draftCandidates[0]).toMatchObject({reviewStatus:"unreviewed",sourceVersionId:version,page:3,
+      deepLink:`/projects/${project}?view=building-model`});
+    expect(agentContext.data.draftCandidates.every((candidate:any)=>candidate.candidateId && candidate.geometry.quality)).toBe(true);
+    await pool.query("update projects_files set purpose='reference_report' where id=$1",[file]);
+    const purposeChangedContext=await (await fetch(base+"/agent-context")).json();
+    expect(purposeChangedContext.data.draftCandidates).toHaveLength(0);
+    await pool.query("update projects_files set purpose='project_evidence' where id=$1",[file]);
+    const candidate=rooms[0],review={baseRevision:0,decision:"approved",name:"Reviewed correction"};
     const reviews=await Promise.all([post(`/extraction-candidates/${candidate.id}/review`,review),post(`/extraction-candidates/${candidate.id}/review`,review)]);
     expect(reviews.map(r=>r.status).sort()).toEqual([200,409]);
     expect((await pool.query("select name,room_use,construction_state from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction",room_use:null,construction_state:"unknown"}]);
     // Upgrade an older labels-only job in place; never replace reviewed candidate IDs.
     await pool.query("update projects_building_extractions set extractor_version='labels-v1'");
     const upgraded=await post("/extractions",{...input,baseRevision:1});
-    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("geometry-v2");
+    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("topology-v3");
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     expect((await pool.query("select count(*)::int as n from projects_building_extraction_candidates")).rows[0].n).toBe(rows.length);
     expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[candidate.id])).rows[0]).toEqual({name:"Reviewed correction",status:"approved"});
     expect((await pool.query("select name from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction"}]);
-    const second=anchors[1];
+    const second=rooms[1];
     if(second)expect((await post(`/extraction-candidates/${second.id}/review`,{baseRevision:1,decision:"rejected"})).status).toBe(200);
-    if(anchors[2]) {
+    if(rooms[2]) {
       const target=(await pool.query("select id from projects_building_rooms")).rows[0].id;
-      expect((await post(`/extraction-candidates/${anchors[2].id}/review`,{baseRevision:2,decision:"approved",targetEntityId:target,name:"Must not overwrite existing correction"})).status).toBe(200);
+      expect((await post(`/extraction-candidates/${rooms[2].id}/review`,{baseRevision:2,decision:"approved",targetEntityId:target,name:"Must not overwrite existing correction"})).status).toBe(200);
       expect((await pool.query("select name from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction"}]);
     }
     const revision=async()=>Number((await pool.query("select revision from projects_building_models where id=$1",[model])).rows[0].revision);
-    const footprintReview=await post(`/extraction-candidates/${footprints[0].id}/review`,{baseRevision:await revision(),decision:"approved",name:"Reviewed footprint"});
+    const footprintReview=await post(`/extraction-candidates/${assemblies[0].id}/review`,{baseRevision:await revision(),decision:"approved",name:"Reviewed assembly"});
     expect(footprintReview.status).toBe(200);
-    expect(footprintReview.body.data.entity).toMatchObject({buildingId:building,storeyId:storey,kind:"source_footprint",constructionState:"unknown",geometry:{quality:"footprint"}});
+    expect(footprintReview.body.data.entity).toMatchObject({buildingId:building,storeyId:storey,kind:"source_construction_assembly",constructionState:"unknown",geometry:{quality:"assembly"}});
+    expect(footprintReview.body.data.entity.geometry.polygons.length).toBeGreaterThan(0);
     await pool.query("update projects_building_extractions set status='queued',lease_until=null");
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     expect((await pool.query("select count(*)::int as n from projects_building_extraction_candidates")).rows[0].n).toBe(rows.length);
-    expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[footprints[0].id])).rows[0]).toEqual({name:"Reviewed footprint",status:"approved"});
-    expect((await pool.query("select name from projects_building_elements")).rows).toEqual([{name:"Reviewed footprint"}]);
+    expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[assemblies[0].id])).rows[0]).toEqual({name:"Reviewed assembly",status:"approved"});
+    expect((await pool.query("select name from projects_building_elements")).rows).toEqual([{name:"Reviewed assembly"}]);
     const room=(await pool.query("select id from projects_building_rooms")).rows[0].id;
     const child=await post(`/rooms/${room}/elements`,{baseRevision:await revision(),stableKey:"manual-child",name:"Manual child",kind:"unknown"});
     expect(child.status).toBe(201);expect(child.body.data.created.buildingId).toBe(building);
