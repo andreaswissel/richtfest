@@ -365,15 +365,45 @@ test("Mastra specialists execute all acoustic tools before returning structured 
 });
 
 test("exterior source extraction returns structured inputs without exposing arithmetic tools", async () => {
-  const output = { summary: "Room geometry missing", rationale: "No inference", citations: [],
-    exteriorNoiseExtraction: { inventory: [], rooms: [], blockers: [{ roomId: null, reason: "No room schedule in this source packet" }] } };
-  const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true },
-    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 4 },
-    calculateAcoustics: async () => { throw new Error("Arithmetic belongs to the application stage"); },
-  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
-    spyStream: request => { expect(request.tools ?? []).toHaveLength(0); },
-  }) });
-  expect(result).toEqual(output);
+  const partial = exteriorNoisePackets()[0]!;
+  partial.facts.find(f => f.field === "envelopeComplete")!.value = false;
+  partial.facts.find(f => f.field === "levelDb")!.value = 0;
+  const { method, ...room } = exteriorNoiseFixture();
+  const packets = [
+    { inventory: [], rooms: [], facts: [], blockers: [{ roomId: null, reason: "No room schedule in this packet" }] },
+    partial,
+    { inventory: [{ roomId: room.room.id, provenance: room.room.provenance }], rooms: [{ ...room, fieldEvidence: [] }], facts: [], blockers: [] },
+  ];
+  for (const extraction of packets) {
+    const output = { summary: "Extracted inputs remain unreviewed", rationale: "No inference", citations: [], messages: [], exteriorNoiseExtraction: extraction };
+    let wire: any;
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async request => {
+      wire = await request.json();
+      const text = JSON.stringify(output);
+      const events = [
+        { type: "response.created", response: { id: "resp_test", created_at: 1, model: "gpt-6-luna" } },
+        { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_test", role: "assistant", content: [] } },
+        { type: "response.output_text.delta", item_id: "msg_test", output_index: 0, content_index: 0, delta: text },
+        { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_test", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] } },
+        { type: "response.completed", response: { id: "resp_test", status: "completed", usage: { input_tokens: 10, output_tokens: 20 } } },
+      ];
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    } });
+    try {
+      const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true, extractionVersion: 2 },
+        modelConfig: { modelId: "gpt-6-luna", maxOutputTokens: 2048, maxSteps: 4 },
+        calculateAcoustics: async () => { throw new Error("Arithmetic belongs to the application stage"); },
+      }, "test-key", { model: new ModelRouterLanguageModel({ id: "openai/gpt-6-luna", api: "responses", url: `${server.url}v1`, apiKey: "test-key" }) });
+      expect(result).toEqual(output);
+      expect(wire.tools ?? []).toHaveLength(0);
+      expect(wire.text.format.strict).toBe(true);
+      const schema = wire.text.format.schema.properties.exteriorNoiseExtraction;
+      expect(schema.required).toEqual(["inventory", "rooms", "facts", "blockers"]);
+      expect(schema.properties.facts.type).toBe("array");
+      expect(schema.properties.rooms.items.properties.fieldEvidence.type).toBe("array");
+      expect(schema.properties.facts.items.properties.value.anyOf).toEqual([{ type: "string" }, { type: "number" }, { type: "boolean" }]);
+    } finally { server.stop(true); }
+  }
 });
 
 test("acoustic tools are absent for other roles and insufficient model steps", async () => {

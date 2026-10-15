@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Exterior-noise workflows now pause before further AI work when room calculations are blocked, including runs outside chat. Saved reasons distinguish incomplete inputs from calculated results below target; explicitly requested model-free sheets can still show unsupported-room outcomes.
+
 - Acoustic extraction failures now retain safe field-level diagnostics for correction attempts, including larger room-fact packets and nested source references. Validation rules, models and spending/retry allowances remain unchanged; no run restarts automatically.
 
 - Project chat now proposes the right outcome directly in the conversation instead of requiring a mode switch. Calculation sheets are distinct from full reports; unclear requests ask for a choice. Confirm the outcome and cost allowance before work starts, with saved proposals protected against duplicate starts.

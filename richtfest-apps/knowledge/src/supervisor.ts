@@ -1265,7 +1265,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         const contract = reconcile ? "exterior-noise-v2" : "exterior-noise-v1";
         const assembled = reconcile ? reconcileExteriorNoiseInputs(extractionPackets)
           : { ...assembleExteriorNoiseInputs(extractionPackets), sourceNotes: [] };
-        const needsInput = assembled.blockers.length > 0 || !d.calculateAcoustics;
+        let needsInput = assembled.blockers.length > 0 || !d.calculateAcoustics;
         calculationBlockers = [...assembled.blockers, ...assembled.sourceNotes];
         const assigned = new Set((state.assignments as Assignment[]).flatMap(a => a.sourceVersionIds));
         if (!extractionPackets.length) calculationBlockers.push("No structured extraction checkpoint is available; a calculation-ready source pass is required.");
@@ -1289,15 +1289,24 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           });
           const savedOutput = output as { result: unknown; blockers: string[] };
           calculationBlockers = savedOutput.blockers;
-          if (savedOutput.result) calculationReceipts.push({ ...acousticCalculationResultSchema.parse(savedOutput.result), receiptId: step.id });
+          if (savedOutput.result) {
+            const result = acousticCalculationResultSchema.parse(savedOutput.result);
+            calculationReceipts.push({ ...result, receiptId: step.id });
+            if (reconcile && !result.batch?.complete) {
+              needsInput = true;
+              calculationBlockers = [...new Set([...calculationBlockers, ...(result.batch?.issues ?? [])])];
+            }
+          }
           if (!previous) await log(d, tx, run, "tool_executed", "exterior_noise_batch", "Application-owned room calculation; not reviewed");
         });
         if (!saved) throw conflict("Supervisor no longer active");
         // Do not spend on prose/review of known incomplete inputs. Responses produce a
         // deterministic draft sheet; a subsequent full report remains an explicit action.
-        if (reconcile && needsInput && run.conversationId) {
+        if (reconcile && needsInput) {
           await commit(d, run, token, async tx => {
-            const summary = "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet.";
+            const summary = run.conversationId
+              ? "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet."
+              : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.";
             await tx.update(agentRuns).set({ status: "needs_review", outputSummary: summary,
               partialOutput: summary, updatedAt: new Date() }).where(eq(agentRuns.id, id));
             await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers } })

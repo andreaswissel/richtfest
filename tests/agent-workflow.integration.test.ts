@@ -410,6 +410,86 @@ integration("v2 chat resolves source conflicts with revision fences and creates 
   } finally { await f.close(); }
 });
 
+for (const scenario of [
+  { mode: "report", chat: true, problem: "applicability" },
+  { mode: "calculation", chat: true, problem: "geometry" },
+  { mode: "report", chat: false, problem: "missing" },
+  { mode: "calculation", chat: false, problem: "conflict" },
+  { mode: "calculation", chat: true, problem: "below_target" },
+] as const) integration(`v2 ${scenario.mode} handles ${scenario.problem} inputs with chat=${scenario.chat}`, async () => {
+  const f = await fixture();
+  const phases: string[] = [];
+  const packets = exteriorNoisePackets(f.sourceVersionId);
+  const extraction = { ...packets[0]!, facts: packets.flatMap(p => p.facts) };
+  if (scenario.problem === "applicability") extraction.facts.find(f => f.target === "applicability" && f.field === "assessment")!.value = "unknown";
+  if (scenario.problem === "geometry") extraction.facts.find(f => f.id === "FE1" && f.field === "areaM2")!.value = 3;
+  if (scenario.problem === "missing") extraction.facts = extraction.facts.filter(f => !(f.id === "FE1" && f.field === "areaM2"));
+  if (scenario.problem === "conflict") extraction.facts.push({ ...extraction.facts.find(f => f.field === "floorAreaM2")!, value: 24 });
+  if (scenario.problem === "below_target") extraction.facts.find(f => f.id === "FE1" && f.field === "rwDb")!.value = 15;
+  f.d.calculateAcoustics = calculateAcoustics;
+  f.d.resolveSource = async () => ({ status: "resolved", source: { versionId: f.sourceVersionId, name: "Schedule.pdf", version: 1 },
+    content: { status: "available", text: extraction.inventory[0]!.provenance.excerpt, truncated: false } });
+  f.d.executeSupervisor = async ({ phase }) => {
+    phases.push(phase);
+    if (phase === "plan") return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Extract inputs", sourceVersionIds: [f.sourceVersionId] }] } };
+    if (phase === "specialist") return { status: "completed", output: { summary: "Room inputs", rationale: "Extraction", citations: [f.sourceVersionId], exteriorNoiseExtraction: extraction } };
+    throw new Error("Blocked calculations must not buy report/review calls");
+  };
+  try {
+    const [chat] = scenario.chat ? await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Input review", createdBy: f.d.actorId }).returning() : [];
+    const created = await f.post("/runs", { ...f.input, ...(chat ? { conversationId: chat.id } : {}),
+      sourceVersionIds: [f.sourceVersionId], workflow: scenario.mode === "report"
+        ? { mode: "report", reportTemplate: "exterior-noise-concept" } : { mode: "calculation" } });
+    expect(created.status).toBe(201);
+    for (let i = 0; i < 5; i++) await stepSupervisor(f.d, created.body.data.id);
+    expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
+    expect(phases).toEqual(["plan", "specialist"]);
+    const [state] = await f.rows(supervisorRuns);
+    expect(state.phase).toBe("done");
+    if (scenario.problem === "below_target") {
+      expect(state.review.inputReviewRequired).toBeUndefined();
+      const sheet = (await f.rows(artifactRevisions)).find((r: any) => r.payload?.acousticDataset);
+      expect(sheet.payload.acousticDataset.receipt.batch.complete).toBe(true);
+      expect(sheet.payload.acousticDataset.receipt.batch.rooms[0].result.exteriorNoise.marginDb).toBeLessThan(0);
+      expect(sheet.payload.template).toBeUndefined();
+      expect(sheet.content).not.toContain("Bebauungsplan");
+      return;
+    }
+    expect(state.review.inputReviewRequired).toBe(true);
+    const steps = (await f.rows(agentRunSteps)).filter((s: any) => s.stepKey.startsWith("exterior-calculation:"));
+    expect(steps).toHaveLength(1);
+    expect(steps[0].output.result.batch.rooms).toHaveLength(1);
+    expect(steps[0].output.result.batch.rooms[0].roomId).toBe("A01");
+    expect(steps[0].output.result.batch.complete).toBe(false);
+    expect(state.review.calculationBlockers.length).toBeGreaterThan(0);
+    expect(await f.rows(artifacts)).toHaveLength(chat ? 1 : 0);
+    if (chat) {
+      const [artifact] = await f.rows(artifacts);
+      const loaded = await f.get(`/conversations/${chat.id}/acoustic-inputs/${artifact.id}`);
+      expect(loaded.status).toBe(200);
+      expect(loaded.body.data.blockers).toEqual([]); // Typed inputs can still be unsupported by the calculator.
+      const path = `/conversations/${chat.id}/acoustic-inputs/${artifact.id}`;
+      const request = { expectedRevisionId: loaded.body.data.revisionId, action: "calculate",
+        reason: "Synthetic correction; not engineering approval", confirmInventory: true, changes: [] };
+      // An explicit, model-free sheet remains available with honest per-room blockers.
+      const blocked = await f.post(path, request);
+      expect(blocked.status).toBe(200);
+      expect(blocked.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(false);
+      expect(blocked.body.data.calculation.revision.payload.acousticDataset.receipt.batch.issues.length).toBeGreaterThan(0);
+      expect(blocked.body.data.calculation.artifact.status).toBe("draft");
+      const field = loaded.body.data.fields.find((f: any) => scenario.problem === "applicability"
+        ? f.target === "applicability" && f.field === "assessment" : f.id === "FE1" && f.field === "areaM2");
+      const corrected = await f.post(path, { ...request, expectedRevisionId: blocked.body.data.revisionId, changes: [{ key: field.key,
+        value: scenario.problem === "applicability" ? "standard_exterior_noise" : 2 }] });
+      expect(corrected.status).toBe(200);
+      expect(corrected.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(true);
+      expect(corrected.body.data.calculation.artifact.status).toBe("draft");
+      expect(phases).toEqual(["plan", "specialist"]);
+    }
+  } finally { await f.close(); }
+});
+
 integration("reviewed room inputs fork model-free scenarios with immutable provenance, fresh results and approval fences", async () => {
   const f = await fixture();
   try {

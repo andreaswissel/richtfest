@@ -240,6 +240,32 @@ the output or the cause of the historical failures. Missing old diagnostics cann
 be recovered retroactively. Do not raise budgets or weaken evidence validation to
 compensate for missing diagnostic evidence.
 
+### Gate expensive continuation on calculation outcomes, not field presence
+
+The follow-up offline audit reproduced two continuation gaps: fully populated
+records with unknown applicability or inconsistent facade geometry could proceed
+despite an unsupported calculator outcome; missing/conflicting inputs only paused
+when a conversation existed. Version-2 continuation now checks saved batch
+completion as well as structural gaps, and pauses with durable reasons regardless
+of chat attachment. A negative calculated margin is not an input error and must
+remain a visible finding rather than being blocked or rounded away.
+
+Preserve the distinction between automatic model continuation and an explicitly
+requested local calculation sheet: the latter deliberately permits unsupported
+room outcomes with their reasons. Do not remove that useful diagnostic product.
+Tests exercise both paths, including corrections saved in later input revisions
+without a provider call. Existing 62-room batch tests preserve every declared
+room, including missing/unsupported rooms; inventory completeness beyond the
+declared rooms still requires human review.
+
+The actual OpenAI Responses wire contract was exercised against a local fake
+endpoint with empty, partial (including false/zero) and whole-room packets.
+Required array fields and typed fact values round-trip without arithmetic tools.
+This found no corresponding schema defect; it does not establish live model
+compliance, semantic quotation accuracy or the cause of the historical failures.
+Approved rules/applicability, the day/night decision and Yven's release remain
+human gates. No lost historical outputs were reconstructed.
+
 ## 9. Change models by responsibility and measure accepted-output cost
 
 The expensive work was Astra drafting/editing/review, not Luna specialists.
