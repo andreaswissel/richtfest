@@ -97,3 +97,50 @@ test("unauthenticated crawlers receive generic previews and a public image on ev
     await pool.end();
   }
 });
+
+test("marketing domains and the landing preview serve the page's relative image URLs", async () => {
+  const previousNodeEnv = env.NODE_ENV;
+  const { db, pool } = createDatabase("postgresql://unused:unused@localhost:1/unused");
+  let server: ReturnType<ReturnType<typeof createApp>["listen"]> | undefined;
+  try {
+    env.NODE_ENV = "production";
+    server = createApp(db).listen(0);
+    env.NODE_ENV = previousNodeEnv;
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const landingHtml = await Bun.file(new URL("../richtfest-landing/index.html", import.meta.url)).text();
+    for (const [host, prefix] of [
+      ["richtfest.ai", "/"],
+      ["richtfest.si", "/"],
+      ["www.richtfest.si", "/"],
+      ["richtfest.andreaswissel.com", "/"],
+      ["app.richtfest.ai", "/landing/"],
+    ]) {
+      const headers = { host: host! };
+      const page = await fetch(base + prefix, { headers });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toBe(landingHtml);
+      for (const name of [
+        "aud-developers", "aud-architects", "aud-contractors", "aud-authorities",
+        "wf-feasibility", "wf-variants", "wf-physics", "wf-cost", "cta-richtfest",
+      ]) {
+        const image = await fetch(`${base}${prefix}img/${name}.webp`, { headers });
+        expect(image.status).toBe(200);
+        expect(image.headers.get("content-type")).toContain("image/webp");
+        const bytes = new Uint8Array(await image.arrayBuffer());
+        expect(new TextDecoder().decode(bytes.slice(0, 4))).toBe("RIFF");
+        expect(new TextDecoder().decode(bytes.slice(8, 12))).toBe("WEBP");
+      }
+      for (const [file, type] of [["favicon.svg", "image/svg+xml"], ["og-image.png", "image/png"]]) {
+        const image = await fetch(`${base}${prefix}${file}`, { headers });
+        expect(image.status).toBe(200);
+        expect(image.headers.get("content-type")).toContain(type!);
+      }
+    }
+    const appPage = await fetch(base + "/", { headers: { host: "app.richtfest.ai" } });
+    expect(await appPage.text()).toContain('name="richtfest-build"');
+  } finally {
+    env.NODE_ENV = previousNodeEnv;
+    server?.close();
+    await pool.end();
+  }
+});

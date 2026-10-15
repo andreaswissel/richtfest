@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Landing-page images, icons and share previews now load correctly on the main website as well as the preview URL.
+
 - Agent activity now uses compact, expandable Trace rows in conversations and run threads. Current tasks, queued work and unreviewed findings stay readable, with timestamped history and failure details on demand. Agent execution, source links and approvals are unchanged.
 
 - Project conversations can request a calculation-only Schallschutznachweis or select a full concept format. New exterior-noise workflows extract source-backed room inputs, automatically calculate every declared room, and save a result or blocker without optional agent arithmetic calls. Calculation sheets skip report writing and editorial passes; configured independent review and human release remain separate.

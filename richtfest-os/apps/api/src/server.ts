@@ -92,11 +92,12 @@ export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; 
   app.use("/api", (_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   if (env.NODE_ENV === "production") {
     const landingDirectory = path.resolve(import.meta.dir, "../../../../richtfest-landing");
+    const serveLanding = express.static(landingDirectory, { index: "index.html", redirect: true });
     // Keep a shareable Railway preview URL while the custom root domain is being configured.
-    app.use("/landing", express.static(landingDirectory, { index: "index.html", redirect: true }));
-    app.get("/", (req, res, next) => {
+    app.use("/landing", serveLanding);
+    app.use((req, res, next) => {
       if (["richtfest.ai", "richtfest.si", "www.richtfest.si", "richtfest.andreaswissel.com"].includes(req.hostname.toLowerCase())) {
-        return res.sendFile(path.join(landingDirectory, "index.html"));
+        return serveLanding(req, res, next);
       }
       return next();
     });
