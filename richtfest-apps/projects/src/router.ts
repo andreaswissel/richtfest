@@ -6,6 +6,7 @@ import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/share
 import { files, fileVersions, projectMembers, projects, sourceExtractions, sourceModels, sourceRepresentations } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
+import { createEnvironmentRouter } from "./environment-router";
 import { createLocationRouter } from "./location-router";
 import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
@@ -70,6 +71,7 @@ const projectFile = async (
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
+  router.use(createEnvironmentRouter(getDeps));
   router.use(createSourceModelRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {

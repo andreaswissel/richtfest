@@ -1,9 +1,10 @@
 import { and, eq, sql, inArray } from "drizzle-orm";
-import type { SourceText } from "@richtfest/shared";
+import type { SourceText, SourceDocumentLayers } from "@richtfest/shared";
 import type { SourceExtractionDeps } from "./deps";
 import { files, fileVersions, sourceExtractions as jobs, sourcePages } from "./schema";
 import { extractSourceText } from "./source-text";
 import { isIfcSource } from "./ifc-model";
+import { withSourceDocumentPage, prepareSourceDocumentLayers } from "./source-document";
 
 /** Only upload completion/migration queues work. Reads never start extraction. */
 export async function runSourceExtraction(d: SourceExtractionDeps, signal: AbortSignal): Promise<boolean> {
@@ -25,6 +26,7 @@ export async function runSourceExtraction(d: SourceExtractionDeps, signal: Abort
   let result: SourceText;
   let status = "complete";
   let progressed = false;
+  let documentLayers: SourceDocumentLayers | undefined = job.result?.documentLayers;
   try {
     signal.throwIfAborted();
     if (job.attempts >= 3) throw new Error("Extraction recovery limit reached");
@@ -32,6 +34,7 @@ export async function runSourceExtraction(d: SourceExtractionDeps, signal: Abort
       .from(fileVersions).innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, fileVersions.tenantId)))
       .where(and(eq(fileVersions.id, job.versionId), eq(fileVersions.tenantId, job.tenantId), eq(fileVersions.status, "ready")));
     if (!source?.storageKey) throw new Error("Ready source unavailable");
+    documentLayers = await prepareSourceDocumentLayers(source, d.fileStorage, documentLayers, jobSignal);
     const structured = isIfcSource(source.mimeType ?? "", source.name);
     if (structured) result = { status: "unsupported", reason: "IFC is imported into the structured source model, not interpreted as raw text." };
     // A process may have stopped after saving the last page but before finalizing.
@@ -43,10 +46,10 @@ export async function runSourceExtraction(d: SourceExtractionDeps, signal: Abort
         result = await extractSourceText(stream, source.mimeType ?? "", source.name, { pageStart: job.nextPage }, async (page, content) => {
           jobSignal.throwIfAborted();
           await d.db.transaction(async (tx: any) => {
-            const [updated] = await tx.update(jobs).set({ nextPage: page + 1, result: { ...content, text: undefined },
+            const [updated] = await tx.update(jobs).set({ nextPage: page + 1, result: { ...content, text: undefined, documentLayers },
               attempts: 0, leaseUntil: new Date(Date.now() + 10 * 60_000), updatedAt: new Date() }).where(owned).returning({ id: jobs.versionId });
             if (!updated) throw new Error("Extraction lease lost");
-            await tx.insert(sourcePages).values({ tenantId: job.tenantId, versionId: job.versionId, page, content });
+            await tx.insert(sourcePages).values({ tenantId: job.tenantId, versionId: job.versionId, page, content: withSourceDocumentPage(job.versionId, page, content) });
           });
           progressed = true;
         });
@@ -66,12 +69,12 @@ export async function runSourceExtraction(d: SourceExtractionDeps, signal: Abort
   await d.db.transaction(async (tx: any) => {
     const [current] = await tx.select().from(jobs).where(owned).for("update");
     if (!current) return;
-    result = { ...result, pages: result.pages ?? current.result?.pages };
+    result = { ...result, pages: result.pages ?? current.result?.pages, ...(documentLayers ? { documentLayers } : {}) };
     const [saved] = await tx.update(jobs).set({ status, result: { ...result, text: undefined }, leaseToken: null,
       leaseUntil: status === "queued" ? new Date(Date.now() + 2000) : null, updatedAt: new Date() }).where(owned).returning({ id: jobs.versionId });
     if (!saved) return;
     // Text-like sources use one bounded, persisted excerpt, with no PDF pages.
-    if (result.text && !result.pages) await tx.insert(sourcePages).values({ tenantId: job.tenantId, versionId: job.versionId, page: 1, content: result }).onConflictDoNothing();
+    if (result.text && !result.pages) await tx.insert(sourcePages).values({ tenantId: job.tenantId, versionId: job.versionId, page: 1, content: withSourceDocumentPage(job.versionId, 1, result) }).onConflictDoNothing();
     await d.audit(tx, job.tenantId, `projects.source.extraction.${status}`, job.versionId, { status: result.status, pages: result.pages });
   });
   return true;

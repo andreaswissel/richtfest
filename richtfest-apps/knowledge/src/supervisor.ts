@@ -1,6 +1,7 @@
+import { formatSteering, steeringInstructions } from "./steering-context";
 import { and, desc, eq, inArray, notInArray, or, isNull, lt, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
-import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, requestedAcousticConcept, acousticConceptIdSchema, specialistRoleSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits, agentModelInputByteBudget } from "@richtfest/shared";
+import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema, prepareAgentDocument, requestedAcousticConcept, acousticConceptIdSchema, specialistRoleSchema, acousticInputReviewSchema, type AgentPresetSnapshot, type AgentWorkProgress, agentOutputSchemas, agentExecutionLimitsSchema, type AgentExecutionLimits, agentModelInputByteBudget } from "@richtfest/shared";
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
@@ -10,6 +11,7 @@ import {
   agentRunEvents,
   agentRunSteps,
   supervisorRuns,
+  artifactRevisions,
   tasks,
   messages,
   annotations,
@@ -19,7 +21,7 @@ import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./
 import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider, interruptProviderAttempts } from "./usage";
 import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage, validateAgentMessageTargets } from "./agent-messages";
-import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
+import { resolveRunSource, resolveCompleteRunSource, sourceEvidencePackets, compactDocumentPackets, compactDocumentLayers, documentPacketDensityBytes, batchPreparedSourcePages } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, exteriorNoiseExtractionSchema, renderAcousticCalculationReceipts, acousticDatasetSchema, type AcousticCalculationReceipt } from "@richtfest/shared";
@@ -58,6 +60,14 @@ export const supervisorReview = defaultSchemas.review.extend({
   // Older persisted runs and host fixtures contain only the conversational summary.
   document: defaultSchemas.review.shape.document.nullish(),
 });
+
+type VisualInspectionReceipt = {
+  receiptId: string;
+  versionId: string;
+  page: number;
+  crop: SourceVisualRequest["crop"] | null;
+  imageHash: string;
+};
 export const independentReview = defaultSchemas.independent_review;
 export type Assignment = {
   taskId: string;
@@ -84,6 +94,59 @@ export type Assignment = {
     output: z.infer<typeof specialistOutput>;
   };
 };
+
+const VISUAL_READ_CONTEXT_LIMIT = 40;
+function visualReadCoverage(assignments: Assignment[], limit = VISUAL_READ_CONTEXT_LIMIT) {
+  // Reads are already replaced by exact request in each assignment. If sibling
+  // assignments requested the same target, prefer a successful image receipt
+  // over an earlier budget result; that receipt still says nothing about model
+  // delivery or semantic inspection.
+  const targets = new Map<string, { taskId: string; request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }>();
+  for (const assignment of assignments) for (const read of assignment.visualReads ?? []) {
+    const request = { ...read.request, crop: read.request.crop ?? null } as SourceVisualRequest;
+    const key = stepHash(request);
+    const previous = targets.get(key);
+    if (!previous || (read.status === "available" && previous.status !== "available"))
+      targets.set(key, { taskId: assignment.taskId, ...read, request });
+  }
+  const all = [...targets.values()].sort((a, b) => stepHash(a.request).localeCompare(stepHash(b.request)));
+  const entries = all.slice(0, limit).map(({ taskId, request, status, receiptId }) => ({
+    taskId,
+    versionId: request.versionId,
+    page: request.page,
+    crop: request.crop ?? null,
+    status,
+    receiptId,
+  }));
+  return {
+    entries,
+    total: all.length,
+    included: entries.length,
+    omitted: Math.max(0, all.length - entries.length),
+    note: "A status of available proves the image tool returned that page/crop in a recorded call. It does not prove the provider received it or semantically inspected it. Omitted entries may exist; omission does not mean a target was not rendered.",
+  };
+}
+async function assertPinnedInputReview(d: AppDeps, run: any, marker: any, tx: any) {
+  const artifactId = marker?.inputReviewArtifactId;
+  const expectedRevisionId = marker?.expectedInputReviewRevisionId;
+  if (typeof artifactId !== "string" || typeof expectedRevisionId !== "string")
+    throw conflict("Input reassessment has no pinned review artifact");
+  const [artifact] = await tx.select({ id: artifacts.id }).from(artifacts).where(and(
+    eq(artifacts.id, artifactId), eq(artifacts.tenantId, d.tenantId),
+    eq(artifacts.projectId, run.projectId), eq(artifacts.runId, run.id),
+  )).for("update");
+  if (!artifact) throw conflict("The pinned acoustic input-review artifact is unavailable");
+  const [revision] = await tx.select({ id: artifactRevisions.id, payload: artifactRevisions.payload })
+    .from(artifactRevisions).where(and(eq(artifactRevisions.tenantId, d.tenantId),
+      eq(artifactRevisions.artifactId, artifact.id))).orderBy(desc(artifactRevisions.version)).limit(1);
+  if (!revision || revision.id !== expectedRevisionId)
+    throw conflict("The acoustic input review changed during reassessment; generated progress was not published");
+  const parsed = acousticInputReviewSchema.safeParse(revision.payload?.acousticInputReview);
+  if (!parsed.success || parsed.data.conversationId !== run.conversationId
+    || parsed.data.resolutions.length || parsed.data.visualMappings.length
+    || parsed.data.visualAreaReviews.length || parsed.data.inventoryConfirmation)
+    throw conflict("The pinned review is no longer decision-free; generated progress was not published");
+}
 export function assertDocumentCitations(
   document: z.infer<typeof agentDocumentSchema> | null | undefined,
   citations: string[],
@@ -299,6 +362,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       throw conflict("Project unavailable");
     if (!d.executeSupervisor) throw conflict("Supervisor unavailable");
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
+    const inputReassessmentOnly = state.review?.inputReassessmentOnly === true;
+    if (inputReassessmentOnly) {
+      if (state.phase !== "review" || policy.workflow?.mode !== "calculation")
+        throw conflict("Input reassessment is limited to the saved acoustic calculation review phase");
+      if (!(state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion === 2))
+        throw conflict("Saved version-2 acoustic extraction is unavailable for input reassessment");
+      await d.db.transaction((tx: any) => assertPinnedInputReview(d, run, state.review, tx));
+    }
     const limits = policy.executionLimits;
     const schemas = agentOutputSchemas(limits);
     // A fresh report must not inherit earlier answers through quoted artifact feedback.
@@ -309,6 +380,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     const assertActive = async () => {
       if (!(await commit(d, run, token, async () => {})))
         throw conflict("Supervisor no longer active");
+    };
+    const currentVisualReadCoverage = async (assignmentRunId?: string) => {
+      const [current] = await d.db.select({ assignments: supervisorRuns.assignments })
+        .from(supervisorRuns).where(and(eq(supervisorRuns.runId, id), eq(supervisorRuns.tenantId, d.tenantId)));
+      const assignments = (current?.assignments ?? state.assignments) as Assignment[];
+      return visualReadCoverage(assignmentRunId
+        ? assignments.filter(assignment => assignment.runId === assignmentRunId)
+        : assignments);
     };
     let partialOutput = "";
     let lastCheckpoint = 0;
@@ -330,7 +409,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       goal: string,
       context: unknown,
       runId = id,
-      validate?: (output: unknown, visualVersionIds?: string[]) => unknown,
+      validate?: (output: unknown, visualVersionIds?: string[], visualReceipts?: VisualInspectionReceipt[]) => unknown,
     ) => {
       // Retry state lives in the existing durable phase history. A restart must
       // honor the saved deadline and attempt budget, not start a fresh burst.
@@ -363,6 +442,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const appendixWriter = phase === "review" && (context as { inputMode?: string }).inputMode === "imported-calculation-evidence";
       const editorialPacket = phase === "review" && (context as { inputMode?: string }).inputMode === "editorial-packet";
       const consolidation = phase === "review" && ["editorial-consolidation", "patch-editorial-v1"].includes((context as { inputMode?: string }).inputMode ?? "");
+      const evidenceIsolatedWorkflow = policy.workflow?.mode === "calculation" || policy.workflow?.mode === "report";
+      const messagingScope = evidenceIsolatedWorkflow ? { familyRootRunId: id } : undefined;
       const providerContext = {
         ...(context as object),
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
@@ -370,7 +451,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           ? await companyKnowledgeCategories(d) : undefined,
         acousticToolsAvailable: !visualOnly && !(context as { extractExteriorNoise?: boolean }).extractExteriorNoise
           && !!d.calculateAcoustics && (policy.specialists.sound_insulation?.maxSteps ?? 0) >= 2,
-        ...(!(context as { documentTask?: string }).documentTask ? { messaging: await agentMessagingContext(d, sender) } : {}),
+        ...(!(context as { documentTask?: string }).documentTask
+          ? { messaging: await agentMessagingContext(d, sender, messagingScope) } : {}),
         componentCatalog: appendixWriter || editorialPacket || consolidation ? undefined : await d.componentContext?.(run.goal),
         documentReview,
         workspaceGuidance: (() => {
@@ -395,16 +477,22 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         },
       };
       const visuallyInspected = new Set<string>();
+      const visualInspectionReceipts = new Map<string, VisualInspectionReceipt>();
       if (d.inspectSource && phase !== "plan") {
         // A cached provider output may skip tool execution on resume. Only this
         // exact call's successful persisted visual receipts restore its citations.
-        const previousReads = await d.db.select({ output: agentRunSteps.output }).from(agentRunSteps).where(and(
+        const previousReads = await d.db.select({ id: agentRunSteps.id, output: agentRunSteps.output }).from(agentRunSteps).where(and(
           eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.runId, runId), eq(agentRunSteps.kind, "tool"),
           eq(agentRunSteps.status, "completed"), sql`${agentRunSteps.stepKey} like ${`visual:${callKey}:%`}`,
         ));
-        for (const { output } of previousReads) {
-          const receipt = output as { status?: string; versionId?: string; imageHash?: string } | null;
-          if (receipt?.status === "available" && receipt.versionId && receipt.imageHash) visuallyInspected.add(receipt.versionId);
+        for (const { id: receiptId, output } of previousReads) {
+          const receipt = output as { status?: string; versionId?: string; page?: number; crop?: SourceVisualRequest["crop"]; imageHash?: string } | null;
+          if (receipt?.status === "available" && receipt.versionId && receipt.page && receipt.imageHash) {
+            visuallyInspected.add(receipt.versionId);
+            const request = sourceVisualRequestSchema.parse({ versionId: receipt.versionId, page: receipt.page, crop: receipt.crop });
+            visualInspectionReceipts.set(stepHash(request), { receiptId, versionId: request.versionId,
+              page: request.page, crop: request.crop ?? null, imageHash: receipt.imageHash });
+          }
         }
       }
       // Render only this call's source scope. Cache within inference, and persist
@@ -416,9 +504,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           await assertActive();
           const parsed = sourceVisualRequestSchema.parse(raw);
           const input = { ...parsed, crop: parsed.crop ?? undefined };
-          const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; visualRequests?: SourceVisualRequest[]; sourceCoverage?: { sliceVersionIds?: string[] } };
+          const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; visualRequests?: SourceVisualRequest[]; sourceCoverage?: { sliceVersionIds?: string[] }; sourcePageScope?: { versionId: string; pages: number[] }[] };
           const allowed = new Set([...(scope.sourceVersionIds ?? scope.sourceCoverage?.sliceVersionIds ?? []), ...(scope.visualSourceVersionIds ?? [])]);
           if (!allowed.has(input.versionId)) throw conflict("Visual source is outside this call's source scope");
+          const enforcedPageScope = policy.workflow?.mode === "report" || policy.workflow?.mode === "calculation"
+            ? policy.workflow.sourcePageScope : undefined;
+          const allowedPages = enforcedPageScope?.find(entry => entry.versionId === input.versionId)?.pages;
+          if (enforcedPageScope && !allowedPages?.includes(input.page)) throw conflict("Visual page is outside this call's explicit page scope");
           const inputHash = stepHash(input);
           if (scope.visualRequests && !scope.visualRequests.some(request => stepHash(request) === inputHash))
             throw conflict("Visual request is outside this follow-up's exact page/crop scope");
@@ -434,6 +526,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             const { image, ...metadata } = result;
             const output = { ...metadata, ...(image ? { imageHash: createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex") } : {}) };
             const stepKey = `visual:${callKey}:${inputHash}`;
+            let savedReceiptId: string | undefined;
             const saved = await commit(d, run, token, async (tx, current) => {
               const previous = await savedStep(d, runId, "tool", stepKey, inputHash, tx);
               // A failed render may recover on an explicit retry. Retain that
@@ -442,6 +535,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 kind: "tool", stepKey, inputHash, input: { name: "inspect_project_source", input },
                 output, status: "completed",
               }) : previous;
+              savedReceiptId = receipt.id;
               if (phase === "specialist") await tx.update(supervisorRuns).set({
                 assignments: (current.assignments as Assignment[]).map(a => a.runId !== runId ? a : {
                   ...a, visualReads: [...(a.visualReads ?? []).filter(read => stepHash(read.request) !== inputHash),
@@ -450,8 +544,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               }).where(eq(supervisorRuns.runId, id));
             });
             if (!saved) throw conflict("Supervisor no longer active");
-            if (result.status === "available" && image) visuallyInspected.add(input.versionId);
-            return result;
+            if (result.status === "available" && image && typeof output.imageHash === "string") {
+              visuallyInspected.add(input.versionId);
+              if (savedReceiptId) visualInspectionReceipts.set(inputHash, { receiptId: savedReceiptId,
+                versionId: input.versionId, page: input.page, crop: input.crop ?? null, imageHash: output.imageHash });
+            }
+            return savedReceiptId ? { ...result, receiptId: savedReceiptId,
+              ...(typeof output.imageHash === "string" ? { imageHash: output.imageHash } : {}) } : result;
           })();
           visualReads.set(inputHash, read);
           return read;
@@ -463,9 +562,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             signal?.throwIfAborted();
             await assertActive();
             const input = sourceImageQuerySchema.parse(raw);
-            const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; sourceCoverage?: { sliceVersionIds?: string[] } };
+            const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; sourceCoverage?: { sliceVersionIds?: string[] }; sourcePageScope?: { versionId: string; pages: number[] }[] };
             const allowed = new Set([...(scope.sourceVersionIds ?? scope.sourceCoverage?.sliceVersionIds ?? []), ...(scope.visualSourceVersionIds ?? [])]);
             if (!allowed.has(input.versionId)) throw conflict("Image query is outside this call's source scope");
+            const enforcedPageScope = policy.workflow?.mode === "report" || policy.workflow?.mode === "calculation"
+              ? policy.workflow.sourcePageScope : undefined;
+            const allowedPages = enforcedPageScope?.find(entry => entry.versionId === input.versionId)?.pages;
+            if (enforcedPageScope && !allowedPages?.includes(input.page)) throw conflict("Image page is outside this call's explicit page scope");
             await sources(d, run.projectId, [input.versionId]);
             const inputHash = stepHash(input);
             const cached = imageQueries.get(inputHash);
@@ -502,6 +605,28 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             imageQueries.set(inputHash, pending);
             return pending;
           } : undefined;
+      let environmentResearch: Promise<import("@richtfest/shared").EnvironmentSurvey> | undefined;
+      const researchProjectEnvironment = !visualOnly && phase === "specialist" && run.projectId
+        && d.researchProjectEnvironment && ["source_reviewer", "requirements_reviewer", "sound_insulation"].includes((context as { role?: string }).role ?? "")
+        && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
+        ? (signal?: AbortSignal) => environmentResearch ??= (async () => {
+          signal?.throwIfAborted();
+          await assertActive();
+          const output = await d.researchProjectEnvironment!(run.projectId!, signal);
+          signal?.throwIfAborted();
+          await assertActive();
+          const input = { projectId: run.projectId, refresh: false };
+          const inputHash = stepHash({ input, output });
+          const saved = await commit(d, run, token, async tx => {
+            await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+              kind: "tool", stepKey: `environment-research:${callKey}:${inputHash}`, inputHash,
+              input: { name: "research_project_environment", input }, output, status: "completed",
+            });
+            await log(d, tx, { ...run, id: runId }, "tool_executed", "research_project_environment", "Saved project environmental research receipt");
+          });
+          if (!saved) throw conflict("Supervisor no longer active");
+          return output;
+        })() : undefined;
       const searchKnowledge: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"] =
         !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? async (raw, signal) => {
@@ -639,6 +764,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             modelPolicy: state.modelPolicy,
             calculateAcoustics,
             searchCompanyKnowledge: searchKnowledge,
+            researchProjectEnvironment,
             inspectSource,
             querySourceImage,
             onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
@@ -654,7 +780,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             if (response.status === "completed") {
               try {
                 validateAgentMessageTargets(response.output, providerContext.messaging);
-                if (validate) response.output = validate(response.output, [...visuallyInspected]);
+                if (validate) response.output = validate(response.output, [...visuallyInspected], [...visualInspectionReceipts.values()]);
               }
               catch (error) {
                 if (!(error instanceof z.ZodError)) throw error;
@@ -672,7 +798,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             // publish an exchange twice, even if the phase checkpoint is retried.
             const outgoing = (response.output as { messages?: unknown[] }).messages ?? [];
             for (const [index, message] of outgoing.entries())
-              await deliverAgentMessage(d, tx, sender, message, `supervisor:${callKey}:${index}`);
+              await deliverAgentMessage(d, tx, sender, message, `supervisor:${callKey}:${index}`, messagingScope);
             await tx.update(supervisorRuns).set({ history: current.history.filter((entry: any) =>
               entry.phase !== "provider_retry" || entry.callKey !== callKey) }).where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "provider_call_completed", phase, callId);
@@ -755,13 +881,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       }
       throw new Error("Provider retry loop ended unexpectedly");
     };
-    const goal = `${run.goal}${state.steering ? `\nHuman steering: ${state.steering}` : ""}`;
+    const steering = formatSteering(state.steering);
+    const goal = `${run.goal}${steering ? `\nHuman steering: ${steering}` : ""}`;
     const plannedTemplate = state.history.findLast((entry: any) => entry.phase === "plan")?.output?.documentTemplate;
     const workflow = policy.workflow;
     const calculationOnly = workflow?.mode === "calculation";
+    const sourcePageScope = workflow?.mode === "report" || workflow?.mode === "calculation"
+      ? workflow.sourcePageScope : undefined;
+    const scopedPages = new Map<string, Set<number>>(sourcePageScope?.map(scope => [scope.versionId, new Set(scope.pages)] as const) ?? []);
     const conceptId = workflow
       ? workflow.mode === "report" ? acousticConceptIdSchema.safeParse(workflow.reportTemplate).data : undefined
-      : requestedAcousticConcept(state.steering ?? "") ?? requestedAcousticConcept(run.goal)
+      : steeringInstructions(state.steering).map(entry => requestedAcousticConcept(entry)).findLast(Boolean) ?? requestedAcousticConcept(run.goal)
         ?? acousticConceptIdSchema.safeParse(plannedTemplate).data;
     const readCompleteSources = calculationOnly || !!conceptId || state.history.findLast((entry: any) => entry.phase === "plan")?.strategy === "selected_source_summary";
     if (state.phase === "plan") {
@@ -770,6 +900,24 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await sources(d, run.projectId, run.sourceVersionIds);
         // Report evidence is pinned at creation, not expanded by later uploads.
         sourceInventory.sources = sourceInventory.sources.filter(source => run.sourceVersionIds.includes(source.versionId));
+      }
+      let pageScopeCoverage: any[] | undefined;
+      if (sourcePageScope) {
+        pageScopeCoverage = await Promise.all(sourcePageScope.map(async scope => {
+          const resolved = await resolveCompleteRunSource(d, run.projectId, { versionId: scope.versionId, preferDocumentModel: true }, assertActive);
+          const totalPages = resolved?.content?.documentModel?.coverage?.totalPages;
+          if (resolved?.status !== "resolved" || resolved.source?.versionId !== scope.versionId
+            || resolved.content?.status !== "available" || typeof totalPages !== "number" || !Number.isInteger(totalPages) || totalPages < 1)
+            throw conflict("Page-scoped reports require a complete original-page document model for every selected version");
+          const modeledPages = new Set((resolved.content.documentModel.pages ?? []).map((page: any) => page.page));
+          const missingPage = scope.pages.find(page => !modeledPages.has(page));
+          if (missingPage !== undefined) throw conflict(`Requested original page ${missingPage} is missing from the saved page model`);
+          const invalidPage = scope.pages.find(page => page > totalPages);
+          if (invalidPage !== undefined) throw conflict(`Requested original page ${invalidPage} exceeds the source document's ${totalPages} pages`);
+          return { versionId: scope.versionId, totalPages, requestedPages: [...scope.pages].sort((a, b) => a - b),
+            completeDocumentCoverage: false, omittedPageCount: totalPages - scope.pages.length,
+            note: "Only explicitly requested original pages are evaluated; omitted pages were not evaluated and are not evidence of absence." };
+        }));
       }
       const availableSourceIds = new Set<string>([
         ...run.sourceVersionIds,
@@ -826,6 +974,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const planContext = {
         projectId: run.projectId,
         workflow,
+        ...(sourcePageScope ? { sourcePageScope, sourceDocumentCoverage: pageScopeCoverage,
+          sourceCoverage: { completeDocumentCoverage: false,
+            note: "Only explicitly requested original pages are in scope; omitted pages were not evaluated and their absence is not established." } } : {}),
         sourceVersionIds: run.sourceVersionIds,
         sourceInventory,
         // New reports start from their request and evidence, not an earlier answer
@@ -982,7 +1133,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 readingVersionIds.map(async (versionId) => {
                   await assertActive();
                   return readCompleteSources
-                    ? resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
+                    ? resolveCompleteRunSource(d, run.projectId, { versionId, preferDocumentModel: calculationOnly || !!conceptId }, assertActive)
                     : resolveRunSource(d, run.projectId, { versionId, textQuery: assignment.goal }, assertActive);
                 }),
               );
@@ -1022,21 +1173,64 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                           ? "Resolved source version did not match the assigned version."
                           : "Readable source text is unavailable.",
                 }));
-              const specialistSources = readableSources.map(
-                ({ versionId, excerpt }) => ({
-                  versionId,
-                  name: excerpt.source.name,
-                  version: excerpt.source.version,
-                  mimeType: excerpt.source.mimeType,
-                  text: excerpt.content.text as string,
-                  truncated: excerpt.content.truncated,
-                  coverage: excerpt.content.coverage,
-                  retrieval: excerpt.content.retrieval,
-                  model: excerpt.content.model,
-                  extractionNotes: excerpt.content.reason,
-                }),
+              const evidencePacketSources = sourcePageScope
+                ? resolvedSources.filter(({ versionId, excerpt }) => excerpt?.status === "resolved"
+                  && excerpt?.source?.versionId === versionId && excerpt?.content?.status === "available"
+                  && !!excerpt?.content?.documentModel)
+                : readableSources;
+              if (sourcePageScope && !assignment.visualFollowup && evidencePacketSources.length !== assignment.sourceVersionIds.length)
+                throw conflict("Page-scoped reports require a page-addressable document model for every assigned source version");
+              const evidencePacketSourceIds = new Set(evidencePacketSources.map(({ versionId }) => versionId));
+              const specialistSources = evidencePacketSources.flatMap(
+                ({ versionId, excerpt }) => sourceEvidencePackets(versionId, excerpt),
               );
-              const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && !!assignment.exteriorNoiseExtractionVersion && !assignment.visualFollowup;
+              let scopedCoverage: any[] | undefined;
+              if (sourcePageScope && !assignment.visualFollowup) {
+                const beforeCount = specialistSources.length;
+                const coverageByVersion = new Map<string, any>(evidencePacketSources.flatMap(({ versionId, excerpt }) => {
+                  const totalPages = excerpt.content.documentModel?.coverage?.totalPages;
+                  const pages = scopedPages.get(versionId);
+                  return pages && typeof totalPages === "number" && Number.isInteger(totalPages) && totalPages > 0
+                    ? [[versionId, { versionId, totalPages, requestedPages: [...pages].sort((a, b) => a - b),
+                        completeDocumentCoverage: false, omittedPageCount: totalPages - pages.size,
+                        note: "Only explicitly requested original pages are evaluated; omitted pages were not evaluated and are not evidence of absence." }] as const]
+                    : [];
+                }));
+                for (const versionId of assignment.sourceVersionIds) {
+                  if (!coverageByVersion.has(versionId) || !evidencePacketSourceIds.has(versionId))
+                    throw conflict("Page-scoped reports require page-addressable evidence for every assigned source version");
+                }
+                const pageOf = (packet: any) => packet.sourcePage
+                  ?? (packet.evidenceKind === "source_fact" && packet.sourceFact?.fact?.evidence?.kind === "text"
+                    ? packet.sourceFact.fact.evidence.page : undefined);
+                for (let index = specialistSources.length - 1; index >= 0; index--) {
+                  const packet = specialistSources[index]!;
+                  const allowedPages = scopedPages.get(packet.versionId);
+                  const page = pageOf(packet);
+                  if (!allowedPages || !Number.isInteger(page) || !allowedPages.has(page)) specialistSources.splice(index, 1);
+                }
+                scopedCoverage = [...coverageByVersion.values()].filter(entry => assignment.sourceVersionIds.includes(entry.versionId))
+                  .map(entry => ({ ...entry,
+                    suppliedPages: [...new Set(specialistSources.filter(packet => packet.versionId === entry.versionId).map(pageOf)
+                      .filter((page: unknown): page is number => Number.isInteger(page)))].sort((a: number, b: number) => a - b),
+                    filteredPacketCount: beforeCount - specialistSources.length,
+                  }));
+              }
+              const sourceDocumentCoverage = evidencePacketSources.flatMap(({ versionId, excerpt }) =>
+                excerpt.content.documentModel ? [{ versionId, ...excerpt.content.documentModel.coverage,
+                  ...(sourcePageScope ? { layerMetadata: "Omitted because PDF layer names and paths have no verified association with the scoped original pages." }
+                    : { layers: compactDocumentLayers(excerpt.content.documentModel.layers) }),
+                  excludedRejectedClaims: excerpt.content.sourceClaims?.excludedRejectedCount ?? 0,
+                  semanticClaimsCoverage: excerpt.content.sourceClaims?.coverage ?? "No saved semantic claims.",
+                  evidencePolicy: excerpt.content.reason }] : []).map((coverage: any) => {
+                    const scoped = scopedCoverage?.find(entry => entry.versionId === coverage.versionId);
+                    return scoped ? { ...coverage, ...scoped } : coverage;
+                  }).concat(sourcePageScope && assignment.visualFollowup
+                    ? sourcePageScope.filter(entry => assignment.sourceVersionIds.includes(entry.versionId)).map(entry => ({
+                        versionId: entry.versionId, requestedPages: entry.pages, completeDocumentCoverage: false,
+                        note: "Visual follow-up is restricted to these original pages; omitted pages were not evaluated and their absence is not established.",
+                      })) : []);
+              const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && !!assignment.exteriorNoiseExtractionVersion;
               const boundedExtraction = extractExteriorNoise && assignment.exteriorNoiseExtractionVersion === 2 && !!assignment.exteriorNoisePacketVersion;
               const specialistSchema = extractExteriorNoise
                 ? schemas.specialist.extend({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }) : schemas.specialist;
@@ -1050,7 +1244,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   - (assignment.role === "sound_insulation" && d.calculateAcoustics ? 24576 : 0)
                   - AGENT_MESSAGING_CONTEXT_BYTES
                   - ((policy.specialists[assignment.role as keyof typeof policy.specialists]?.maxSteps ?? 1) >= 2 ? COMPANY_KNOWLEDGE_CONTEXT_BYTES : 0)
-                  - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources,
+                  - Buffer.byteLength(JSON.stringify({ goal: assignment.goal, role: assignment.role, unreadableSources, sourceDocumentCoverage,
                     sourceVersionIds: assignment.sourceVersionIds,
                     documentReview,
                     profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
@@ -1066,17 +1260,18 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               // Plan-layout whitespace is not another room's worth of output. Weight
               // it only for packing; preserve every original character and byte range.
               // The separate raw ceiling reserves room for an equally large continuation.
-              const rawByteLimit = Math.min(128 * 1024, Math.floor((inputByteLimit ?? 48 * 1024) / 2));
+              const rawByteLimit = Math.min(256 * 1024, Math.floor((inputByteLimit ?? 48 * 1024) / 2));
+              const batchBytes = (batch: any[]) => Buffer.byteLength(JSON.stringify(compactDocumentPackets(batch)));
               const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources)
-                : batchSectionSources(specialistSources, byteLimit,
+                : batchPreparedSourcePages(specialistSources, byteLimit,
                   boundedExtraction && assignment.exteriorNoisePacketVersion === 2 ? batch => Math.max(
-                    Buffer.byteLength(JSON.stringify(batch.map(source => ({ ...source, text: source.text.replace(/[\t ]+/g, " ") })))),
-                    Buffer.byteLength(JSON.stringify(batch)) * byteLimit / rawByteLimit,
-                  ) : undefined, boundedExtraction);
+                    documentPacketDensityBytes(batch),
+                    batchBytes(batch) * byteLimit / rawByteLimit,
+                  ) : batchBytes, boundedExtraction);
               // Checkpoints can only be reused for the same goal and extracted
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
-                goal: assignment.goal, batches, unreadableSources,
+                goal: assignment.goal, batches, unreadableSources, sourceDocumentCoverage,
                 ...(extractExteriorNoise ? { extractionContract: `exterior-noise-v${assignment.exteriorNoiseExtractionVersion}` } : {}),
                 ...(assignment.visualFollowup ? { visualFollowup: assignment.visualFollowup } : {}),
               })).digest("hex");
@@ -1094,8 +1289,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 // component table continues here. Include one exact adjacent slice,
                 // clearly marked as context rather than new source coverage.
                 const continuation = preceding && primary[0]?.versionId === preceding.versionId
+                  && primary[0].sourcePage === preceding.sourcePage
+                  && primary[0].documentBlock?.id === preceding.documentBlock?.id
                   && primary[0].textRange.startByte === preceding.textRange.endByte ? preceding : undefined;
-                const batch = continuation ? [{ ...continuation, continuation: true }, ...primary] : primary;
+                const batch = compactDocumentPackets(continuation ? [{ ...continuation, continuation: true }, ...primary] : primary);
                 const batchIds = [...new Set(batch.map(source => source.versionId))];
                 const allowedCitations = new Set([...batchIds, ...(accumulated?.citations ?? [])]);
                 const workSources = [...new Map(batch.map(({ versionId, name, version }) => [versionId, { versionId, name, version }])).values()];
@@ -1133,7 +1330,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   ...(d.inspectSource ? { visualSourceVersionIds: assignment.visualFollowup
                     ? [...new Set(assignment.visualFollowup.requests.map(request => request.versionId))] : assignment.sourceVersionIds } : {}),
                   ...(assignment.visualFollowup ? { visualRequests: assignment.visualFollowup.requests } : {}),
+                  ...(sourcePageScope ? { sourcePageScope } : {}),
+                  visualReadCoverage: await currentVisualReadCoverage(assignment.runId),
                   sources: batch,
+                  sourceDocumentCoverage,
                   unreadableSources,
                   previousFindings: accumulated ? schemas.specialist.parse(accumulated) : undefined,
                   documentTemplate: conceptId ? { id: conceptId, version: 1 } : undefined,
@@ -1142,16 +1342,30 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                     batchCount: batches.length,
                     assignedVersionCount: assignment.sourceVersionIds.length,
                     readableVersionCount: readableSourceIds.size,
+                    ...(sourcePageScope ? { completeDocumentCoverage: false,
+                      pageScope: scopedCoverage ?? sourcePageScope.filter(entry => assignment.sourceVersionIds.includes(entry.versionId)) } : {}),
                   },
-                }, assignment.runId, (raw, visualVersionIds = []) => {
+                }, assignment.runId, (raw, visualVersionIds = [], visualReceipts = []) => {
                   const parsed = specialistSchema.parse(raw);
                   if (extractExteriorNoise) {
-                    const extraction = validateExteriorNoiseExtraction(z.object({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }).parse(raw).exteriorNoiseExtraction, batch);
+                    const rawExtraction = z.object({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }).parse(raw).exteriorNoiseExtraction;
+                    if (assignment.visualFollowup && (rawExtraction.inventory.length > 0 || rawExtraction.rooms.length > 0
+                      || (rawExtraction.facts?.length ?? 0) > 0)) {
+                      throw new z.ZodError([{
+                        code: "custom", path: ["exteriorNoiseExtraction"],
+                        message: "Visual-only follow-ups cannot add structured inventory, room or fact inputs.",
+                      }]);
+                    }
+                    const extraction = validateExteriorNoiseExtraction(rawExtraction,
+                      batch, visualReceipts);
                     if ("exteriorNoiseExtraction" in parsed) parsed.exteriorNoiseExtraction = extraction;
                     const inputSources = [...extraction.inventory.map(r => r.provenance),
                       ...(extraction.facts ?? []).map(f => f.provenance),
                       ...extraction.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
-                    parsed.citations = [...new Set([...parsed.citations, ...inputSources.flatMap(p => p.kind === "source" ? [p.versionId] : [])])];
+                    parsed.citations = [...new Set([...parsed.citations,
+                      ...inputSources.flatMap(p => p.kind === "source" ? [p.versionId] : []),
+                      ...(extraction.visualCandidates ?? []).map(candidate => candidate.provenance.versionId),
+                    ])];
                   }
                   for (const versionId of visualVersionIds) allowedCitations.add(versionId);
                   const rejected = parsed.citations.flatMap((versionId, index) => allowedCitations.has(versionId) ? [] : [{ versionId, index }]);
@@ -1247,7 +1461,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     } else if (state.phase === "review") {
       const outstandingVisualReads = (state.assignments as Assignment[]).flatMap(a =>
         (a.visualReads ?? []).filter(read => read.status === "budget_exhausted").map(read => ({ taskId: a.taskId, ...read.request })));
-      if (outstandingVisualReads.length && state.revision < policy.maxRevisions) {
+      if (!inputReassessmentOnly && outstandingVisualReads.length && state.revision < policy.maxRevisions) {
         // Consume one shared revision round, not a fresh per-assignment budget.
         // Freeze targets and findings so a worker restart resumes the same call.
         await commit(d, run, token, async (tx, current) => {
@@ -1303,15 +1517,22 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const reportModels = [policy.supervisor, ...(policy.writer ? [policy.writer] : [])];
       const reportBudgets = reportModels.map(model => agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens));
       const calculationReceipts = (state.assignments as Assignment[]).flatMap(a => a.calculationReceipts ?? []);
+      const reviewVisualReadCoverage = await currentVisualReadCoverage();
       let calculationBlockers: string[] = [];
       if ((conceptId === "exterior-noise-concept" || calculationOnly) && (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion)) {
         const extractionPackets = (state.assignments as Assignment[]).flatMap(a => {
           const completed = state.history.findLast((entry: any) => entry.runId === a.runId && entry.phase === "specialist");
-          return state.history.filter((entry: any) => entry.runId === a.runId && entry.phase === "specialist_batch"
-            && entry.inputHash === completed?.inputHash && entry.revision === completed?.revision)
+          const originalPackets = state.history.filter((entry: any) => entry.runId === a.runId && entry.phase === "specialist_batch"
+            && entry.inputHash === completed?.inputHash && entry.revision === completed?.revision);
+          const visualFollowupPackets = state.history.filter((entry: any) => entry.runId === a.runId
+            && entry.phase === "specialist_visual_followup" && entry.revision >= (completed?.revision ?? 0)
+            && entry.revision <= state.revision);
+          return [...originalPackets, ...visualFollowupPackets]
             .flatMap((entry: any) => entry.output?.exteriorNoiseExtraction ? [entry.output.exteriorNoiseExtraction] : []);
         });
         const reconcile = (state.assignments as Assignment[]).some(a => a.exteriorNoiseExtractionVersion === 2);
+        if (inputReassessmentOnly && (!reconcile || !extractionPackets.length))
+          throw conflict("Saved version-2 acoustic extraction is unavailable for input reassessment");
         const contract = reconcile ? "exterior-noise-v2" : "exterior-noise-v1";
         const assembled = reconcile ? reconcileExteriorNoiseInputs(extractionPackets)
           : { ...assembleExteriorNoiseInputs(extractionPackets), sourceNotes: [] };
@@ -1325,6 +1546,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           await sources(d, run.projectId, inputSourceIds);
         }
         if (!d.calculateAcoustics) calculationBlockers.push("The deterministic acoustic calculator is unavailable.");
+        if (inputReassessmentOnly && !needsInput)
+          throw conflict("Saved extraction no longer has an input blocker; reassessment will not start report authoring");
         const inputHash = stepHash({ contract, extractionPackets, calculatorAvailable: !!d.calculateAcoustics });
         const stepKey = `exterior-calculation:${inputHash}`;
         const saved = await commit(d, run, token, async tx => {
@@ -1389,9 +1612,44 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               if (!declared.has(roomId)) ctx.addIssue({ code: "custom", path: ["questions", i, "roomIds", j], message: "Use declared room IDs only." });
             }));
           });
-          const progressPlan = (state.assignments as Assignment[]).some(a => !!a.exteriorNoisePacketVersion)
-            ? progressSchema.parse(await call("review", goal, {
+          const visualCandidates = [...(assembled.visualCandidates ?? [])]
+            .sort((a, b) => a.candidateKey.localeCompare(b.candidateKey));
+          const visualCandidateObservations = {
+            status: "visual_candidates_separate_from_inventory",
+            total: visualCandidates.length,
+            included: Math.min(60, visualCandidates.length),
+            omitted: Math.max(0, visualCandidates.length - 60),
+            printedAreaObservationCount: visualCandidates.filter(candidate => !!candidate.floorAreaObservation).length,
+            note: "This sidecar preserves receipt-backed observations even when the text-backed room inventory is empty. Candidates remain separate from declared rooms, facts and calculation inputs; per-candidate review decisions are shown without changing that boundary. Printed floor areas remain typed unreviewed observations and must not be promoted, inferred or counted as rooms.",
+            candidates: visualCandidates.slice(0, 60).map(candidate => {
+              const reviewed = candidate as typeof candidate & { floorAreaObservationKey?: string | null; floorAreaDecision?: "approved" | "rejected" | null };
+              return {
+                candidateKey: candidate.candidateKey,
+                apartmentLabel: candidate.apartmentLabel,
+                roomLabel: candidate.roomLabel,
+                mapping: candidate.mapping,
+                reviewStatus: candidate.reviewStatus,
+                mappingDecision: candidate.mappingDecision,
+                confirmedRoomId: candidate.confirmedRoomId,
+                ...(candidate.floorAreaObservation ? { floorAreaObservation: {
+                  ...candidate.floorAreaObservation,
+                  observationKey: reviewed.floorAreaObservationKey,
+                  reviewDecision: reviewed.floorAreaDecision,
+                } } : {}),
+                provenance: { versionId: candidate.provenance.versionId, page: candidate.provenance.page,
+                  crop: candidate.provenance.crop, receiptId: candidate.provenance.receiptId,
+                  imageHash: candidate.provenance.imageHash },
+              };
+            }),
+          };
+          let progressPlan: z.infer<typeof progressSchema> | undefined;
+          if ((state.assignments as Assignment[]).some(a => !!a.exteriorNoisePacketVersion)) {
+            if (inputReassessmentOnly)
+              await d.db.transaction((tx: any) => assertPinnedInputReview(d, run, state.review, tx));
+            progressPlan = progressSchema.parse(await call("review", goal, {
               documentTask: "acoustic_progress", calculatedRoomIds, partialArtifactId,
+              visualCandidateObservations,
+              visualReadCoverage: await currentVisualReadCoverage(),
               rooms: (assembled.input?.inventory ?? []).map(room => ({ roomId: room.roomId,
                 outcome: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.status ?? "missing_input",
                 calculationLimitations: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.result?.limitations ?? [],
@@ -1400,8 +1658,12 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               })),
               findings: (state.assignments as Assignment[]).map(a => ({ role: a.role, summary: a.output?.summary })),
               sourceNotes: assembled.sourceNotes,
-            }, id, raw => progressSchema.parse(raw))) : undefined;
+            }, id, raw => progressSchema.parse(raw)));
+          }
+          if (inputReassessmentOnly && !progressPlan)
+            throw conflict("Saved acoustic extraction cannot produce an input reassessment plan");
           await commit(d, run, token, async tx => {
+            if (inputReassessmentOnly) await assertPinnedInputReview(d, run, state.review, tx);
             const summary = progressPlan?.summary ?? (run.conversationId
               ? "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet."
               : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.");
@@ -1413,7 +1675,10 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             await tx.update(agentRuns).set({ status: "needs_review", outputSummary: summary,
               partialOutput: summary, updatedAt: new Date() }).where(eq(agentRuns.id, id));
             await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers,
-              partialArtifactId, ...(progressPlan ? { progressPlan } : {}) } })
+              partialArtifactId, ...(progressPlan ? { progressPlan } : {}),
+              ...(inputReassessmentOnly ? { inputReassessmentOnly: false,
+                inputReviewArtifactId: state.review.inputReviewArtifactId,
+                expectedInputReviewRevisionId: state.review.expectedInputReviewRevisionId } : {}) } })
               .where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "acoustic_inputs_required");
           });
@@ -1442,6 +1707,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             documentReview,
             profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
             budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
+            visualReadCoverage: reviewVisualReadCoverage,
           },
           // Keep each assignment's latest full evidence pass plus its visual
           // supplements, including siblings unchanged by a later revision.
@@ -1459,7 +1725,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           sourceVersionIds: [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))],
           sourceDirectory: await d.sourceReferences(run.projectId,
             [...new Set<string>((state.assignments as Assignment[]).flatMap(a => a.output?.citations ?? []))]),
-          visualReads: (state.assignments as Assignment[]).flatMap(a => a.visualReads ?? []),
+          visualReads: reviewVisualReadCoverage.entries.map(({ versionId, page, crop, status, receiptId }) => ({
+            request: { versionId, page, crop }, status, receiptId,
+          })),
           draft: state.review?.documentDraft,
           previousReview: state.review?.documentDraft?.previousReview ?? state.review,
           assertActive,
@@ -1480,6 +1748,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           },
         }) : await call("review", goal, {
           assignments: state.assignments,
+          visualReadCoverage: reviewVisualReadCoverage,
           ...(outstandingVisualReads.length ? { outstandingVisualReads } : {}),
           companyKnowledge: (state.assignments as Assignment[]).flatMap(a => a.companyKnowledge ?? []),
           revision: state.revision,
@@ -1674,29 +1943,62 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         // Independent review retains broad evidence coverage, not just the
         // specialist's relevance selection, but never re-extracts the original.
         return { versionId, resolution: readCompleteSources
-          ? await resolveCompleteRunSource(d, run.projectId, { versionId }, assertActive)
+          ? await resolveCompleteRunSource(d, run.projectId, { versionId, preferDocumentModel: calculationOnly || !!conceptId }, assertActive)
           : await resolveRunSource(d, run.projectId, { versionId, pageStart: 1 }, assertActive) };
       }));
       const readableSourceIds = new Set(resolvedExcerpts.flatMap(({ versionId, resolution }: any) =>
         resolution?.status === "resolved" &&
         resolution?.source?.versionId === versionId &&
         resolution?.content?.status === "available" &&
-        typeof resolution.content.text === "string" &&
-        resolution.content.text.trim().length > 0
+        (sourcePageScope
+          ? !!resolution.content.documentModel && (scopedPages.get(versionId) ?? new Set()).size > 0
+            && [...(scopedPages.get(versionId) ?? [])].every(page => resolution.content.documentModel.pages.some((entry: any) => entry.page === page))
+          : typeof resolution.content.text === "string" && resolution.content.text.trim().length > 0)
           ? [versionId]
           : [],
       ));
       const unreadableSources = resolvedExcerpts
-        .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId) || (readCompleteSources && resolution?.content?.truncated))
+        .filter(({ versionId, resolution }: any) => !readableSourceIds.has(versionId)
+          || (!sourcePageScope && readCompleteSources && resolution?.content?.truncated))
         .map(({ versionId, resolution }: any) => ({ versionId, name: resolution?.source?.name ?? null }));
       const coverageIncomplete = (sourceVersionIds.length === 0 && workflow?.mode !== "team") || unreadableSources.length > 0;
       const firstPassReview = state.review;
-      const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId));
+      const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId)).flatMap(({ versionId, resolution }: any) => {
+        if (!resolution.content.documentModel) {
+          if (sourcePageScope) throw conflict("Page-scoped independent review requires original-page document models");
+          return [{ versionId, resolution }];
+        }
+        // Independent review also receives only local block metadata, never a
+        // whole-document block list attached to every transport fragment.
+        const requestedPages = scopedPages.get(versionId);
+        const pageOf = (packet: any) => packet.sourcePage
+          ?? (packet.evidenceKind === "source_fact" && packet.sourceFact?.fact?.evidence?.kind === "text"
+            ? packet.sourceFact.fact.evidence.page : undefined);
+        const packets = compactDocumentPackets(sourceEvidencePackets(versionId, resolution))
+          .filter(packet => !requestedPages || requestedPages.has(pageOf(packet)));
+        return packets.map((packet, index) => {
+          const { documentBlocks, ...metadata } = packet;
+          // Review has no structured input extraction. A single encoded literal
+          // tuple view stays nonempty for its existing transport-fragment fallback.
+          // Never copy both the full block array and its text representation.
+          const content = documentBlocks ? { ...metadata, text: JSON.stringify(documentBlocks),
+            textEncoding: "document-block-tuples-json",
+            tupleFields: ["originalStartByte", "line", "column", "literalText", "optionalFragmentRange"],
+            evidencePolicy: "Decoded literalText is source evidence; tuple syntax, offsets and IDs are metadata. This is a review presentation, not a new source quotation." } : metadata;
+          return { versionId, resolution: { ...resolution, content: { ...content, status: "available",
+            ...(index === 0 ? { documentCoverage: { ...resolution.content.documentModel.coverage,
+              ...(requestedPages ? { completeDocumentCoverage: false, requestedPages: [...requestedPages].sort((a, b) => a - b),
+                note: "Only explicitly requested original pages were evaluated; omitted pages were not evaluated and their absence is not established." } : {}) },
+              ...(sourcePageScope ? { layerMetadata: "Omitted because PDF layer names and paths have no verified association with the scoped original pages." }
+                : { documentLayers: compactDocumentLayers(resolution.content.documentModel.layers) }) } : {}) } } };
+        });
+      });
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
       // Older verdicts used the misleading assembled-length and slice-scope
       // contract. Preserve their history, but never reuse them as current checks.
       const contextOverhead = {
         goal, documentReview,
+        ...(sourcePageScope ? { sourcePageScope, sourceCoverage: { completeDocumentCoverage: false } } : {}),
         componentCatalog: await d.componentContext?.(run.goal),
         profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
         budgets: { maxTasks: policy.maxTasks, maxRevisions: policy.maxRevisions },
@@ -1706,6 +2008,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         sources: readableExcerpts as any,
         originalGoal: run.goal, revision: state.revision, assignedVersionCount: sourceVersionIds.length,
         readableSourceIds: [...readableSourceIds], unreadableSources, contextOverhead,
+        ...(sourcePageScope ? { sourcePageScope } : {}),
         inputByteBudget: modelBudget === undefined ? undefined : modelBudget - AGENT_MESSAGING_CONTEXT_BYTES,
       });
       const inputHash = checkpointHash({ version: 3, goal, assignments, firstPassReview, resolvedExcerpts,

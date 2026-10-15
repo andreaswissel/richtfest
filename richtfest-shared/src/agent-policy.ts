@@ -5,11 +5,22 @@ export type AgentEffort = z.infer<typeof agentEffortSchema>;
 export const agentWorkflowModeSchema = z.enum(["chat", "team", "report", "calculation"]);
 export type AgentWorkflowMode = z.infer<typeof agentWorkflowModeSchema>;
 export const agentReportTemplateSchema = z.enum(["sound-insulation-review", "interior-noise-concept", "exterior-noise-concept"]);
+export const agentSourcePageScopeSchema = z.array(z.object({
+  versionId: z.string().uuid(),
+  pages: z.array(z.number().int().positive()).min(1).max(100),
+}).strict()).min(1).max(100).superRefine((scopes, context) => {
+  const versionIds = new Set<string>();
+  scopes.forEach((scope, index) => {
+    if (versionIds.has(scope.versionId)) context.addIssue({ code: "custom", path: [index, "versionId"], message: "Each source version must appear once" });
+    versionIds.add(scope.versionId);
+    if (new Set(scope.pages).size !== scope.pages.length) context.addIssue({ code: "custom", path: [index, "pages"], message: "Page numbers must be unique" });
+  });
+});
 export const agentWorkflowSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("chat") }).strict(),
   z.object({ mode: z.literal("team") }).strict(),
-  z.object({ mode: z.literal("report"), reportTemplate: agentReportTemplateSchema }).strict(),
-  z.object({ mode: z.literal("calculation") }).strict(),
+  z.object({ mode: z.literal("report"), reportTemplate: agentReportTemplateSchema, sourcePageScope: agentSourcePageScopeSchema.optional() }).strict(),
+  z.object({ mode: z.literal("calculation"), sourcePageScope: agentSourcePageScopeSchema.optional() }).strict(),
 ]);
 export type AgentWorkflow = z.infer<typeof agentWorkflowSchema>;
 // Requests can leave the format to the application; persisted policies remain exact.

@@ -5,6 +5,7 @@ import { createMockModel, MastraLanguageModelV2Mock } from "@mastra/core/test-ut
 import { callMastraSupervisor, supervisorSchemas } from "./mastra-supervisor";
 import { assertDocumentCitations, createSupervisor, stepSupervisor, supervisorReview } from "../../../../../richtfest-apps/knowledge/src/supervisor";
 import { sanitizeProviderDiagnostics } from "@richtfest/knowledge/deps";
+import { validateExteriorNoiseExtraction } from "../../../../../richtfest-apps/knowledge/src/acoustic-extraction";
 import type { AppDeps, ProviderExecutionSettings } from "@richtfest/knowledge/deps";
 import { knowledgeDeps } from "../app-hosts";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks, artifacts, artifactRevisions } from "@richtfest/knowledge/schema";
@@ -362,6 +363,37 @@ test("Mastra specialists execute all acoustic tools before returning structured 
   expect(settings).toMatchObject({ maxSteps: 8, maxOutputTokens: 2048 });
   expect(settings.toolSchemaHash).toMatch(/^[0-9a-f]{64}$/);
   expect(prepared.tools.map((tool: any) => tool.name)).toEqual([...new Set(calls.map(call => call.name))]);
+});
+
+test("visual-only room candidates stay unresolved without repairing source quotations", async () => {
+  const versionId = crypto.randomUUID();
+  const sources = [{ versionId, text: "[Page 2]\nApartment A\nBedroom\nApartment ?\nBedroom" }];
+  const inventory = { roomId: "Apartment A / Bedroom", provenance: {
+    kind: "source" as const, versionId, page: 2, excerpt: "Apartment A\nBedroom",
+  } };
+  const extraction = { inventory: [inventory], rooms: [], facts: [], blockers: [{ roomId: null,
+    reason: `Visual candidate Apartment B / Bedroom, version ${versionId}, page 2, crop (0,0,0.5,0.5): apartment label and room mapping are not supported by supplied text; unresolved.`,
+  }] };
+  const output = { summary: "Text-backed room retained; visual candidate unresolved.", rationale: "No inferred mapping.",
+    citations: [versionId], messages: [], exteriorNoiseExtraction: extraction };
+  let prepared: any;
+  const result = await callMastraSupervisor({ ...base, phase: "specialist",
+    context: { role: "source_reviewer", extractExteriorNoise: true, extractionVersion: 2, sources },
+    onPrepared: async value => { prepared = value; return undefined; },
+  }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }) });
+  for (const rule of ["never transcribe or correct an image-only label", "never substitute that label",
+    "retain the visual candidate, original version/page/crop", "Keep independently text-backed inventory and facts unchanged",
+    "structured source quotations and room mappings still require the supplied text evidence"])
+    expect(prepared.instructions).toContain(rule);
+  expect(result).toEqual(output);
+  expect(validateExteriorNoiseExtraction((result as typeof output).exteriorNoiseExtraction, sources)).toEqual(extraction);
+  // Preserve the observation, but never promote a visual correction to source text.
+  const unsupported = { ...extraction, inventory: [...extraction.inventory, {
+    roomId: "Apartment B / Bedroom", provenance: { ...inventory.provenance, excerpt: "Apartment B" },
+  }] };
+  expect(() => validateExteriorNoiseExtraction(unsupported, sources)).toThrow("exact quotations");
+  expect(unsupported.inventory).toHaveLength(2);
+  expect(unsupported.blockers).toEqual(extraction.blockers);
 });
 
 test("exterior source extraction returns structured inputs without exposing arithmetic tools", async () => {

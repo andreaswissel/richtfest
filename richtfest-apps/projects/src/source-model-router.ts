@@ -5,6 +5,7 @@ import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, sourceFacts, sourceModels, sourceExtractions, sourcePages } from "./schema";
 import { readSourceModel } from "./source-model";
+import { readSourceDocumentModel, savedSourceDocumentPage, withSourceDocumentPage, prepareSourceDocumentLayers } from "./source-document";
 
 const failure = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
 export function createSourceModelRouter(getDeps: (req: Request) => AppDeps) {
@@ -14,11 +15,11 @@ export function createSourceModelRouter(getDeps: (req: Request) => AppDeps) {
     d.requirePermission("projects:read");
     const projectId = z.string().uuid().parse(req.params.projectId);
     const versionId = z.string().uuid().parse(req.params.versionId);
-    const [source] = await d.db.select({ id: fileVersions.id }).from(fileVersions)
+    const [source] = await d.db.select({ id: fileVersions.id, fileId: files.id, purpose: files.purpose, name: files.name, mimeType: fileVersions.mimeType, storageKey: fileVersions.storageKey }).from(fileVersions)
       .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId)))
       .where(and(eq(files.projectId, projectId), eq(fileVersions.id, versionId), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready")));
     if (!source) throw failure(404, "not_found", "Source version not found in project");
-    return { d, versionId };
+    return { d, versionId, projectId, source };
   };
   router.get("/projects/:projectId/source-versions/:versionId/model", async (req, res, next) => {
     try {
@@ -26,6 +27,62 @@ export function createSourceModelRouter(getDeps: (req: Request) => AppDeps) {
       const input = z.object({ query: z.string().max(500).optional(), entityKey: z.string().max(200).optional(),
         offset: z.coerce.number().int().min(0).max(1000000).optional(), limit: z.coerce.number().int().min(1).max(100).optional() }).parse(req.query);
       res.json(ok(await readSourceModel(d.db, d.tenantId, versionId, input)));
+    } catch (error) { next(error); }
+  });
+  router.get("/projects/:projectId/source-versions/:versionId/document-model", async (req, res, next) => {
+    try {
+      const { d, versionId } = await scope(req);
+      const input = z.object({ page: z.coerce.number().int().positive().optional(),
+        offset: z.coerce.number().int().min(0).max(1000000).optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional() }).strict().parse(req.query);
+      res.json(ok(await readSourceDocumentModel(d.db, d.tenantId, versionId, input)));
+    } catch (error) { next(error); }
+  });
+  // Build deterministic blocks from already saved text only. No extraction or AI jobs.
+  router.post("/projects/:projectId/source-versions/:versionId/document-model/prepare", async (req, res, next) => {
+    try {
+      const { d, versionId, projectId, source } = await scope(req);
+      d.requirePermission("projects:write");
+      z.object({}).strict().parse(req.body ?? {});
+      const prepared = await d.db.transaction(async (tx: any) => {
+        // Serialize against purpose changes; comparison documents are never backfilled.
+        const [file] = await tx.select({ purpose: files.purpose }).from(files).where(and(
+          eq(files.id, source.fileId), eq(files.tenantId, d.tenantId), eq(files.projectId, projectId),
+        )).for("update");
+        if (!file || file.purpose !== "project_evidence")
+          throw failure(409, "source_purpose_excluded", "Only project evidence can be prepared as a document model");
+        const [version] = await tx.select({ id: fileVersions.id }).from(fileVersions).where(and(
+          eq(fileVersions.id, versionId), eq(fileVersions.fileId, source.fileId),
+          eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready"),
+        )).for("share");
+        if (!version) throw failure(404, "not_found", "Ready source version not found");
+        const [extraction] = await tx.select({ result: sourceExtractions.result }).from(sourceExtractions)
+          .where(and(eq(sourceExtractions.versionId, versionId), eq(sourceExtractions.tenantId, d.tenantId))).for("update");
+        if (!extraction) throw failure(409, "source_text_unavailable", "Saved source extraction is unavailable");
+        const rows = await tx.select({ page: sourcePages.page, content: sourcePages.content }).from(sourcePages)
+          .where(and(eq(sourcePages.versionId, versionId), eq(sourcePages.tenantId, d.tenantId)))
+          .orderBy(sourcePages.page).for("update");
+        if (!rows.length) throw failure(409, "source_text_unavailable", "No saved pages are available; preparation does not re-extract the original");
+        let preparedPages = 0;
+        for (const row of rows) {
+          if (savedSourceDocumentPage(versionId, row.page, row.content)) continue;
+          const content = withSourceDocumentPage(versionId, row.page, row.content);
+          await tx.update(sourcePages).set({ content }).where(and(
+            eq(sourcePages.versionId, versionId), eq(sourcePages.tenantId, d.tenantId), eq(sourcePages.page, row.page),
+          ));
+          preparedPages++;
+        }
+        const layersPrepared = !extraction.result?.documentLayers;
+        if (layersPrepared) {
+          const documentLayers = await prepareSourceDocumentLayers(source, d.fileStorage);
+          await tx.update(sourceExtractions).set({ result: { ...(extraction.result ?? { status: "unsupported" as const }), documentLayers } })
+            .where(and(eq(sourceExtractions.versionId, versionId), eq(sourceExtractions.tenantId, d.tenantId)));
+        }
+        if (preparedPages || layersPrepared) await d.audit(tx, "projects.source.document_model.prepared", "file_version", versionId,
+          { projectId, preparedPages, reusedPages: rows.length - preparedPages, parserVersion: "text-grid-v1", layersPrepared });
+        return { preparedPages, reusedPages: rows.length - preparedPages };
+      });
+      res.json(ok({ ...prepared, documentModel: await readSourceDocumentModel(d.db, d.tenantId, versionId) }));
     } catch (error) { next(error); }
   });
   // Explicit, scoped recovery only. Reads and new agent runs never replay jobs.
