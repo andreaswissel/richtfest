@@ -159,6 +159,46 @@ test(`visual inspection preserves ${imageCount} native images and bounds tokens 
   expect(result.output.value.filter((part: any) => part.type === "text").map((part: any) => part.text).join("")).not.toContain(data);
 });
 
+test("image triage stays text-only and the model can escalate to direct visual inspection", async () => {
+  const request = { versionId: crypto.randomUUID(), page: 3 };
+  const image = Buffer.from("synthetic-vision-image").toString("base64");
+  const receipt = { ...request, status: "completed" as const, model: "jev-1.14.0" as const,
+    queryVersion: "image-triage-v1" as const, provenance: "inferred" as const, semanticInspection: false as const,
+    reason: "Uncertain page classification; not direct inspection.", answers: { table: { type: "noul" as const, noul: 0.52 } } };
+  const output = { summary: "Inspected the source after uncertain triage.", rationale: "Still unreviewed.", citations: [request.versionId] };
+  let round = 0, queries = 0, inspections = 0;
+  const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+    const step = round++;
+    const prompt = JSON.stringify(options.prompt);
+    if (step === 1) {
+      expect(prompt).toContain("semanticInspection");
+      expect(prompt).toContain("0.52");
+      expect(prompt).not.toContain(image);
+      expect(prompt).not.toContain('"type":"media"');
+    }
+    if (step === 2) expect(prompt).toContain(image);
+    return { stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] });
+      if (step < 2) controller.enqueue({ type: "tool-call", toolCallId: `triage-${step}`,
+        toolName: step === 0 ? "query_source_image" : "inspect_project_source", input: JSON.stringify(request) });
+      else {
+        controller.enqueue({ type: "text-start", id: "result" });
+        controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify(output) });
+        controller.enqueue({ type: "text-end", id: "result" });
+      }
+      controller.enqueue({ type: "finish", finishReason: step < 2 ? "tool-calls" : "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+      controller.close();
+    } }) };
+  } });
+  expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "source_reviewer" },
+    modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 3 },
+    querySourceImage: async input => { queries++; expect(input).toEqual(request); return receipt; },
+    inspectSource: async input => { inspections++; return { ...input, status: "available", scope: "pdf_page",
+      reason: "Unreviewed", image: { mediaType: "image/jpeg", data: image } }; },
+  }, "test-key", { model })).toEqual(output);
+  expect([round, queries, inspections]).toEqual([3, 1, 1]);
+});
+
 test("visual inspection is not registered for a one-step model or planning", async () => {
   for (const [phase, maxSteps] of [["specialist", 1], ["plan", 4]] as const) {
     const output = phase === "plan" ? { tasks: [{ role: "source_reviewer", goal: "Review source", sourceVersionIds: [] }] }
@@ -166,6 +206,7 @@ test("visual inspection is not registered for a one-step model or planning", asy
     expect(await callMastraSupervisor({ ...base, phase,
       modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps },
       inspectSource: async () => { throw new Error("Visual inspection must not execute"); },
+      querySourceImage: async () => { throw new Error("Image triage must not execute"); },
     }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
       spyStream: options => { expect(options.tools ?? []).toHaveLength(0); },
     }) })).toEqual(output);

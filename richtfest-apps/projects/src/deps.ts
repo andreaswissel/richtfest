@@ -69,4 +69,6 @@ export type SourceExtractionDeps = {
 
 export type SourceModelDeps = SourceExtractionDeps & {
   structureDocument: (input: DocumentModelInput) => Promise<DocumentModelResult>;
+  classifyImage?: (input: { tenantId: string; actorId: string; projectId: string; versionId: string; page: number },
+    signal?: AbortSignal) => Promise<import("@richtfest/shared").SourceImageReceipt>;
 };

@@ -46,7 +46,7 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
   signal.throwIfAborted();
   const token = crypto.randomUUID();
   const claimed = await d.db.transaction(async (tx: any) => {
-    const [row] = await tx.select({ job: jobs, extraction: sourceExtractions, source: fileVersions, name: files.name })
+    const [row] = await tx.select({ job: jobs, extraction: sourceExtractions, source: fileVersions, name: files.name, projectId: files.projectId, purpose: files.purpose })
       .from(jobs)
       .innerJoin(fileVersions, and(eq(fileVersions.id, jobs.versionId), eq(fileVersions.tenantId, jobs.tenantId)))
       .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, jobs.tenantId)))
@@ -80,6 +80,32 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
         imported = await parseIfc(Buffer.concat(parts), workSignal);
       } finally { (stream as { destroy?: () => void }).destroy?.(); }
     } else {
+      const pdf = source.mimeType === "application/pdf" || /\.pdf$/i.test(name);
+      const standalone = isImageSource(source.mimeType ?? "", name) && !/\.afpub$/i.test(name);
+      if (d.classifyImage && (pdf || standalone) && claimed.purpose === "project_evidence") {
+        const total = standalone ? 1 : extraction.result?.pages ?? null;
+        const count = total === null ? 1 : Math.min(24, total);
+        // Triage must leave time for the existing source-model import.
+        const classificationSignal = AbortSignal.any([workSignal, AbortSignal.timeout(45_000)]);
+        const receipts: import("@richtfest/shared").SourceImageReceipt[] = [];
+        let missing = 0, attempted = 0;
+        for (let page = 1; page <= count; page++) {
+          if (classificationSignal.aborted) break;
+          attempted++;
+          try {
+            const result = await d.classifyImage({ tenantId: job.tenantId, actorId: source.createdBy,
+              projectId: claimed.projectId, versionId: job.versionId, page }, classificationSignal);
+            receipts.push(result);
+            if (result.status === "unavailable") missing++;
+            if (["unconfigured", "outcome_unknown", "limit_reached"].includes(result.status)) break;
+          } catch { break; /* Triage failure must not fail or repeatedly delay document structuring. */ }
+        }
+        imported.metadata.imageClassification = { totalPages: total, attemptedPages: attempted,
+          completedPages: receipts.filter(r => r.status === "completed").length, missingPages: missing,
+          uninspectedPages: total === null ? null : total - receipts.filter(r => r.status === "completed").length,
+          coverageUnknown: total === null, receipts,
+          semanticInspection: false, provenance: "inferred" };
+      }
       // Reuse saved text. Images additionally supply one bounded raster to this
       // upload-time pass, never to subsequent agent reads.
       const rows: { page: number; text: string | null }[] = await d.db.select({ page: sourcePages.page, text: sql<string>`left(${sourcePages.content}->>'text', 24000)` })
@@ -91,7 +117,7 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
         remaining -= text.length;
         return text ? [{ page: row.page, text }] : [];
       });
-      imported.metadata = { scope: "Bounded proposal index, not exhaustive document interpretation", inputPages: pages.map(p => p.page),
+      imported.metadata = { ...imported.metadata, scope: "Bounded proposal index, not exhaustive document interpretation", inputPages: pages.map(p => p.page),
         inputCharacters: 24000 - remaining, sourcePages: extraction.result?.pages ?? null, sourceExtractionStatus: extraction.status,
         sourceExtractionNotes: extraction.result?.reason, sourceTruncated: extraction.result?.truncated };
       let image: DocumentModelInput["image"];
@@ -147,7 +173,7 @@ export async function runSourceModel(d: SourceModelDeps, signal: AbortSignal): P
     // Publication and terminal state are atomic. Different source claims are never merged.
     for (let i = 0; i < imported.entities.length; i += 500) await tx.insert(sourceEntities).values(imported.entities.slice(i, i + 500).map(entity => ({ ...entity, tenantId: job.tenantId, versionId: job.versionId })));
     for (let i = 0; i < imported.facts.length; i += 500) await tx.insert(sourceFacts).values(imported.facts.slice(i, i + 500).map(fact => ({ ...fact, tenantId: job.tenantId, versionId: job.versionId })));
-    const metadata = { ...imported.metadata, entityCount: imported.entities.length, factCount: imported.facts.length };
+    const metadata = { ...current.metadata, ...imported.metadata, entityCount: imported.entities.length, factCount: imported.facts.length };
     await tx.update(jobs).set({ status, method, metadata, leaseToken: null, leaseUntil: null, updatedAt: new Date() }).where(owned);
     await d.audit(tx, job.tenantId, `projects.source.model.${status}`, job.versionId, { method, entityCount: imported.entities.length, factCount: imported.facts.length });
   });
@@ -172,6 +198,8 @@ export async function readSourceModel(db: any, tenantId: string, versionId: stri
   const [job] = await db.select({ status: jobs.status, method: jobs.method, metadata: jobs.metadata }).from(jobs)
     .where(and(eq(jobs.tenantId, tenantId), eq(jobs.versionId, versionId)));
   if (!job) return null;
+  const { imageQueries: _privateQueries, ...publicMetadata } = job.metadata;
+  job.metadata = publicMetadata;
   const limit = Math.max(1, Math.min(100, input.limit ?? 30)), offset = Math.max(0, input.offset ?? 0);
   const terms = [...new Set(input.query?.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].slice(0, 64);
   const search = sql`websearch_to_tsquery('simple', ${terms.join(" OR ")})`;

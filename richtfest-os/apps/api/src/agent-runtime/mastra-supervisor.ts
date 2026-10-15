@@ -21,6 +21,7 @@ import { acousticCalculationSchema, acousticCalculationReceiptSchema, sumSoundLe
 import type { AppDeps } from "@richtfest/knowledge/deps";
 import { companyKnowledgeSearchSchema, companyKnowledgeReceiptSchema, companyKnowledgePolicy } from "@richtfest/shared";
 import { sourceVisualRequestSchema, type SourceVisual } from "@richtfest/shared";
+import { sourceImageQuerySchema } from "@richtfest/shared";
 
 export type SupervisorPhase = "plan" | "specialist" | "review" | "independent_review";
 export type SupervisorRequest = {
@@ -34,6 +35,7 @@ export type SupervisorRequest = {
   calculateAcoustics?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["calculateAcoustics"];
   searchCompanyKnowledge?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"];
   inspectSource?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["inspectSource"];
+  querySourceImage?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["querySourceImage"];
   onSummaryDelta?: (delta: string) => Promise<void>;
   onUsage?: (usage: ProviderUsage) => Promise<void>;
   onRequest?: ProviderTelemetry["onRequest"];
@@ -351,6 +353,19 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
             ...(result.status === "available" && image ? [{ type: "media", data: image.data, mediaType: image.mediaType }] : []),
           ] };
         },
+      }),
+    } : {}),
+    ...((input.phase === "specialist" || input.phase === "independent_review") && input.querySourceImage && (modelConfig?.maxSteps ?? 1) >= 2 ? {
+      query_source_image: createTool({ id: "query_source_image",
+        description: "Cheap experimental Jev image triage for an exact source page/crop. Omit questions to reuse upload classification (page type, legend, title block, table); otherwise ask up to eight bounded Choice, Noul or Box questions. Each Box must name a companion Noul presenceQuestion. Boxes are normalized to the ORIGINAL page, not the crop; convert left/top/right/bottom into x/y/width/height for inspect_project_source. Four distinct queries per call. Returns typed inferred observations, not image pixels or verified inspection. Assess whether answers suffice for discovery; use inspect_project_source for uncertainty, contradictions, small text, exact values, relationships, engineering conclusions or required visual coverage. A confident result does not verify correctness. Never exclude a page solely on these labels or treat a missing/failed result as absence. Box presence below 0.9 suppresses the box; that provisional floor is not a calibration guarantee. Do not keep probing instead of escalating. Existing evidence and citation rules still apply.",
+        inputSchema: sourceImageQuerySchema,
+        execute: async (data, context) => {
+          context.abortSignal?.throwIfAborted();
+          const result = await input.querySourceImage!(data, context.abortSignal);
+          context.abortSignal?.throwIfAborted();
+          return result;
+        },
+        toModelOutput: output => ({ type: "json", value: output }),
       }),
     } : {}),
     ...(input.phase === "specialist" && input.searchCompanyKnowledge && (modelConfig?.maxSteps ?? 1) >= 2 ? {

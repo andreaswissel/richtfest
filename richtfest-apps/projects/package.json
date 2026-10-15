@@ -11,7 +11,8 @@
     "./source-text": "./src/source-text.ts",
     "./source-representations": "./src/source-representations.ts",
     "./source-extraction": "./src/source-extraction.ts",
-    "./source-model": "./src/source-model.ts"
+    "./source-model": "./src/source-model.ts",
+    "./source-image-query": "./src/source-image-query.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

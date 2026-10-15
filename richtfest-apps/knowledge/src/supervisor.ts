@@ -27,6 +27,7 @@ import { assembleExteriorNoiseInputs, reconcileExteriorNoiseInputs, validateExte
 import { createAcousticInputReview } from "./acoustic-input-review";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
+import { sourceImageQuerySchema, SOURCE_IMAGE_MODEL, SOURCE_IMAGE_QUERY_VERSION, type SourceImageReceipt } from "@richtfest/shared";
 import { COMPANY_KNOWLEDGE_CONTEXT_BYTES, companyKnowledgeCategories, searchCompanyKnowledge, assertCompanyKnowledgeCurrent } from "./company-knowledge";
 import { classifyRun, decisionRoutingVersion } from "./decision-routing";
 import {
@@ -453,6 +454,52 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           visualReads.set(inputHash, read);
           return read;
         } : undefined;
+      const imageQueries = new Map<string, Promise<SourceImageReceipt>>();
+      const querySourceImage: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["querySourceImage"] =
+        !visualOnly && d.querySourceImage && d.executeImageDecision && (phase === "specialist" || phase === "independent_review")
+          ? async (raw, signal) => {
+            signal?.throwIfAborted();
+            await assertActive();
+            const input = sourceImageQuerySchema.parse(raw);
+            const scope = context as { sourceVersionIds?: string[]; visualSourceVersionIds?: string[]; sourceCoverage?: { sliceVersionIds?: string[] } };
+            const allowed = new Set([...(scope.sourceVersionIds ?? scope.sourceCoverage?.sliceVersionIds ?? []), ...(scope.visualSourceVersionIds ?? [])]);
+            if (!allowed.has(input.versionId)) throw conflict("Image query is outside this call's source scope");
+            await sources(d, run.projectId, [input.versionId]);
+            const inputHash = stepHash(input);
+            const cached = imageQueries.get(inputHash);
+            if (cached) return cached;
+            const base = { versionId: input.versionId, page: input.page, crop: input.crop,
+              provenance: "inferred" as const, semanticInspection: false as const,
+              queryVersion: SOURCE_IMAGE_QUERY_VERSION, model: SOURCE_IMAGE_MODEL } as const;
+            if (imageQueries.size >= 4) return { ...base, status: "limit_reached",
+              reason: "Four distinct image queries used. Use direct visual inspection if needed; this is not evidence of absence." };
+            const pending = (async (): Promise<SourceImageReceipt> => {
+              let output: SourceImageReceipt;
+              try {
+                output = await d.querySourceImage!(run.projectId!, input, image => executeTrackedProvider(d,
+                  { ...run, id: runId, provider: "typesafe" },
+                  { phase: "image_query", generation: state.generation, rootRunId: id, leaseToken: token, assertActive },
+                  telemetry => d.executeImageDecision!({ ...image, ...telemetry, runId })), signal);
+              } catch (error) {
+                signal?.throwIfAborted();
+                if (["budget_exhausted", "outcome_unknown"].includes(String((error as { code?: unknown })?.code))) throw error;
+                output = { ...base, status: "outcome_unknown",
+                  reason: "Image question failed or its outcome is unknown. No absence or inspection is established; use direct vision if needed." };
+              }
+              await assertActive();
+              const saved = await commit(d, run, token, async tx => {
+                await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+                  kind: "tool", stepKey: `image-query:${callKey}:${inputHash}`, inputHash,
+                  input: { name: "query_source_image", input }, output, status: "completed",
+                });
+              });
+              if (!saved) throw conflict("Supervisor no longer active");
+              // Deliberately do not add to visuallyInspected or satisfy deferred visual reads.
+              return output;
+            })();
+            imageQueries.set(inputHash, pending);
+            return pending;
+          } : undefined;
       const searchKnowledge: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"] =
         !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? async (raw, signal) => {
@@ -591,6 +638,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             calculateAcoustics,
             searchCompanyKnowledge: searchKnowledge,
             inspectSource,
+            querySourceImage,
             onSummaryDelta: streamSummary ? onSummaryDelta : undefined,
             });
             if (response.status === "completed") {

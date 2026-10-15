@@ -1,4 +1,5 @@
 import type { PermissionKey, AgentPresetSnapshot, AgentProvider, SourceReference, AgentExecutionLimits, AcousticCalculationInput, AcousticCalculationResult, AcousticCalculationReceipt, CompanyKnowledgeSearch, CompanyKnowledgeReceipt, SourceVisualRequest, SourceVisual } from "@richtfest/shared";
+import type { SourceImageInference, SourceImageQuery, SourceImageReceipt } from "@richtfest/shared";
 import { acousticSectionKeySchema } from "@richtfest/shared";
 
 /** Defense in depth; adapters also remove the actual credential and known input text. */
@@ -104,6 +105,10 @@ export type AppDeps = {
     state: unknown;
     questions: Record<string, { type: "choice"; instructions: string; criteria: Record<string, string> }>;
   } & ProviderTelemetry) => Promise<ProviderResult>;
+  executeImageDecision?: (input: SourceImageInference & ProviderTelemetry & { runId?: string }) => Promise<ProviderResult>;
+  /** Projects owns authorization/rendering/cache; Knowledge supplies tracked inference. */
+  querySourceImage?: (projectId: string, input: SourceImageQuery,
+    infer: (input: SourceImageInference) => Promise<ProviderResult>, signal?: AbortSignal) => Promise<SourceImageReceipt>;
   resolveSupervisorPreset?: (
     effort: "low" | "medium" | "high" | "ultra",
     provider: AgentProvider,
@@ -118,6 +123,7 @@ export type AppDeps = {
     calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
     searchCompanyKnowledge?: (input: CompanyKnowledgeSearch, signal?: AbortSignal) => Promise<CompanyKnowledgeReceipt>;
     inspectSource?: (input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual>;
+    querySourceImage?: (input: SourceImageQuery, signal?: AbortSignal) => Promise<SourceImageReceipt>;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
     onRequest?: ProviderTelemetry["onRequest"];

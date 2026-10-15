@@ -13,6 +13,7 @@ export * from "./customer";
 export * from "./support";
 export * from "./location";
 export * from "./source-text";
+export * from "./source-image-query";
 export * from "./source-model";
 export * from "./public-data";
 export * from "./components";

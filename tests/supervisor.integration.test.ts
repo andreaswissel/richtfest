@@ -133,6 +133,61 @@ integration(`visual source scope and durable citation authorization: ${scenario}
   }
 });
 
+for (const inspect of [false, true])
+integration(`image triage receipts never authorize unreadable citations without vision: ${inspect}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), projectId = crypto.randomUUID(), versionId = crypto.randomUUID();
+  let queries = 0;
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, providerConfigured: async () => false,
+    requirePermission: () => {}, auditRun: async () => {}, validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: [{ versionId, name: "Plan", version: 1 }], truncated: false }),
+    resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Plan", version: 1 },
+      content: { status: "extraction_failed", reason: "No readable text" } }),
+    executeImageDecision: async () => { throw new Error("Cached upload result must not buy inference"); },
+    querySourceImage: async (_project: string, input: any) => { queries++; return { ...input, status: "completed", reused: true,
+      provenance: "inferred", semanticInspection: false, model: "jev-1.14.0", queryVersion: "image-triage-v1",
+      reason: "Experimental classification", answers: { table: { type: "noul", noul: 0.999 } } }; },
+    inspectSource: async (_project: string, input: any) => ({ ...input, status: "available", scope: "pdf_page", reason: "Unreviewed",
+      image: { mediaType: "image/jpeg", data: "c3ludGhldGlj" } }),
+    executeSupervisor: async (request: any) => {
+      if (request.phase === "plan") {
+        expect(request.querySourceImage).toBeUndefined();
+        return { status: "completed", output: { tasks: [{ role: "source_reviewer", goal: "Inspect drawing", sourceVersionIds: [versionId] }] } };
+      }
+      await expect(request.querySourceImage({ versionId: crypto.randomUUID(), page: 1 })).rejects.toThrow("outside this call's source scope");
+      const first = await request.querySourceImage({ versionId, page: 1 });
+      expect(await request.querySourceImage({ versionId, page: 1 })).toEqual(first);
+      for (const page of [2, 3, 4]) await request.querySourceImage({ versionId, page });
+      expect(await request.querySourceImage({ versionId, page: 5 })).toMatchObject({ status: "limit_reached" });
+      if (inspect) await request.inspectSource({ versionId, page: 1 });
+      return { status: "completed", output: { summary: "Source claim", rationale: "Unreviewed", citations: [versionId] } };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId, goal: "Image triage", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id); await stepSupervisor(d, run!.id);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    if (inspect) {
+      expect(state!.phase).toBe("review");
+      expect((state!.assignments as any[])[0].output.citations).toEqual([versionId]);
+      expect(queries).toBe(4);
+    } else {
+      expect((await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id)))[0]!.status).toBe("failed");
+      expect((state!.assignments as any[])[0].output).toBeUndefined();
+    }
+    const steps = await db.select().from(agentRunSteps).where(and(eq(agentRunSteps.tenantId, tenantId), eq(agentRunSteps.kind, "tool")));
+    expect(steps.filter(step => step.stepKey.startsWith("image-query:")).length).toBeGreaterThanOrEqual(4);
+    expect(steps.filter(step => step.stepKey.startsWith("visual:"))).toHaveLength(inspect ? 1 : 0);
+    expect(JSON.stringify(steps)).not.toContain("c3ludGhldGlj");
+    expect(await db.select().from(agentRunUsage).where(eq(agentRunUsage.tenantId, tenantId))).toHaveLength(0);
+  } finally {
+    for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
 for (const scenario of ["recover", "report", "report_exhausted", "exhausted", "ignored"] as const)
 integration(`visual budget recovery preserves findings and shares the revision limit: ${scenario}`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);

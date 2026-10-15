@@ -32,6 +32,14 @@ const extractionWorker = startSourceExtractionWorker({
 });
 const modelWorker = startSourceModelWorker({
   db, fileStorage, structureDocument: input => structureSourceDocument(db, input),
+  classifyImage: env.SOURCE_IMAGE_TRIAGE_ENABLED ? async (input, signal) => {
+    const deps = await backgroundKnowledgeDeps(db, input.tenantId, input.actorId);
+    return deps.querySourceImage!(input.projectId, { versionId: input.versionId, page: input.page },
+      image => deps.executeImageDecision!({ ...image,
+        onUsage: usage => db.transaction(tx => recordAudit(tx, input.actorId, input.tenantId,
+          "projects.source.image.usage", "file_version", input.versionId, { page: input.page, usage })),
+      }), signal);
+  } : undefined,
   audit: (tx, tenantId, action, versionId, metadata) => recordAudit(tx, null, tenantId, action, "file_version", versionId, metadata, { actorType: "system" }),
   reportError: () => console.error("Project source model worker database operation failed"),
 });

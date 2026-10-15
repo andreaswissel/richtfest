@@ -9,6 +9,7 @@ import type { Database } from "./db/client";
 import { fileStorage } from "./file-storage";
 export { fileStorage } from "./file-storage";
 import { readSourceEvidence } from "@richtfest/projects/source-model";
+import { querySourceImage } from "@richtfest/projects/source-image-query";
 import { extractSourceVisual } from "@richtfest/projects/source-text";
 import { readPdfRepresentations } from "@richtfest/projects/source-representations";
 import { sourceVisualRequestSchema } from "@richtfest/shared";
@@ -190,6 +191,18 @@ export const knowledgeDeps = (
         : await execute();
       return result ?? { status: "unconfigured" as const };
     },
+    querySourceImage: env.SOURCE_IMAGE_TRIAGE_ENABLED
+      ? (projectId, input, infer, signal) => querySourceImage(base(db, req), projectId, input, infer, signal)
+      : undefined,
+    executeImageDecision: env.SOURCE_IMAGE_TRIAGE_ENABLED ? async input => {
+      const { callImageDecisionModel } = await import("./image-decision-runtime");
+      const execute = (signal?: AbortSignal) => withProviderCredential(db, actor.tenantId, actor.id, "typesafe",
+        key => callImageDecisionModel(input, key, { signal, fetch: providerFetch }));
+      const result = input.runId
+        ? await withSupervisorCancellation(db, actor.tenantId, actor.id, input.runId, execute)
+        : await execute(input.signal);
+      return result ?? { status: "unconfigured" as const };
+    } : undefined,
     generateConversationTitle: async ({ message }) => {
       try {
         const provider = await getActiveProvider(db, actor.tenantId);

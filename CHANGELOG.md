@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Added opt-in Jev image triage for new project-source uploads and agent questions. Revision-linked labels and suggested regions are reused without sending image pixels to the calling model; direct visual inspection, evidence checks and human review remain available and separate. Disabled by default, with no automatic backfill or database migration.
+
 - Acoustic workflows now combine room data across documents and clarify missing or conflicting values directly in chat. Rounded choices, plain-language questions and expandable sources keep the form simple. Answers are saved with their history; confirmed inputs produce a draft calculation sheet without another AI call. New runs wait for missing inputs before report writing; existing checkpoints keep their behavior.
 
 - Landing-page images, icons and share previews now load correctly on the main website as well as the preview URL.
