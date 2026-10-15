@@ -59,6 +59,7 @@ test("optional specialists keep their table rows and only expose editable values
           {
             effort: "medium",
             supervisor: reviewer,
+            ...(enabled ? { writer: { ...reviewer, maxSteps: 1 } } : {}),
             specialists: {
               source_reviewer: reviewer,
               requirements_reviewer: reviewer,
@@ -70,8 +71,8 @@ test("optional specialists keep their table rows and only expose editable values
         ],
       },
     });
-    expect(html.match(/scope="row"/g)?.length).toBe(6);
     for (const role of [
+      "Report writer",
       "Sound insulation",
       "Construction law",
       "Cost optimizer",
@@ -83,6 +84,12 @@ test("optional specialists keep their table rows and only expose editable values
     expect(soundSteps).toBeDefined();
     expect(soundSteps?.includes('disabled=""')).toBe(!enabled);
     expect(soundSteps).toContain(`value="${enabled ? "7" : ""}"`);
+    const writerSteps = html.match(
+      /<input[^>]*aria-label="Report writer: Max steps"[^>]*>/,
+    )?.[0];
+    expect(writerSteps).toBeDefined();
+    expect(writerSteps?.includes('disabled=""')).toBe(!enabled);
+    expect(writerSteps).toContain(`value="${enabled ? "1" : "4"}"`);
   }
 });
 

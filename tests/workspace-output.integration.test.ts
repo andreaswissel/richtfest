@@ -52,6 +52,13 @@ integration("workspace returns scoped historical citation names and terminal chi
     expect(failed.failureRole).toBe("source_reviewer");
     expect(JSON.parse(failed.failureEvent.paramsSummary).runId).toBe(child);
     expect(failed.failureEvent.paramsSummary).not.toContain("SECRET");
+    const writerCall = crypto.randomUUID();
+    await pool.query(`update knowledge_agent_runs set error='phase=review; category=validation' where id=$1`, [parent]);
+    for (const [event, modelRole, time] of [["provider_attempt_failed", "writer", "2026-01-03"], ["provider_call_failed", undefined, "2026-01-04"]])
+      await pool.query(`insert into knowledge_agent_run_events(tenant_id,run_id,event_type,result_summary,params_summary,created_at) values($1,$2,$3,'review',$4,$5)`,
+        [tenant, parent, event, JSON.stringify({ runId: parent, callId: writerCall, attempt: 1, modelRole, diagnostics: { finishReason: "length" } }), time]);
+    const writerWorkspace = (await (await fetch(`${url}/workspaces/${project}`)).json() as any).data;
+    expect(writerWorkspace.runs.find((run: any) => run.id === parent).failureRole).toBe("writer");
     const secondThread = crypto.randomUUID();
     await pool.query(`insert into knowledge_conversations(id,tenant_id,project_id,title,created_by) values($1,$2,$3,'Other thread',$4)`, [secondThread, tenant, project, actor]);
     await pool.query(`update knowledge_artifacts set run_id=$1 where id=$2`, [child, artifact]);

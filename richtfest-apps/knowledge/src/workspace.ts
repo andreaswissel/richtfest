@@ -242,7 +242,14 @@ async function withFailureDetails(d: AppDeps, runs: any[]) {
     if (!match) return run;
     const owner = owners.find((owner: any) => owner.id === match.metadata.runId);
     const budget = agentBudgetDecisionSchema.safeParse(match.metadata.budget);
-    return { ...run, failureRole: owner?.specialistRole ?? "supervisor", failureEvent: {
+    const providerFailure = parsed.find(({ event, metadata }: any) => event.eventType === "provider_attempt_failed"
+      && metadata.runId === match.metadata.runId && metadata.callId === match.metadata.callId
+      && metadata.attempt === match.metadata.attempt);
+    const modelRole = providerFailure?.metadata.modelRole;
+    // Without attribution, do not offer to increase the wrong root model's cap.
+    const rootRole = modelRole === "writer" || modelRole === "supervisor" ? modelRole
+      : run.modelPolicy?.writer ? undefined : "supervisor";
+    return { ...run, failureRole: owner?.specialistRole ?? rootRole, failureEvent: {
       eventType: budgetStopped ? "budget_stopped" : "provider_call_failed", resultSummary: phase ?? match.event.resultSummary?.split(";")[0],
       paramsSummary: JSON.stringify({ runId: owner.id, callId: match.metadata.callId, attempt: match.metadata.attempt,
         ...(budgetStopped && budget.success ? { budget: budget.data } : {}),

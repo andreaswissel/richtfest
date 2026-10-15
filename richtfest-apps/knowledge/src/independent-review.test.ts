@@ -4,10 +4,10 @@ import {
   assertIndependentReviewDecision,
   assertRevisionAssignments,
   aggregateIndependentReviews,
-  chunkSourceVersionIds,
   independentReview,
   type Assignment,
 } from "./supervisor";
+import { prepareIndependentReview } from "./independent-review";
 
 const sourceVersionId = "00000000-0000-4000-8000-000000000001";
 const otherSourceVersionId = "00000000-0000-4000-8000-000000000002";
@@ -95,17 +95,42 @@ test("independent revisions can only target existing bounded assignments", () =>
   ], assignments)).toThrow("Invalid revision assignments");
 });
 
-test("source excerpts are divided into bounded, deduplicated slices", () => {
-  expect(chunkSourceVersionIds([
-    sourceVersionId,
-    otherSourceVersionId,
-    sourceVersionId,
-    taskId,
-    otherTaskId,
-  ])).toEqual([
-    [sourceVersionId, otherSourceVersionId, taskId],
-    [otherTaskId],
-  ]);
+test("review slices distinguish omitted sections from missing content without dropping evidence", () => {
+  const content = `Uncited introduction.\n\n## Assessment\n31.7 dB [${sourceVersionId}]\n\n## Plans\nDrawing p. 9 [${otherSourceVersionId}]\n\n## Plans\nUncited unresolved attachment status.\n`;
+  const sources = [sourceVersionId, otherSourceVersionId, taskId].map((versionId, i) => ({ versionId,
+    resolution: { status: "resolved", source: { versionId, name: `source-${i}` },
+      content: { status: "available", text: `[Page ${i + 1}]\n${"Überprüfung 🧱 ".repeat(1500)}`, truncated: false } },
+  }));
+  const input = { review: { document: { title: "Report", content }, citations: [sourceVersionId, otherSourceVersionId] },
+    sources, assignments: [], originalGoal: "Check all evidence", revision: 0, assignedVersionCount: 3,
+    readableSourceIds: sources.map(s => s.versionId), unreadableSources: [], contextOverhead: {} };
+  const plan = prepareIndependentReview({ ...input, inputByteBudget: 54000 });
+  expect(plan.batches.length).toBeGreaterThan(1);
+  const first = plan.batches.find(b => b.sourceCoverage.sliceVersionIds.length === 1 && b.sourceCoverage.sliceVersionIds[0] === sourceVersionId)!;
+  expect(first.reportCoverage).toEqual({ scope: "selected_sections", sectionDirectory: [
+    { id: "section:0", heading: null, contentSupplied: true },
+    { id: "section:1", heading: "Assessment", contentSupplied: true },
+    { id: "section:2", heading: "Plans", contentSupplied: false },
+    { id: "section:3", heading: "Plans", contentSupplied: true },
+  ] });
+  expect(first.firstPassReview.document!.content).toContain("31.7 dB");
+  expect(first.firstPassReview.document!.content).not.toContain("Drawing p. 9");
+  expect(first.firstPassReview.document!.content).toContain("Uncited unresolved attachment status");
+  for (const source of sources) {
+    const pieces = plan.batches.flatMap(b => b.sourceExcerpts).filter(s => s.versionId === source.versionId);
+    expect(pieces.map(p => p.resolution.content.text).join("")).toBe(source.resolution.content.text);
+  }
+  // Evidence the report never cited still gets the whole report for omissions.
+  const unmatched = plan.batches.find(b => b.sourceCoverage.sliceVersionIds.length === 1 && b.sourceCoverage.sliceVersionIds[0] === taskId)!;
+  expect(unmatched.reportCoverage.scope).toBe("whole_report");
+  expect(unmatched.firstPassReview.document!.content).toBe(content);
+  const consistency = plan.consistency({ findings: [] });
+  expect(consistency.firstPassReview.document!.content).toBe(content);
+  expect(consistency.reportCoverage.sectionDirectory.every(s => s.contentSupplied)).toBe(true);
+  const complete = prepareIndependentReview({ ...input, inputByteBudget: 250000 }).batches;
+  expect(complete).toHaveLength(1);
+  expect(complete[0]!.reviewTask).toBe("complete");
+  expect(complete[0]!.firstPassReview.document!.content).toBe(content);
 });
 
 test("slice results aggregate findings, citations, and bounded assignment revisions", () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { acousticSectionKeys, agentExecutionLimitsSchema } from "@richtfest/shared";
+import { acousticSectionKeys, agentExecutionLimitsSchema, type AgentPresetSnapshot } from "@richtfest/shared";
 import { authorAcousticConcept, type AcousticDraft } from "./acoustic-authoring";
 import type { AppDeps } from "./deps";
 
@@ -8,9 +8,10 @@ function harness() {
   const tasks: string[] = [];
   return {
     tasks, get draft() { return draft; },
-    run(editor: (context: Record<string, any>) => unknown) {
+    run(editor: (context: Record<string, any>) => unknown, modelPolicy?: Pick<AgentPresetSnapshot, "writer" | "supervisor">) {
       return authorAcousticConcept({ d: {} as AppDeps, projectId: "test", id: "exterior-noise-concept", goal: "Report",
         findings: [], sourceVersionIds: [], limits: agentExecutionLimitsSchema.parse({}), maxOutputTokens: 6000, maxParallel: 1, draft,
+        modelPolicy,
         assertActive: async () => {}, checkpoint: async saved => { draft = structuredClone(saved); },
         call: async (c, validate) => {
           tasks.push(String(c.documentTask));
@@ -60,4 +61,18 @@ test("unversioned editorial checkpoint remains legacy and resumes saved candidat
   expect(h.draft!.editorial!.candidate).toEqual(candidate);
   expect(h.draft!.editorial!.mode).toBeUndefined();
   expect(h.draft!.consolidation!.mode).toBeUndefined();
+});
+
+test("authoring reuses an identical writer policy but not a changed model's draft", async () => {
+  const h = harness();
+  const model = { modelId: "gpt-6-astra", maxOutputTokens: 6000, maxSteps: 1 };
+  const policy = { supervisor: model, writer: { ...model, modelId: "gpt-6-sol" } };
+  const unchanged = (c: Record<string, any>) => ({ complete: true,
+    replacements: c.original.map((f: any) => ({ id: f.id, content: null })) });
+  await h.run(unchanged, policy);
+  const before = h.tasks.length;
+  await h.run(() => { throw new Error("Identical policy must reuse saved work"); }, structuredClone(policy));
+  expect(h.tasks).toHaveLength(before);
+  await h.run(unchanged, { ...policy, writer: { ...policy.writer, modelId: "gpt-6.1-sol" } });
+  expect(h.tasks.slice(before)).toContain("section");
 });

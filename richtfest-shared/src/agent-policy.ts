@@ -55,6 +55,8 @@ export const agentDecisionRoutingSchema = z.object({
 export type AgentDecisionRouting = z.infer<typeof agentDecisionRoutingSchema>;
 export const agentPresetConfigSchema = z.object({
   supervisor: agentModelConfigSchema,
+  // Report prose only; absent preserves the supervisor configuration unchanged.
+  writer: agentModelConfigSchema.optional(),
   specialists: z.object({
     source_reviewer: agentModelConfigSchema,
     requirements_reviewer: agentModelConfigSchema,

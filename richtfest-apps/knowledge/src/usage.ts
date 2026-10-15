@@ -222,7 +222,7 @@ export async function executeTrackedProvider(
       if (failureCategory && failureCategory !== "budget" && status !== "cancelled") await tx.insert(agentRunEvents).values({
         tenantId: d.tenantId, runId: run.id, eventType: "provider_attempt_failed",
         paramsSummary: JSON.stringify({ runId: run.id, callId: attempt.operationId, attempt: attempt.attemptNumber,
-          attemptId: attempt.id, providerStatus,
+          attemptId: attempt.id, providerStatus, modelRole: settings?.modelRole,
           diagnostics: sanitizeProviderDiagnostics((output as { failure?: { diagnostics?: unknown } })?.failure?.diagnostics) }),
         resultSummary: invocation.phase,
       });

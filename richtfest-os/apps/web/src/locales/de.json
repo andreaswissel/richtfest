@@ -762,6 +762,8 @@
   "supervisorSoundInsulation": "Schallschutz",
   "supervisorConstructionLaw": "Baurecht",
   "supervisorCostOptimizer": "Kostenoptimierung",
+  "supervisorReportWriter": "Berichtsautor",
+  "supervisorReportWriterDescription": "Optionale Abweichung nur für Berichtsabschnitte, redaktionelle Texte und Zusammenführung. Ohne Aktivierung gelten die Supervisor-Einstellungen unverändert. Gliederung, Prüfungen, unabhängige Prüfung und reguläre Supervisor-Aufrufe bleiben unberührt. Beim Aktivieren werden die Supervisor-Einstellungen zur Anpassung kopiert.",
   "supervisorOptionalSpecialistsDescription": "Fachagenten für diesen Anbieter und diese Aufwand-Voreinstellung aktivieren. Deaktivierte Fachagenten erhalten keine Aufgaben. Beim Aktivieren werden die konfigurierten Prüfer-Modelleinstellungen kopiert und können anschließend angepasst werden. Zusätzliche Modellaufrufe sind möglich.",
   "supervisorIndependentReview": "Unabhängige Prüfung",
   "supervisorIndependentReviewDescription": "Optionalen separaten Prüflauf nach dem Ergebnisentwurf des Supervisors aktivieren. Standardmäßig aus; zusätzliche Modellaufrufe sind möglich.",

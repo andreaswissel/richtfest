@@ -483,6 +483,45 @@ test("consolidation uses bounded tool-free shared writer and independent checker
   }
 });
 
+test("writer overrides only report prose, leaving planning and independent checks on their configured models", async () => {
+  const supervisor = { modelId: "gpt-6-astra", maxOutputTokens: 32000, maxSteps: 4 };
+  const writer = { modelId: "gpt-6-sol", maxOutputTokens: 16000, maxSteps: 1 };
+  const specialist = { modelId: "gpt-6-luna", maxOutputTokens: 8000, maxSteps: 2 };
+  const policy = { ...vendorPreset("openai", "medium"), supervisor, writer,
+    specialists: { source_reviewer: specialist, requirements_reviewer: specialist },
+    provider: "openai" as const, effort: "medium" as const, version: 1, source: "workspace" as const };
+  const summary = { summary: "Evidence checked.", rationale: "Unverified claims retained.", citations: [] };
+  const sections = acousticSectionKeys("exterior-noise-concept");
+  const outputs: Record<string, Record<string, unknown>> = {
+    section: { content: "Claims remain unverified.", citations: [], complete: true },
+    editorial: { complete: true, sections: sections.map(key => ({ key, content: "Claims remain unverified." })) },
+    consolidation: { complete: true, replacements: [{ id: "plans:0", content: null }] },
+    editorial_check: { preserved: false, issues: ["Attachment status changed."] },
+    consolidation_check: { preserved: false, issues: ["Attachment status changed."] },
+    outline: { id: "exterior-noise-concept", title: "Report", language: "en",
+      project: { name: null, number: null, client: null, designer: null, author: null, date: null }, attachments: [],
+      sections: sections.map(key => ({ key, sources: [] })) },
+    plan: { documentTemplate: null, tasks: [{ role: "source_reviewer", goal: "Check evidence", sourceVersionIds: [] }] },
+    review: { ...summary, document: { title: "Report", content: "Evidence remains unverified." }, decision: "accept", revisions: [] },
+    independent_review: { ...summary, decision: "accept", findings: [], revisions: [] },
+    specialist: summary,
+  };
+  for (const enabled of [true, false]) for (const [task, output] of Object.entries(outputs)) {
+    const phase = ["plan", "specialist", "review", "independent_review"].includes(task) ? task as "plan" | "specialist" | "review" | "independent_review" : "review";
+    const prose = ["section", "editorial", "consolidation"].includes(task);
+    const selected = phase === "specialist" ? specialist : enabled && prose ? writer : supervisor;
+    let settings: ProviderExecutionSettings | undefined;
+    expect(await callMastraSupervisor({ ...base, phase, modelPolicy: { ...policy, writer: enabled ? writer : undefined },
+      context: phase === "specialist" ? { role: "source_reviewer" } : phase === "review" && task !== "review"
+        ? { documentTask: task, documentTemplate: { id: "exterior-noise-concept", version: 1 } } : {},
+      onRequest: async value => { settings = value; },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output }) })).toEqual(output);
+    expect(settings!.modelId).toBe(selected.modelId);
+    expect(settings!.modelRole).toBe(phase === "specialist" ? undefined : enabled && prose ? "writer" : "supervisor");
+    expect(settings!.maxOutputTokens).toBeLessThanOrEqual(selected.maxOutputTokens);
+  }
+});
+
 test("section authoring retains canonical identity, bounded coverage and component distinctions", async () => {
   let prepared: any;
   const output = { content: "Unverified source claims.", citations: [], complete: true };
@@ -1330,6 +1369,10 @@ test("independent review requires evidence findings and does not inherit the sup
   expect(prompt).toContain("fresh, independent reviewer");
   expect(prompt).toContain("against every supplied source excerpt");
   expect(prompt).toContain("Do not claim to have reread absent source text");
+  expect(prompt).not.toContain("document.content at most");
+  expect(prompt).toContain("summary at most 10000 characters");
+  expect(prompt).toContain("contentSupplied=false means deliberately omitted");
+  expect(prompt).toContain("no per-response character ceiling");
 });
 
 test("source review plans treat unreviewed files as readable and honor all-source requests", async () => {

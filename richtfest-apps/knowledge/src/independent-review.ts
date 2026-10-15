@@ -27,17 +27,25 @@ export function prepareIndependentReview(input: {
     ?.map(id => id.toLowerCase()).filter(id => sourceIds.includes(id))));
   const context = (sources: ReviewSource[], wholeReport: boolean, slice: number, sliceCount: number) => {
     const ids = new Set(sources.map(source => source.versionId));
-    const relevantSections = sections.filter((_section, index) => references[index]!.size === 0
-      || [...references[index]!].some(id => ids.has(id)));
     // Uncited evidence still needs a report to check for omissions. A final whole-
     // report pass reconciles cross-source findings when evidence needs >1 call.
-    const content = wholeReport || !references.some(refs => [...refs].some(id => ids.has(id)))
-      ? document?.content : relevantSections.join("");
+    const allSections = wholeReport || !references.some(refs => [...refs].some(id => ids.has(id)));
+    const sectionDirectory = sections.map((section, index) => ({
+      id: `section:${index}`,
+      heading: section.match(/^## (.+)$/m)?.[1] ?? null,
+      contentSupplied: allSections || references[index]!.size === 0
+        || [...references[index]!].some(id => ids.has(id)),
+    }));
+    const content = allSections ? document?.content
+      : sections.filter((_section, index) => sectionDirectory[index]!.contentSupplied).join("");
     const assignments = input.assignments.filter(assignment => wholeReport || !assignment.sourceVersionIds.length
       || assignment.sourceVersionIds.some(id => ids.has(id)));
     return {
       role: "independent_reviewer", originalGoal: input.originalGoal, revision: input.revision,
       reviewTask: wholeReport ? "complete" : "evidence",
+      // Structure only: an omitted section exists but its claims are not evidence
+      // in this slice. IDs are positional, so repeated headings stay distinct.
+      reportCoverage: { scope: allSections ? "whole_report" : "selected_sections", sectionDirectory },
       companyKnowledge: assignments.flatMap(assignment => assignment.companyKnowledge ?? []),
       assignments: assignments.map(assignment => ({
         taskId: assignment.taskId, role: assignment.role, goal: assignment.goal,

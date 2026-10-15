@@ -24,6 +24,7 @@ export function tokenLimitCandidate(run: RecordData) {
   const role: unknown = run.failureRole;
   if (
     role !== "supervisor" &&
+    role !== "writer" &&
     role !== "source_reviewer" &&
     role !== "requirements_reviewer" &&
     role !== "sound_insulation" &&
@@ -35,7 +36,9 @@ export function tokenLimitCandidate(run: RecordData) {
   if (!parsed.success) return;
   const policy = parsed.data;
   const model =
-    role === "supervisor" ? policy.supervisor : policy.specialists[role];
+    role === "supervisor" || role === "writer"
+      ? policy[role]
+      : policy.specialists[role];
   if (!model) return;
   return { role, policy, model };
 }
@@ -73,8 +76,8 @@ function TokenLimitDecision({
         (item: RecordData) => item.effort === policy.effort,
       );
       const current =
-        role === "supervisor"
-          ? preset?.supervisor
+        role === "supervisor" || role === "writer"
+          ? preset?.[role]
           : preset?.specialists?.[role];
       if (
         !preset?.configured ||
@@ -129,15 +132,17 @@ function TokenLimitDecision({
         {t(
           role === "supervisor"
             ? "tokenLimitSupervisor"
-            : role === "source_reviewer"
-              ? "tokenLimitSourceReviewer"
-              : role === "sound_insulation"
-                ? "supervisorSoundInsulation"
-                : role === "construction_law"
-                  ? "supervisorConstructionLaw"
-                  : role === "cost_optimizer"
-                    ? "supervisorCostOptimizer"
-                    : "tokenLimitRequirementsReviewer",
+            : role === "writer"
+              ? "supervisorReportWriter"
+              : role === "source_reviewer"
+                ? "tokenLimitSourceReviewer"
+                : role === "sound_insulation"
+                  ? "supervisorSoundInsulation"
+                  : role === "construction_law"
+                    ? "supervisorConstructionLaw"
+                    : role === "cost_optimizer"
+                      ? "supervisorCostOptimizer"
+                      : "tokenLimitRequirementsReviewer",
         )}{" "}
         · {model.modelId}
         <br />

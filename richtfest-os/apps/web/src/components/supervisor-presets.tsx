@@ -106,6 +106,7 @@ export function SupervisorPresets({
       );
       if (provider === "anthropic") {
         if (body.supervisor) delete body.supervisor.reasoningEffort;
+        if (body.writer) delete body.writer.reasoningEffort;
         Object.values(body.specialists || {}).forEach((config: any) => {
           delete config.reasoningEffort;
         });
@@ -266,6 +267,29 @@ export function SupervisorPresets({
               }
               t={t}
             />
+            <PresetRow
+              title={t("supervisorReportWriter")}
+              config={activeDraft.writer || supervisor}
+              disabled={readOnly || !activeDraft.writer}
+              enablement={
+                <Switch
+                  aria-label={`${t("supervisorReportWriter")}: ${t("enabled")}`}
+                  disabled={readOnly}
+                  checked={!!activeDraft.writer}
+                  onCheckedChange={(enabled) =>
+                    updateConfig(
+                      ["writer"],
+                      enabled ? { ...supervisor } : undefined,
+                    )
+                  }
+                />
+              }
+              provider={provider}
+              models={modelCatalog?.models || []}
+              modelsLoading={modelsQuery.isLoading}
+              onChange={(key, value) => updateConfig(["writer", key], value)}
+              t={t}
+            />
             {Object.entries(specialists)
               .filter(
                 ([role, config]) =>
@@ -332,6 +356,9 @@ export function SupervisorPresets({
           </TableBody>
         </Table>
       </fieldset>
+      <p className="muted text-ui-xs">
+        {t("supervisorReportWriterDescription")}
+      </p>
       <p className="muted text-ui-xs">
         {t("supervisorOptionalSpecialistsDescription")}
       </p>

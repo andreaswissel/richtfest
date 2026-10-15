@@ -218,6 +218,8 @@ export type ProviderExecutionSettings = {
   adapterVersion: string;
   appRevision: string | null;
   modelId: string;
+  /** Root policy slot; specialists retain their durable specialistRole. */
+  modelRole?: "supervisor" | "writer";
   requestedReasoningEffort: string | null;
   reasoningEffort: string | null;
   maxOutputTokens: number;

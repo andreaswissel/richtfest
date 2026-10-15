@@ -762,6 +762,8 @@
   "supervisorSoundInsulation": "Sound insulation",
   "supervisorConstructionLaw": "Construction law",
   "supervisorCostOptimizer": "Cost optimizer",
+  "supervisorReportWriter": "Report writer",
+  "supervisorReportWriterDescription": "Optional override for report sections, editorial writing and consolidation only. When disabled, the supervisor settings are used unchanged. Outline, checks, independent review and ordinary supervisor calls are not affected. Enabling copies the supervisor settings for adjustment.",
   "supervisorOptionalSpecialistsDescription": "Enable specialists for this provider and effort preset. Disabled specialists are not delegated work. Enabling copies the configured reviewer model; you can then adjust it. Additional model calls may be used.",
   "supervisorIndependentReview": "Independent review",
   "supervisorIndependentReviewDescription": "Opt in to a separate reviewer run after the supervisor prepares its result. Off by default; enabling it may use additional model calls.",

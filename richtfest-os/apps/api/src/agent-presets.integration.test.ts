@@ -9,11 +9,13 @@ import { domainSpecialistRoles } from "@richtfest/shared";
 // Explicit local-only opt-in: never write to a deployed database during verification.
 const url = process.env.AGENT_PRESET_TEST_DATABASE_URL;
 const integration = url && ["localhost", "127.0.0.1"].includes(new URL(url).hostname) ? test : test.skip;
-for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integration(`output limit endpoint patches only ${role}, rejects stale/unauthorized changes and caps output`, async () => {
+for (const role of ["writer", "source_reviewer", ...domainSpecialistRoles] as const) integration(`output limit endpoint patches only ${role}, rejects stale/unauthorized changes and caps output`, async () => {
   const { db, pool } = createDatabase(url!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
   const config = vendorPreset("openai", "medium");
-  config.specialists[role] = { ...config.specialists.source_reviewer, maxOutputTokens: 70000, reasoningEffort: "high" };
+  const roleConfig = { ...config.specialists.source_reviewer, maxOutputTokens: 70000, reasoningEffort: "high" as const };
+  if (role === "writer") config.writer = roleConfig;
+  else config.specialists[role] = roleConfig;
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -25,7 +27,7 @@ for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integ
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   const port = (server.address() as { port: number }).port;
-  const body = { role: role as string, expectedVersion: 4, expectedModelId: config.specialists[role]!.modelId, expectedMaxOutputTokens: 70000 };
+  const body = { role: role as string, expectedVersion: 4, expectedModelId: roleConfig.modelId, expectedMaxOutputTokens: 70000 };
   const patch = (payload = body, manage = true) => fetch(`http://127.0.0.1:${port}/agent/presets/openai/medium/output-limit`, { method: "PATCH", headers: { "Content-Type": "application/json", "x-manage": manage ? "yes" : "no" }, body: JSON.stringify(payload) });
   try {
     await db.insert(agentPresets).values({ tenantId, provider: "openai", effort: "medium", config, version: 4, updatedBy: actorId });
@@ -37,7 +39,9 @@ for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integ
     expect(response.status).toBe(200);
     const [row] = await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId));
     expect(row.version).toBe(5);
-    expect(row.config).toEqual({ ...config, specialists: { ...config.specialists, [role]: { ...config.specialists[role], maxOutputTokens: 128000 } } });
+    expect(row.config).toEqual(role === "writer"
+      ? { ...config, writer: { ...roleConfig, maxOutputTokens: 128000 } }
+      : { ...config, specialists: { ...config.specialists, [role]: { ...roleConfig, maxOutputTokens: 128000 } } });
     expect((await patch()).status).toBe(409);
     expect((await patch({ ...body, expectedVersion: 5, expectedMaxOutputTokens: 128000 })).status).toBe(409);
     const audits = await db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantId));
@@ -54,6 +58,8 @@ for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integ
     // An absent vendor row is safely materialized only by a successful transaction.
     await db.delete(agentPresets).where(eq(agentPresets.tenantId, tenantId));
     expect((await patch({ ...body, role: "sound_insulation", expectedVersion: 1 })).status).toBe(409);
+    expect(await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId))).toHaveLength(0);
+    expect((await patch({ ...body, role: "writer", expectedVersion: 1 })).status).toBe(409);
     expect(await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId))).toHaveLength(0);
     expect((await patch({ ...supervisorBody, expectedVersion: 2 })).status).toBe(409);
     expect(await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId))).toHaveLength(0);
@@ -77,14 +83,15 @@ for (const role of ["source_reviewer", ...domainSpecialistRoles] as const) integ
     expect((await request("PUT", false, { ...vendor, executionLimits: limits })).status).toBe(403);
     expect((await request("DELETE", false)).status).toBe(403);
     expect((await load()).find((p: any) => p.effort === "medium").executionLimits).toEqual(vendor.executionLimits);
-    const saved = await request("PUT", true, { ...vendor, executionLimits: limits });
+    const saved = await request("PUT", true, { ...vendor, writer: roleConfig, executionLimits: limits });
     expect(saved.status).toBe(200);
-    expect((await saved.json()).data.executionLimits).toEqual(limits);
+    expect((await saved.json()).data).toMatchObject({ writer: roleConfig, executionLimits: limits });
     const loaded = await load();
-    expect(loaded.find((p: any) => p.effort === "medium")).toMatchObject({ executionLimits: limits, source: "workspace" });
+    expect(loaded.find((p: any) => p.effort === "medium")).toMatchObject({ writer: roleConfig, executionLimits: limits, source: "workspace" });
     expect(loaded.filter((p: any) => p.effort !== "medium").every((p: any) => p.executionLimits.timeoutSeconds === 180)).toBe(true);
     expect((await request("DELETE")).status).toBe(200);
     expect((await load()).find((p: any) => p.effort === "medium")).toMatchObject({ executionLimits: vendor.executionLimits, source: "vendor" });
+    expect((await load()).find((p: any) => p.effort === "medium").writer).toBeUndefined();
     const [reset] = await db.select().from(agentPresets).where(eq(agentPresets.tenantId, tenantId));
     expect(reset.config).toBeNull();
     const allAudits = await db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantId));

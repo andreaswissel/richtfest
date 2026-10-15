@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Lexer } from "marked";
 import {
   acousticConceptOutlineSchema, acousticConceptTemplateSchema, acousticSectionKeys,
-  acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits,
+  acousticSectionOutputSchema, prepareAgentDocument, type AcousticConceptId, type AgentExecutionLimits, type AgentPresetSnapshot,
   acousticInputProvenance, type AcousticCalculationReceipt, type CompanyKnowledgeReceipt,
   acousticEditorialOutputSchema, acousticEditorialPacketOutputSchema, acousticEditorialCheckSchema, renderAcousticCalculationReceipts,
   selectAcousticCalculationReportReceipts, type SourceReference, type SourceVisualRequest, type SourceVisual,
@@ -70,6 +70,7 @@ export async function authorAcousticConcept(input: {
   visualReads?: { request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }[];
   maxParallel: number;
   inputByteBudget?: number; contextOverhead?: unknown;
+  modelPolicy?: Pick<AgentPresetSnapshot, "writer" | "supervisor">;
   previousReview?: unknown; draft?: AcousticDraft;
   assertActive: () => Promise<unknown>;
   call: (context: Record<string, unknown>, validate: (output: unknown) => unknown) => Promise<unknown>;
@@ -81,6 +82,7 @@ export async function authorAcousticConcept(input: {
   const inputHash = hash({ id, goal: input.goal, findings: input.findings, limits, maxOutputTokens: input.maxOutputTokens,
     ...(input.calculationReceipts?.length ? { calculationReceipts: input.calculationReceipts } : {}),
     ...(input.companyKnowledge?.length ? { companyKnowledge: input.companyKnowledge } : {}),
+    ...(input.modelPolicy ? { modelPolicy: input.modelPolicy } : {}),
   });
   const sourceIds = new Set(input.sourceVersionIds);
   const sourceDirectory = (input.sourceDirectory ?? []).filter(source => sourceIds.has(source.versionId));

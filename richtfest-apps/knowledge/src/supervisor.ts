@@ -108,14 +108,6 @@ export function assertIndependentReviewDecision(
   if (review.revisions.length)
     assertRevisionAssignments(review.revisions, assignments, review.decision === "revise");
 }
-export const INDEPENDENT_REVIEW_SOURCE_SLICE_SIZE = 3;
-export function chunkSourceVersionIds(versionIds: string[], size = INDEPENDENT_REVIEW_SOURCE_SLICE_SIZE) {
-  if (!Number.isInteger(size) || size < 1) throw new Error("Source slice size must be a positive integer");
-  const unique = [...new Set(versionIds)];
-  return Array.from({ length: Math.ceil(unique.length / size) }, (_, index) =>
-    unique.slice(index * size, (index + 1) * size),
-  );
-}
 export function aggregateIndependentReviews(
   results: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[],
   limits: AgentExecutionLimits = agentExecutionLimitsSchema.parse({}),
@@ -1188,11 +1180,17 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           assertRevisionAssignments(review.revisions, state.assignments as Assignment[]);
         return review;
       };
+      // Writer and checker must both fit before buying prose. Unknown models
+      // retain the conservative historical packing instead of borrowing capacity.
+      const reportModels = [policy.supervisor, ...(policy.writer ? [policy.writer] : [])];
+      const reportBudgets = reportModels.map(model => agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens));
       const review = validateReview(
         conceptId ? await authorAcousticConcept({
-          d, projectId: run.projectId, id: conceptId, goal, limits, maxOutputTokens: policy.supervisor.maxOutputTokens,
+          d, projectId: run.projectId, id: conceptId, goal, limits,
+          maxOutputTokens: Math.min(...reportModels.map(model => model.maxOutputTokens)),
           maxParallel: policy.maxParallel,
-          inputByteBudget: agentModelInputByteBudget(run.provider, policy.supervisor.modelId, policy.supervisor.maxOutputTokens),
+          inputByteBudget: reportBudgets.every(budget => budget !== undefined) ? Math.min(...reportBudgets as number[]) : undefined,
+          ...(policy.writer ? { modelPolicy: { writer: policy.writer, supervisor: policy.supervisor } } : {}),
           contextOverhead: {
             documentReview,
             profiles: state.profileSnapshot?.length ? state.profileSnapshot : defaultProfiles().map(profile => ({ ...profile, knowledge: [] })),
@@ -1441,28 +1439,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const firstPassReview = state.review;
       const readableExcerpts = resolvedExcerpts.filter(({ versionId }) => readableSourceIds.has(versionId));
       const sliceResults: { sourceVersionIds: string[]; output: z.infer<typeof independentReview> }[] = [];
-      // Reuse old completed slices, but repack their unfinished evidence. Deploying
-      // a better batching strategy must not buy already-reviewed evidence again.
-      const legacySlices = !state.history.some((entry: any) => entry.phase === "independent_review_slice") ? [] : readCompleteSources
-        ? batchSpecialistSources(readableExcerpts.map(({ versionId, resolution }: any) => ({
-          versionId, resolution, text: resolution.content.text, truncated: resolution.content.truncated,
-        }))).map(batch => batch.map(({ versionId, resolution, text, textRange, truncated }) => ({ versionId,
-          resolution: { ...resolution, content: { ...resolution.content, text, textRange, truncated } },
-        })))
-        : chunkSourceVersionIds([...readableSourceIds]).map(ids => readableExcerpts.filter(({ versionId }) => ids.includes(versionId)));
-      const legacyHash = checkpointHash({ goal, assignments, firstPassReview,
-        sourceSlices: legacySlices, modelPolicy: state.modelPolicy, profiles: state.profileSnapshot });
-      const remaining = legacySlices.filter((slice, index) => {
-        const saved = state.history.find((entry: any) => entry.phase === "independent_review_slice"
-          && entry.inputHash === legacyHash && entry.index === index);
-        if (!saved) return true;
-        const ids = [...new Set(slice.map(source => source.versionId))];
-        const output = schemas.independent_review.parse(saved.output);
-        assertIndependentReviewCitations(output, new Set(ids));
-        sliceResults.push({ sourceVersionIds: ids, output });
-        return false;
-      }).flat();
-      const legacyCount = sliceResults.length;
+      // Older verdicts used the misleading assembled-length and slice-scope
+      // contract. Preserve their history, but never reuse them as current checks.
       const contextOverhead = {
         goal, documentReview,
         componentCatalog: await d.componentContext?.(run.goal),
@@ -1471,14 +1449,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       };
       const modelBudget = agentModelInputByteBudget(run.provider, policy.supervisor.modelId, policy.supervisor.maxOutputTokens);
       const plan = prepareIndependentReview({ review: firstPassReview ?? {}, assignments,
-        sources: legacyCount ? remaining as any : readableExcerpts as any,
+        sources: readableExcerpts as any,
         originalGoal: run.goal, revision: state.revision, assignedVersionCount: sourceVersionIds.length,
         readableSourceIds: [...readableSourceIds], unreadableSources, contextOverhead,
         inputByteBudget: modelBudget === undefined ? undefined : modelBudget - AGENT_MESSAGING_CONTEXT_BYTES,
       });
-      const inputHash = checkpointHash({ version: 2, goal, assignments, firstPassReview, resolvedExcerpts,
+      const inputHash = checkpointHash({ version: 3, goal, assignments, firstPassReview, resolvedExcerpts,
         modelPolicy: state.modelPolicy, profiles: state.profileSnapshot, contextOverhead });
-      const needsConsistency = legacyCount > 0 || plan.batches.some(batch => batch.reviewTask === "evidence");
+      const needsConsistency = plan.batches.some(batch => batch.reviewTask === "evidence");
       const batchCount = plan.batches.length + Number(needsConsistency);
       for (let index = 0; index < batchCount; index++) {
         const context = index < plan.batches.length ? plan.batches[index]!

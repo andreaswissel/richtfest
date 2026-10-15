@@ -1,8 +1,53 @@
 import { describe, expect, test } from "bun:test";
+import express from "express";
 import { agentPresetConfigSchema, domainSpecialistRoles, specialistRoleSchema } from "@richtfest/shared";
-import { isConfiguredPreset, isGatewayModelId, vendorPreset } from "./agent-presets";
+import { createAgentPresetsRouter, isConfiguredPreset, isGatewayModelId, vendorPreset } from "./agent-presets";
 
 describe("agent provider presets", () => {
+  test("vendor presets never enable a writer override and gateway validation includes writers", () => {
+    for (const effort of ["low", "medium", "high", "ultra"] as const) {
+      for (const provider of ["openai", "anthropic", "vercel"] as const) {
+        expect(vendorPreset(provider, effort)).not.toHaveProperty("writer");
+      }
+    }
+    const base = vendorPreset("openai", "medium");
+    const model = { ...base.supervisor, modelId: "openai/gpt-4.1-mini" };
+    const gateway = { ...base, supervisor: model, specialists: { source_reviewer: model, requirements_reviewer: model } };
+    expect(isConfiguredPreset("vercel", { ...gateway, writer: model })).toBe(true);
+    expect(isConfiguredPreset("vercel", { ...gateway, writer: base.supervisor })).toBe(false);
+  });
+
+  test("settings API rejects invalid writer provider settings before any database write", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).actor = { permissions: new Set(["access:manage"]) };
+      next();
+    });
+    // No database or provider calls are needed for rejected settings.
+    app.use(createAgentPresetsRouter({} as any));
+    app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? 500).json({ error: error.code }));
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const port = (server.address() as { port: number }).port;
+    const base = vendorPreset("openai", "medium");
+    const model = { ...base.supervisor, modelId: "openai/gpt-4.1-mini" };
+    try {
+      for (const [provider, config, code] of [
+        ["vercel", { ...base, supervisor: model, specialists: { source_reviewer: model, requirements_reviewer: model }, writer: base.supervisor }, "invalid_gateway_model"],
+        ["anthropic", { ...base, writer: { ...base.supervisor, reasoningEffort: "high" } }, "unsupported_reasoning_effort"],
+      ] as const) {
+        const response = await fetch(`http://127.0.0.1:${port}/agent/presets/${provider}/medium`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config),
+        });
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe(code);
+      }
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
   test("domain models are optional, strictly validated, and do not replace required generic roles", () => {
     const legacy = vendorPreset("openai", "medium");
     expect(agentPresetConfigSchema.parse(legacy).specialists).toEqual(legacy.specialists);

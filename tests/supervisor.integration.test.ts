@@ -625,16 +625,23 @@ integration(`independent review packs requests without losing evidence or saved 
     await stepSupervisor(d, run!.id);
     const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
     expect(state!.phase).toBe("done");
-    expect(contexts.map(context => context.reviewTask)).toEqual(scenario === "complete" ? ["complete"]
-      : scenario === "legacy" ? ["complete", "consistency"] : ["evidence", "evidence", "consistency"]);
+    expect(contexts.map(context => context.reviewTask)).toEqual(scenario === "oversized"
+      ? ["evidence", "evidence", "consistency"] : ["complete"]);
     const supplied = contexts.flatMap(context => context.sourceExcerpts);
-    for (const [index, source] of evidence.entries()) {
+    for (const source of evidence) {
       const slices = supplied.filter(item => item.versionId === source.versionId);
-      expect(slices.map(item => item.resolution.content.text).join("")).toBe(scenario === "legacy" && index < 3 ? "" : source.text);
+      expect(slices.map(item => item.resolution.content.text).join("")).toBe(source.text);
     }
-    if (scenario !== "complete") {
+    if (scenario === "oversized") {
       expect((state!.review as any).unresolved).toBe(true);
       expect((state!.review as any).findings).toContainEqual(finding);
+    }
+    if (scenario === "legacy") {
+      // Old scope/length-contract verdicts remain diagnostic history, not current approval.
+      expect(state!.history.find((entry: any) => entry.phase === "independent_review_slice")).toMatchObject({
+        output: { findings: [finding] },
+      });
+      expect((state!.review as any).findings).toEqual([]);
     }
     const revisions = await db.select().from(artifactRevisions).where(eq(artifactRevisions.tenantId, tenantId));
     expect(revisions).toHaveLength(1);
