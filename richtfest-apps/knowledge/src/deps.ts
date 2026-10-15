@@ -74,7 +74,12 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
       }
     }
     const sectionKey = issue.code === "invalid_literal" && issue.path[0] === "sections" && issue.path[2] === "key";
+    const acousticReason = (issue.params as { acoustic?: unknown } | undefined)?.acoustic ?? issue.acoustic;
+    const safeAcousticReason = acoustic && issue.code === "custom" && typeof acousticReason === "string"
+      && ["invalid_fact_value", "room_fact_id", "source_required", "source_not_in_packet", "quote_not_in_source", "duplicate_room", "room_not_declared"].includes(acousticReason)
+      ? acousticReason : undefined;
     return [{ code: issue.code as string, path: issue.path as (string | number)[], ...limits,
+      ...(safeAcousticReason ? { acoustic: safeAcousticReason } : {}),
       ...(editorial ? { editorial } : {}),
       ...(sectionKey && acousticSectionKeySchema.safeParse(issue.expected).success ? { expected: issue.expected as string } : {}),
       ...(sectionKey && acousticSectionKeySchema.safeParse(issue.received).success ? { received: issue.received as string } : {}),

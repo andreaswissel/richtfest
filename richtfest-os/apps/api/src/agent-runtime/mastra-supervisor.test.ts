@@ -369,6 +369,9 @@ test("exterior source extraction returns structured inputs without exposing arit
   partial.facts.find(f => f.field === "envelopeComplete")!.value = false;
   partial.facts.find(f => f.field === "levelDb")!.value = 0;
   const { method, ...room } = exteriorNoiseFixture();
+  const provenance = partial.inventory[0]!.provenance;
+  for (const record of [room.room, room.applicability, room.flanking, ...room.facades, ...room.facades.map(f => f.noise), ...room.elements])
+    record.provenance = provenance;
   const packets = [
     { inventory: [], rooms: [], facts: [], blockers: [{ roomId: null, reason: "No room schedule in this packet" }] },
     partial,
@@ -390,7 +393,8 @@ test("exterior source extraction returns structured inputs without exposing arit
       return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
     } });
     try {
-      const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true, extractionVersion: 2 },
+      const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true, extractionVersion: 2,
+        sources: [{ versionId: provenance.versionId, text: provenance.excerpt }] },
         modelConfig: { modelId: "gpt-6-luna", maxOutputTokens: 2048, maxSteps: 4 },
         calculateAcoustics: async () => { throw new Error("Arithmetic belongs to the application stage"); },
       }, "test-key", { model: new ModelRouterLanguageModel({ id: "openai/gpt-6-luna", api: "responses", url: `${server.url}v1`, apiKey: "test-key" }) });
@@ -402,6 +406,9 @@ test("exterior source extraction returns structured inputs without exposing arit
       expect(schema.properties.facts.type).toBe("array");
       expect(schema.properties.rooms.items.properties.fieldEvidence.type).toBe("array");
       expect(schema.properties.facts.items.properties.value.anyOf).toEqual([{ type: "string" }, { type: "number" }, { type: "boolean" }]);
+      expect(schema.properties.facts.items.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
+      expect(schema.properties.inventory.items.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
+      expect(schema.properties.rooms.items.properties.facades.items.properties.noise.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
     } finally { server.stop(true); }
   }
 });
@@ -1027,8 +1034,8 @@ for (const failure of ["summary", "citation", "acoustic_field", "acoustic_proven
   const provenance = packet.inventory[0]!.provenance;
   const sourceVersionIds = acoustic ? [provenance.versionId] : [];
   const expectedAcousticIssue = failure === "acoustic_field"
-    ? { code: "custom", path: ["exteriorNoiseExtraction", "facts", 121, "value"] }
-    : { code: "custom", path: ["exteriorNoiseExtraction"] };
+    ? { code: "custom", path: ["exteriorNoiseExtraction", "facts", 121, "value"], acoustic: "invalid_fact_value" }
+    : { code: "custom", path: ["exteriorNoiseExtraction", "inventory", 0, "provenance", "excerpt"], acoustic: "quote_not_in_source" };
   const policy = { provider: "openai" as const, effort: "medium" as const, source: "vendor" as const, version: 1,
     supervisor: modelConfig, specialists: { source_reviewer: modelConfig, requirements_reviewer: modelConfig }, maxParallel: 2, maxTasks: 2, maxRevisions: 1 };
   const d = {
@@ -1057,7 +1064,7 @@ for (const failure of ["summary", "citation", "acoustic_field", "acoustic_proven
             if (failure === "acoustic_field") {
               extraction.facts = Array.from({ length: 122 }, () => structuredClone(packet.facts[1]!));
               extraction.facts[121]!.value = -1;
-            } else extraction.inventory[0]!.provenance.excerpt = "REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK";
+            } else extraction.inventory[0]!.provenance = { ...provenance, excerpt: "REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK" };
           }
           if (acoustic && corrected) {
             expect((input.context as any).outputValidationFeedback.issues).toEqual([expectedAcousticIssue]);

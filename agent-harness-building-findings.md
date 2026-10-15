@@ -770,3 +770,25 @@ first; a writer-model comparison is no longer the next full-workflow experiment.
    double counting. Never label reservations as charges or unknown outcomes zero.
 5. **End-to-end release gate:** independently check the final artifact, source-page
    attachment completeness and prepared PDF—not merely a model's accepted verdict.
+
+### Extraction contracts and actionable repair (15 October)
+
+The later calculation run on `7946ace` retained safe diagnostics: malformed
+source-version UUIDs and a room-level fact ID unequal to its room ID. Subsequent
+root-level custom errors did not identify their condition. Offline reproduction
+showed that unselected sources, non-verbatim quotations, duplicate rooms and
+undeclared rooms all previously collapsed into identical repair feedback. This
+does not reconstruct the rejected production outputs or establish older failures'
+causes. That run exhausted three shared retries at an estimated $0.290159, not its
+$5 spending limit.
+
+Constrain identities at generation time: the extraction schema enumerates the
+packet's exact source versions throughout inventory, facts and complete-room
+provenance. No readable sources means no extracted records, only blockers. Keep
+the independent post-generation source/quotation checks. Emit precise field paths
+and an allowlisted reason for each failure; preserve these through persistence
+and repeated sanitization without including rejected values or source prose.
+Distinguish room identity repair from duplicate records and evidence repair.
+Never invent IDs/quotations, omit evidenced rooms or weaken engineering checks to
+make validation pass. Synthetic and mocked-retry tests verify the contract and
+feedback transport, not extraction quality or real-model recovery.

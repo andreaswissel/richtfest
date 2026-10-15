@@ -7,19 +7,43 @@ import { stepHash } from "./run-steps";
 /** Check source scope before an extraction is accepted into durable history. */
 export function validateExteriorNoiseExtraction(raw: unknown, sources: { versionId: string; text: string }[]) {
   const extraction = exteriorNoiseExtractionSchema.parse(raw);
-  const evidence = [
-    ...extraction.inventory.map(r => r.provenance),
-    ...extraction.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" })),
-    ...(extraction.facts ?? []).map(f => f.provenance),
-  ];
-  for (const p of evidence) {
-    if (p.kind !== "source" || !sources.some(s => s.versionId === p.versionId && s.text.includes(p.excerpt)))
-      throw new z.ZodError([{ code: "custom", path: ["exteriorNoiseExtraction"], message: "Extracted calculation inputs require exact quotations from this source packet; leave unsupported rooms blocked." }]);
-  }
+  const issues: z.ZodIssue[] = [];
+  const issue = (path: (string | number)[], reason: string, message: string) => issues.push({
+    code: "custom", path: ["exteriorNoiseExtraction", ...path], message, params: { acoustic: reason },
+  });
+  const evidence = (p: ReturnType<typeof acousticInputProvenance>[number], path: (string | number)[]) => {
+    if (p.kind !== "source") issue([...path, "kind"], "source_required", "Extracted calculation inputs require exact quotations, not assumptions.");
+    else if (!sources.some(s => s.versionId === p.versionId))
+      issue([...path, "versionId"], "source_not_in_packet", "Use an exact source version from this packet with exact quotations.");
+    else if (!sources.some(s => s.versionId === p.versionId && s.text.includes(p.excerpt)))
+      issue([...path, "excerpt"], "quote_not_in_source", "Extracted calculation inputs require exact quotations from the associated source packet.");
+  };
+  extraction.inventory.forEach((r, i) => evidence(r.provenance, ["inventory", i, "provenance"]));
+  extraction.rooms.forEach((room, i) => {
+    for (const key of ["room", "applicability", "flanking"] as const) evidence(room[key].provenance, ["rooms", i, key, "provenance"]);
+    room.facades.forEach((f, j) => {
+      evidence(f.provenance, ["rooms", i, "facades", j, "provenance"]);
+      evidence(f.noise.provenance, ["rooms", i, "facades", j, "noise", "provenance"]);
+    });
+    room.elements.forEach((e, j) => evidence(e.provenance, ["rooms", i, "elements", j, "provenance"]));
+    room.fieldEvidence?.forEach((e, j) => evidence(e.provenance, ["rooms", i, "fieldEvidence", j, "provenance"]));
+  });
+  extraction.facts?.forEach((f, i) => evidence(f.provenance, ["facts", i, "provenance"]));
   const ids = new Set(extraction.inventory.map(r => r.roomId));
-  if (ids.size !== extraction.inventory.length || new Set(extraction.rooms.map(r => r.room.id)).size !== extraction.rooms.length
-    || extraction.rooms.some(r => !ids.has(r.room.id)) || extraction.facts?.some(f => !ids.has(f.roomId)))
-    throw new z.ZodError([{ code: "custom", path: ["exteriorNoiseExtraction"], message: "Use unique room IDs; every supplied room must occur in the declared inventory." }]);
+  const seenInventory = new Set<string>(), seenRooms = new Set<string>();
+  extraction.inventory.forEach((r, i) => {
+    if (seenInventory.has(r.roomId)) issue(["inventory", i, "roomId"], "duplicate_room", "Use unique room IDs in the declared inventory.");
+    seenInventory.add(r.roomId);
+  });
+  extraction.rooms.forEach((r, i) => {
+    if (seenRooms.has(r.room.id)) issue(["rooms", i, "room", "id"], "duplicate_room", "Supply each room only once.");
+    if (!ids.has(r.room.id)) issue(["rooms", i, "room", "id"], "room_not_declared", "Every supplied room must occur in the declared inventory.");
+    seenRooms.add(r.room.id);
+  });
+  extraction.facts?.forEach((f, i) => {
+    if (!ids.has(f.roomId)) issue(["facts", i, "roomId"], "room_not_declared", "Every fact must refer to a room in the declared inventory.");
+  });
+  if (issues.length) throw new z.ZodError(issues);
   return extraction;
 }
 

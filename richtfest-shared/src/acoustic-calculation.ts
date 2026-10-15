@@ -109,9 +109,9 @@ export const exteriorNoiseFactSchema = z.object({
 }).strict().superRefine((fact, ctx) => {
   const fields = exteriorNoiseFactFields[fact.target]!;
   if (!Object.hasOwn(fields, fact.field) || !fields[fact.field]!.safeParse(fact.value).success)
-    ctx.addIssue({ code: "custom", path: ["value"], message: "Invalid acoustic field or value" });
+    ctx.addIssue({ code: "custom", path: ["value"], message: "Invalid acoustic field or value", params: { acoustic: "invalid_fact_value" } });
   if (["room", "coverage", "applicability", "flanking"].includes(fact.target) && fact.id !== fact.roomId)
-    ctx.addIssue({ code: "custom", path: ["id"], message: "Room-level facts must use the room ID" });
+    ctx.addIssue({ code: "custom", path: ["id"], message: "Room-level facts must use the room ID", params: { acoustic: "room_fact_id" } });
 });
 export type ExteriorNoiseFact = z.infer<typeof exteriorNoiseFactSchema>;
 export const acousticFactKey = (fact: Pick<ExteriorNoiseFact, "roomId" | "target" | "id" | "field">) =>
@@ -123,6 +123,36 @@ export const exteriorNoiseExtractionSchema = z.object({
   facts: z.array(exteriorNoiseFactSchema).max(5000).optional(),
   blockers: z.array(z.object({ roomId: label.nullable(), reason: z.string().min(1).max(1000) }).strict()).max(100),
 }).strict();
+
+/** Provider contract: copy source identities from this packet, never generate UUIDs. */
+export function scopedExteriorNoiseExtractionSchema(versionIds: string[]) {
+  const ids = [...new Set(versionIds.map(id => z.string().uuid().parse(id)))];
+  const source = provenance.options[0].extend({
+    versionId: ids.length ? z.enum(ids as [string, ...string[]]) : z.string().uuid(),
+  });
+  const facade = exteriorNoiseFacadeSchema.shape.facades.element;
+  const elements = exteriorNoiseFacadeSchema.shape.elements.element.options;
+  const room = exteriorNoiseFacadeSchema.extend({
+    room: exteriorNoiseFacadeSchema.shape.room.extend({ provenance: source }),
+    applicability: exteriorNoiseFacadeSchema.shape.applicability.extend({ provenance: source }),
+    flanking: exteriorNoiseFacadeSchema.shape.flanking.extend({ provenance: source }),
+    facades: z.array(facade.extend({ provenance: source, noise: facade.shape.noise.extend({ provenance: source }) })).min(1).max(20),
+    elements: z.array(z.discriminatedUnion("kind", [
+      elements[0].extend({ provenance: source }), elements[1].extend({ provenance: source }),
+    ])).min(1).max(100),
+    fieldEvidence: z.array(z.object({ field: label, provenance: source }).strict()).max(3000).optional(),
+  });
+  // Keep the canonical fact refinements; narrowing provenance must not erase them.
+  const fact = exteriorNoiseFactSchema.innerType().extend({ provenance: source }).superRefine((value, ctx) => {
+    const result = exteriorNoiseFactSchema.safeParse(value);
+    if (!result.success) for (const issue of result.error.issues) ctx.addIssue(issue);
+  });
+  return exteriorNoiseExtractionSchema.extend({
+    inventory: z.array(z.object({ roomId: label, provenance: source }).strict()).max(ids.length ? 100 : 0),
+    rooms: z.array(room).max(ids.length ? 100 : 0),
+    facts: z.array(fact).max(ids.length ? 5000 : 0).optional(),
+  });
+}
 
 export const acousticInputReviewSchema = z.object({
   version: z.literal(1),

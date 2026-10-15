@@ -2,6 +2,7 @@
 
 ## 2026-10-15
 
+- Acoustic extraction now selects only source-version IDs supplied in its packet. Correction attempts distinguish invalid room references, duplicate rooms and non-verbatim quotations without exposing rejected source text or relaxing evidence checks.
 - Agent cost displays now include known settled charges from interrupted calls without double counting later totals. Partial costs stay visibly incomplete; reservations are not charges.
 - Calculation-sheet PDFs now include an ARC-inspired room overview and calculation details, plus a two-page numerical Prüfbericht highlighting blockers, shortfalls and low reserves. Sources, scenario notes and every declared room remain traceable; engineering rules and approval requirements are unchanged.
 

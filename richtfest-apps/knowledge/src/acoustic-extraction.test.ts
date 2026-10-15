@@ -3,6 +3,65 @@ import { assembleExteriorNoiseInputs, reconcileExteriorNoiseInputs, validateExte
 import { exteriorNoiseFixture } from "../../../tests/fixtures/exterior-noise";
 import { exteriorNoisePackets } from "../../../tests/fixtures/exterior-noise-packets";
 import { calculateAcoustics } from "../../acoustics/src/calculations";
+import { acousticInputProvenance, scopedExteriorNoiseExtractionSchema } from "@richtfest/shared";
+import { sanitizeProviderDiagnostics } from "./deps";
+import { z } from "zod";
+
+test("extraction repair distinguishes source, quotation and inventory failures without exposing rejected values", () => {
+  const base = exteriorNoisePackets()[0]!;
+  const p = base.inventory[0]!.provenance;
+  const sources = [{ versionId: p.versionId, text: p.excerpt }];
+  for (const [reason, path, mutate] of [
+    ["source_not_in_packet", ["inventory", 0, "provenance", "versionId"], (v: typeof base) => { v.inventory[0]!.provenance = { ...p, versionId: crypto.randomUUID() }; }],
+    ["quote_not_in_source", ["inventory", 0, "provenance", "excerpt"], (v: typeof base) => { v.inventory[0]!.provenance = { ...p, excerpt: "PRIVATE_REJECTED_QUOTE" }; }],
+    ["duplicate_room", ["inventory", 1, "roomId"], (v: typeof base) => { v.inventory.push(structuredClone(v.inventory[0]!)); }],
+    ["room_not_declared", ["facts", 0, "roomId"], (v: typeof base) => { v.facts[0]!.roomId = "UNKNOWN"; v.facts[0]!.id = "UNKNOWN"; }],
+  ] as const) {
+    const packet = structuredClone(base);
+    mutate(packet);
+    let error: unknown;
+    try { validateExteriorNoiseExtraction(packet, sources); } catch (e) { error = e; }
+    expect(error).toBeInstanceOf(z.ZodError);
+    const safe = sanitizeProviderDiagnostics({ issues: (error as z.ZodError).issues });
+    expect(safe.issues).toEqual([{ code: "custom", path: ["exteriorNoiseExtraction", ...path], acoustic: reason }]);
+    expect(sanitizeProviderDiagnostics(safe)).toEqual(safe);
+    expect(JSON.stringify(safe)).not.toContain("PRIVATE_REJECTED_QUOTE");
+  }
+  expect(validateExteriorNoiseExtraction(base, sources)).toEqual(base);
+  expect(sanitizeProviderDiagnostics({ issues: [{ code: "custom", path: ["exteriorNoiseExtraction"], params: { acoustic: "PRIVATE_REJECTED_QUOTE" } }] }))
+    .toEqual({ issues: [{ code: "custom", path: ["exteriorNoiseExtraction"] }] });
+});
+
+test("packet source contract constrains every provenance without losing fact validation", () => {
+  const packet = exteriorNoisePackets()[0]!;
+  const p = packet.inventory[0]!.provenance;
+  const schema = scopedExteriorNoiseExtractionSchema([p.versionId]);
+  expect(schema.safeParse(packet).success).toBe(true);
+  expect(scopedExteriorNoiseExtractionSchema([]).safeParse(packet).success).toBe(false);
+  expect(scopedExteriorNoiseExtractionSchema([]).safeParse({ inventory: [], rooms: [], facts: [], blockers: [] }).success).toBe(true);
+  for (const field of ["id", "value"] as const) {
+    const bad = structuredClone(packet);
+    if (field === "id") bad.facts[1]!.id = "NOT_THE_ROOM";
+    else bad.facts[1]!.value = -1;
+    expect(schema.safeParse(bad).success).toBe(false);
+  }
+  const { method, ...room } = exteriorNoiseFixture();
+  room.fieldEvidence = [{ field: "room.floorAreaM2", provenance: { ...p } }];
+  for (const record of [room.room, room.applicability, room.flanking, ...room.facades, ...room.facades.map(f => f.noise), ...room.elements])
+    record.provenance = { ...p };
+  const full = { inventory: [{ roomId: room.room.id, provenance: p }], rooms: [room], facts: [], blockers: [] };
+  expect(schema.safeParse(full).success).toBe(true);
+  for (const versionId of ["Q1", "20000000-0000-4000-8000-000000000002"]) {
+    const bad = structuredClone(full);
+    // Each record is checked separately, including nested noise and element provenance.
+    for (const value of acousticInputProvenance({ ...bad.rooms[0]!, method })) {
+      const previous = { ...value };
+      Object.assign(value, { versionId });
+      expect(schema.safeParse(bad).success).toBe(false);
+      Object.assign(value, previous);
+    }
+  }
+});
 
 test("extracted room inputs require scoped quotations, not assumptions or reference answers", () => {
   const { method, ...room } = exteriorNoiseFixture();
