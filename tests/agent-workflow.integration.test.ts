@@ -34,7 +34,6 @@ function progressPlan(context: any) {
       roomIds: [r.roomId], question: `Please clarify the missing or conflicting inputs for ${r.roomId}.`,
     })),
     independentWork: "Keep extracted inputs and independently calculated rooms for later answers.",
-    publishPartialSheet: context.calculatedRoomIds.length > 0,
   } };
 }
 
@@ -365,11 +364,11 @@ integration(`historical v1 calculation sheet bypasses report writing and retains
   } finally { await f.close(); }
 });
 
-integration("v2 extraction bounds dense evidence and carries identities across intervening packets", async () => {
+integration("v2 extraction preserves sparse plan layout within two budgets and carries identities across packets", async () => {
   const f = await fixture();
   const packets = exteriorNoisePackets(f.sourceVersionId);
   const quote = packets[0]!.inventory[0]!.provenance.excerpt;
-  const texts = [1, 2, 3].map(page => `[Page ${page}]\n${quote}\n${"Evidence padding without additional room inputs.\n".repeat(180)}`);
+  const texts = [1, 2, 3].map(page => `[Page ${page}]\n${quote}\n${(" ".repeat(256) + "Evidence padding without additional room inputs.\n").repeat(180)}`);
   const received: string[] = [];
   const extractionModel = { modelId: "gpt-6-luna", maxOutputTokens: 32000, maxSteps: 4 };
   f.d.resolveSupervisorPreset = async () => ({ ...policy,
@@ -384,7 +383,10 @@ integration("v2 extraction bounds dense evidence and carries identities across i
     if (context.documentTask === "acoustic_progress") return progressPlan(context);
     if (phase !== "specialist") throw new Error("Incomplete inputs must not trigger report authoring");
     const primary = context.sources.filter((source: any) => !source.continuation);
-    expect(Buffer.byteLength(JSON.stringify(primary))).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(JSON.stringify(primary))).toBeGreaterThan(16384);
+    expect(Buffer.byteLength(JSON.stringify(primary))).toBeLessThanOrEqual(128 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(primary.map((source: any) => ({ ...source, text: source.text.replace(/[\t ]+/g, " ") }))))).toBeLessThanOrEqual(16384);
+    expect(Buffer.byteLength(JSON.stringify(context.sources))).toBeLessThanOrEqual(256 * 1024);
     received.push(...primary.map((source: any) => source.text));
     const page = Number(primary[0].text.match(/\[Page (\d+)\]/)[1]);
     expect(primary[0].packetPageNumbers).toEqual([page]);
@@ -423,15 +425,16 @@ integration("v2 extraction bounds dense evidence and carries identities across i
     expect(partial.content).toContain("Teilstand");
     expect((await f.rows(messages)).some((m: any) => m.body.includes("clarify") && m.body.includes("B02"))).toBe(true);
     const path = `/conversations/${chat.id}/acoustic-inputs/${artifact.id}`;
-    const request = { expectedRevisionId: review.body.data.revisionId, action: "calculate",
-      reason: "Synthetic fixture; no engineering approval", confirmInventory: true, changes: [] };
+    const request = { expectedRevisionId: review.body.data.revisionId, action: "save",
+      reason: "Synthetic fixture; no engineering approval", confirmInventory: false, changes: [] };
     const stillPartial = await f.post(path, request);
     expect(stillPartial.status).toBe(200);
     expect(stillPartial.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(false);
     expect(stillPartial.body.data.calculation.revision.payload.acousticDataset.blockers.length).toBeGreaterThan(0);
+    expect(stillPartial.body.data.calculation.revision.payload.acousticDataset.blockers).toContain("Rauminventar noch nicht bestätigt; Vollständigkeit fachlich prüfen.");
     const field = stillPartial.body.data.fields.find((f: any) => f.roomId === "B02" && f.field === "floorAreaM2");
     const answered = await f.post(path, { ...request, expectedRevisionId: stillPartial.body.data.revisionId,
-      changes: [{ key: field.key, value: 21 }] });
+      confirmInventory: true, changes: [{ key: field.key, value: 21 }] });
     expect(answered.status).toBe(200);
     const updated = answered.body.data.calculation.revision.payload.acousticDataset;
     expect(updated.receipt.batch.complete).toBe(true);
@@ -501,6 +504,8 @@ integration("v2 chat resolves source conflicts with revision fences and creates 
     f.d.validateSourceVersion = validate;
     const response = await f.post(path, body);
     expect(response.status).toBe(200);
+    expect(response.body.data.calculation.revision.payload.acousticDataset.receipt.batch.complete).toBe(true);
+    expect(response.body.data.calculation.artifact.status).toBe("draft");
     expect(response.body.data.blockers).toEqual([]);
     expect(response.body.data.resolutions.map((r: any) => r.fact.provenance.kind)).toEqual(["source", "assumption"]);
     expect((await f.get(path)).body.data.revisionId).toBe(response.body.data.revisionId);

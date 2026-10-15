@@ -30,8 +30,22 @@ export function exteriorNoiseIdentityDirectory(packets: unknown[]) {
 }
 
 /** Check source scope before an extraction is accepted into durable history. */
-export function validateExteriorNoiseExtraction(raw: unknown, sources: { versionId: string; text: string }[]) {
+export function validateExteriorNoiseExtraction(raw: unknown, sources: { versionId: string; text: string;
+  textRange?: { startByte: number; endByte: number; totalBytes: number } }[]) {
   const extraction = exteriorNoiseExtractionSchema.parse(raw);
+  const evidenceSources: typeof sources = [];
+  for (const source of sources) {
+    const previous = evidenceSources.at(-1);
+    if (previous?.versionId === source.versionId && previous.textRange && source.textRange
+      && previous.textRange.endByte === source.textRange.startByte
+      && previous.textRange.totalBytes === source.textRange.totalBytes
+      && Buffer.byteLength(previous.text) === previous.textRange.endByte - previous.textRange.startByte
+      && Buffer.byteLength(source.text) === source.textRange.endByte - source.textRange.startByte) {
+      // Exact byte-adjacent slices are one supplied passage, not an evidence gap.
+      previous.text += source.text;
+      previous.textRange = { ...previous.textRange, endByte: source.textRange.endByte };
+    } else evidenceSources.push({ ...source });
+  }
   const issues: z.ZodIssue[] = [];
   const issue = (path: (string | number)[], reason: string, message: string) => issues.push({
     code: "custom", path: ["exteriorNoiseExtraction", ...path], message, params: { acoustic: reason },
@@ -40,8 +54,16 @@ export function validateExteriorNoiseExtraction(raw: unknown, sources: { version
     if (p.kind !== "source") issue([...path, "kind"], "source_required", "Extracted calculation inputs require exact quotations, not assumptions.");
     else if (!sources.some(s => s.versionId === p.versionId))
       issue([...path, "versionId"], "source_not_in_packet", "Use an exact source version from this packet with exact quotations.");
-    else if (!sources.some(s => s.versionId === p.versionId && s.text.includes(p.excerpt)))
-      issue([...path, "excerpt"], "quote_not_in_source", "Extracted calculation inputs require exact quotations from the associated source packet.");
+    else if (!evidenceSources.some(s => s.versionId === p.versionId && s.text.includes(p.excerpt))) {
+      // Models may reflow whitespace in OCR tables. Recover only an unambiguous
+      // literal source span; never change words, punctuation, numbers or units.
+      const pattern = p.excerpt.split(/\s+/u).map(word => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+      const literals = new Set(evidenceSources.filter(s => s.versionId === p.versionId)
+        .flatMap(s => [...s.text.matchAll(new RegExp(pattern, "gu"))].map(match => match[0])));
+      const literal = literals.size === 1 ? [...literals][0] : undefined;
+      if (literal && literal.length <= 1000) p.excerpt = literal;
+      else issue([...path, "excerpt"], "quote_not_in_source", "Extracted calculation inputs require exact quotations from the associated source packet.");
+    }
   };
   extraction.inventory.forEach((r, i) => evidence(r.provenance, ["inventory", i, "provenance"]));
   extraction.rooms.forEach((room, i) => {

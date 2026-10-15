@@ -2,8 +2,8 @@
 
 ## 2026-10-15
 
-- Acoustic extraction now uses smaller, page-aware packets with adjacent table context and stable source-backed room identities. Explicit numerical inputs remain available even while applicability or installation details need clarification.
-- Blocked acoustic workflows now assess independent progress once, ask focused questions and can publish calculated rooms as an unapproved partial sheet. Later answers advance saved inputs without another extraction run; unresolved rooms and engineering-release requirements remain visible.
+- Acoustic extraction keeps sparse plan drawings together with bounded, page-aware packets and stable source-backed room identities. Typed input choices and exact quotation recovery reduce avoidable retries without losing source text or accepting unsupported evidence; explicit numerical inputs remain available while other decisions await clarification.
+- Blocked acoustic workflows assess independent progress once, ask focused questions and automatically save available room calculations as an unapproved partial sheet. Saving later answers advances the calculation without another extraction run or an extra Calculate action; unresolved rooms and engineering-release requirements remain visible.
 - Agent replies now validate the recipient and original message before accepting a model response. Misaddressed replies get corrective feedback instead of stopping a calculation with a misleading project-access error; delivery permissions remain unchanged.
 - Acoustic extraction now selects only source-version IDs supplied in its packet. Correction attempts distinguish invalid room references, duplicate rooms and non-verbatim quotations without exposing rejected source text or relaxing evidence checks.
 - Combined calculation inputs now retain up to 1,000 room identifiers across source packets, while each extraction packet stays limited to 100. Missing inputs and unmatched room identities remain explicit rather than crashing aggregation or being silently merged.

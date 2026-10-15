@@ -366,6 +366,7 @@ test("Mastra specialists execute all acoustic tools before returning structured 
 
 test("exterior source extraction returns structured inputs without exposing arithmetic tools", async () => {
   const partial = exteriorNoisePackets()[0]!;
+  const earlierVersionId = crypto.randomUUID();
   partial.facts.find(f => f.field === "envelopeComplete")!.value = false;
   partial.facts.find(f => f.field === "levelDb")!.value = 0;
   const { method, ...room } = exteriorNoiseFixture();
@@ -394,19 +395,27 @@ test("exterior source extraction returns structured inputs without exposing arit
     } });
     try {
       const result = await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "sound_insulation", extractExteriorNoise: true, extractionVersion: 2,
-        sources: [{ versionId: provenance.versionId, text: provenance.excerpt }] },
+        sources: [{ versionId: provenance.versionId, text: provenance.excerpt }], previousFindings: { citations: [earlierVersionId] } },
         modelConfig: { modelId: "gpt-6-luna", maxOutputTokens: 2048, maxSteps: 4 },
         calculateAcoustics: async () => { throw new Error("Arithmetic belongs to the application stage"); },
       }, "test-key", { model: new ModelRouterLanguageModel({ id: "openai/gpt-6-luna", api: "responses", url: `${server.url}v1`, apiKey: "test-key" }) });
       expect(result).toEqual(output);
       expect(wire.tools ?? []).toHaveLength(0);
       expect(wire.text.format.strict).toBe(true);
+      expect(wire.text.format.schema.properties.citations.items.enum).toEqual([provenance.versionId, earlierVersionId]);
       const schema = wire.text.format.schema.properties.exteriorNoiseExtraction;
       expect(schema.required).toEqual(["inventory", "rooms", "facts", "blockers"]);
       expect(schema.properties.facts.type).toBe("array");
       expect(schema.properties.rooms.items.properties.fieldEvidence.type).toBe("array");
-      expect(schema.properties.facts.items.properties.value.anyOf).toEqual([{ type: "string" }, { type: "number" }, { type: "boolean" }]);
-      expect(schema.properties.facts.items.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
+      const variants = schema.properties.facts.items.anyOf;
+      const field = (target: string, name: string) => variants.find((v: any) =>
+        v.properties.target.const === target && v.properties.field.const === name).properties.value;
+      expect(field("room", "use").enum).toEqual(["hospital_bedroom", "residential_accommodation_classroom", "office"]);
+      expect(field("element", "areaM2").type).toBe("number");
+      expect(field("coverage", "elementsComplete").type).toBe("boolean");
+      expect(field("noise", "metric").const).toBe("La");
+      for (const variant of variants)
+        expect(variant.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
       expect(schema.properties.inventory.items.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
       expect(schema.properties.rooms.items.properties.facades.items.properties.noise.properties.provenance.properties.versionId.enum).toEqual([provenance.versionId]);
     } finally { server.stop(true); }
@@ -454,7 +463,7 @@ test("authoring, editorial and source-review context budgets reject oversized pr
 
 test("acoustic dependency planning uses a bounded tool-free contract instead of report writing", async () => {
   const output = { summary: "B02 awaits evidence; A01 is calculated.", questions: [{ question: "Confirm B02 geometry?", roomIds: ["B02"] }],
-    independentWork: "Publish the saved A01 result as an unapproved partial sheet.", publishPartialSheet: true };
+    independentWork: "A01 is already saved as an unapproved partial sheet." };
   const request = { ...base, phase: "review" as const, goal: "Schallschutznachweis", modelPolicy: responsePolicy,
     modelConfig: { modelId: "test-model", maxOutputTokens: 32000, maxSteps: 4 },
     context: { documentTask: "acoustic_progress", calculatedRoomIds: ["A01"] } };
@@ -463,7 +472,7 @@ test("acoustic dependency planning uses a bounded tool-free contract instead of 
       spyStream: options => { expect(options.tools ?? []).toHaveLength(0); } }),
   })).toEqual(output);
   await expect(callMastraSupervisor(request, "test-key", {
-    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...output, publishPartialSheet: "yes" } }),
+    model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: { ...output, questions: "none" } }),
   })).rejects.toMatchObject({ code: "invalid_provider_output", failureCategory: "validation" });
 });
 
@@ -1082,7 +1091,7 @@ for (const failure of ["summary", "citation", "acoustic_field", "acoustic_proven
             } else extraction.inventory[0]!.provenance = { ...provenance, excerpt: "REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK" };
           }
           if (acoustic && corrected) {
-            expect((input.context as any).outputValidationFeedback.issues).toEqual([expectedAcousticIssue]);
+            expect((input.context as any).outputValidationFeedback.issues).toContainEqual(expectedAcousticIssue);
             expect(instructions).not.toContain("REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK");
           }
           const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations,

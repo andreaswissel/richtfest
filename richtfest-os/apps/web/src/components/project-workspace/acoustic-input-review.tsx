@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import type { ExteriorNoiseFact, AcousticDataset } from "@richtfest/shared";
+import type { ExteriorNoiseFact } from "@richtfest/shared";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { Input } from "../ui/input";
@@ -25,7 +25,6 @@ type ReviewField = Pick<
 };
 type Review = {
   revisionId: string;
-  input: AcousticDataset["receipt"]["input"] | null;
   fields: ReviewField[];
   blockers: string[];
   sourceNotes: string[];
@@ -122,7 +121,7 @@ function ReviewForm({
     setConfirm(false);
     setReason("");
     setSaved(true);
-    if (next.calculation) setResult(next.calculation);
+    setResult(next.calculation);
   });
   const stale = base.revisionId !== data.revisionId;
   const rooms = [...new Set(base.inventoryEvidence.map((r) => r.roomId))];
@@ -183,12 +182,11 @@ function ReviewForm({
               : value,
       };
     });
-  const ready = !!base.input?.rooms.length && !changes.length;
-  const submit = (action: "save" | "calculate") => {
+  const submit = () => {
     setSaved(false);
     write.mutate({
       expectedRevisionId: base.revisionId,
-      action,
+      action: "save",
       reason,
       changes,
       confirmInventory: confirm,
@@ -202,9 +200,7 @@ function ReviewForm({
       onSubmit={(event) => {
         event.preventDefault();
         if (disabled || !reason.trim()) return;
-        if (ready && (base.inventoryConfirmation || confirm))
-          submit("calculate");
-        else if (changes.length || confirm) submit("save");
+        if (changes.length || confirm) submit();
       }}
     >
       <div className="space-y-2">
@@ -509,33 +505,14 @@ function ReviewForm({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        {!ready && (
-          <Button
-            type="submit"
-            className="acoustic-input-action"
-            disabled={
-              disabled || !reason.trim() || (!changes.length && !confirm)
-            }
-          >
-            {t("acousticInputsSave")}
-            <ArrowRight className="size-icon-sm" aria-hidden="true" />
-          </Button>
-        )}
-        {ready && (
-          <Button
-            type="submit"
-            className="acoustic-input-action"
-            disabled={
-              disabled ||
-              !reason.trim() ||
-              !!changes.length ||
-              !(base.inventoryConfirmation || confirm)
-            }
-          >
-            {t(base.blockers.length ? "acousticInputsCalculatePartial" : "acousticInputsCalculate")}
-            <ArrowRight className="size-icon-sm" aria-hidden="true" />
-          </Button>
-        )}
+        <Button
+          type="submit"
+          className="acoustic-input-action"
+          disabled={disabled || !reason.trim() || (!changes.length && !confirm)}
+        >
+          {t("acousticInputsSave")}
+          <ArrowRight className="size-icon-sm" aria-hidden="true" />
+        </Button>
         <span className="text-ui-xs text-muted-foreground">
           {t("acousticInputsBoundary")}
         </span>

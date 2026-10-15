@@ -94,10 +94,16 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
           if (!review.inventoryConfirmation || !assembled.input?.rooms.length)
             throw conflict("Confirm the room inventory and resolve at least one room's input gaps before calculating");
           if (!d.calculateAcoustics) throw conflict("Deterministic calculator is unavailable");
+        }
+        // Saving an answer advances all independently calculable rooms. Inventory
+        // confirmation is a review boundary, not a prerequisite for draft arithmetic.
+        if (assembled.input?.rooms.length && d.calculateAcoustics) {
           const dataset = acousticDatasetSchema.parse({ version: 1,
             receipt: { ...d.calculateAcoustics(assembled.input), receiptId: crypto.randomUUID() },
-            blockers: [...assembled.blockers, ...assembled.sourceNotes], basedOn: { artifactId, revisionId: savedRevisionId } });
-          const partial = !dataset.receipt.batch?.complete;
+            blockers: [...assembled.blockers, ...assembled.sourceNotes,
+              ...(!review.inventoryConfirmation ? ["Rauminventar noch nicht bestätigt; Vollständigkeit fachlich prüfen."] : [])],
+            basedOn: { artifactId, revisionId: savedRevisionId } });
+          const partial = !dataset.receipt.batch?.complete || !review.inventoryConfirmation;
           calculation = await createArtifact(d, tx, { projectId: chat.projectId!,
             title: partial ? "Schallschutznachweis · Außenlärm · Teilstand" : "Schallschutznachweis · Außenlärm · Geprüfte Eingaben", type: "draft",
             content: ["# Schallschutznachweis · Außenlärm",

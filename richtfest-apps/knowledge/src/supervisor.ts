@@ -69,7 +69,7 @@ export type Assignment = {
   sourceInputByteBudget?: number;
   sourceBatchingVersion?: 2;
   exteriorNoiseExtractionVersion?: 1 | 2;
-  exteriorNoisePacketVersion?: 1;
+  exteriorNoisePacketVersion?: 1 | 2;
   sourceIdentityContext?: { inputHash: string; batch: number; identities: ReturnType<typeof exteriorNoiseIdentityDirectory> };
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
@@ -943,7 +943,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             sourceInputByteBudget: agentModelInputByteBudget(run.provider, model.modelId, model.maxOutputTokens),
             sourceBatchingVersion: 2,
             ...((conceptId ?? plan.documentTemplate) === "exterior-noise-concept" || calculationOnly
-              ? { exteriorNoiseExtractionVersion: 2 as const, exteriorNoisePacketVersion: 1 as const } : {}),
+              ? { exteriorNoiseExtractionVersion: 2 as const, exteriorNoisePacketVersion: 2 as const } : {}),
           });
         }
         await tx
@@ -1037,7 +1037,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 }),
               );
               const extractExteriorNoise = (conceptId === "exterior-noise-concept" || calculationOnly) && !!assignment.exteriorNoiseExtractionVersion && !assignment.visualFollowup;
-              const boundedExtraction = extractExteriorNoise && assignment.exteriorNoiseExtractionVersion === 2 && assignment.exteriorNoisePacketVersion === 1;
+              const boundedExtraction = extractExteriorNoise && assignment.exteriorNoiseExtractionVersion === 2 && !!assignment.exteriorNoisePacketVersion;
               const specialistSchema = extractExteriorNoise
                 ? schemas.specialist.extend({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }) : schemas.specialist;
               // Reserve the maximum accumulated findings (including JSON escaping),
@@ -1063,8 +1063,16 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               const byteLimit = assignment.sourceProgress?.byteLimit ?? (boundedExtraction
                 ? Math.min(inputByteLimit ?? 48 * 1024, extractionByteLimit) : inputByteLimit);
               if (byteLimit !== undefined && byteLimit < 1024) throw conflict("Specialist context exceeds the model input budget");
+              // Plan-layout whitespace is not another room's worth of output. Weight
+              // it only for packing; preserve every original character and byte range.
+              // The separate raw ceiling reserves room for an equally large continuation.
+              const rawByteLimit = Math.min(128 * 1024, Math.floor((inputByteLimit ?? 48 * 1024) / 2));
               const batches = byteLimit === undefined ? batchSpecialistSources(specialistSources)
-                : batchSectionSources(specialistSources, byteLimit, undefined, boundedExtraction);
+                : batchSectionSources(specialistSources, byteLimit,
+                  boundedExtraction && assignment.exteriorNoisePacketVersion === 2 ? batch => Math.max(
+                    Buffer.byteLength(JSON.stringify(batch.map(source => ({ ...source, text: source.text.replace(/[\t ]+/g, " ") })))),
+                    Buffer.byteLength(JSON.stringify(batch)) * byteLimit / rawByteLimit,
+                  ) : undefined, boundedExtraction);
               // Checkpoints can only be reused for the same goal and extracted
               // evidence. A changed extraction or revision must be read again.
               const inputHash = createHash("sha256").update(JSON.stringify({
@@ -1139,6 +1147,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                   const parsed = specialistSchema.parse(raw);
                   if (extractExteriorNoise) {
                     const extraction = validateExteriorNoiseExtraction(z.object({ exteriorNoiseExtraction: exteriorNoiseExtractionSchema }).parse(raw).exteriorNoiseExtraction, batch);
+                    if ("exteriorNoiseExtraction" in parsed) parsed.exteriorNoiseExtraction = extraction;
                     const inputSources = [...extraction.inventory.map(r => r.provenance),
                       ...(extraction.facts ?? []).map(f => f.provenance),
                       ...extraction.rooms.flatMap(room => acousticInputProvenance({ ...room, method: "exterior_noise_facade" }))];
@@ -1341,37 +1350,20 @@ export async function stepSupervisor(d: AppDeps, id: string) {
           if (!previous) await log(d, tx, run, "tool_executed", "exterior_noise_batch", "Application-owned room calculation; not reviewed");
         });
         if (!saved) throw conflict("Supervisor no longer active");
-        // Keep report authoring blocked, but assess independent progress once. The
-        // model may publish already calculated rooms; it cannot supply missing inputs.
+        // Publish independent results before asking the model about dependencies.
+        // A failed planning call must not hide work that is already complete.
         if (reconcile && needsInput) {
           const batchReceipt = calculationReceipts.find(r => r.method === "exterior_noise_batch");
           const calculatedRoomIds = batchReceipt?.batch?.rooms.filter(r => r.status === "calculated").map(r => r.roomId) ?? [];
-          const declared = new Set(assembled.input?.inventory.map(r => r.roomId));
-          const progressSchema = schemas.acousticProgress.superRefine((plan, ctx) => {
-            if (plan.publishPartialSheet && !calculatedRoomIds.length) ctx.addIssue({ code: "custom", path: ["publishPartialSheet"],
-              message: "No deterministic room result is available to publish." });
-            plan.questions.forEach((question, i) => question.roomIds.forEach((roomId, j) => {
-              if (!declared.has(roomId)) ctx.addIssue({ code: "custom", path: ["questions", i, "roomIds", j], message: "Use declared room IDs only." });
-            }));
-          });
-          const progressPlan = (state.assignments as Assignment[]).some(a => a.exteriorNoisePacketVersion === 1)
-            ? progressSchema.parse(await call("review", goal, {
-              documentTask: "acoustic_progress", calculatedRoomIds,
-              rooms: (assembled.input?.inventory ?? []).map(room => ({ roomId: room.roomId,
-                outcome: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.status ?? "missing_input",
-                calculationLimitations: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.result?.limitations ?? [],
-                unresolvedFields: "fields" in assembled ? assembled.fields.filter(f => f.roomId === room.roomId && f.value === null)
-                  .map(f => ({ target: f.target, id: f.id, field: f.field, status: f.status })) : [],
-              })),
-              findings: (state.assignments as Assignment[]).map(a => ({ role: a.role, summary: a.output?.summary })),
-              sourceNotes: assembled.sourceNotes,
-            }, id, raw => progressSchema.parse(raw))) : undefined;
-          await commit(d, run, token, async tx => {
-            const summary = progressPlan?.summary ?? (run.conversationId
-              ? "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet."
-              : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.");
-            let partialArtifactId: string | undefined;
-            if (progressPlan?.publishPartialSheet && batchReceipt) {
+          let partialArtifactId: string | undefined;
+          if (calculatedRoomIds.length && batchReceipt) {
+            const published = await commit(d, run, token, async tx => {
+              const key = `exterior-partial:${inputHash}`;
+              const previous = await savedStep(d, id, "tool", key, inputHash, tx);
+              if (previous) {
+                partialArtifactId = (previous.output as { artifactId: string }).artifactId;
+                return;
+              }
               const dataset = acousticDatasetSchema.parse({ version: 1, receipt: batchReceipt,
                 blockers: calculationBlockers, basedOn: null });
               const sourceVersionIds = [...new Set(acousticInputProvenance(batchReceipt.input)
@@ -1386,7 +1378,33 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 authorId: d.actorId, actorKind: "agent", runId: run.id, parentMessageId: run.messageId,
                 body: "Berechenbare Räume sind als Teilstand gespeichert. Offene Räume und fachliche Freigabe bleiben ausstehend.",
                 openui: `root = ArtifactPdf(${JSON.stringify(partial.artifact.id)}, ${JSON.stringify(partial.revision.id)})`, sourceVersionIds });
-            }
+              await recordStep(d, tx, { ...run, generation: state.generation }, { kind: "tool", stepKey: key, inputHash,
+                input: { receiptId: batchReceipt.receiptId }, output: { artifactId: partialArtifactId }, status: "completed" });
+            });
+            if (!published) throw conflict("Supervisor no longer active");
+          }
+          const declared = new Set(assembled.input?.inventory.map(r => r.roomId));
+          const progressSchema = schemas.acousticProgress.superRefine((plan, ctx) => {
+            plan.questions.forEach((question, i) => question.roomIds.forEach((roomId, j) => {
+              if (!declared.has(roomId)) ctx.addIssue({ code: "custom", path: ["questions", i, "roomIds", j], message: "Use declared room IDs only." });
+            }));
+          });
+          const progressPlan = (state.assignments as Assignment[]).some(a => !!a.exteriorNoisePacketVersion)
+            ? progressSchema.parse(await call("review", goal, {
+              documentTask: "acoustic_progress", calculatedRoomIds, partialArtifactId,
+              rooms: (assembled.input?.inventory ?? []).map(room => ({ roomId: room.roomId,
+                outcome: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.status ?? "missing_input",
+                calculationLimitations: batchReceipt?.batch?.rooms.find(r => r.roomId === room.roomId)?.result?.limitations ?? [],
+                unresolvedFields: "fields" in assembled ? assembled.fields.filter(f => f.roomId === room.roomId && f.value === null)
+                  .map(f => ({ target: f.target, id: f.id, field: f.field, status: f.status })) : [],
+              })),
+              findings: (state.assignments as Assignment[]).map(a => ({ role: a.role, summary: a.output?.summary })),
+              sourceNotes: assembled.sourceNotes,
+            }, id, raw => progressSchema.parse(raw))) : undefined;
+          await commit(d, run, token, async tx => {
+            const summary = progressPlan?.summary ?? (run.conversationId
+              ? "Berechnungseingaben benötigen Klärung im Gespräch. Kein weiterer KI-Aufruf gestartet."
+              : "Berechnungseingaben benötigen Klärung. Kein weiterer KI-Aufruf gestartet.");
             if (progressPlan && run.conversationId) await tx.insert(messages).values({ tenantId: d.tenantId,
               conversationId: run.conversationId, authorId: d.actorId, actorKind: "agent", runId: run.id, parentMessageId: run.messageId,
               body: [progressPlan.summary, progressPlan.independentWork,
@@ -1395,7 +1413,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             await tx.update(agentRuns).set({ status: "needs_review", outputSummary: summary,
               partialOutput: summary, updatedAt: new Date() }).where(eq(agentRuns.id, id));
             await tx.update(supervisorRuns).set({ phase: "done", review: { inputReviewRequired: true, calculationBlockers,
-              ...(progressPlan ? { progressPlan, partialArtifactId } : {}) } })
+              partialArtifactId, ...(progressPlan ? { progressPlan } : {}) } })
               .where(eq(supervisorRuns.runId, id));
             await log(d, tx, run, "acoustic_inputs_required");
           });

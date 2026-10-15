@@ -7,6 +7,39 @@ import { acousticInputProvenance, scopedExteriorNoiseExtractionSchema, exteriorN
 import { sanitizeProviderDiagnostics } from "./deps";
 import { z } from "zod";
 
+test("quotation validation accepts exact adjacent fragments but never bridges gaps or source versions", () => {
+  const versionId = crypto.randomUUID();
+  const left = "Room 56: wall area ", right = "4.85 m²; Rw 55.3 dB.";
+  const end = Buffer.byteLength(left), totalBytes = end + Buffer.byteLength(right);
+  const sources = [
+    { versionId, text: left, textRange: { startByte: 0, endByte: end, totalBytes } },
+    { versionId, text: right, textRange: { startByte: end, endByte: totalBytes, totalBytes } },
+  ];
+  const packet = { inventory: [{ roomId: "56", provenance: { kind: "source" as const, versionId, page: 67,
+    excerpt: left + right } }], rooms: [], facts: [], blockers: [] };
+  expect(validateExteriorNoiseExtraction(packet, sources)).toEqual(packet);
+  expect(() => validateExteriorNoiseExtraction(packet, [sources[0]!, { ...sources[1]!, versionId: crypto.randomUUID() }])).toThrow("exact quotations");
+  expect(() => validateExteriorNoiseExtraction(packet, [sources[0]!, { ...sources[1]!, textRange: { startByte: end + 1, endByte: totalBytes + 1, totalBytes: totalBytes + 1 } }])).toThrow("exact quotations");
+  expect(() => validateExteriorNoiseExtraction(packet, sources.map(({ textRange, ...s }) => s))).toThrow("exact quotations");
+  expect(() => validateExteriorNoiseExtraction({ ...packet, inventory: [{ ...packet.inventory[0]!,
+    provenance: { ...packet.inventory[0]!.provenance, excerpt: "Room 56: wall area 9 m²" } }] }, sources)).toThrow("exact quotations");
+});
+
+test("OCR whitespace recovery retains the literal source quote, not a rewritten or ambiguous claim", () => {
+  const versionId = crypto.randomUUID();
+  const literal = "FE(1)   area\t3.47 m²;\nRw 30 dB";
+  const quote = "FE(1) area 3.47 m²; Rw 30 dB";
+  const packet = { inventory: [{ roomId: "1", provenance: { kind: "source" as const, versionId, page: 29, excerpt: quote } }],
+    rooms: [], facts: [], blockers: [] };
+  const result = validateExteriorNoiseExtraction(packet, [{ versionId, text: literal }]);
+  expect(result.inventory[0]!.provenance).toEqual({ ...packet.inventory[0]!.provenance, excerpt: literal });
+  expect(packet.inventory[0]!.provenance.excerpt).toBe(quote);
+  for (const text of [literal.replace("3.47", "34.7"), literal.replace(";", ","), literal.replace("m²", "m"),
+    literal.replace("FE(1)", "FE1"), literal + "\n" + literal.replace("\t", "  ")]) {
+    expect(() => validateExteriorNoiseExtraction(packet, [{ versionId, text }])).toThrow("exact quotations");
+  }
+});
+
 test("extraction repair distinguishes source, quotation and inventory failures without exposing rejected values", () => {
   const base = exteriorNoisePackets()[0]!;
   const p = base.inventory[0]!.provenance;

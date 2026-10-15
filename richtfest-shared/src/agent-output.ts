@@ -28,7 +28,6 @@ export function agentOutputSchemas(limits: AgentExecutionLimits = agentExecution
       questions: z.array(z.object({ question: z.string().trim().min(1).max(1000),
         roomIds: z.array(z.string().trim().min(1).max(200)).max(100) }).strict()).max(8),
       independentWork: z.string().trim().min(1).max(2000),
-      publishPartialSheet: z.boolean(),
     }).strict(),
     specialist,
     review: specialist.extend({

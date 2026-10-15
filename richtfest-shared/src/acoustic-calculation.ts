@@ -143,8 +143,13 @@ export function scopedExteriorNoiseExtractionSchema(versionIds: string[]) {
     ])).min(1).max(100),
     fieldEvidence: z.array(z.object({ field: label, provenance: source }).strict()).max(3000).optional(),
   });
-  // Keep the canonical fact refinements; narrowing provenance must not erase them.
-  const fact = exteriorNoiseFactSchema.innerType().extend({ provenance: source }).superRefine((value, ctx) => {
+  // Refinements are not part of the provider's JSON schema. Expose each field's
+  // actual type/enum there too, rather than inviting arbitrary scalar values.
+  const variants = Object.entries(exteriorNoiseFactFields).flatMap(([target, fields]) =>
+    Object.entries(fields).map(([field, value]) => exteriorNoiseFactSchema.innerType().extend({
+      target: z.literal(target), field: z.literal(field), value, provenance: source,
+    })));
+  const fact = z.union(variants as [typeof variants[number], typeof variants[number], ...typeof variants[number][]]).superRefine((value, ctx) => {
     const result = exteriorNoiseFactSchema.safeParse(value);
     if (!result.success) for (const issue of result.error.issues) ctx.addIssue(issue);
   });
