@@ -4,6 +4,26 @@
 
 - Projects now include a source-linked Building model workspace with durable PDF extraction and human review. The topology-v3 reference check on page 3 produced 91 room candidates: 73 approximate partitions, 3 enclosed regions and 15 unresolved anchors, with 76 WE associations; 72 construction-fragment assemblies retain 235 exact source polygons. Reviewers can correct, accept, reject or reconcile candidates into the shared model. The 90 printed-area observations remain unreviewed and are removed on acceptance; doors, adjacency, materials, construction state and physical measurements remain unresolved. Migration 0041 stores extraction jobs and candidates. Extraction needs no model provider or vector index; accepted objects enter bounded agent context.
 
+- Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
+
+- Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
+
+- Calculation and Report agents now message only agents in the current run family, keeping prior runs out of their discovery and inbox.
+
+- Successive agent clarifications now retain earlier project decisions in order; explicit corrections affect conflicting facts without discarding unrelated constraints. Oversized accumulated guidance is rejected clearly rather than truncated.
+
+- Acoustic agents use RLS-19 within the DIN 18005 planning workflow for road-noise assessment, reserve contour maps for aircraft research, and keep unavailable calculation inputs and other noise-source categories explicit.
+
+- Projects can save source-backed environmental surveys with bounded official Rheinland-Pfalz road, rail, industry and aviation records. The survey preserves dated source receipts and Fraport layer metadata, and checks the site against published noise-contour extents. Flight paths and site-specific noise levels remain explicitly unresolved.
+
+- Uploaded sources now retain reusable page models and PDF layer metadata. Agents can read compact source-backed blocks, while the document inspector shows page coverage, layer visibility and unresolved extraction limits. Existing project evidence can be prepared without AI calls; original files, reviews and reference exclusions remain intact.
+
+- Acoustic extraction keeps large, sparse plan pages together and retains directly printed plan areas as receipt-bound, unreviewed observations; visual mappings and areas remain outside calculation inputs until explicitly approved by a person.
+
+- Acoustic input review shows visual room candidates as partial, unreviewed observations linked to their exact source page and image-inspection receipt, with an on-demand source preview returned only when its rendered image hash still matches that receipt; candidates remain outside the calculation inventory.
+
+- Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
+
 ## 2026-10-15
 
 - Acoustic extraction keeps sparse plan drawings together with bounded, page-aware packets and stable source-backed room identities. Typed input choices and exact quotation recovery reduce avoidable retries without losing source text or accepting unsupported evidence; explicit numerical inputs remain available while other decisions await clarification.

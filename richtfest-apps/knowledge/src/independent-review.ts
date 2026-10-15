@@ -10,6 +10,7 @@ export function prepareIndependentReview(input: {
   review: Review; sources: ReviewSource[]; assignments: Assignment[]; originalGoal: string;
   revision: number; assignedVersionCount: number; unreadableSources: unknown[];
   readableSourceIds: string[]; inputByteBudget?: number; contextOverhead: unknown;
+  sourcePageScope?: { versionId: string; pages: number[] }[];
 }) {
   const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
   const document = input.review.document;
@@ -58,7 +59,9 @@ export function prepareIndependentReview(input: {
         ...(fullReview.document ? { document: { ...fullReview.document, content } } : {}) },
       sourceExcerpts: sources,
       sourceCoverage: { slice, sliceCount, assignedVersionCount: input.assignedVersionCount,
-        readableVersionCount: sourceIds.length, sliceVersionIds: [...ids], unreadableSources: input.unreadableSources },
+        readableVersionCount: sourceIds.length, sliceVersionIds: [...ids], unreadableSources: input.unreadableSources,
+        ...(input.sourcePageScope ? { completeDocumentCoverage: false, sourcePageScope: input.sourcePageScope,
+          note: "Only explicitly requested original pages were evaluated; omitted pages were not evaluated and their absence is not established." } : {}) },
     };
   };
   const empty = context([], true, 1000000, 1000000);

@@ -20,3 +20,4 @@ export * from "./public-data";
 export * from "./components";
 export * from "./company-knowledge";
 export * from "./building-model";
+export * from "./environment";

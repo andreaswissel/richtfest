@@ -25,7 +25,8 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     "provenance", "kind", "versionId", "page", "excerpt", "reason", "standard", "room", "use", "floorAreaM2",
     "applicability", "assessment", "basis", "envelopeComplete", "facades", "areaM2", "noise", "metric", "levelDb",
     "fieldEvidence", "elementsComplete", "flanking", "elements", "facadeId", "ratingBasis", "configuration", "rwDb",
-    "construction", "dnEWDb", "count", "openingAreaM2"];
+    "construction", "dnEWDb", "count", "openingAreaM2", "visualCandidates", "apartmentLabel", "roomLabel", "mapping",
+    "receiptId", "imageHash", "crop", "reviewStatus", "x", "y", "width", "height"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
   const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error",
     "invalid_request_error", "invalid_function_parameters", "invalid_json_schema", "unsupported_parameter", "unsupported_value",
@@ -76,7 +77,8 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     const sectionKey = issue.code === "invalid_literal" && issue.path[0] === "sections" && issue.path[2] === "key";
     const acousticReason = (issue.params as { acoustic?: unknown } | undefined)?.acoustic ?? issue.acoustic;
     const safeAcousticReason = acoustic && issue.code === "custom" && typeof acousticReason === "string"
-      && ["invalid_fact_value", "room_fact_id", "source_required", "source_not_in_packet", "quote_not_in_source", "duplicate_room", "room_not_declared"].includes(acousticReason)
+      && ["invalid_fact_value", "room_fact_id", "source_required", "source_not_in_packet", "quote_not_in_source", "duplicate_room", "room_not_declared",
+        "visual_source_not_in_packet", "visual_receipt_mismatch"].includes(acousticReason)
       ? acousticReason : undefined;
     const messagingReason = (issue.params as { messaging?: unknown } | undefined)?.messaging ?? issue.messaging;
     const safeMessagingReason = issue.path[0] === "messages" && issue.code === "custom" && typeof messagingReason === "string"
@@ -136,6 +138,8 @@ export type AppDeps = {
   /** Projects owns authorization/rendering/cache; Knowledge supplies tracked inference. */
   querySourceImage?: (projectId: string, input: SourceImageQuery,
     infer: (input: SourceImageInference) => Promise<ProviderResult>, signal?: AbortSignal) => Promise<SourceImageReceipt>;
+  /** Cached Projects research, creating only when absent; never refresh from an agent. */
+  researchProjectEnvironment?: (projectId: string, signal?: AbortSignal) => Promise<import("@richtfest/shared").EnvironmentSurvey>;
   resolveSupervisorPreset?: (
     effort: "low" | "medium" | "high" | "ultra",
     provider: AgentProvider,
@@ -148,8 +152,9 @@ export type AppDeps = {
     context: unknown;
     modelPolicy?: AgentPresetSnapshot;
     calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
+    researchProjectEnvironment?: (signal?: AbortSignal) => Promise<import("@richtfest/shared").EnvironmentSurvey>;
     searchCompanyKnowledge?: (input: CompanyKnowledgeSearch, signal?: AbortSignal) => Promise<CompanyKnowledgeReceipt>;
-    inspectSource?: (input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual>;
+    inspectSource?: (input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual & { receiptId?: string; imageHash?: string }>;
     querySourceImage?: (input: SourceImageQuery, signal?: AbortSignal) => Promise<SourceImageReceipt>;
     onSummaryDelta?: (delta: string) => Promise<void>;
     onUsage?: (usage: ProviderUsage) => Promise<void>;
@@ -192,7 +197,7 @@ export type AppDeps = {
       pageEnd?: number;
       entityKey?: string;
       modelOffset?: number;
-      /** Read saved literal document blocks without preparing or indexing. */
+      /** Read the saved deterministic page model, without preparing or re-indexing it. */
       documentModel?: boolean;
       documentOffset?: number;
     },

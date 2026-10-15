@@ -1,7 +1,8 @@
+import { appendSteering } from "./steering-context";
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { agentBudgetDecisionSchema, buildingEntityRefSchema, buildingEvidenceSchema, buildingPropertyValueSchema } from "@richtfest/shared";
+import { acousticInputReviewSchema, agentBudgetDecisionSchema, buildingEntityRefSchema, buildingEvidenceSchema, buildingPropertyValueSchema } from "@richtfest/shared";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunBudgetSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
@@ -950,6 +951,14 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         throw conflict("No ready project evidence is available. Reference and comparison reports cannot supply project facts.");
       input = { ...input, sourceVersionIds };
     }
+    if ((workflow?.mode === "report" || workflow?.mode === "calculation") && workflow.sourcePageScope) {
+      const selectedVersions = new Set(input.sourceVersionIds);
+      const scopedVersions = new Set(workflow.sourcePageScope.map(scope => scope.versionId));
+      if (selectedVersions.size !== input.sourceVersionIds.length
+        || selectedVersions.size !== scopedVersions.size
+        || [...selectedVersions].some(versionId => !scopedVersions.has(versionId)))
+        throw conflict("A page-scoped report or calculation must specify pages for every selected source version and no others");
+    }
     await sources(d, input.projectId, input.sourceVersionIds);
     const provider = providerOverride ?? await d.resolveActiveProvider?.() ?? "openai";
     const calculation = input.intent === "calculation" && workflow?.mode !== "calculation";
@@ -1202,6 +1211,8 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           );
         if (!message) throw missing("User message not found in conversation");
       }
+      // Bound the accumulated context before any message/write/cancellation.
+      const steering = appendSteering(state.steering, instruction);
       const selectedSources =
         sourceVersionIds ?? (run.sourceVersionIds as string[]);
       await sources(d, run.projectId, selectedSources);
@@ -1263,7 +1274,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           revision: 0,
           assignments: [],
           review: null,
-          steering: instruction,
+          steering,
           leaseToken: null,
           leaseUntil: null,
         })
@@ -1340,6 +1351,31 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
         ? { maxCostUsd: state.modelPolicy.runBudget.maxCostUsd, maxAutomaticRetries: state.modelPolicy.runBudget.maxAutomaticRetries } : {}),
     };
   };
+  const decisionFreeInputReview = async (d: AppDeps, run: any, tx: any, expectedRevisionId: string) => {
+    const steps = await tx.select({ output: agentRunSteps.output }).from(agentRunSteps).where(and(
+      eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.runId, run.id),
+      eq(agentRunSteps.kind, "tool"), eq(agentRunSteps.status, "completed"),
+    ));
+    const artifactIds: string[] = [...new Set<string>(steps.flatMap(({ output }: any) =>
+      typeof (output as any)?.inputReviewArtifactId === "string" ? [(output as any).inputReviewArtifactId] : []))];
+    if (artifactIds.length !== 1) throw conflict("A single saved acoustic input-review artifact is required for reassessment");
+    const [artifact] = await tx.select({ id: artifacts.id }).from(artifacts).where(and(
+      eq(artifacts.id, artifactIds[0]!), eq(artifacts.tenantId, d.tenantId),
+      eq(artifacts.projectId, run.projectId), eq(artifacts.runId, run.id),
+    )).for("update");
+    if (!artifact) throw conflict("The saved acoustic input-review artifact is unavailable");
+    const [revision] = await tx.select({ id: artifactRevisions.id, payload: artifactRevisions.payload })
+      .from(artifactRevisions).where(and(eq(artifactRevisions.tenantId, d.tenantId),
+        eq(artifactRevisions.artifactId, artifact.id))).orderBy(desc(artifactRevisions.version)).limit(1);
+    if (!revision || revision.id !== expectedRevisionId) throw conflict("The acoustic input review changed. Reload it before reassessing.");
+    const parsed = acousticInputReviewSchema.safeParse(revision.payload?.acousticInputReview);
+    if (!parsed.success || parsed.data.conversationId !== run.conversationId)
+      throw conflict("The saved acoustic input-review artifact is invalid for this run");
+    if (parsed.data.resolutions.length || parsed.data.visualMappings.length || parsed.data.visualAreaReviews.length
+      || parsed.data.inventoryConfirmation)
+      throw conflict("This reassessment only supports an input review with no human decisions; preserve and continue the current review instead");
+    return { artifactId: artifact.id, revisionId: revision.id };
+  };
   route("get", "/runs/:runId/recovery", "knowledge:read", async (d, req) => {
     const run = await getRun(d, String(req.params.runId));
     await requireIndependentRun(d, run);
@@ -1347,6 +1383,67 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
     const [state] = await d.db.select().from(supervisorRuns).where(and(eq(supervisorRuns.runId, run.id), eq(supervisorRuns.tenantId, d.tenantId)));
     return recoveryPreview(d, run, state);
+  });
+  route("post", "/runs/:runId/reassess-inputs", "agent:run", async (d, req) => {
+    const input = z.object({ checkpointHash: z.string().length(64), generation: z.number().int(),
+      expectedRevisionId: z.string().uuid(), budget: agentRunBudgetSchema,
+      acknowledgeUnknownOutcomes: z.boolean().default(false) }).strict().parse(req.body);
+    d.requirePermission("knowledge:read");
+    d.requirePermission("knowledge:write");
+    d.requirePermission("projects:read");
+    if (!d.supervisorEnabled || !d.estimateCallCost) throw conflict("Bounded supervisor reassessment is unavailable");
+    const run = await getRun(d, String(req.params.runId));
+    await requireIndependentRun(d, run);
+    if (run.parentRunId || run.specialistRole) throw conflict("Input reassessment is available only on a root supervisor run");
+    if (!(await d.validateProject(run.projectId))) throw missing("Project not found");
+    if (run.conversationId) await conversation(d, run.conversationId, run.projectId);
+    return d.db.transaction(async (tx: any) => {
+      const current = await getRun(d, run.id, tx, true);
+      const [state] = await tx.select().from(supervisorRuns).where(and(
+        eq(supervisorRuns.runId, run.id), eq(supervisorRuns.tenantId, d.tenantId),
+      )).for("update");
+      if (!state || current.status !== "needs_review" || state.phase !== "done"
+        || state.review?.inputReviewRequired !== true || state.review?.inputReassessmentOnly === true)
+        throw conflict("Only a completed acoustic input review can be reassessed");
+      const policy = agentPresetSnapshotSchema.safeParse(state.modelPolicy);
+      const workflow = policy.success ? policy.data.workflow : undefined;
+      if (!workflow || workflow.mode !== "calculation")
+        throw conflict("Only saved acoustic calculation input reviews can be reassessed");
+      const assignments = (state.assignments ?? []) as any[];
+      if (!assignments.some(a => a.exteriorNoiseExtractionVersion === 2)
+        || !state.history?.some((entry: any) => entry.phase === "specialist_batch"
+          && entry.output?.exteriorNoiseExtraction))
+        throw conflict("Saved acoustic extraction is unavailable for reassessment");
+      const preview = await recoveryPreview(d, current, state, tx);
+      if (input.checkpointHash !== preview.checkpointHash || input.generation !== preview.generation)
+        throw conflict("Saved progress changed. Reload the recovery preview before reassessing inputs.");
+      if ((preview.accounting.unknownOutcomes || preview.accounting.unpricedAttempts) && !input.acknowledgeUnknownOutcomes)
+        throw conflict("Acknowledge unknown provider outcomes and usage before reassessing inputs.");
+      const originalAllowance = preview.budget.maxCostUsd;
+      const remaining = Math.max(0, Number((originalAllowance - preview.accounting.windowCostUsd
+        - preview.accounting.committedCostUsd - preview.accounting.reservedCostUsd).toFixed(6)));
+      if (remaining < 0.01 || input.budget.maxCostUsd > remaining)
+        throw conflict("The requested allowance exceeds the remaining authorized run budget");
+      const budget = { ...input.budget, maxAutomaticRetries: 0 };
+      const review = await decisionFreeInputReview(d, current, tx, input.expectedRevisionId);
+      const generation = state.generation + 1;
+      const nextPolicy = { ...state.modelPolicy,
+        runBudget: { ...budget, authorizedAt: new Date().toISOString() } };
+      await tx.update(supervisorRuns).set({ generation, phase: "review", leaseToken: null, leaseUntil: null,
+        modelPolicy: nextPolicy,
+        review: { ...state.review, inputReassessmentOnly: true, inputReviewArtifactId: review.artifactId,
+          expectedInputReviewRevisionId: review.revisionId },
+      }).where(and(eq(supervisorRuns.runId, run.id), eq(supervisorRuns.tenantId, d.tenantId)));
+      const [updated] = await tx.update(agentRuns).set({ status: "queued", error: null, requestedBy: d.actorId,
+        generation, modelPolicy: nextPolicy, startedAt: null, finishedAt: null, durationMs: null, updatedAt: new Date() })
+        .where(and(eq(agentRuns.id, run.id), eq(agentRuns.tenantId, d.tenantId))).returning();
+      await event(d, tx, current, "resumed", undefined, "Authorized bounded reassessment from saved acoustic extraction");
+      await d.auditRun(tx, "knowledge.agent_run.input_reassessment_authorized", "agent_run", run.id, run.id,
+        run.correlationId, { checkpointHash: input.checkpointHash, generation: input.generation,
+          expectedRevisionId: review.revisionId, budget, acknowledgeUnknownOutcomes: input.acknowledgeUnknownOutcomes,
+          accounting: preview.accounting });
+      return updated;
+    });
   });
   const retryRun = async (d: AppDeps, req: Request, fresh: boolean) => {
     const run = await getRun(d, String(req.params.runId));

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { ExteriorNoiseFact } from "@richtfest/shared";
+import { ApiError, api } from "../../api";
+import { useQuery } from "@tanstack/react-query";
 import { useApi, useWrite, queryClient } from "../../query";
 import { useT } from "../../i18n";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { NativeSelect } from "../ui/native-select";
-import { Callout, Field } from "../ui/primitives";
-import { ArrowRight, Check, ChevronRight, FileText } from "lucide-react";
+import { Badge, Callout, Field, Modal } from "../ui/primitives";
+import { ArrowRight, Check, ChevronRight, Eye, FileText } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import "./acoustic-input-review.css";
 
@@ -23,17 +25,66 @@ type ReviewField = Pick<
   type: "number" | "boolean" | "string";
   options?: string[];
 };
+type VisualMapping =
+  | { candidateKey: string; decision: "confirmed"; roomId: string }
+  | { candidateKey: string; decision: "rejected" };
+type VisualAreaReview =
+  | {
+      candidateKey: string;
+      observationKey: string;
+      decision: "approved";
+      roomId: string;
+    }
+  | {
+      candidateKey: string;
+      observationKey: string;
+      decision: "rejected";
+    };
 type Review = {
   revisionId: string;
   fields: ReviewField[];
   blockers: string[];
   sourceNotes: string[];
+  input: {
+    inventory: {
+      roomId: string;
+      provenance: ExteriorNoiseFact["provenance"];
+    }[];
+  } | null;
+  visualCandidates?: {
+    candidateKey: string;
+    apartmentLabel: string | null;
+    roomLabel: string | null;
+    mapping: string;
+    reviewStatus: "unreviewed";
+    mappingDecision: "confirmed" | "rejected" | null;
+    confirmedRoomId: string | null;
+    floorAreaObservation?: {
+      valueM2: number;
+      basis: "explicitly_printed";
+      reviewStatus: "unreviewed";
+    };
+    floorAreaObservationKey?: string | null;
+    floorAreaDecision?: "approved" | "rejected" | null;
+    floorAreaActive?: boolean;
+    confirmedFloorAreaM2?: number | null;
+    floorAreaRoomId?: string | null;
+    provenance: {
+      kind: "visual_inspection";
+      versionId: string;
+      page: number;
+      crop: { x: number; y: number; width: number; height: number } | null;
+      receiptId: string;
+      imageHash: string;
+    };
+  }[];
   inventoryEvidence: {
     roomId: string;
     provenance: ExteriorNoiseFact["provenance"];
   }[];
   inventoryConfirmation: { at: string } | null;
 };
+type VisualCandidate = NonNullable<Review["visualCandidates"]>[number];
 
 export function AcousticInputReview({
   artifactId,
@@ -54,6 +105,7 @@ export function AcousticInputReview({
   if (!expanded)
     return (
       <Button
+        type="button"
         variant="secondary"
         className="rounded-full px-4"
         onClick={() => setExpanded(true)}
@@ -107,6 +159,13 @@ function ReviewForm({
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, boolean>>({});
   const [reason, setReason] = useState("");
+  const [roomIdDrafts, setRoomIdDrafts] = useState<Record<string, string>>({});
+  const [visualMappings, setVisualMappings] = useState<
+    Record<string, VisualMapping>
+  >({});
+  const [visualAreaReviews, setVisualAreaReviews] = useState<
+    Record<string, VisualAreaReview>
+  >({});
   const [confirm, setConfirm] = useState(false);
   const [saved, setSaved] = useState(false);
   const [result, setResult] = useState<{
@@ -119,12 +178,16 @@ function ReviewForm({
     setEdits({});
     setCustom({});
     setConfirm(false);
+    setRoomIdDrafts({});
+    setVisualMappings({});
+    setVisualAreaReviews({});
     setReason("");
     setSaved(true);
     setResult(next.calculation);
   });
   const stale = base.revisionId !== data.revisionId;
-  const rooms = [...new Set(base.inventoryEvidence.map((r) => r.roomId))];
+  const inventory = base.input?.inventory ?? base.inventoryEvidence;
+  const rooms = [...new Set(inventory.map((r) => r.roomId))];
   const selected =
     room ||
     rooms.find((id) =>
@@ -146,6 +209,23 @@ function ReviewForm({
   };
   const unit = (field: string) =>
     field.endsWith("M2") ? "m²" : field.endsWith("Db") ? "dB" : "";
+  const clearAreaApprovalForMapping = (
+    candidateKey: string,
+    roomId: string | null,
+  ) => {
+    setVisualAreaReviews((current) => {
+      const pending = current[candidateKey];
+      if (
+        !pending ||
+        pending.decision !== "approved" ||
+        pending.roomId === roomId
+      )
+        return current;
+      const next = { ...current };
+      delete next[candidateKey];
+      return next;
+    });
+  };
   const question = (f: ReviewField) =>
     f.field === "floorAreaM2"
       ? t("acousticInputsFloorQuestion")
@@ -168,6 +248,9 @@ function ReviewForm({
     ) : (
       <span>{p.reason}</span>
     );
+  const visualCandidates = base.visualCandidates ?? [];
+  const pendingVisualMappings = Object.values(visualMappings);
+  const pendingVisualAreaReviews = Object.values(visualAreaReviews);
   const changes = Object.entries(edits)
     .filter(([, value]) => value.trim() !== "")
     .map(([key, value]) => {
@@ -190,6 +273,8 @@ function ReviewForm({
       reason,
       changes,
       confirmInventory: confirm,
+      visualMappings: pendingVisualMappings,
+      visualAreaReviews: pendingVisualAreaReviews,
     });
   };
   return (
@@ -200,7 +285,13 @@ function ReviewForm({
       onSubmit={(event) => {
         event.preventDefault();
         if (disabled || !reason.trim()) return;
-        if (changes.length || confirm) submit();
+        if (
+          changes.length ||
+          confirm ||
+          pendingVisualMappings.length ||
+          pendingVisualAreaReviews.length
+        )
+          submit();
       }}
     >
       <div className="space-y-2">
@@ -234,6 +325,9 @@ function ReviewForm({
               setEdits({});
               setCustom({});
               setConfirm(false);
+              setRoomIdDrafts({});
+              setVisualMappings({});
+              setVisualAreaReviews({});
               setReason("");
               setSaved(false);
               write.reset();
@@ -244,6 +338,229 @@ function ReviewForm({
         </Callout>
       )}
       {!rooms.length && <Callout>{t("acousticInputsNeedSources")}</Callout>}
+      {visualCandidates.length > 0 && (
+        <section className="space-y-2" aria-labelledby="acoustic-visual-candidates">
+          <h3 id="acoustic-visual-candidates" className="font-medium">
+            {t("acousticInputsVisualCandidates")}
+          </h3>
+          <Callout>{t("acousticInputsVisualCandidatesBoundary")}</Callout>
+          <ul className="divide-y rounded-md border">
+            {visualCandidates.map((candidate, index) => {
+              const provenance = candidate.provenance;
+              const pendingMapping = visualMappings[candidate.candidateKey];
+              const draftRoomId =
+                roomIdDrafts[candidate.candidateKey] ??
+                candidate.confirmedRoomId ??
+                "";
+              const statusKey = pendingMapping
+                ? "acousticInputsVisualMappingPending"
+                : candidate.mappingDecision === "confirmed"
+                  ? "acousticInputsVisualMappingConfirmed"
+                  : candidate.mappingDecision === "rejected"
+                    ? "acousticInputsVisualCandidateRejected"
+                    : "acousticInputsVisualCandidateUnreviewed";
+              const pendingAreaReview = visualAreaReviews[candidate.candidateKey];
+              const areaRoomId = pendingMapping
+                ? pendingMapping.decision === "confirmed"
+                  ? pendingMapping.roomId
+                  : null
+                : candidate.mappingDecision === "confirmed"
+                  ? candidate.confirmedRoomId
+                  : null;
+              const areaStatusKey = pendingAreaReview
+                ? "acousticInputsVisualAreaPending"
+                : candidate.floorAreaDecision === "approved"
+                  ? candidate.floorAreaActive
+                    ? "acousticInputsVisualAreaApproved"
+                    : "acousticInputsVisualAreaInactive"
+                  : candidate.floorAreaDecision === "rejected"
+                    ? "acousticInputsVisualAreaRejected"
+                    : "acousticInputsVisualAreaUnreviewed";
+              return (
+                <li key={`${candidate.candidateKey}:${index}`} className="space-y-2 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">
+                      {[candidate.apartmentLabel, candidate.roomLabel]
+                        .filter(Boolean)
+                        .join(" · ") || t("acousticInputsVisualCandidateUnlabeled")}
+                    </span>
+                    <Badge>{t(statusKey)}</Badge>
+                  </div>
+                  <p className="whitespace-pre-wrap">{candidate.mapping}</p>
+                  {candidate.mappingDecision === "confirmed" && !pendingMapping && (
+                    <p className="text-ui-sm">
+                      {t("acousticInputsVisualCanonicalRoom")}: {candidate.confirmedRoomId}
+                    </p>
+                  )}
+                  <p className="flex flex-wrap items-center gap-x-2 text-ui-2xs text-muted-foreground">
+                    <Link
+                      to={`/projects/${projectId}?conversation=${conversationId}&sourceVersion=${provenance.versionId}&page=${provenance.page}`}
+                      className="underline"
+                    >
+                      {t("acousticInputsSource")} · {t("acousticInputsPage")} {provenance.page}
+                    </Link>
+                    <span>{provenance.versionId}</span>
+                    <span>{t("acousticInputsVisualReceipt")}: {provenance.receiptId}</span>
+                    <span>{t("acousticInputsVisualImageHash")}: {provenance.imageHash}</span>
+                  </p>
+                  <VisualCandidateImagePreview
+                    basePath={path}
+                    candidate={candidate}
+                  />
+                  {writable && (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <Field label={t("acousticInputsVisualCanonicalRoom")}>
+                        <Input
+                          value={draftRoomId}
+                          disabled={disabled}
+                          maxLength={200}
+                          onChange={(event) => {
+                            const nextRoomId = event.target.value.trim();
+                            setEditingBase(base);
+                            setSaved(false);
+                            clearAreaApprovalForMapping(
+                              candidate.candidateKey,
+                              nextRoomId || null,
+                            );
+                            setRoomIdDrafts((current) => ({
+                              ...current,
+                              [candidate.candidateKey]: event.target.value,
+                            }));
+                          }}
+                        />
+                      </Field>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={disabled || !draftRoomId.trim()}
+                        onClick={() => {
+                          clearAreaApprovalForMapping(
+                            candidate.candidateKey,
+                            draftRoomId.trim(),
+                          );
+                          setEditingBase(base);
+                          setSaved(false);
+                          setVisualMappings((current) => ({
+                            ...current,
+                            [candidate.candidateKey]: {
+                              candidateKey: candidate.candidateKey,
+                              decision: "confirmed",
+                              roomId: draftRoomId.trim(),
+                            },
+                          }));
+                        }}
+                      >
+                        {t("acousticInputsVisualConfirmMapping")}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={disabled}
+                        onClick={() => {
+                          clearAreaApprovalForMapping(
+                            candidate.candidateKey,
+                            null,
+                          );
+                          setEditingBase(base);
+                          setSaved(false);
+                          setVisualMappings((current) => ({
+                            ...current,
+                            [candidate.candidateKey]: {
+                              candidateKey: candidate.candidateKey,
+                              decision: "rejected",
+                            },
+                          }));
+                        }}
+                      >
+                        {t("acousticInputsVisualRejectCandidate")}
+                      </Button>
+                    </div>
+                  )}
+                  {candidate.floorAreaObservation && (
+                    <section className="space-y-2 rounded-md border p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">
+                          {t("acousticInputsVisualPrintedArea")}: {String(candidate.floorAreaObservation.valueM2)} m²
+                        </span>
+                        <Badge>{t(areaStatusKey)}</Badge>
+                      </div>
+                      <p className="text-ui-sm text-muted-foreground">
+                        {t("acousticInputsVisualAreaBoundary")}
+                      </p>
+                      {candidate.floorAreaDecision === "approved" &&
+                        candidate.floorAreaActive &&
+                        !pendingAreaReview && (
+                        <p className="text-ui-sm">
+                          {t("acousticInputsVisualAreaApprovedFor")}: {candidate.floorAreaRoomId} · {String(candidate.confirmedFloorAreaM2)} m²
+                        </p>
+                      )}
+                      {pendingAreaReview?.decision === "approved" && (
+                        <p className="text-ui-sm">
+                          {t("acousticInputsVisualAreaPendingFor")}: {pendingAreaReview.roomId}
+                        </p>
+                      )}
+                      {!areaRoomId && writable && (
+                        <p className="text-ui-sm text-muted-foreground">
+                          {t("acousticInputsVisualAreaNeedsRoom")}
+                        </p>
+                      )}
+                      {writable && (
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={
+                              disabled ||
+                              !areaRoomId ||
+                              !candidate.floorAreaObservationKey
+                            }
+                            onClick={() => {
+                              if (!areaRoomId || !candidate.floorAreaObservationKey) return;
+                              setEditingBase(base);
+                              setSaved(false);
+                              setVisualAreaReviews((current) => ({
+                                ...current,
+                                [candidate.candidateKey]: {
+                                  candidateKey: candidate.candidateKey,
+                                  observationKey: candidate.floorAreaObservationKey!,
+                                  decision: "approved",
+                                  roomId: areaRoomId,
+                                },
+                              }));
+                            }}
+                          >
+                            {t("acousticInputsVisualApproveArea")}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={disabled || !candidate.floorAreaObservationKey}
+                            onClick={() => {
+                              if (!candidate.floorAreaObservationKey) return;
+                              setEditingBase(base);
+                              setSaved(false);
+                              setVisualAreaReviews((current) => ({
+                                ...current,
+                                [candidate.candidateKey]: {
+                                  candidateKey: candidate.candidateKey,
+                                  observationKey: candidate.floorAreaObservationKey!,
+                                  decision: "rejected",
+                                },
+                              }));
+                            }}
+                          >
+                            {t("acousticInputsVisualRejectArea")}
+                          </Button>
+                        </div>
+                      )}
+                    </section>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       {rooms.length > 0 && (
         <>
           <div className="flex flex-wrap items-end gap-2">
@@ -420,19 +737,6 @@ function ReviewForm({
               );
             })}
           </div>
-          <Field label={t("acousticInputsReason")}>
-            <Input
-              value={reason}
-              disabled={disabled}
-              placeholder={t("acousticInputsReasonPlaceholder")}
-              onChange={(e) => {
-                setEditingBase(base);
-                setSaved(false);
-                setReason(e.target.value);
-              }}
-              maxLength={1000}
-            />
-          </Field>
           <label className="flex items-start gap-3 text-ui-sm">
             <Checkbox
               checked={!!base.inventoryConfirmation || confirm}
@@ -451,7 +755,7 @@ function ReviewForm({
             </summary>
             <p className="py-2">{t("acousticInputsInventoryHint")}</p>
             <ul className="space-y-1 py-2">
-              {base.inventoryEvidence.map((entry, i) => (
+              {inventory.map((entry, i) => (
                 <li key={i}>
                   {entry.roomId} · {source(entry.provenance)}
                 </li>
@@ -484,6 +788,21 @@ function ReviewForm({
           </ul>
         </details>
       )}
+      {(rooms.length > 0 || visualCandidates.length > 0) && (
+        <Field label={t("acousticInputsReason")}>
+          <Input
+            value={reason}
+            disabled={disabled}
+            placeholder={t("acousticInputsReasonPlaceholder")}
+            onChange={(event) => {
+              setEditingBase(base);
+              setSaved(false);
+              setReason(event.target.value);
+            }}
+            maxLength={1000}
+          />
+        </Field>
+      )}
       {write.isError && (
         <Callout tone="warning">
           {t("acousticInputsSaveError")}{" "}
@@ -508,7 +827,16 @@ function ReviewForm({
         <Button
           type="submit"
           className="acoustic-input-action"
-          disabled={disabled || !reason.trim() || (!changes.length && !confirm)}
+          disabled={
+            disabled ||
+            !reason.trim() ||
+            (
+              !changes.length &&
+              !confirm &&
+              !pendingVisualMappings.length &&
+              !pendingVisualAreaReviews.length
+            )
+          }
         >
           {t("acousticInputsSave")}
           <ArrowRight className="size-icon-sm" aria-hidden="true" />
@@ -526,5 +854,100 @@ function ReviewForm({
         </Link>
       )}
     </form>
+  );
+}
+
+type VisualCandidateImage = {
+  candidateKey: string;
+  provenance: VisualCandidate["provenance"];
+  image: { mediaType: string; data: string };
+};
+
+function VisualCandidateImagePreview({
+  basePath,
+  candidate,
+}: {
+  basePath: string;
+  candidate: VisualCandidate;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const path = `${basePath}/visual/${encodeURIComponent(candidate.candidateKey)}`;
+  const query = useQuery({
+    queryKey: [path],
+    queryFn: () => api<VisualCandidateImage>(path),
+    enabled: open,
+    retry: false,
+  });
+  const preview = query.data;
+  const sameCrop =
+    JSON.stringify(preview?.provenance.crop ?? null) ===
+    JSON.stringify(candidate.provenance.crop ?? null);
+  const provenanceMatches =
+    preview?.candidateKey === candidate.candidateKey &&
+    preview.provenance.versionId === candidate.provenance.versionId &&
+    preview.provenance.page === candidate.provenance.page &&
+    preview.provenance.receiptId === candidate.provenance.receiptId &&
+    preview.provenance.imageHash === candidate.provenance.imageHash &&
+    sameCrop;
+  const imageMatches =
+    provenanceMatches && preview?.image.mediaType === "image/jpeg";
+  const imageSrc =
+    imageMatches && preview
+      ? `data:${preview.image.mediaType};base64,${preview.image.data}`
+      : null;
+  const crop = candidate.provenance.crop;
+  const cropLabel = crop
+    ? `${t("acousticInputsVisualCrop")}: ${[crop.x, crop.y, crop.width, crop.height]
+        .map((value) => `${Math.round(value * 100)}%`)
+        .join(" · ")}`
+    : t("acousticInputsVisualFullPage");
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="link"
+        className="h-auto px-0"
+        onClick={() => setOpen(true)}
+      >
+        <Eye className="size-icon-sm" aria-hidden="true" />
+        {t("acousticInputsVisualViewImage")}
+      </Button>
+      {open && (
+        <Modal
+          wide
+          title={t("acousticInputsVisualImageTitle")}
+          onClose={() => setOpen(false)}
+        >
+          <div className="space-y-3">
+            <p className="text-ui-sm text-muted-foreground">
+              {t("acousticInputsVisualSourceVersion")}: {candidate.provenance.versionId} · {t("acousticInputsPage")} {candidate.provenance.page} · {cropLabel}
+            </p>
+            {query.isPending && <p role="status">{t("loading")}</p>}
+            {query.isError && (
+              <Callout tone="error">
+                {query.error instanceof ApiError && query.error.status === 403
+                  ? t("acousticInputsVisualImageForbidden")
+                  : t("acousticInputsVisualImageUnavailable")}
+                <Button variant="link" onClick={() => void query.refetch()}>
+                  {t("retry")}
+                </Button>
+              </Callout>
+            )}
+            {!query.isError && preview && !imageMatches && (
+              <Callout tone="error">{t("acousticInputsVisualImageMismatch")}</Callout>
+            )}
+            {imageSrc && (
+              <img
+                src={imageSrc}
+                alt={`${t("acousticInputsVisualImageTitle")} · ${t("acousticInputsPage")} ${candidate.provenance.page}`}
+                className="mx-auto max-h-[70vh] max-w-full rounded-md border object-contain"
+              />
+            )}
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
