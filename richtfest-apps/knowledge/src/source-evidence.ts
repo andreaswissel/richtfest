@@ -1,4 +1,32 @@
 import type { AppDeps } from "./deps";
+import { sourceDocumentModelSchema, type SourceDocumentModel } from "@richtfest/shared";
+
+/** Reads literal saved blocks only; completeness never implies semantic approval. */
+export async function resolveCompleteDocumentModel(d: AppDeps, projectId: string, versionId: string,
+  assertActive: () => Promise<unknown>): Promise<SourceDocumentModel | null> {
+  let offset = 0;
+  let first: SourceDocumentModel | undefined;
+  const pages: SourceDocumentModel["pages"] = [];
+  for (;;) {
+    await assertActive();
+    const result: any = await d.resolveSource(projectId, { versionId, documentModel: true, documentOffset: offset });
+    if (result?.status !== "resolved" || result.source?.versionId !== versionId) return null;
+    const parsed = sourceDocumentModelSchema.safeParse(result.content?.documentModel);
+    if (!parsed.success || parsed.data.versionId !== versionId || !parsed.data.coverage.complete) return null;
+    const model = parsed.data;
+    if (first && (JSON.stringify(model.coverage) !== JSON.stringify(first.coverage)
+      || JSON.stringify(model.layers) !== JSON.stringify(first.layers)))
+      throw new Error("Saved document model changed while reading.");
+    first ??= model;
+    pages.push(...model.pages);
+    if (model.nextOffset === null) break;
+    if (model.nextOffset <= offset) throw new Error("Saved document model pagination did not advance.");
+    offset = model.nextOffset;
+  }
+  if (pages.length !== first.coverage.totalPages || pages.some((page, index) =>
+    page.page !== index + 1 || page.versionId !== versionId || page.status !== "available")) return null;
+  return { ...first, pages, nextOffset: null };
+}
 
 /** Agent execution waits without provider calls; the source HTTP API stays fast. */
 export async function resolveRunSource(d: AppDeps, projectId: string,

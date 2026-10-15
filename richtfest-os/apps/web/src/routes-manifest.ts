@@ -40,6 +40,7 @@ export const performanceRoutes = [
   "/knowledge/:draftId",
   "/projects/:id",
   "/projects/:id?view=location",
+  "/projects/:id?view=building-model",
   "/projects/:id?view=analytics",
   "/settings",
   "/settings/models",

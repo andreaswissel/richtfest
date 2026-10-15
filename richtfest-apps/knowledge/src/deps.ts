@@ -116,6 +116,12 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
 }
 export type AppDeps = {
   db: any;
+  /** Projects owns tenant authorization, bounded reviewed state and proposal persistence. */
+  buildingModelContext?: (projectId: string, selection?: import("@richtfest/shared").BuildingEntityRef) => Promise<unknown>;
+  proposeBuildingModelChange?: (projectId: string, input: import("@richtfest/shared").BuildingEntityRef & {
+    baseRevision: number; propertyKey: string; value: unknown; unit?: string | null;
+    reason: string; evidence: import("@richtfest/shared").BuildingEvidence[];
+  }, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
   supervisorEnabled?: boolean;
   estimateCallCost?: (provider: ProviderUsage["provider"], settings: ProviderExecutionSettings, inputBytes: number, hasTools: boolean, inputTokenUpperBound?: number) => number | null;
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
@@ -186,6 +192,9 @@ export type AppDeps = {
       pageEnd?: number;
       entityKey?: string;
       modelOffset?: number;
+      /** Read saved literal document blocks without preparing or indexing. */
+      documentModel?: boolean;
+      documentOffset?: number;
     },
   ) => Promise<unknown>;
   auditRun: (

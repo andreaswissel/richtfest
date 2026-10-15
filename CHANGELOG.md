@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Projects now include a source-linked Building model workspace with durable PDF extraction and human review. The topology-v3 reference check on page 3 produced 91 room candidates: 73 approximate partitions, 3 enclosed regions and 15 unresolved anchors, with 76 WE associations; 72 construction-fragment assemblies retain 235 exact source polygons. Reviewers can correct, accept, reject or reconcile candidates into the shared model. The 90 printed-area observations remain unreviewed and are removed on acceptance; doors, adjacency, materials, construction state and physical measurements remain unresolved. Migration 0041 stores extraction jobs and candidates. Extraction needs no model provider or vector index; accepted objects enter bounded agent context.
+
 ## 2026-10-15
 
 - Acoustic extraction keeps sparse plan drawings together with bounded, page-aware packets and stable source-backed room identities. Typed input choices and exact quotation recovery reduce avoidable retries without losing source text or accepting unsupported evidence; explicit numerical inputs remain available while other decisions await clarification.

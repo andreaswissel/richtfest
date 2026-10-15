@@ -10,6 +10,7 @@ import { createLocationRouter } from "./location-router";
 import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
 import { readPdfRepresentations } from "./source-representations";
+import { createBuildingModelRouter } from "./building-model-router";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -71,6 +72,7 @@ export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
   router.use(createSourceModelRouter(getDeps));
+  router.use(createBuildingModelRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {
       const d = getDeps(req);

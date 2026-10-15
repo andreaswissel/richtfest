@@ -78,8 +78,11 @@ const router = createBrowserRouter([
         }),
         loader: ({ params, request }) => {
           prefetch(`/projects/${params.id}`)();
-          if (new URL(request.url).searchParams.get("view") === "analytics")
+          const view = new URL(request.url).searchParams.get("view");
+          if (view === "analytics")
             prefetch(`/knowledge/workspaces/${params.id}/analytics?page=0`)();
+          if (view === "building-model")
+            prefetch(`/projects/${params.id}/building-model`)();
           return null;
         },
       },

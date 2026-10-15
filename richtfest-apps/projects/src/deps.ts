@@ -63,6 +63,14 @@ export type LocationWorkerDeps = {
 export type SourceExtractionDeps = {
   db: any;
   fileStorage: Pick<FileStorage, "read">;
+  /** Optional OS-owned TypeSafe adapter. Source extraction remains complete when unavailable. */
+  executeDecision?: (input: {
+    tenantId: string;
+    actorId: string;
+    state: unknown;
+    questions: Record<string, { type: "choice"; instructions: string; criteria: Record<string, string> }>;
+    signal?: AbortSignal;
+  }) => Promise<{ status: "completed"; output: unknown; usage?: unknown } | { status: "unconfigured" }>;
   audit: (tx: any, tenantId: string, action: string, versionId: string, metadata?: unknown) => Promise<void>;
   reportError: () => void;
 };

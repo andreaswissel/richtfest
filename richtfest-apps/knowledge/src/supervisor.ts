@@ -4,6 +4,7 @@ import { agentDocumentSchema, agentPresetSnapshotSchema, agentWorkProgressSchema
 import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
+import { buildingContextForRun } from "./building-model-context";
 import { batchSectionSources, batchSpecialistSources } from "./source-batches";
 import {
   agentRuns,
@@ -365,6 +366,8 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const consolidation = phase === "review" && ["editorial-consolidation", "patch-editorial-v1"].includes((context as { inputMode?: string }).inputMode ?? "");
       const providerContext = {
         ...(context as object),
+        buildingModel: visualOnly || appendixWriter || editorialPacket || consolidation ? undefined : await buildingContextForRun(d, run),
+        buildingModelPolicy: "Read-only project context. Use current approved properties and stable object links; imported or proposed claims are not reviewed facts. No building-model mutation or approval is available in Team/Report. This context does not authorize engineering calculations.",
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
         companyKnowledgeCategories: !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2
           ? await companyKnowledgeCategories(d) : undefined,

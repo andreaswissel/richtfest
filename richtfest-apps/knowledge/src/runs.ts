@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { agentBudgetDecisionSchema } from "@richtfest/shared";
+import { agentBudgetDecisionSchema, buildingEntityRefSchema, buildingEvidenceSchema, buildingPropertyValueSchema } from "@richtfest/shared";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunBudgetSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
@@ -35,6 +35,7 @@ import { recordStep, savedStep, stepHash } from "./run-steps";
 import { resolveRunSource } from "./source-evidence";
 import { recommendMode } from "./decision-routing";
 import { workflowProposalsRouter } from "./workflow-proposals";
+import { buildingContextForRun } from "./building-model-context";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -113,6 +114,14 @@ export function recordResolvedEvidence(evidence: Set<string>, result: unknown) {
 }
 
 export const toolInputs = {
+  propose_building_model_change: buildingEntityRefSchema.extend({
+    baseRevision: z.number().int().nonnegative(),
+    propertyKey: z.string().trim().min(1).max(200),
+    value: buildingPropertyValueSchema,
+    unit: z.string().max(80).nullable().optional(),
+    reason: z.string().trim().min(1).max(2000),
+    evidence: z.array(buildingEvidenceSchema).min(1).max(20),
+  }).strict().refine(input => JSON.stringify(input.value).length <= 8000, "Proposed value exceeds context limit"),
   send_thread_message: agentMessageInputSchema,
   search_company_knowledge: companyKnowledgeSearchSchema,
   delegate_source_review: z
@@ -153,6 +162,7 @@ export function validateTool(name: string, input: unknown, limits?: AgentExecuti
     return toolInputs.create_draft.extend({ content: z.string().min(1).max(limits.documentMaxCharacters) }).parse(input);
   return toolInputs[name as keyof typeof toolInputs].parse(input);
 }
+
 async function getRun(d: AppDeps, id: string, tx = d.db, lock = false) {
   let query = tx
     .select()
@@ -315,6 +325,7 @@ export async function executeRun(d: AppDeps, run: any) {
       .filter((m: any) => m.body)
       .reverse();
     const context = {
+      buildingModel: await buildingContextForRun(d, run),
       history: boundedHistory,
       messaging: await agentMessagingContext(d, run),
       companyKnowledgeCategories: await companyKnowledgeCategories(d),
@@ -479,6 +490,10 @@ export async function executeRun(d: AppDeps, run: any) {
         }
         let result: any;
         if (tool.name === "resolve_project_source") result = resolved;
+        else if (tool.name === "propose_building_model_change") {
+          if (!d.proposeBuildingModelChange) throw conflict("Building model proposals are unavailable");
+          result = await d.proposeBuildingModelChange(run.projectId, input, { runId: run.id, agentId: run.agentId ?? "richtfest-agent" }, tx);
+        }
         else if (tool.name === "search_company_knowledge") {
           await assertCompanyKnowledgeCurrent(d, [search!], tx);
           result = search;
