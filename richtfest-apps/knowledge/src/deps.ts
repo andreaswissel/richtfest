@@ -21,6 +21,11 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     "template", "id", "version", "language", "project", "sections", "key", "sources", "attachments", "pageStart", "pageEnd", "complete", "editorial",
     "preliminaryRemarks", "exteriorNoiseAssessment", "planningLaw", "components", "plans", "sourcesAndRevisions", "openIssues", "calculationAppendix",
     "requirements", "verification", "buildingServices", "heatPumps", "protectionLevels", "scope", "measures", "entities"];
+  const acousticKeys = ["exteriorNoiseExtraction", "inventory", "rooms", "facts", "blockers", "roomId", "target", "id", "field", "value",
+    "provenance", "kind", "versionId", "page", "excerpt", "reason", "standard", "room", "use", "floorAreaM2",
+    "applicability", "assessment", "basis", "envelopeComplete", "facades", "areaM2", "noise", "metric", "levelDb",
+    "fieldEvidence", "elementsComplete", "flanking", "elements", "facadeId", "ratingBasis", "configuration", "rwDb",
+    "construction", "dnEWDb", "count", "openingAreaM2"];
   const codes = ["invalid_type", "invalid_literal", "invalid_union", "invalid_union_discriminator", "invalid_enum_value", "unrecognized_keys", "invalid_arguments", "invalid_return_type", "invalid_date", "invalid_string", "too_small", "too_big", "invalid_intersection_types", "not_multiple_of", "not_finite", "custom"];
   const providerCodes = ["rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "billing_hard_limit_reached", "overloaded_error",
     "invalid_request_error", "invalid_function_parameters", "invalid_json_schema", "unsupported_parameter", "unsupported_value",
@@ -42,12 +47,18 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
   const issues = Array.isArray(value.issues) ? value.issues.slice(0, 10).flatMap(rawIssue => {
     if (!rawIssue || typeof rawIssue !== "object") return [];
     const issue = rawIssue as Record<string, unknown>;
-    if (!codes.includes(issue.code as string) || !Array.isArray(issue.path) || issue.path.length > 8
-      || !issue.path.every(part => typeof part === "string" ? keys.includes(part) : typeof part === "number" && Number.isInteger(part) && part >= 0 && part <= 100)) return [];
+    if (!codes.includes(issue.code as string) || !Array.isArray(issue.path)) return [];
+    const acoustic = issue.path[0] === "exteriorNoiseExtraction";
+    if (issue.path.length > (acoustic ? 9 : 8)) return [];
+    // Extraction permits 5,000 facts and 3,000 evidence entries per room. Keep
+    // their bounded indices, not arbitrary field names or rejected source text.
+    if (!issue.path.every((part, index, path) => typeof part === "string" ? (acoustic ? acousticKeys : keys).includes(part)
+      : typeof part === "number" && Number.isInteger(part) && part >= 0
+        && part <= (acoustic && path[index - 1] === "facts" ? 4999 : acoustic && path[index - 1] === "fieldEvidence" ? 2999 : 100))) return [];
     const limits: Partial<Record<"minimum" | "maximum" | "multipleOf", number>> = {};
     for (const key of ["minimum", "maximum", "multipleOf"] as const) {
       const number = issue[key];
-      if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 200000) limits[key] = number;
+      if (typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= (acoustic ? 1000000 : 200000)) limits[key] = number;
     }
     // Preserve actionable packet errors, never rejected prose or arbitrary Zod
     // params. Accept the sanitized form too: diagnostics cross several layers.

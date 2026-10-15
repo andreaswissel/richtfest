@@ -10,10 +10,11 @@ import { knowledgeDeps } from "../app-hosts";
 import { agentRuns, agentRunAttempts, agentRunEvents, agentRunUsage, supervisorRuns, tasks, artifacts, artifactRevisions } from "@richtfest/knowledge/schema";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../db/client";
-import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, agentExecutionLimitsSchema, companyKnowledgeSearchSchema } from "@richtfest/shared";
+import { acousticSectionKeys, agentPresetSnapshotSchema, domainSpecialistRoles, agentModelInputByteBudget, agentExecutionLimitsSchema, companyKnowledgeSearchSchema, exteriorNoiseExtractionSchema } from "@richtfest/shared";
 import { vendorPreset } from "../agent-presets";
 import { acousticConceptFixture, legacyAcousticDraft } from "../../../../../tests/fixtures/acoustic-concepts";
 import { exteriorNoiseFixture } from "../../../../../tests/fixtures/exterior-noise";
+import { exteriorNoisePackets } from "../../../../../tests/fixtures/exterior-noise-packets";
 import { calculateAcoustics } from "@richtfest/acoustics";
 import { metadataHash, serializeProviderInput } from "../provider-metadata";
 
@@ -987,31 +988,53 @@ test("configured ten-second timeout aborts real Mastra and retains timeout class
   expect(error).toMatchObject({ code: "timeout", failureCategory: "timeout", timedOut: true, retryable: false });
 }, 20000);
 
-for (const failure of ["summary", "citation"] as const) test.skipIf(!process.env.DATABASE_URL)(`supervisor repairs a rejected ${failure} through Mastra without retrying a successful sibling`, async () => {
+for (const failure of ["summary", "citation", "acoustic_field", "acoustic_provenance"] as const) test.skipIf(!process.env.DATABASE_URL)(`supervisor repairs a rejected ${failure} through Mastra without retrying a successful sibling`, async () => {
   const { db, pool } = createDatabase(process.env.DATABASE_URL!);
   const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
   const modelConfig = { modelId: "test-model", maxSteps: 1, maxOutputTokens: 32000 };
+  const acoustic = failure.startsWith("acoustic_");
+  const packet = exteriorNoisePackets()[0]!;
+  const provenance = packet.inventory[0]!.provenance;
+  const sourceVersionIds = acoustic ? [provenance.versionId] : [];
+  const expectedAcousticIssue = failure === "acoustic_field"
+    ? { code: "custom", path: ["exteriorNoiseExtraction", "facts", 121, "value"] }
+    : { code: "custom", path: ["exteriorNoiseExtraction"] };
   const policy = { provider: "openai" as const, effort: "medium" as const, source: "vendor" as const, version: 1,
     supervisor: modelConfig, specialists: { source_reviewer: modelConfig, requirements_reviewer: modelConfig }, maxParallel: 2, maxTasks: 2, maxRevisions: 1 };
   const d = {
     db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {}, validateProject: async () => true,
-    listProjectSources: async () => ({ sources: [], truncated: false }),
+    validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: sourceVersionIds.map(versionId => ({ versionId, name: "Synthetic schedule" })), truncated: false }),
+    resolveSource: async () => ({ status: "resolved", source: { versionId: provenance.versionId, name: "Synthetic schedule" },
+      content: { status: "available", text: provenance.excerpt, truncated: false } }),
     executeSupervisor: async (input: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]) => {
-      if (input.phase === "plan") return { status: "completed", output: { tasks: [
-        { role: "requirements_reviewer", goal: "Check requirements", sourceVersionIds: [] },
-        { role: "source_reviewer", goal: "Check sources", sourceVersionIds: [] },
+      if (input.phase === "plan") return { status: "completed", output: { ...(acoustic ? { documentTemplate: "exterior-noise-concept" } : {}), tasks: [
+        { role: "requirements_reviewer", goal: "Check requirements", sourceVersionIds },
+        { role: "source_reviewer", goal: "Check sources", sourceVersionIds },
       ] } };
       const output = await callMastraSupervisor({ ...input, modelConfig }, "test-key", {
         model: new MastraLanguageModelV2Mock({ doStream: async options => {
           const instructions = options.prompt.filter(message => message.role === "system").map(message => message.content).join("\n");
-          const corrected = failure === "summary"
+          const corrected = acoustic ? instructions.includes(JSON.stringify(expectedAcousticIssue)) : failure === "summary"
             ? instructions.includes('"code":"too_big","path":["summary"],"maximum":10000') && instructions.includes("rewrite it concisely")
             : instructions.includes('"errorId":"SOURCE_CITATION_OUT_OF_SCOPE"') && instructions.includes("Recheck the claims behind rejected references");
           const summary = input.goal === "Check sources" ? "Sources inspected; coverage gaps remain explicit."
             : corrected ? "Requirements identified; missing dimensions still require confirmation."
             : failure === "summary" ? "Overlong requirements. ".repeat(600) : "Unsupported reference";
           const citations = failure === "citation" && input.goal !== "Check sources" && !corrected ? [crypto.randomUUID()] : [];
-          const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations });
+          const extraction = structuredClone(packet);
+          if (acoustic && input.goal !== "Check sources" && !corrected) {
+            if (failure === "acoustic_field") {
+              extraction.facts = Array.from({ length: 122 }, () => structuredClone(packet.facts[1]!));
+              extraction.facts[121]!.value = -1;
+            } else extraction.inventory[0]!.provenance.excerpt = "REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK";
+          }
+          if (acoustic && corrected) {
+            expect((input.context as any).outputValidationFeedback.issues).toEqual([expectedAcousticIssue]);
+            expect(instructions).not.toContain("REJECTED_QUOTE_MUST_NOT_REACH_FEEDBACK");
+          }
+          const text = JSON.stringify({ summary, rationale: "Unreviewed proposal, not a validated calculation.", citations,
+            ...(acoustic ? { exteriorNoiseExtraction: extraction } : {}) });
           return { stream: new ReadableStream({ start(controller) {
             controller.enqueue({ type: "text-start", id: "output" });
             controller.enqueue({ type: "text-delta", id: "output", delta: text });
@@ -1349,6 +1372,43 @@ test("diagnostics exclude unknown paths, messages, values and unbounded numeric 
   expect(packet.issues?.[3]).toEqual({ code: "custom", path: ["sections"] });
   expect(JSON.stringify(packet)).not.toContain("sk-secret");
   expect(sanitizeProviderDiagnostics(sanitizeProviderDiagnostics(packet))).toEqual(packet);
+});
+
+test("acoustic diagnostics retain schema paths and bounded indices without rejected evidence", () => {
+  const { method, ...room } = exteriorNoiseFixture();
+  room.facades[1]!.noise.levelDb = 151;
+  room.room.floorAreaM2 = 1000001;
+  room.facades[1]!.noise.provenance = { kind: "source", versionId: "sk-secret", page: 1, excerpt: "private source text" };
+  const parsed = exteriorNoiseExtractionSchema.safeParse({ inventory: [], rooms: [room], blockers: [] });
+  expect(parsed.success).toBe(false);
+  if (parsed.success) throw new Error("Invalid acoustic input was accepted");
+  const diagnostics = sanitizeProviderDiagnostics({ issues: parsed.error.issues.map(issue => ({ ...issue, path: ["exteriorNoiseExtraction", ...issue.path] })) });
+  expect(diagnostics.issues).toEqual([
+    { code: "too_big", path: ["exteriorNoiseExtraction", "rooms", 0, "room", "floorAreaM2"], maximum: 1000000 },
+    { code: "too_big", path: ["exteriorNoiseExtraction", "rooms", 0, "facades", 1, "noise", "levelDb"], maximum: 150 },
+    { code: "invalid_string", path: ["exteriorNoiseExtraction", "rooms", 0, "facades", 1, "noise", "provenance", "versionId"], validation: "uuid" },
+  ]);
+  expect(sanitizeProviderDiagnostics(diagnostics)).toEqual(diagnostics);
+  expect(JSON.stringify(diagnostics)).not.toContain("sk-secret");
+  expect(JSON.stringify(diagnostics)).not.toContain("private source text");
+  for (const [path, retained] of [
+    [["exteriorNoiseExtraction", "facts", 4999, "value"], true],
+    [["exteriorNoiseExtraction", "facts", 5000, "value"], false],
+    [["exteriorNoiseExtraction", "rooms", 0, "fieldEvidence", 2999, "provenance", "excerpt"], true],
+    [["exteriorNoiseExtraction", "rooms", 0, "fieldEvidence", 3000, "provenance", "excerpt"], false],
+    [["exteriorNoiseExtraction", "facts", -1, "value"], false],
+    [["exteriorNoiseExtraction", "facts", 1.5, "value"], false],
+    [["exteriorNoiseExtraction", "facts", 0, "sk-secret"], false],
+    [["exteriorNoiseExtraction", "rooms", 0, "facades", 0, "noise", "provenance", "excerpt", "id", "id"], false],
+    [["facts", 4999, "value"], false],
+    [["citations", 101], false],
+  ] as const) {
+    const result = sanitizeProviderDiagnostics({ issues: [{ code: "custom", path,
+      message: "private source text", received: "sk-secret", params: { secret: "sk-secret" } }] });
+    expect(result).toEqual(retained ? { issues: [{ code: "custom", path: [...path] }] } : {});
+  }
+  const issue = { code: "custom", path: ["exteriorNoiseExtraction"] };
+  expect(sanitizeProviderDiagnostics({ issues: Array(11).fill(issue) }).issues).toHaveLength(10);
 });
 
 test("provider 429 diagnostics distinguish quota from throttling without retaining bodies or arbitrary headers", async () => {

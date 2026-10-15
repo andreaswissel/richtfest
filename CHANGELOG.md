@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Acoustic extraction failures now retain safe field-level diagnostics for correction attempts, including larger room-fact packets and nested source references. Validation rules, models and spending/retry allowances remain unchanged; no run restarts automatically.
+
 - Project chat now proposes the right outcome directly in the conversation instead of requiring a mode switch. Calculation sheets are distinct from full reports; unclear requests ask for a choice. Confirm the outcome and cost allowance before work starts, with saved proposals protected against duplicate starts.
 
 - Added opt-in Jev image triage for new project-source uploads and agent questions. Revision-linked labels and suggested regions are reused without sending image pixels to the calling model; direct visual inspection, evidence checks and human review remain available and separate. Disabled by default, with no automatic backfill or database migration.

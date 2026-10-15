@@ -215,6 +215,31 @@ base64 inflation was a hypothesis for those historical records, not a replayed
 cause. Image-aware numeric admission diagnostics have since been implemented;
 they cannot reconstruct fields absent from older records.
 
+### Schema growth must include diagnostic and retry contracts
+
+The read-only monitor's 2026-10-15 12:30 UTC snapshot recorded a calculation-only
+run stopping after five specialist schema-validation failures. It exhausted the
+shared three-retry allowance at an estimated $0.283090, not its $5 spending
+allowance. All five failures retained an error ID and `stop` finish reason but no
+`issues` property. Their offending fields and historical outputs remain unknown.
+
+Local inspection confirmed a separate observability bug: the diagnostic sanitizer
+did not recognize `exteriorNoiseExtraction` paths. Its general index/depth bounds
+also excluded later facts and nested facade provenance. New schemas must ship
+with safe diagnostic field names and bounds matching their actual structure, not
+only a happy-path output test. Keep codes, paths and numeric constraints; never
+copy rejected values, source quotations or arbitrary validation messages.
+
+Offline regression cases now exercise both an invalid typed fact beyond index
+100 and an out-of-source quotation through the real supervisor/Mastra retry path
+with a mocked model and local Postgres. Before the fix, both lose their issue path
+and exhaust retries; afterward, feedback reaches the next request and the
+synthetic correction passes the unchanged schema without rerunning its successful
+sibling. This verifies feedback transport, not a real model's ability to repair
+the output or the cause of the historical failures. Missing old diagnostics cannot
+be recovered retroactively. Do not raise budgets or weaken evidence validation to
+compensate for missing diagnostic evidence.
+
 ## 9. Change models by responsibility and measure accepted-output cost
 
 The expensive work was Astra drafting/editing/review, not Luna specialists.
