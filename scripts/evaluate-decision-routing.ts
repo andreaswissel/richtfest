@@ -15,7 +15,7 @@ const version = values.workflow ? modeRecommendationVersion : decisionRoutingVer
 const threshold = z.coerce.number().min(0.9).max(1).parse(values.threshold);
 const cases = z.array(z.object({
   id: z.string().min(1), split: z.enum(["calibration", "holdout"]), expectedSummary: z.boolean().optional(),
-  expectedMode: z.enum(["chat", "team", "report", "uncertain"]).optional(),
+  expectedMode: z.enum(["chat", "team", "report", "calculation", "uncertain"]).optional(),
   state: z.object({ goal: z.string().min(1).max(2000), selectedSourceCount: z.number().int().min(values.workflow ? 0 : 1).max(10),
     history: z.array(z.object({ body: z.string().max(1000), actorKind: z.enum(["human", "agent"]) })).max(20),
   }).refine(v => Buffer.byteLength(JSON.stringify(v), "utf8") <= 16000),
@@ -94,7 +94,7 @@ const summary = ["calibration", "holdout"].map(split => {
     recordedCostUsd: priced.length ? priced.reduce((sum, r) => sum + r.usage!.estimatedCostUsd!, 0) : null,
     unpricedCalls: rows.length - priced.length,
     ...(values.workflow ? { correctRecommendations: rows.filter(r => r.recommendation === r.expectedMode).length,
-      unnecessaryEscalations: rows.filter(r => r.expectedMode === "chat" && ["team", "report"].includes(r.recommendation ?? "")).length } : {}) };
+      unnecessaryEscalations: rows.filter(r => r.expectedMode === "chat" && ["team", "report", "calculation"].includes(r.recommendation ?? "")).length } : {}) };
 });
 console.log(JSON.stringify({ version, threshold, summary, results,
   note: "Semantic router evaluation only, not end-to-end task quality. Fixture labels are provisional; obtain domain review and use a separate untouched holdout before enabling routing. Safety/eligibility gates remain in the application." }, null, 2));

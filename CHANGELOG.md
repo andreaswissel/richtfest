@@ -2,6 +2,8 @@
 
 ## 2026-10-15
 
+- Project chat now proposes the right outcome directly in the conversation instead of requiring a mode switch. Calculation sheets are distinct from full reports; unclear requests ask for a choice. Confirm the outcome and cost allowance before work starts, with saved proposals protected against duplicate starts.
+
 - Added opt-in Jev image triage for new project-source uploads and agent questions. Revision-linked labels and suggested regions are reused without sending image pixels to the calling model; direct visual inspection, evidence checks and human review remain available and separate. Disabled by default, with no automatic backfill or database migration.
 
 - Acoustic workflows now combine room data across documents and clarify missing or conflicting values directly in chat. Rounded choices, plain-language questions and expandable sources keep the form simple. Answers are saved with their history; confirmed inputs produce a draft calculation sheet without another AI call. New runs wait for missing inputs before report writing; existing checkpoints keep their behavior.

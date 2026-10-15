@@ -47,7 +47,7 @@ export const routingResultSchema = z.object({
   }).strict(),
 });
 
-export const modeRecommendationVersion = "workflow-recommendation-jev-v1";
+export const modeRecommendationVersion = "workflow-recommendation-jev-v2";
 export const modeRecommendationQuestions = {
   mode: {
     type: "choice" as const,
@@ -55,14 +55,15 @@ export const modeRecommendationQuestions = {
     criteria: {
       chat: "Search company knowledge, find relevant examples or documents, retrieve facts, summarize sources, explain or answer a focused question. This includes questions about engineering reports and sound insulation examples, without requesting a new report or coordinated investigation.",
       team: "Explicitly delegate work or investigate a complex question across multiple disciplines or independent workstreams and synthesize findings. Do not choose merely because the question concerns engineering, comparisons or costs.",
-      report: "Explicitly create or revise a structured report, sound insulation concept or formal deliverable. Finding, reading, explaining or searching for existing reports is chat, not report creation.",
+      report: "Explicitly create or revise a full structured report or concept (Schallschutzkonzept, Außenlärmkonzept), including narrative and calculations. A calculation sheet or Schallschutznachweis alone is calculation, not report. Finding, reading, explaining or searching for existing reports is chat, not report creation.",
+      calculation: "Perform project acoustic calculations or create a calculation sheet (Schallschutznachweis, Rechenblatt), without a full narrative concept/report. Example: 'Kannst du mir einen Schallschutznachweis für dieses Projekt erstellen?' Choose chat for explaining or finding an existing Nachweis. The available calculator covers exterior-noise room/facade insulation only; other calculation disciplines are uncertain, not calculation.",
       uncertain: "Ambiguous intent, unresolved references such as 'do that' without adequate context, conflicting requests, or insufficient context to recommend a workflow.",
     },
   },
 };
 export const modeRecommendationResultSchema = z.object({
   model: z.literal("jev-1.13.0"),
-  answers: z.object({ mode: answer(["chat", "team", "report", "uncertain"]) }).strict(),
+  answers: z.object({ mode: answer(["chat", "team", "report", "calculation", "uncertain"]) }).strict(),
 });
 
 /** Authorized, on-demand preflight: never creates a run or grants execution authority. */

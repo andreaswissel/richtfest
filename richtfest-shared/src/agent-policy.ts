@@ -23,7 +23,7 @@ export type AgentWorkflowRequest = z.infer<typeof agentWorkflowRequestSchema>;
 export const agentModeRecommendationSchema = z.object({
   version: z.string(),
   outcome: z.enum(["classified", "unconfigured", "fallback", "context_limit"]),
-  recommendation: z.enum(["chat", "team", "report", "uncertain"]).nullable(),
+  recommendation: z.enum(["chat", "team", "report", "calculation", "uncertain"]).nullable(),
   confidence: z.number().min(0).max(1).nullable(),
 });
 export type AgentModeRecommendation = z.infer<typeof agentModeRecommendationSchema>;
@@ -82,6 +82,24 @@ export const agentRunBudgetSchema = z.object({
   maxCostUsd: z.number().min(0.01).max(1000).default(10),
   maxAutomaticRetries: z.number().int().min(0).max(10).default(3),
 }).strict();
+/** Server-owned proposal snapshot; confirmation is distinct from routing. */
+export const workflowProposalSchema = z.object({
+  version: z.literal(1),
+  conversationId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  goal: z.string().min(1).max(5000),
+  sourceVersionIds: z.array(z.string().uuid()).max(100),
+  effort: agentEffortSchema,
+  budget: agentRunBudgetSchema,
+  recommendation: agentModeRecommendationSchema,
+  workflow: agentWorkflowRequestSchema.nullable(),
+}).strict();
+export type WorkflowProposal = z.infer<typeof workflowProposalSchema> & {
+  id: string;
+  status: "pending" | "confirmed" | "cancelled";
+  runId: string | null;
+  supervisorEnabled: boolean;
+};
 export const agentPresetSnapshotSchema = agentPresetConfigSchema.extend({
   effort: agentEffortSchema,
   provider: agentProviderSchema,

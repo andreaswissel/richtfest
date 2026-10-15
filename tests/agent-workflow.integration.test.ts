@@ -56,7 +56,7 @@ async function fixture() {
     },
     executeDecision: async () => { decisionCalls++; return { status: "completed", output: {
       model: "jev-1.13.0", answers: { mode: { type: "choice", choice: "chat", confidence: 0.99,
-        probabilities: { chat: 0.99, team: 0.004, report: 0.004, uncertain: 0.002 } } },
+        probabilities: { chat: 0.99, team: 0.003, report: 0.003, calculation: 0.002, uncertain: 0.002 } } },
     } }; },
   };
   const getDeps = (req: express.Request) => ({ ...d,
@@ -550,7 +550,7 @@ integration("mode preflight does not classify clipped conversation context", asy
   } finally { await f.close(); }
 });
 
-for (const choice of ["chat", "team", "report"] as const)
+for (const choice of ["chat", "team", "report", "calculation"] as const)
 integration(`Jev mode recommendation returns standard ${choice} envelope without starting a run`, async () => {
   const f = await fixture();
   let calls = 0;
@@ -558,8 +558,8 @@ integration(`Jev mode recommendation returns standard ${choice} envelope without
     calls++;
     expect(input.runId).toBeUndefined();
     return { status: "completed", output: { model: "jev-1.13.0", answers: { mode: { type: "choice", choice, confidence: 0.99,
-      probabilities: { chat: choice === "chat" ? 0.99 : 0.003, team: choice === "team" ? 0.99 : 0.003,
-        report: choice === "report" ? 0.99 : 0.003, uncertain: 0.004 } } } } };
+      probabilities: { chat: choice === "chat" ? 0.99 : 0.0025, team: choice === "team" ? 0.99 : 0.0025,
+        report: choice === "report" ? 0.99 : 0.0025, calculation: choice === "calculation" ? 0.99 : 0.0025, uncertain: 0.0025 } } } } };
   };
   try {
     const result = await f.post("/mode-recommendation", f.input);
@@ -583,7 +583,7 @@ integration(`mode preflight ${scenario} never starts runs or leaks provider outp
     if (scenario === "unconfigured") return { status: "unconfigured" };
     return { status: "completed", output: scenario === "malformed" ? { answers: secret }
       : { model: "jev-1.13.0", answers: { mode: { type: "choice", choice: "uncertain", confidence: 0.99,
-        probabilities: { chat: 0.003, team: 0.003, report: 0.004, uncertain: 0.99 } } } } };
+        probabilities: { chat: 0.003, team: 0.003, report: 0.002, calculation: 0.002, uncertain: 0.99 } } } } };
   };
   try {
     const result = await f.post("/mode-recommendation", f.input);
@@ -597,5 +597,90 @@ integration(`mode preflight ${scenario} never starts runs or leaks provider outp
     expect(await f.rows(artifacts)).toHaveLength(0);
     expect(JSON.stringify([result.body, f.audits, await f.rows(agentRunSteps)])).not.toContain(secret);
     if (scenario === "failure") expect(f.audits.length).toBeGreaterThan(0);
+  } finally { await f.close(); }
+});
+
+for (const choice of ["calculation", "report", "uncertain", "unconfigured"] as const)
+integration(`durable ${choice} proposal requires confirmation and starts at most one scoped run`, async () => {
+  const f = await fixture();
+  let classifications = 0;
+  f.d.estimateCallCost = () => 0.1;
+  f.d.executeDecision = async () => {
+    classifications++;
+    return choice === "unconfigured" ? { status: "unconfigured" } : { status: "completed", output: {
+      model: "jev-1.13.0", answers: { mode: { type: "choice", choice, confidence: 1,
+        probabilities: Object.fromEntries(["chat", "team", "report", "calculation", "uncertain"].map(m => [m, m === choice ? 1 : 0])) } },
+    } };
+  };
+  try {
+    const [chat] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Proposed workflow", createdBy: f.d.actorId }).returning();
+    const goal = choice === "report" ? "Erstelle ein Außenlärmkonzept." : "Kannst du mir einen Schallschutznachweis für dieses Projekt erstellen?";
+    const [message] = await f.db.insert(messages).values({ tenantId: f.d.tenantId, conversationId: chat!.id,
+      authorId: f.d.actorId, actorKind: "user", body: goal, sourceVersionIds: [f.sourceVersionId] }).returning();
+    const path = `/conversations/${chat!.id}/workflow-proposals/${message!.id}`;
+    const proposed = await f.post(path, { action: "propose", effort: "medium" });
+    expect(proposed.status).toBe(200);
+    expect(proposed.body.data.status).toBe("pending");
+    expect(proposed.body.data.workflow).toEqual(choice === "calculation" ? { mode: "calculation" }
+      : choice === "report" ? { mode: "report", reportTemplate: "exterior-noise-concept" } : null);
+    expect((await f.post(path, { action: "propose" })).body.data.id).toBe(message!.id);
+    expect(classifications).toBe(1);
+    expect(await f.rows(agentRuns)).toHaveLength(0);
+    expect(f.calls().providerCalls + f.calls().supervisorCalls).toBe(0);
+    expect((await f.get(path)).body.data.goal).toBe(goal);
+    expect((await f.get(`/conversations/${chat!.id}/workflow-proposals`)).body.data).toHaveLength(1);
+    expect((await f.rows(messages)).filter(m => m.openui?.startsWith("root = WorkflowProposal("))).toHaveLength(1);
+    const workflow = choice === "report" ? { mode: "report", reportTemplate: "exterior-noise-concept" } : { mode: "calculation" };
+    const confirm = { action: "confirm", workflow, budget: { maxCostUsd: 3.5, maxAutomaticRetries: 1 } };
+    expect((await f.post(path, confirm, { "x-other-tenant": "1" })).status).toBe(404);
+    expect((await f.post(path.replace(chat!.id, crypto.randomUUID()), confirm)).status).toBe(404);
+    expect((await f.post(path, { ...confirm, goal: "Forged request" })).status).toBe(400);
+    expect((await f.post(path, { ...confirm, workflow: { mode: "report" } })).status).toBe(409);
+    f.d.supervisorEnabled = false;
+    expect((await f.post(path, confirm)).status).toBe(409);
+    f.d.supervisorEnabled = true;
+    await f.db.update(conversations).set({ archivedAt: new Date() }).where(eq(conversations.id, chat!.id));
+    expect((await f.post(path, confirm)).status).toBe(409);
+    await f.db.update(conversations).set({ archivedAt: null }).where(eq(conversations.id, chat!.id));
+    const confirmed = await Promise.all([f.post(path, confirm), f.post(path, confirm)]);
+    expect(confirmed.map(r => r.status)).toEqual([200, 200]);
+    expect(confirmed[0]!.body.data.runId).toBe(confirmed[1]!.body.data.runId);
+    const runs = await f.rows(agentRuns);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.goal).toBe(goal);
+    expect(runs[0]!.modelPolicy).toMatchObject({ workflow,
+      runBudget: { maxCostUsd: 3.5, maxAutomaticRetries: 1 } });
+    expect((await f.get(`/conversations/${chat!.id}/workflow-proposals`)).body.data).toHaveLength(1);
+    expect((await f.get(path)).body.data).toMatchObject({ status: "confirmed", workflow });
+    expect((await f.post(path, { action: "cancel" })).body.data.status).toBe("confirmed");
+    expect(f.calls().providerCalls + f.calls().supervisorCalls).toBe(0);
+  } finally { await f.close(); }
+});
+
+integration("cancelled proposals never execute; clear chat requests execute once without a proposal card", async () => {
+  const f = await fixture();
+  try {
+    const [chat] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Chat routing", createdBy: f.d.actorId }).returning();
+    const [message] = await f.db.insert(messages).values({ tenantId: f.d.tenantId, conversationId: chat!.id,
+      authorId: f.d.actorId, actorKind: "user", body: "Explain the facade area." }).returning();
+    const path = `/conversations/${chat!.id}/workflow-proposals/${message!.id}`;
+    const result = await f.post(path, { action: "propose" });
+    expect(result.status).toBe(200);
+    expect(result.body.data.status).toBe("confirmed");
+    await f.stopped(result.body.data.runId);
+    expect((await f.post(path, { action: "propose" })).body.data.runId).toBe(result.body.data.runId);
+    expect(f.calls().providerCalls).toBe(1);
+    expect(f.calls().decisionCalls).toBe(1);
+    expect((await f.rows(messages)).some(m => m.openui?.startsWith("root = WorkflowProposal("))).toBe(false);
+    f.d.executeDecision = undefined;
+    const [second] = await f.db.insert(messages).values({ tenantId: f.d.tenantId, conversationId: chat!.id,
+      authorId: f.d.actorId, actorKind: "user", body: "Do that." }).returning();
+    const pending = `/conversations/${chat!.id}/workflow-proposals/${second!.id}`;
+    expect((await f.post(pending, { action: "propose" })).body.data.status).toBe("pending");
+    expect((await f.post(pending, { action: "cancel" })).body.data.status).toBe("cancelled");
+    expect((await f.post(pending, { action: "confirm", workflow: { mode: "chat" }, budget: {} })).body.data.status).toBe("cancelled");
+    expect(await f.rows(agentRuns)).toHaveLength(1);
   } finally { await f.close(); }
 });

@@ -34,6 +34,7 @@ import { executeTrackedProvider, summarizeUsageRows, runAccounting, interruptPro
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { resolveRunSource } from "./source-evidence";
 import { recommendMode } from "./decision-routing";
+import { workflowProposalsRouter } from "./workflow-proposals";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -878,6 +879,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     lineage?: { parentRunId?: string; specialistRole?: string },
     providerOverride?: import("@richtfest/shared").AgentProvider,
     modelPolicyOverride?: unknown,
+    deferExecution = false,
   ) {
     if (!(await d.validateProject(input.projectId)))
       throw missing("Project not found");
@@ -997,10 +999,13 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       );
       return created;
     });
-    if (configured && !useSupervisor)
+    if (configured && !useSupervisor && !deferExecution)
       void executeRun(d, row).catch(() => undefined);
     return row;
   }
+  router.use(workflowProposalsRouter(getDeps,
+    (d, input) => create(d, runInput.parse(input), undefined, undefined, undefined, undefined, true),
+    (d, run) => { void executeRun(d, run).catch(() => undefined); }));
   route("post", "/runs", "agent:run", (d, req) =>
     create(d, runInput.parse(req.body)),
   );

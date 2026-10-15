@@ -1,5 +1,5 @@
 import {
-  library,
+  modelLibrary as library,
   systemPrompt,
 } from "../src/components/project-workspace/openui";
 const schema = library.toJSONSchema();

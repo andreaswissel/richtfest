@@ -25,14 +25,8 @@ import {
 } from "../ui/dialog";
 import { AgentEffortControl } from "../agent-effort-control";
 import { AgentRunRetryActions } from "../agent-run-retry-actions";
-import {
-  AgentWorkflowControl,
-  workflowReady,
-  useWorkflowDecision,
-  type WorkflowSelection,
-} from "../agent-workflow-control";
 import { AgentSourcePicker } from "../agent-source-picker";
-import type { AgentWorkflowRequest } from "@richtfest/shared";
+import type { WorkflowProposal } from "@richtfest/shared";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -282,9 +276,6 @@ function Conversation({
   useAgentMessageEvents(conversationId);
   const richtfest = useRichtfestCelebration();
   const [effort, setEffort] = useState("medium");
-  const [workflow, setWorkflow] = useState<WorkflowSelection>({
-    mode: "suggest",
-  });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -318,31 +309,28 @@ function Conversation({
   }, [readiness.data?.supervisor]);
   const startRun = useMutation({
     mutationFn: ({
-      goal,
-      sourceVersionIds,
       messageId,
       effort,
-      workflow,
     }: {
-      goal: string;
-      sourceVersionIds: string[];
-      messageId?: string;
+      messageId: string;
       effort: string;
-      workflow: AgentWorkflowRequest;
     }) =>
-      api("/knowledge/runs", {
-        projectId,
-        conversationId,
-        effort,
-        workflow,
-        goal,
-        sourceVersionIds,
-        messageId,
-      }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
+      api<WorkflowProposal>(
+        `/knowledge/conversations/${conversationId}/workflow-proposals/${messageId}`,
+        {
+          action: "propose",
+          effort,
+        },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [path, "messages"] });
+      void queryClient.invalidateQueries({
+        queryKey: [`${path}/workflow-proposals`],
+      });
+      return queryClient.invalidateQueries({
         queryKey: [`/knowledge/workspaces/${projectId}`],
-      }),
+      });
+    },
   });
   const steer = useMutation({
     mutationFn: ({
@@ -437,16 +425,6 @@ function Conversation({
     ),
     [search, setSearch] = useState(""),
     [reply, setReply] = useState<string>();
-  const workflowContext = {
-    projectId,
-    conversationId,
-    goal: draft,
-    sourceVersionIds: attachments,
-    value: workflow,
-    supervisorEnabled: !!readiness.data?.supervisor?.enabled,
-    steering: !!activeSupervisorRun,
-  };
-  const workflowDecision = useWorkflowDecision(workflowContext);
   const selectSource = (source: { id: string; label: string }) => {
     setAttachmentLabels((current) => ({
       ...current,
@@ -562,7 +540,6 @@ function Conversation({
       body: string;
       parentMessageId?: string;
       sourceVersionIds: string[];
-      workflow: AgentWorkflowRequest;
       effort: string;
       steeringRunId?: string;
     }) =>
@@ -580,11 +557,8 @@ function Conversation({
         isPositiveFeedback(submitted.body);
       if (readiness.data?.executionAvailable && !feedbackOnly) {
         const nextRun = {
-          goal: submitted.body,
-          sourceVersionIds: submitted.sourceVersionIds,
           messageId: message.id,
           effort: submitted.effort,
-          workflow: submitted.workflow,
         };
         if (submitted.steeringRunId)
           steer.mutate({
@@ -601,11 +575,6 @@ function Conversation({
         setAttachments([]);
         setAttachmentLabels({});
         setReply(undefined);
-        setWorkflow((current) =>
-          JSON.stringify(current) === JSON.stringify(submitted.workflow)
-            ? { mode: "suggest" }
-            : current,
-        );
       }
       draftDirty.current = !composerUnchanged;
       reader.current = {
@@ -642,18 +611,10 @@ function Conversation({
     )
       return;
     initialMessageSubmitted.current = true;
-    void (
-      readiness.data?.executionAvailable && !isPositiveFeedback(initialMessage)
-        ? workflowDecision.resolve()
-        : Promise.resolve({ mode: "chat" } as AgentWorkflowRequest)
-    ).then((resolved) => {
-      if (resolved)
-        send.mutate({
-          body: initialMessage,
-          sourceVersionIds: [],
-          workflow: resolved,
-          effort: selectedEffort,
-        });
+    send.mutate({
+      body: initialMessage,
+      sourceVersionIds: [],
+      effort: selectedEffort,
     });
     onInitialMessageSent?.();
   }, [initialMessage, ready, readiness.isFetched, messages.length]);
@@ -1009,24 +970,7 @@ function Conversation({
                 </Message>
               </MessageScrollerItem>
             )}
-            {(workflowDecision.result || workflowDecision.error) && (
-              <MessageScrollerItem messageId="workflow-recommendation">
-                <Message>
-                  <MessageContent>
-                    <AgentWorkflowControl
-                      {...workflowContext}
-                      presentation="recommendation"
-                      decision={workflowDecision}
-                      onChange={(next) => {
-                        setWorkflow(next);
-                        composer.current?.focus();
-                      }}
-                    />
-                  </MessageContent>
-                </Message>
-              </MessageScrollerItem>
-            )}
-            {!displayMessages.length && !workflowDecision.result && (
+            {!displayMessages.length && (
               <Marker>
                 <MarkerContent>{t("noMessages")}</MarkerContent>
               </Marker>
@@ -1045,17 +989,7 @@ function Conversation({
         className="workspace-composer"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (
-            draft.trim() &&
-            !send.isPending &&
-            !workflowDecision.isPending &&
-            (activeSupervisorRun ||
-              workflowReady(
-                workflow,
-                attachments,
-                !!readiness.data?.supervisor?.enabled,
-              ))
-          ) {
+          if (draft.trim() && !send.isPending && !startRun.isPending) {
             const submitted = {
               body: draft,
               parentMessageId: reply,
@@ -1063,13 +997,7 @@ function Conversation({
               effort: selectedEffort,
               steeringRunId: activeSupervisorRun?.id,
             };
-            const resolved =
-              readiness.data?.executionAvailable &&
-              (attachments.length > 0 || !isPositiveFeedback(draft))
-                ? await workflowDecision.resolve()
-                : ({ mode: "chat" } as AgentWorkflowRequest);
-            if (resolved) send.mutate({ ...submitted, workflow: resolved });
-            else if (composer.current?.isConnected) resumeFollowing();
+            send.mutate(submitted);
           }
         }}
       >
@@ -1195,19 +1123,11 @@ function Conversation({
                 <Button
                   type="button"
                   variant="ghost"
-                  size={workflow.mode === "suggest" ? "icon" : "sm"}
+                  size="icon"
                   aria-label={t("workspaceChatOptions")}
                   title={t("workspaceChatOptions")}
                 >
                   <Settings2 aria-hidden="true" />
-                  {workflow.mode !== "suggest" &&
-                    t(
-                      workflow.mode === "chat"
-                        ? "agentModeChat"
-                        : workflow.mode === "team"
-                          ? "agentModeTeam"
-                          : "agentModeReport",
-                    )}
                 </Button>
               </DialogTrigger>
               <DialogContent
@@ -1216,17 +1136,10 @@ function Conversation({
               >
                 <DialogTitle>{t("workspaceChatOptions")}</DialogTitle>
                 <DialogDescription>
-                  {t("agentSuggestDefaultHint")}
+                  {t("workflowProposalRoutingHint")}
                 </DialogDescription>
-                {activeSupervisorRun ? (
+                {activeSupervisorRun && (
                   <Callout>{t("agentSteeringMode")}</Callout>
-                ) : (
-                  <AgentWorkflowControl
-                    {...workflowContext}
-                    presentation="settings"
-                    decision={workflowDecision}
-                    onChange={setWorkflow}
-                  />
                 )}
                 <AgentEffortControl
                   enabled
@@ -1234,11 +1147,6 @@ function Conversation({
                   value={selectedEffort}
                   onChange={setEffort}
                 />
-                {workflow.mode === "report" &&
-                  !activeSupervisorRun &&
-                  !attachments.length && (
-                    <Callout>{t("agentReportAutomaticEvidence")}</Callout>
-                  )}
                 <DialogClose asChild>
                   <Button type="button" variant="outline">
                     {t("close")}
@@ -1250,7 +1158,7 @@ function Conversation({
               className={`workspace-composer-status text-ui-xs${save.error ? " workspace-composer-error" : " muted"}`}
               aria-live={save.error ? "assertive" : "polite"}
             >
-              {workflowDecision.isPending
+              {startRun.isPending
                 ? t("agentCheckingMode")
                 : save.error
                   ? t("workspaceDraftError")
@@ -1278,17 +1186,7 @@ function Conversation({
                 className="workspace-send-button"
                 aria-label={t("workspaceUiSendMessage")}
                 title={t("workspaceUiSendShortcut")}
-                disabled={
-                  send.isPending ||
-                  workflowDecision.isPending ||
-                  !draft.trim() ||
-                  (!activeSupervisorRun &&
-                    !workflowReady(
-                      workflow,
-                      attachments,
-                      !!readiness.data?.supervisor?.enabled,
-                    ))
-                }
+                disabled={send.isPending || startRun.isPending || !draft.trim()}
               >
                 <ArrowUp aria-hidden="true" />
               </Button>

@@ -16,6 +16,7 @@ test("accepts static registered source-grounded UI", () => {
 });
 test("rejects executable, external, unregistered or incomplete UI", () => {
   for (const code of [
+    'root = WorkflowProposal("550e8400-e29b-41d4-a716-446655440002")',
     'root = Callout("https://example.com")',
     'root = Query("fetch", {})',
     'root = Unknown("x")',

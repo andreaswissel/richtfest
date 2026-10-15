@@ -2,7 +2,7 @@ import { repairLegacyRuns } from "./run-recovery";
 import { Router, type Request } from "express";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { and, asc, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, getTableColumns, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, acousticDocumentTemplateSchema, agentBudgetDecisionSchema, acousticDatasetSchema, type AcousticDataset } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
@@ -371,6 +371,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
             and(
               eq(artifacts.tenantId, d.tenantId),
               eq(artifacts.projectId, id),
+              ne(artifacts.type, "workflow_proposal"),
             ),
           )
           .orderBy(desc(artifacts.createdAt)),
@@ -823,6 +824,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           )
           .for("update");
         if (!artifact) throw missing();
+        if (artifact.type === "workflow_proposal") throw conflict("Workflow proposals are not editable documents");
         await sources(d, artifact.projectId, input.sourceVersionIds);
         const [last] = await tx
           .select()

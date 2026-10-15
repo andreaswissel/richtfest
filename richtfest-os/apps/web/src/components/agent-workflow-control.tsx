@@ -97,7 +97,9 @@ export function useWorkflowDecision(props: WorkflowContext) {
       if (response === undefined) return;
       if (
         response?.outcome === "classified" &&
-        ["team", "report"].includes(response.recommendation ?? "") &&
+        ["team", "report", "calculation"].includes(
+          response.recommendation ?? "",
+        ) &&
         props.supervisorEnabled
       )
         return; // Apply + Send explicitly authorizes escalation.
@@ -127,7 +129,9 @@ export function AgentWorkflowControl({
       : null;
   const actionable =
     recommendation === "chat" ||
-    ((recommendation === "team" || recommendation === "report") &&
+    ((recommendation === "team" ||
+      recommendation === "report" ||
+      recommendation === "calculation") &&
       supervisorEnabled);
   return (
     <div className="flex flex-wrap items-end gap-stack">
@@ -244,7 +248,9 @@ export function AgentWorkflowControl({
                     ? "agentModeChat"
                     : recommendation === "team"
                       ? "agentModeTeam"
-                      : "agentModeReport",
+                      : recommendation === "calculation"
+                        ? "agentModeCalculation"
+                        : "agentModeReport",
                 )}{" "}
                 <Button
                   type="button"
@@ -253,7 +259,10 @@ export function AgentWorkflowControl({
                     onChange(
                       recommendation === "report"
                         ? { mode: "report" }
-                        : { mode: recommendation as "chat" | "team" },
+                        : {
+                            mode: recommendation as
+                              "chat" | "team" | "calculation",
+                          },
                     )
                   }
                 >

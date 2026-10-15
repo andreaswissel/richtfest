@@ -439,6 +439,19 @@ release. No new paid run is needed to test deterministic arithmetic or rendering
 
 ### Typed input clarification belongs in the active conversation
 
+Routing is not execution authority. A classifier must know every available output
+contract: omitting Calculation from its options forced “Schallschutznachweis” into
+Report even though the calculation workflow already existed. Classify the requested
+action, not just the domain word: create a Nachweis, explain it and find an existing
+one are different requests. Keep these contrasts in the routing evaluation corpus.
+Persist the proposed outcome in the conversation, let people correct it, and require
+explicit allowance/confirmation before delegated, calculation or report work.
+Missing or ambiguous classification asks for clarification; it does not authorize
+a fallback report. Clear conversational requests can continue directly. A saved
+proposal and its confirmation must share an idempotency key so reloads, network
+retries and double clicks cannot buy duplicate runs. The renderer never owns this
+authority: model-generated UI cannot create the execution card or alter its scope.
+
 OpenUI is a presentation layer, not the authority for accepting engineering inputs.
 The original `MissingInput` component only posted conversational text. The new
 application-created `AcousticInputReview` references a saved review artifact in its
