@@ -6,10 +6,13 @@ import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/share
 import { files, fileVersions, projectMembers, projects, sourceExtractions, sourceModels, sourceRepresentations } from "./schema";
 import { extractAffinityPreview } from "./affinity-preview";
 import type { AppDeps } from "./deps";
+import { createEnvironmentRouter } from "./environment-router";
 import { createLocationRouter } from "./location-router";
 import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
 import { readPdfRepresentations } from "./source-representations";
+import { createBuildingModelRouter } from "./building-model-router";
+import { bootstrapAutomaticBuildingModel } from "./automatic-building-model";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -70,7 +73,9 @@ const projectFile = async (
 export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
+  router.use(createEnvironmentRouter(getDeps));
   router.use(createSourceModelRouter(getDeps));
+  router.use(createBuildingModelRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -722,6 +727,8 @@ export function createRouter(getDeps: GetDeps) {
             });
           await tx.insert(sourceExtractions).values({ versionId: updated.id, tenantId: d.tenantId });
           await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId });
+          if (updated.mimeType === "application/pdf" || /\.pdf$/i.test(row.file.name))
+            await bootstrapAutomaticBuildingModel(tx, d, { projectId, sourceVersionId: updated.id, fileName: row.file.name });
           await d.audit(tx, "projects.file.upload.completed", "file", fileId, {
             projectId,
             versionId: row.version.id,

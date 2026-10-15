@@ -65,6 +65,17 @@ test("presence floor suppresses absent targets, with inclusive 0.9 boundary", as
   }
 });
 
+test("box answers accept the official nullable provider confidence contract", async () => {
+  const value = result();
+  value.answers.legend.confidence = null as unknown as number;
+  const output = await callImageDecisionModel(input, apiKey, { fetch: response(value) });
+  expect(output.output.answers.legend).toMatchObject({
+    confidence: null,
+    presenceProbability: 0.95,
+    box: result().answers.legend.box,
+  });
+});
+
 test("malformed answers fail closed while actual usage is recorded and settled", async () => {
   const mutations: ((v: any) => void)[] = [
     v => { v.model = "jev-latest"; }, v => { delete v.answers.present; },

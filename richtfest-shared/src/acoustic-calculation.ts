@@ -5,6 +5,44 @@ const provenance = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("source"), versionId: z.string().uuid(), page: z.number().int().positive().nullable(), excerpt: z.string().trim().min(1).max(1000) }).strict(),
   z.object({ kind: z.literal("assumption"), reason: z.string().trim().min(1).max(1000) }).strict(),
 ]);
+const visualCrop = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1),
+  width: z.number().positive().max(1), height: z.number().positive().max(1) }).strict()
+  .refine(c => c.x + c.width <= 1 && c.y + c.height <= 1, "Crop must fit within the page");
+/** A visually inferred room/unit relationship. This is a review candidate, never calculation provenance. */
+export const exteriorNoiseVisualCandidateSchema = z.object({
+  apartmentLabel: z.string().trim().min(1).max(200).nullable(),
+  roomLabel: z.string().trim().min(1).max(200).nullable(),
+  mapping: z.string().trim().min(1).max(1000),
+  provenance: z.object({
+    kind: z.literal("visual_inspection"), versionId: z.string().uuid(), page: z.number().int().positive(),
+    crop: visualCrop.nullable(), receiptId: z.string().uuid(), imageHash: z.string().regex(/^[a-f0-9]{64}$/i),
+  }).strict(),
+  // An explicitly printed value from the inspected page. This remains a
+  // candidate until a separate human decision approves this exact observation.
+  floorAreaObservation: z.object({ valueM2: z.number().finite().min(1e-6).max(1000000),
+    basis: z.literal("explicitly_printed"), reviewStatus: z.literal("unreviewed") }).strict().optional(),
+  reviewStatus: z.literal("unreviewed"),
+}).strict();
+export type ExteriorNoiseVisualCandidate = z.infer<typeof exteriorNoiseVisualCandidateSchema>;
+const visualCandidateKey = z.string().regex(/^[a-f0-9]{64}$/);
+const visualMappingReviewFields = {
+  candidateKey: visualCandidateKey,
+  actorId: z.string().uuid(), at: z.string().datetime(), reason: z.string().trim().min(1).max(1000),
+};
+export const acousticVisualMappingReviewSchema = z.discriminatedUnion("decision", [
+  z.object({ ...visualMappingReviewFields, decision: z.literal("confirmed"), roomId: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ ...visualMappingReviewFields, decision: z.literal("rejected") }).strict(),
+]);
+export type AcousticVisualMappingReview = z.infer<typeof acousticVisualMappingReviewSchema>;
+const acousticVisualAreaReviewFields = {
+  candidateKey: visualCandidateKey, observationKey: visualCandidateKey,
+  actorId: z.string().uuid(), at: z.string().datetime(), reason: z.string().trim().min(1).max(1000),
+};
+export const acousticVisualAreaReviewSchema = z.discriminatedUnion("decision", [
+  z.object({ ...acousticVisualAreaReviewFields, decision: z.literal("approved"), roomId: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ ...acousticVisualAreaReviewFields, decision: z.literal("rejected") }).strict(),
+]);
+export type AcousticVisualAreaReview = z.infer<typeof acousticVisualAreaReviewSchema>;
 const label = z.string().trim().min(1).max(200);
 const level = z.number().finite().min(-200).max(300);
 const observation = z.object({ label, levelDb: level, provenance }).strict();
@@ -121,6 +159,8 @@ export const acousticFactKey = (fact: Pick<ExteriorNoiseFact, "roomId" | "target
 export const exteriorNoiseExtractionSchema = z.object({
   inventory: exteriorNoiseBatchSchema.shape.inventory.min(0).max(100),
   rooms: exteriorNoiseBatchSchema.shape.rooms.max(100),
+  // Preserved alongside text-backed extraction, but deliberately excluded from calculation input.
+  visualCandidates: z.array(exteriorNoiseVisualCandidateSchema).max(100).optional(),
   facts: z.array(exteriorNoiseFactSchema).max(5000).optional(),
   blockers: z.array(z.object({ roomId: label.nullable(), reason: z.string().min(1).max(1000) }).strict()).max(100),
 }).strict();
@@ -156,6 +196,11 @@ export function scopedExteriorNoiseExtractionSchema(versionIds: string[]) {
   return exteriorNoiseExtractionSchema.extend({
     inventory: z.array(z.object({ roomId: label, provenance: source }).strict()).max(ids.length ? 100 : 0),
     rooms: z.array(room).max(ids.length ? 100 : 0),
+    visualCandidates: z.array(exteriorNoiseVisualCandidateSchema.extend({
+      provenance: exteriorNoiseVisualCandidateSchema.shape.provenance.extend({
+        versionId: ids.length ? z.enum(ids as [string, ...string[]]) : z.string().uuid(),
+      }),
+    })).max(ids.length ? 100 : 0).optional(),
     facts: z.array(fact).max(ids.length ? 5000 : 0).optional(),
   });
 }
@@ -166,6 +211,10 @@ export const acousticInputReviewSchema = z.object({
   packets: z.array(exteriorNoiseExtractionSchema),
   resolutions: z.array(z.object({ fact: exteriorNoiseFactSchema, reason: z.string().trim().min(1).max(1000),
     actorId: z.string().uuid(), at: z.string().datetime() }).strict()),
+  // Optional for old persisted review snapshots; these decisions add identity only, never numeric evidence.
+  visualMappings: z.array(acousticVisualMappingReviewSchema).default([]),
+  // Approval history is separate from identity mapping and always retains the exact observation key.
+  visualAreaReviews: z.array(acousticVisualAreaReviewSchema).default([]),
   inventoryConfirmation: z.object({ actorId: z.string().uuid(), at: z.string().datetime(), reason: z.string() }).nullable(),
 }).strict();
 export type AcousticInputReview = z.infer<typeof acousticInputReviewSchema>;

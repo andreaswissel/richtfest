@@ -12,7 +12,12 @@
     "./source-representations": "./src/source-representations.ts",
     "./source-extraction": "./src/source-extraction.ts",
     "./source-model": "./src/source-model.ts",
-    "./source-image-query": "./src/source-image-query.ts"
+    "./source-document": "./src/source-document.ts",
+    "./source-image-query": "./src/source-image-query.ts",
+    "./building-model": "./src/building-model-router.ts",
+    "./building-extraction": "./src/building-extraction-worker.ts",
+    "./automatic-building-model": "./src/automatic-building-model.ts",
+    "./environment": "./src/environment.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
@@ -23,7 +28,8 @@
     "express": "^4.21.2",
     "saxes": "6.0.0",
     "web-ifc": "0.0.78",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "pdfjs-dist": "5.7.284"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

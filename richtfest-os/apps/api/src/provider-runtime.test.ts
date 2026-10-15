@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { callProvider, reasoningEffortForModel, redactProviderText, supportsReasoningModel } from "./provider-runtime";
+import { buildingDeepLink } from "@richtfest/shared";
 import {
   validateTool,
   outputInput,
@@ -16,6 +17,30 @@ const output = {
     type: "draft" as const,
   },
 };
+test("Chat provider receives reviewed building state and returns a proposal for the same stable room and evidence", async () => {
+  const projectId = "00000000-0000-4000-8000-000000000001";
+  const entityId = "00000000-0000-4000-8000-000000000002";
+  const evidence = [{ kind: "page" as const, sourceVersionId: "00000000-0000-4000-8000-000000000003", page: 3 }];
+  const deepLink = buildingDeepLink(projectId, "room", entityId);
+  const proposal = { entityType: "room" as const, entityId, baseRevision: 4, propertyKey: "roomUse", value: "Conference room", reason: "Clarify room use", evidence };
+  let request: any;
+  const result = await callProvider({ provider: "openai", goal: `Review ${deepLink}`, context: {
+    workflow: { mode: "chat" }, buildingModel: { revision: 4, entities: [{ id: entityId, deepLink }],
+      properties: [{ entityId, propertyKey: "roomUse", value: "Meeting room", reviewStatus: "approved", evidence }] },
+  } }, "test-credential", async (_url, init) => {
+    request = JSON.parse(String(init.body));
+    return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({
+      summary: `Proposed clarification for ${deepLink}`, rationale: "Human review required", citations: [],
+      tools: [{ name: "propose_building_model_change", input: proposal }], artifact: null,
+    }) }] }] });
+  });
+  expect(JSON.stringify(request.input)).toContain("Meeting room");
+  expect(JSON.stringify(request.input)).toContain(deepLink);
+  expect(request.instructions).toContain("never approves or changes a reviewed fact");
+  expect(request.instructions).toContain("propose_building_model_change");
+  const parsed = outputInput.parse(result);
+  expect(validateTool(parsed.tools[0]!.name, parsed.tools[0]!.input)).toEqual(proposal);
+});
 test("direct HTTP and streaming errors preserve provider reasons, not credentials or echoed input", async () => {
   const key = "opaque-connection-token";
   const error = { type: "invalid_request_error", code: "invalid_json_schema", param: "text.format.schema",

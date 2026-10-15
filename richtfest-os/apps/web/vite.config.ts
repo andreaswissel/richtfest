@@ -35,6 +35,6 @@ export default defineConfig({
         html.replaceAll("__PUBLIC_ORIGIN__", "http://localhost:5173"),
     },
   ],
-  server: { port: 5173, proxy: { "/api": "http://localhost:3000" } },
+  server: { port: 5173, proxy: { "/api": process.env.VITE_API_PROXY || "http://localhost:3000" } },
   build: { manifest: true, target: "es2022" },
 });

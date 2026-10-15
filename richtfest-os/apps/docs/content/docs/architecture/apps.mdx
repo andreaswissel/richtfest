@@ -10,7 +10,7 @@ Richtfest OS owns identity, sessions, roles and access, audit, provider connecti
 | Package | Responsibility |
 | --- | --- |
 | `richtfest-apps/crm` | Customers and contacts |
-| `richtfest-apps/projects` | Projects, source files and revisions |
+| `richtfest-apps/projects` | Projects, source files and revisions, and the shared building model |
 | `richtfest-apps/knowledge` | Conversations, tasks and reviewed knowledge |
 | `richtfest-apps/acoustics` | Versioned acoustic arithmetic, supplied to agents through the OS host |
 | `richtfest-apps/support` | Private help conversations and reviewed bug/feature submissions |
@@ -31,6 +31,28 @@ Postgres stores operational state, access, records, metadata, tasks and audit hi
 The [Components catalog](/docs/workflows/components) retains supplier URLs and source metadata, with optional private, immutable original-PDF snapshots uploaded explicitly against a current revision's recorded checksum and page count. Sources without those values remain external-only; no automatic fetch or extraction occurs. OS storage adapters keep bytes in private Railway buckets in production and local storage in development. Migration `0034_component_documents` adds document metadata; uploading matching bytes does not change content revisions or review. Reviewed catalog revisions can inform bounded agent recommendations through OS host adapters, but are neither project source citations nor evidence of installed project components. Migration `0033_components` adds catalog tables and permissions without importing records; new keys are granted only to roles already holding `access:manage`.
 
 TanStack Query owns server-state caching. Zustand holds local UI state. Browser caches are disposable views, never the authoritative copy of company knowledge or workflow state.
+
+The Projects app owns the durable building, storey, room and element graph. Construction state, properties, measurements, plan-page links, placement, alternatives, review status and source reconciliation remain versioned records in Postgres. Richtfest OS supplies database, permission, audit, file and agent-runtime capabilities through the Projects host contract; the app does not import OS internals. PDF optional-content groups are a rendering control only and never become the model object hierarchy.
+
+Agents receive a bounded snapshot of stable object IDs and reviewed facts through the Projects host. Chat may create an evidence-linked proposal against the revision it read. It cannot approve, merge or silently replace the human-reviewed model; Team and Report receive read-only context. A changed revision makes an older proposal stale instead of overwriting newer work.
+
+### Building-plan extraction
+
+Completing an ordinary project-evidence PDF upload creates or reuses a draft Building model and source container immediately. Once durable source processing is terminal, the Projects worker registers every packet page and queues topology only for confidently identified floor-plan sheets. Exact saved drawing-title text takes precedence over optional upload-time TypeSafe image triage; mixed, low-confidence, absent or conflicting results remain unresolved. Non-floor and unresolved pages stay in the page register with no guessed geometry. This orchestration reuses existing Postgres records and needs no migration beyond `0041_building_extraction`.
+
+Each identified floor sheet receives a source-linked draft storey and durable extraction job. The source identity and extractor version make repeated planning and recovery idempotent; leases and a maximum of three extraction attempts bound automatic recovery. Native PDF text is preferred. If it yields no labels, the worker uses bounded German/English OCR. Topology-v3 reads supported closed construction paths, supplementary existing/demolition fills and compound even-odd fill regions with their holes. The deterministic topology pass does not call a live model provider or populate a vector index. If TypeSafe is configured, one optional fail-open decision call classifies at most 64 deduplicated exact room-label snippets; its output is an unreviewed proposal, not extracted evidence.
+
+Every candidate is **unreviewed** and linked to the source revision and page. Room labels seed a bounded raster topology pass. Single-label enclosed components yield approximate contours; multi-label interiors yield wall-constrained geodesic partitions with competing labels and algorithm metadata retained. Unresolved labels remain anchors. Source fill containment supports WE-unit association. Construction polygons are grouped by raster connectivity into source-fragment assemblies; their member polygons remain exact source geometry, while their grouping is inferred. Partition seams are not walls or openings.
+
+The reference page 3 produced 91 room candidates: 73 approximate partitions, 3 enclosed regions and 15 unresolved anchors. It associated 76 with WE units, formed 72 construction-fragment assemblies from 235 exact polygons, and retained 90 unreviewed printed-area observations. These counts describe that reference page only. Doors, openings, adjacency, materials, construction state, room use, physical measurements and complete room/wall coverage are not established. An inferred room contour is not a verified boundary, and a connected assembly is not a semantic wall. If extraction fails or is unavailable, the original PDF remains available for manual region entry.
+
+Reviewers can rename a candidate, accept it as a new room or element, reconcile it to an existing same-type object, or reject it. Accepted assemblies become canonical `source_construction_assembly` elements; legacy individual footprints use `source_footprint`. Geometry retains its source evidence and inference limits. Printed-area observations are stripped from accepted geometry, so accepting a candidate cannot silently approve a numerical measurement. Review and reconciliation create the ordinary versioned model/review/audit records. Accepted objects enter the bounded building snapshot supplied to authorized agent runs. Agents still need the configured provider and permissions to propose changes; this context has no embedding/vector retrieval path.
+
+Before review, authorized agents receive the same unreviewed rooms and construction assemblies in a bounded, explicitly separate `draftCandidates` collection with source revision, page and geometry quality. They are not canonical entities, calculation inputs or approvals.
+
+An explicit re-run refreshes a completed or failed extraction job in place. Reviewed candidates remain intact; obsolete unreviewed hypotheses are superseded, and new candidates retain distinct source keys. The optional TypeSafe step is not retried independently and never prevents the deterministic job from completing.
+
+The separate source-document model preserves extracted text blocks, the raw-text SHA-256 and PDF optional-content-group metadata for provenance and display. Those blocks are not a second semantic inventory, and their physical PDF geometry or OCG association is unknown. OCG visibility changes the evidence renderer only; it does not create, hide or redefine construction objects.
 
 ## Engineering references
 

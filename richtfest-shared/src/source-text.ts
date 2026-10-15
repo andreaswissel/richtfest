@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SourceDocumentPage, SourceDocumentLayers } from "./source-document";
 
 /** Human-confirmed full export of an exact original revision; not content approval. */
 export type SourcePdfRepresentation = {
@@ -33,6 +34,8 @@ export type SourceVisual = SourceVisualRequest & ({
 export type SourceText = {
   status: "processing" | "available" | "unsupported" | "extraction_too_large" | "extraction_failed";
   text?: string;
+  documentModel?: SourceDocumentPage;
+  documentLayers?: SourceDocumentLayers;
   truncated?: boolean;
   reason?: string;
   pages?: number;

@@ -1,14 +1,17 @@
 import type { Request } from "express";
 import { Readable } from "node:stream";
 import { sql } from "drizzle-orm";
-import { agentModelInputByteBudget, type AgentProvider } from "@richtfest/shared";
+import { environmentSurveySchema, agentModelInputByteBudget, type AgentProvider } from "@richtfest/shared";
 import { estimateCostUsd } from "./model-pricing";
 import { HttpError, type Actor } from "./middleware/auth";
 import { recordAudit } from "./audit";
 import type { Database } from "./db/client";
 import { fileStorage } from "./file-storage";
 export { fileStorage } from "./file-storage";
-import { readSourceEvidence } from "@richtfest/projects/source-model";
+import { readSourceEvidence, readSourceModel } from "@richtfest/projects/source-model";
+import { readSourceDocumentModel } from "@richtfest/projects/source-document";
+import { researchProjectEnvironment } from "@richtfest/projects/environment";
+import { readBuildingModelAgentContext, proposeBuildingModelChange } from "@richtfest/projects/building-model";
 import { querySourceImage } from "@richtfest/projects/source-image-query";
 import { extractSourceVisual } from "@richtfest/projects/source-text";
 import { readPdfRepresentations } from "@richtfest/projects/source-representations";
@@ -151,6 +154,10 @@ export const knowledgeDeps = (
   return {
     ...base(db, req),
     // Only agent source access is evidence-only. Other apps retain generic validation.
+    buildingModelContext: (projectId, selection) => readBuildingModelAgentContext(projectsDeps(db, req), projectId,
+      selection ? { objectId: selection.entityId } : {}),
+    proposeBuildingModelChange: (projectId, input, execution, tx) => proposeBuildingModelChange(
+      { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
     validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
       sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid
@@ -316,6 +323,10 @@ export const knowledgeDeps = (
       },
       remove: key => fileStorage.remove(key),
     },
+    ...(actor.permissions.has("projects:read") && actor.permissions.has("projects:write") && actor.permissions.has("agent:run") ? {
+      researchProjectEnvironment: async (projectId: string, signal?: AbortSignal) =>
+        researchProjectEnvironment(projectsDeps(db, req), projectId, { signal }),
+    } : {}),
     inspectSource: async (projectId, raw, signal) => {
       if (!actor.permissions.has("projects:read") || !actor.permissions.has("agent:run"))
         throw new HttpError(403, "forbidden", "Source inspection requires projects:read and agent:run");
@@ -348,8 +359,10 @@ export const knowledgeDeps = (
       return Buffer.concat(chunks);
     },
     resolveSource: async (projectId, input) => {
+      if (!actor.permissions.has("projects:read"))
+        throw new HttpError(403, "forbidden", "Source retrieval requires projects:read");
       const result = await db.execute(
-        sql`select distinct on (f.id) f.id as "fileId", f.name, v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and f.purpose='project_evidence' and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,
+        sql`select distinct on (f.id) f.id as "fileId", f.name, f.source_type as "sourceType", v.id as "versionId", v.version, v.checksum, v.mime_type as "mimeType", v.storage_key as "storageKey", v.source_metadata as provenance, v.created_at as "createdAt" from projects_files f join projects_file_versions v on v.file_id=f.id and v.tenant_id=f.tenant_id where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and f.purpose='project_evidence' and v.status='ready' ${input.fileId ? sql`and f.id=${input.fileId}` : sql``} ${input.versionId ? sql`and v.id=${input.versionId}` : sql``} ${input.query ? sql`and strpos(lower(f.name),lower(${input.query}))>0` : sql``} order by f.id,v.version desc limit 100`,
       );
       const rows = result.rows as any[];
       const latest = [
@@ -369,7 +382,36 @@ export const knowledgeDeps = (
         };
       const selected = input.versionId ? rows[0] : latest[0];
       const { storageKey, ...source } = selected;
-      const content = await readSourceEvidence(db, actor.tenantId, source.versionId, { ...input, name: source.name, mimeType: source.mimeType ?? "" });
+      // Application-generated receipts remain typed, unreviewed discovery context.
+      // Their JSON representation is never original acoustic quotation evidence.
+      if (source.sourceType === "environment_research") {
+        const parsed = environmentSurveySchema.safeParse(source.provenance?.environmentSurvey);
+        const receipt = parsed.success ? parsed.data : null;
+        const valid = receipt && receipt.versionId === source.versionId && receipt.fileId === source.fileId && receipt.projectId === projectId;
+        return {
+          status: "resolved", source,
+          content: valid ? { status: "available", text: JSON.stringify(receipt),
+            evidenceKind: "environment_research", textEncoding: "typed-environment-receipt-json", truncated: false,
+            authority: "unreviewed_discovery", engineeringApproval: false, noiseMetrics: "unknown",
+            reason: "Complete saved research receipt, not complete environmental coverage. Category limitations and not-checked states remain binding. JSON fields, mapped observations and provenance metadata are not original acoustic quotations or calculation inputs." }
+            : { status: "unsupported", reason: "Saved environmental receipt is missing or invalid for this exact project/version." },
+          selection: input.versionId ? "exact_version" : "latest_uploaded", authority: "unreviewed_source",
+          downloadUrl: `/api/projects/${projectId}/files/${source.fileId}/versions/${source.version}/download`,
+        };
+      }
+      // Use the same project/tenant/purpose gate above for stored models as for originals.
+      // Reading never starts preparation or paid indexing.
+      const documentModel = input.documentModel
+        ? await readSourceDocumentModel(db, actor.tenantId, source.versionId, { offset: input.documentOffset, limit: 100 }) : undefined;
+      const claims = input.documentModel && (input.documentOffset === undefined || input.documentOffset === 0 || input.modelOffset !== undefined)
+        ? await readSourceModel(db, actor.tenantId, source.versionId, { offset: input.modelOffset, limit: 100 }) : null;
+      const content = input.documentModel ? {
+        status: "available" as const, documentModel,
+        sourceClaims: claims ? { status: claims.status, method: claims.method,
+          facts: claims.facts.filter(({ fact }: any) => fact.reviewStatus !== "rejected"),
+          excludedRejectedCount: claims.facts.filter(({ fact }: any) => fact.reviewStatus === "rejected").length,
+          nextOffset: claims.nextOffset, coverage: claims.coverage } : null,
+      } : await readSourceEvidence(db, actor.tenantId, source.versionId, { ...input, name: source.name, mimeType: source.mimeType ?? "" });
       const pdfRepresentation = /\.afpub$/i.test(source.name)
         ? (await readPdfRepresentations(db, actor.tenantId, projectId, [source.versionId], true))[source.versionId] ?? null : null;
       return {

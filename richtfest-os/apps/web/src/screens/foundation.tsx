@@ -1,3 +1,5 @@
+import { EnvironmentSurveyButton } from "../components/location/environment-survey";
+import { SourceDocumentInspector } from "../components/project-workspace/source-document-inspector";
 import { AgentRuns } from "../components/agent-runs";
 import { Activity } from "../components/activity";
 import { CustomerForm } from "../components/crm/customer-form";
@@ -354,6 +356,7 @@ export function Sources({
   const query = useApi(`/projects/${projectId}/files`);
   const [mode, setMode] = useState<"upload" | "link" | null>(null);
   const [selectedFileCount, setSelectedFileCount] = useState(0);
+  const [inspectedSource, setInspectedSource] = useState<RecordData | null>(null);
   const [uploadResults, setUploadResults] = useState<
     Array<{
       name: string;
@@ -374,19 +377,25 @@ export function Sources({
         setUploadResults,
       );
     },
-    onSuccess: (results) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries();
-      if (results.every((result) => result.status === "uploaded")) {
-        setMode(null);
-      }
     },
   });
   const files = list(query.data || initial.files, "files");
+  const purposeLabel = (purpose: string | undefined) =>
+    t(
+      purpose === "reference_report"
+        ? "sourcePurposeReference"
+        : purpose === "comparison_only"
+          ? "sourcePurposeComparison"
+          : "sourcePurposeEvidence",
+    );
   return (
     <Section
       title={t("sources")}
       meta={
         <div className="inline-actions">
+          <EnvironmentSurveyButton projectId={projectId} />
           <Button variant="link" onClick={() => setMode("link")}>
             {t("registerSource")}
           </Button>
@@ -406,17 +415,26 @@ export function Sources({
       <LoadState query={query} />
       {files.length ? (
         <Table
-          headers={[t("sourceName"), t("fileSize"), t("version"), t("source")]}
+          headers={[
+            t("sourceName"),
+            t("sourcePurpose"),
+            t("fileSize"),
+            t("version"),
+            t("source"),
+            t("sourceDocumentModel"),
+          ]}
           rows={files.map((file) => ({
             id: file.id,
             sort: [
               file.name,
+              purposeLabel(file.purpose),
               String(file.sizeBytes || 0),
               String(file.version || 1),
               file.name,
             ],
             cells: [
               <strong>{file.name}</strong>,
+              <Badge>{purposeLabel(file.purpose)}</Badge>,
               file.sizeBytes ? `${(file.sizeBytes / 1024).toFixed(1)} KB` : "—",
               <span className="mono">
                 {file.version || file.sourceMetadata?.version || 1}
@@ -434,12 +452,14 @@ export function Sources({
                   {file.downloadUrl ? t("downloadFile") : t("viewSource")} ↗
                 </a>
               </Button>,
+              file.versionId ? <Button variant="link" onClick={() => setInspectedSource(file)}>{t("sourceDocumentInspect")}</Button> : "—",
             ],
           }))}
         />
       ) : (
         !query.isPending && <Empty>{t("noSources")}</Empty>
       )}
+      {inspectedSource && <SourceDocumentInspector key={inspectedSource.versionId} projectId={projectId} source={inspectedSource} onClose={() => setInspectedSource(null)} />}
       {mode === "upload" && (
         <Modal
           title={t("attachFile")}
@@ -501,6 +521,14 @@ export function Sources({
                     </li>
                   ))}
                 </ul>
+                {uploadResults.some((result) => result.status === "uploaded" && /\.pdf$/i.test(result.name)) && uploadResults.every((result) => result.status !== "uploading") && (
+                  <Callout>
+                    <div className="grid gap-stack">
+                      <div><strong>{t("uploadPlanAnalysisStarted")}</strong><p className="muted text-ui-xs">{t("uploadPlanAnalysisDescription")}</p></div>
+                      <Button asChild variant="outline"><Link to={`/projects/${projectId}?view=building-model`}>{t("uploadOpenBuildingModel")}</Link></Button>
+                    </div>
+                  </Callout>
+                )}
               </div>
             )}
             {!uploadResults.length && selectedFileCount <= 1 && (

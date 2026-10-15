@@ -42,6 +42,7 @@ import { Badge, Callout, Field, Segmented } from "../ui/primitives";
 import type { IfcGeometry } from "./ifc-loader";
 import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
+import { EnvironmentSurveyButton } from "./environment-survey";
 import { PublicDataStatus } from "./public-data";
 import "./location.css";
 
@@ -1106,6 +1107,7 @@ export function LocationEditor({
                   <Callout>{t("locationBuildingHint")}</Callout>
                 </>
               )}
+              <EnvironmentSurveyButton projectId={projectId} />
               {!!state.data?.context?.publicReleases?.length && (
                 <PublicDataStatus projectId={projectId} state={state.data} address={address} />
               )}

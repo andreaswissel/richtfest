@@ -236,10 +236,12 @@ export function Modal({
   title,
   children,
   onClose,
+  wide = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  wide?: boolean;
 }) {
   const t = useT();
   return (
@@ -251,6 +253,7 @@ export function Modal({
     >
       <DialogContent
         className="modal"
+        style={wide ? { width: "min(900px, calc(100vw - 2rem))", maxWidth: "calc(100vw - 2rem)" } : undefined}
         showCloseButton={false}
         aria-describedby={undefined}
       >

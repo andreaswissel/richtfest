@@ -1,12 +1,13 @@
 import { Router, type Request } from "express";
-import { and, desc, eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { acousticInputReviewSchema, acousticInputProvenance, exteriorNoiseFactSchema, acousticDatasetSchema,
   renderAcousticCalculationReceipts, ok, type AcousticInputReview } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { artifactRevisions, artifacts, messages } from "./schema";
+import { agentRunSteps, agentRuns, artifactRevisions, artifacts, messages } from "./schema";
 import { conflict, conversation, createArtifact, missing, sources } from "./workspace";
-import { reconcileExteriorNoiseInputs } from "./acoustic-extraction";
+import { exteriorNoiseVisualAreaObservationKey, reconcileExteriorNoiseInputs } from "./acoustic-extraction";
 
 /** Server-created review snapshot; generic artifact/model output cannot attach this payload. */
 export async function createAcousticInputReview(d: AppDeps, tx: any,
@@ -18,7 +19,9 @@ export async function createAcousticInputReview(d: AppDeps, tx: any,
     ...review.packets.flatMap(p => p.inventory.map(i => i.provenance)),
     ...review.packets.flatMap(p => (p.facts ?? []).map(f => f.provenance)),
     ...review.packets.flatMap(p => p.rooms.flatMap(r => acousticInputProvenance({ ...r, method: "exterior_noise_facade" }))),
-  ].flatMap(p => p.kind === "source" ? [p.versionId] : []))];
+  ].flatMap(p => p.kind === "source" ? [p.versionId] : []).concat(
+    review.packets.flatMap(p => (p.visualCandidates ?? []).map(candidate => candidate.provenance.versionId)),
+  ))];
   await sources(d, run.projectId, sourceVersionIds);
   const created = await createArtifact(d, tx, { projectId: run.projectId,
     title: "Außenlärm · Eingabenprüfung", type: "draft", sourceVersionIds,
@@ -40,6 +43,17 @@ const responseSchema = z.object({
   confirmInventory: z.boolean().default(false),
   changes: z.array(z.object({ key: z.string().max(1000),
     value: z.union([z.string(), z.number().finite(), z.boolean()]) }).strict()).max(1000),
+  visualMappings: z.array(z.discriminatedUnion("decision", [
+    z.object({ candidateKey: z.string().regex(/^[a-f0-9]{64}$/), decision: z.literal("confirmed"),
+      roomId: z.string().trim().min(1).max(200) }).strict(),
+    z.object({ candidateKey: z.string().regex(/^[a-f0-9]{64}$/), decision: z.literal("rejected") }).strict(),
+  ])).max(100).default([]),
+  visualAreaReviews: z.array(z.discriminatedUnion("decision", [
+    z.object({ candidateKey: z.string().regex(/^[a-f0-9]{64}$/), observationKey: z.string().regex(/^[a-f0-9]{64}$/),
+      decision: z.literal("approved"), roomId: z.string().trim().min(1).max(200) }).strict(),
+    z.object({ candidateKey: z.string().regex(/^[a-f0-9]{64}$/), observationKey: z.string().regex(/^[a-f0-9]{64}$/),
+      decision: z.literal("rejected") }).strict(),
+  ])).max(100).default([]),
 }).strict();
 
 export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
@@ -68,12 +82,42 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
         if (!parsed.success || parsed.data.conversationId !== conversationId) throw missing();
         const review: AcousticInputReview = parsed.data;
         await sources(d, chat.projectId, z.array(z.string().uuid()).parse(revision.sourceVersionIds));
-        let assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions);
+        let assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions, review.visualMappings, review.visualAreaReviews);
+        const inventoryBefore = [...new Set((assembled.input?.inventory ?? []).map(item => item.roomId))].sort();
+        const mappingState = (candidates: typeof assembled.visualCandidates) => candidates
+          .map(candidate => ({ candidateKey: candidate.candidateKey,
+            decision: candidate.mappingDecision, roomId: candidate.confirmedRoomId }))
+          .sort((a, b) => a.candidateKey.localeCompare(b.candidateKey));
+        const mappingsBefore = JSON.stringify(mappingState(assembled.visualCandidates));
         const view = (revisionId: string) => ({ artifactId, revisionId, ...assembled,
           inventoryConfirmation: review.inventoryConfirmation, resolutions: review.resolutions });
         if (method === "get") return view(revision.id);
         const input = responseSchema.parse(req.body);
         if (input.expectedRevisionId !== revision.id) throw conflict("Inputs changed. Reload the latest revision before saving.");
+        const seenVisualMappings = new Set<string>();
+        for (const mapping of input.visualMappings) {
+          if (seenVisualMappings.has(mapping.candidateKey)) throw conflict("Duplicate visual candidate mapping");
+          seenVisualMappings.add(mapping.candidateKey);
+          if (!assembled.visualCandidates.some(candidate => candidate.candidateKey === mapping.candidateKey))
+            throw conflict("Visual candidate changed or is no longer available; reload before reviewing it");
+          review.visualMappings.push({ ...mapping, actorId: d.actorId, at: new Date().toISOString(), reason: input.reason });
+        }
+        // Resolve mappings first so an area can only be approved for the identity
+        // that is visibly confirmed in this same saved revision.
+        assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions, review.visualMappings, review.visualAreaReviews);
+        const seenVisualAreas = new Set<string>();
+        for (const areaReview of input.visualAreaReviews) {
+          const key = `${areaReview.candidateKey}:${areaReview.observationKey}`;
+          if (seenVisualAreas.has(key)) throw conflict("Duplicate visual floor-area review");
+          seenVisualAreas.add(key);
+          const candidate = assembled.visualCandidates.find(item => item.candidateKey === areaReview.candidateKey);
+          if (!candidate?.floorAreaObservation || candidate.floorAreaObservationKey !== areaReview.observationKey)
+            throw conflict("Visual floor-area observation changed or is no longer available; reload before reviewing it");
+          if (areaReview.decision === "approved"
+            && (candidate.mappingDecision !== "confirmed" || candidate.confirmedRoomId !== areaReview.roomId))
+            throw conflict("Confirm this candidate's room identity before approving its floor area for that room");
+          review.visualAreaReviews.push({ ...areaReview, actorId: d.actorId, at: new Date().toISOString(), reason: input.reason });
+        }
         const seen = new Set<string>();
         for (const change of input.changes) {
           const field = assembled.fields.find(f => f.key === change.key);
@@ -87,7 +131,13 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
         }
         if (input.confirmInventory) review.inventoryConfirmation = { actorId: d.actorId,
           at: new Date().toISOString(), reason: input.reason };
-        assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions);
+        assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions, review.visualMappings, review.visualAreaReviews);
+        const inventoryAfter = [...new Set((assembled.input?.inventory ?? []).map(item => item.roomId))].sort();
+        const inventoryChanged = JSON.stringify(inventoryBefore) !== JSON.stringify(inventoryAfter);
+        const mappingChanged = mappingsBefore !== JSON.stringify(mappingState(assembled.visualCandidates));
+        // Changed candidate-to-room associations need a fresh GET and a later
+        // confirmation; the same request cannot confirm an association it just changed.
+        if (inventoryChanged || mappingChanged) review.inventoryConfirmation = null;
         const savedRevisionId = crypto.randomUUID();
         let calculation: Awaited<ReturnType<typeof createArtifact>> | undefined;
         if (input.action === "calculate") {
@@ -121,19 +171,110 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
         await tx.update(artifacts).set({ status: "draft" }).where(eq(artifacts.id, artifactId));
         await tx.insert(messages).values({ tenantId: d.tenantId, conversationId,
           authorId: d.actorId, actorKind: "user",
-          body: `Berechnungseingaben gespeichert (${input.changes.length}). ${input.reason}`,
+          body: `Berechnungseingaben gespeichert (${input.changes.length}); visuelle Zuordnungen geprüft (${input.visualMappings.length}); visuelle Flächen geprüft (${input.visualAreaReviews.length}). ${input.reason}`,
           sourceVersionIds: revision.sourceVersionIds });
         if (calculation) await tx.insert(messages).values({ tenantId: d.tenantId, conversationId,
           authorId: d.actorId, actorKind: "agent", body: "Rechenblatt ohne KI-Aufruf erstellt. Fachliche Prüfung und Freigabe stehen aus.",
           openui: `root = ArtifactPdf(${JSON.stringify(calculation.artifact.id)}, ${JSON.stringify(calculation.revision.id)})`,
           sourceVersionIds: revision.sourceVersionIds });
         await d.audit(tx, "knowledge.acoustic_inputs.resolved", "artifact_revision", saved.id, {
-          artifactId, previousRevisionId: revision.id, changedFields: input.changes.map(c => c.key),
-          inventoryConfirmed: input.confirmInventory, calculationArtifactId: calculation?.artifact.id,
+          artifactId, previousRevisionId: revision.id, expectedRevisionId: input.expectedRevisionId,
+          changedFields: input.changes.map(c => c.key), reason: input.reason,
+          visualMappings: input.visualMappings.map(mapping => ({ candidateKey: mapping.candidateKey,
+            decision: mapping.decision, ...(mapping.decision === "confirmed" ? { roomId: mapping.roomId } : {}) })),
+          visualAreaReviews: input.visualAreaReviews.map(areaReview => ({ candidateKey: areaReview.candidateKey,
+            observationKey: areaReview.observationKey, decision: areaReview.decision,
+            ...(areaReview.decision === "approved" ? { roomId: areaReview.roomId } : {}) })),
+          inventoryChanged, mappingChanged, inventoryConfirmed: !!review.inventoryConfirmation,
+          calculationArtifactId: calculation?.artifact.id,
         });
         return { ...view(saved.id), calculation };
       });
       res.json(ok(result));
+    } catch (error) { next(error); }
+  });
+  router.get(`${path}/visual/:candidateKey`, async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("knowledge:read");
+      d.requirePermission("projects:read");
+      d.requirePermission("agent:run");
+      const artifactId = z.string().uuid().parse(req.params.artifactId);
+      const conversationId = z.string().uuid().parse(req.params.conversationId);
+      const candidateKey = z.string().regex(/^[a-f0-9]{64}$/).parse(req.params.candidateKey);
+      const chat = await conversation(d, conversationId);
+      if (!chat.projectId || !(await d.validateProject(chat.projectId))) throw missing();
+      const preview = await d.db.transaction(async (tx: any) => {
+        const [artifact] = await tx.select().from(artifacts).where(and(eq(artifacts.id, artifactId),
+          eq(artifacts.tenantId, d.tenantId), eq(artifacts.projectId, chat.projectId!)));
+        if (!artifact) throw missing();
+        const [revision] = await tx.select().from(artifactRevisions).where(and(
+          eq(artifactRevisions.artifactId, artifactId), eq(artifactRevisions.tenantId, d.tenantId),
+        )).orderBy(desc(artifactRevisions.version)).limit(1);
+        const parsed = acousticInputReviewSchema.safeParse(revision?.payload?.acousticInputReview);
+        if (!parsed.success || parsed.data.conversationId !== conversationId) throw missing();
+        const review: AcousticInputReview = parsed.data;
+        const assembled = reconcileExteriorNoiseInputs(review.packets, review.resolutions,
+          review.visualMappings, review.visualAreaReviews);
+        const candidate = assembled.visualCandidates.find(item => item.candidateKey === candidateKey);
+        if (!candidate) throw missing("Visual candidate not found");
+        const sourceVersionIds = z.array(z.string().uuid()).parse(revision.sourceVersionIds);
+        if (!sourceVersionIds.includes(candidate.provenance.versionId)) throw missing("Visual source is not retained by this review");
+        await sources(d, chat.projectId, [candidate.provenance.versionId]);
+        if (!artifact.runId) throw missing("Visual inspection receipt is unavailable");
+        const [receipt] = await tx.select({ input: agentRunSteps.input, output: agentRunSteps.output })
+          .from(agentRunSteps).innerJoin(agentRuns, and(eq(agentRuns.id, agentRunSteps.runId),
+            eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, chat.projectId!),
+            or(eq(agentRuns.id, artifact.runId), eq(agentRuns.parentRunId, artifact.runId))))
+          .where(and(eq(agentRunSteps.id, candidate.provenance.receiptId),
+            eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.kind, "tool"),
+            eq(agentRunSteps.status, "completed"))).limit(1);
+        const sameCrop = (left: { x: number; y: number; width: number; height: number } | null | undefined,
+          right: { x: number; y: number; width: number; height: number } | null | undefined) => {
+          const a = left ?? null, b = right ?? null;
+          return a === null || b === null ? a === b
+            : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+        };
+        const receiptInput = receipt?.input as { name?: unknown; input?: { versionId?: unknown; page?: unknown; crop?: unknown } } | null;
+        const receiptOutput = receipt?.output as { status?: unknown; versionId?: unknown; page?: unknown; crop?: unknown; imageHash?: unknown } | null;
+        const sourceRequest = { versionId: candidate.provenance.versionId, page: candidate.provenance.page,
+          crop: candidate.provenance.crop };
+        if (receiptInput?.name !== "inspect_project_source" || receiptInput.input?.versionId !== sourceRequest.versionId
+          || receiptInput.input.page !== sourceRequest.page || !sameCrop(receiptInput.input.crop as typeof sourceRequest.crop, sourceRequest.crop)
+          || receiptOutput?.status !== "available" || receiptOutput.versionId !== sourceRequest.versionId
+          || receiptOutput.page !== sourceRequest.page || !sameCrop(receiptOutput.crop as typeof sourceRequest.crop, sourceRequest.crop)
+          || typeof receiptOutput.imageHash !== "string"
+          || receiptOutput.imageHash.toLowerCase() !== candidate.provenance.imageHash.toLowerCase())
+          throw conflict("The saved visual inspection receipt does not match this candidate");
+        return candidate;
+      });
+      if (!d.inspectSource) throw conflict("Source image preview is unavailable");
+      const request = { versionId: preview.provenance.versionId, page: preview.provenance.page,
+        crop: preview.provenance.crop };
+      const rendered = await d.inspectSource(chat.projectId, request);
+      const sameCrop = (left: typeof request.crop | undefined, right: typeof request.crop | undefined) => {
+        const a = left ?? null, b = right ?? null;
+        return a === null || b === null ? a === b
+          : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+      };
+      if (rendered.status !== "available" || rendered.versionId !== request.versionId || rendered.page !== request.page
+        || !sameCrop(rendered.crop, request.crop) || rendered.scope === undefined)
+        throw conflict("The exact source image is unavailable; its visual receipt could not be verified");
+      const renderedImage = rendered.image;
+      if (!renderedImage || renderedImage.mediaType !== "image/jpeg" || typeof renderedImage.data !== "string"
+        || renderedImage.data.length > 5_600_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(renderedImage.data))
+        throw conflict("The exact source image is unavailable; its visual receipt could not be verified");
+      const image = Buffer.from(renderedImage.data, "base64");
+      if (image.toString("base64") !== renderedImage.data
+        || createHash("sha256").update(image).digest("hex") !== preview.provenance.imageHash.toLowerCase())
+        throw conflict("The source image no longer matches this candidate's visual receipt");
+      res.json(ok({ candidateKey, apartmentLabel: preview.apartmentLabel, roomLabel: preview.roomLabel,
+        mapping: preview.mapping, reviewStatus: preview.reviewStatus,
+        provenance: { versionId: preview.provenance.versionId, page: preview.provenance.page,
+          crop: preview.provenance.crop, receiptId: preview.provenance.receiptId,
+          imageHash: preview.provenance.imageHash },
+        image: { mediaType: renderedImage.mediaType, data: renderedImage.data },
+      }));
     } catch (error) { next(error); }
   });
   return router;

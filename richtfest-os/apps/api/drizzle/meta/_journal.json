@@ -281,6 +281,20 @@
       "when": 1792013000000,
       "tag": "0039_artifact_pdf_exports",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1792014000000,
+      "tag": "0040_building_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792100400000,
+      "tag": "0041_building_extraction",
+      "breakpoints": true
     }
   ]
 }

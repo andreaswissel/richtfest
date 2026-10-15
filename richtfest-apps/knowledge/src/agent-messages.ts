@@ -50,8 +50,31 @@ async function validConversation(d: AppDeps, tx: any, run: Run, includeArchived 
   return !!row;
 }
 
+type AgentMessageScope = { familyRootRunId: string };
+
+async function runFamilyIds(d: AppDeps, tx: any, rootRunId: string, run: Run) {
+  const [root] = await tx.select({ id: agentRuns.id }).from(agentRuns).where(and(
+    eq(agentRuns.id, rootRunId), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, run.projectId!),
+    eq(agentRuns.conversationId, run.conversationId!),
+  )).limit(1);
+  if (!root) return new Set<string>();
+  const ids = new Set<string>([root.id]);
+  let parents = [root.id];
+  while (parents.length) {
+    const children = await tx.select({ id: agentRuns.id }).from(agentRuns).where(and(
+      eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, run.projectId!),
+      eq(agentRuns.conversationId, run.conversationId!),
+      sql`${agentRuns.parentRunId} in (${sql.join(parents.map(parentId => sql`${parentId}`), sql`, `)})`,
+    ));
+    parents = children.map((child: { id: string }) => child.id).filter((id: string) => !ids.has(id));
+    for (const id of parents) ids.add(id);
+  }
+  return ids;
+}
+
 /** The caller owns the active sender/root fence and the transaction. Never lock or wake the recipient. */
-export async function deliverAgentMessage(d: AppDeps, tx: any, sender: Run, rawInput: unknown, stepKey: string) {
+export async function deliverAgentMessage(d: AppDeps, tx: any, sender: Run, rawInput: unknown, stepKey: string,
+  scope?: AgentMessageScope) {
   const input = agentMessageInputSchema.parse(rawInput);
   d.requirePermission("agent:run");
   d.requirePermission("knowledge:write");
@@ -64,6 +87,10 @@ export async function deliverAgentMessage(d: AppDeps, tx: any, sender: Run, rawI
     eq(agentRuns.id, input.recipientRunId), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, sender.projectId),
   )).limit(1);
   if (!recipient || !(await validConversation(d, tx, recipient))) throw missing("Recipient not found in project");
+  if (scope) {
+    const family = await runFamilyIds(d, tx, scope.familyRootRunId, sender);
+    if (!family.has(sender.id) || !family.has(recipient.id)) throw missing("Recipient not found in this run family");
+  }
   const inputHash = stepHash(input);
   const saved = await savedStep(d, sender.id, "agent_message", stepKey, undefined, tx);
   if (saved) {
@@ -133,13 +160,17 @@ export async function deliverAgentMessage(d: AppDeps, tx: any, sender: Run, rawI
   return receipt;
 }
 
-async function threadRows(d: AppDeps, run: Run, incoming: boolean, limit: number) {
+async function threadRows(d: AppDeps, run: Run, incoming: boolean, limit: number, senderRunIds?: string[]) {
+  const senderScope = senderRunIds === undefined ? undefined : senderRunIds.length
+    ? sql`${messages.agentMessage}->'sender'->>'runId' in (${sql.join(senderRunIds.map(id => sql`${id}`), sql`, `)})`
+    : sql`false`;
   return d.db.select({ id: messages.id, body: messages.body, agentMessage: messages.agentMessage, createdAt: messages.createdAt })
     .from(messages).where(and(eq(messages.tenantId, d.tenantId), eq(messages.conversationId, run.conversationId!),
       incoming ? sql`${messages.agentMessage}->'recipient'->>'runId' = ${run.id}` : or(
         sql`${messages.agentMessage}->'sender'->>'runId' = ${run.id}`,
         sql`${messages.agentMessage}->'recipient'->>'runId' = ${run.id}`,
       ),
+      senderScope,
     )).orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
 }
 
@@ -148,17 +179,20 @@ export async function runThreadMessages(d: AppDeps, run: Run) {
   return (await threadRows(d, run, false, 100)).reverse();
 }
 
-export async function agentMessagingContext(d: AppDeps, run: Run) {
+export async function agentMessagingContext(d: AppDeps, run: Run, scope?: AgentMessageScope) {
   const empty = { selfRunId: run.id, recipients: [], inbox: [], remainingMessages: 0, deliveryPolicy };
   if (!(await validConversation(d, d.db, run)) || !(await d.validateProject(run.projectId!))) return empty;
+  const family = scope ? await runFamilyIds(d, d.db, scope.familyRootRunId, run) : undefined;
+  if (scope && (!family?.size || !family.has(run.id))) return empty;
   const recipients = await d.db.select({ runId: agentRuns.id, conversationId: agentRuns.conversationId,
     role: agentRuns.specialistRole, goal: sql<string>`left(${agentRuns.goal}, 500)`, status: agentRuns.status })
     .from(agentRuns).innerJoin(conversations, and(eq(conversations.id, agentRuns.conversationId),
       eq(conversations.tenantId, d.tenantId), eq(conversations.projectId, run.projectId!), isNull(conversations.archivedAt)))
-    .where(and(eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, run.projectId!), ne(agentRuns.id, run.id)))
+    .where(and(eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.projectId, run.projectId!), ne(agentRuns.id, run.id),
+      family ? sql`${agentRuns.id} in (${sql.join([...family].map(runId => sql`${runId}`), sql`, `)})` : undefined))
     .orderBy(sql`case when ${agentRuns.id} = ${run.parentRunId ?? run.id} then 0
       when ${agentRuns.parentRunId} = ${run.parentRunId ?? run.id} then 1 else 2 end`, desc(agentRuns.createdAt), desc(agentRuns.id)).limit(30);
-  const incoming = await threadRows(d, run, true, 12);
+  const incoming = await threadRows(d, run, true, 12, family ? [...family] : undefined);
   const inbox = incoming.map((message: typeof messages.$inferSelect) => ({
     id: message.id, body: message.body.slice(0, 1000), truncated: message.body.length > 1000,
     sender: { runId: message.agentMessage!.sender.runId, role: message.agentMessage!.sender.role },

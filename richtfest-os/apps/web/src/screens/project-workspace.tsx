@@ -24,6 +24,7 @@ import { LiveRun } from "../components/project-workspace/live-run";
 import { SubagentThread } from "../components/project-workspace/subagent-thread";
 import { ProjectAnalytics } from "../components/project-workspace/analytics";
 import { LocationMode } from "../components/location/mode";
+import { BuildingModelMode } from "../components/building-model";
 import { AddressSelect } from "../components/address-select";
 import { ArrowUp } from "lucide-react";
 
@@ -121,7 +122,7 @@ export function ProjectWorkspace() {
   const project = useApi(`/projects/${id}`),
     workspace = useApi(
       `/knowledge/workspaces/${id}`,
-      view !== "location" && view !== "analytics",
+      view !== "location" && view !== "analytics" && view !== "building-model",
     ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
@@ -177,6 +178,7 @@ export function ProjectWorkspace() {
       {[
         "workspace",
         "location",
+        "building-model",
         "details",
         "sources",
         "knowledge",
@@ -191,6 +193,8 @@ export function ProjectWorkspace() {
             ? t("workspaceConversation")
             : key === "location"
               ? t("locationEditor")
+              : key === "building-model"
+                ? t("buildingModel")
               : key === "details"
                 ? t("projectDetails")
                 : t(key as "sources")}
@@ -228,6 +232,9 @@ export function ProjectWorkspace() {
       <LoadState query={project} />
       {view === "location" && project.isSuccess && (
         <LocationMode projectId={id!} address={details} />
+      )}
+      {view === "building-model" && project.isSuccess && (
+        <BuildingModelMode projectId={id!} />
       )}
       {view === "analytics" && project.isSuccess && (
         <ProjectAnalytics key={id} projectId={id!} />
