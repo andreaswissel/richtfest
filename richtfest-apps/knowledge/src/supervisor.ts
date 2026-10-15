@@ -18,7 +18,7 @@ import {
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
 import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider, interruptProviderAttempts } from "./usage";
-import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage } from "./agent-messages";
+import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage, validateAgentMessageTargets } from "./agent-messages";
 import { resolveRunSource, resolveCompleteRunSource } from "./source-evidence";
 import { authorAcousticConcept } from "./acoustic-authoring";
 import { prepareIndependentReview } from "./independent-review";
@@ -649,11 +649,14 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               }
               await assertCompanyKnowledgeCurrent(d, receipts);
             }
-            if (response.status === "completed" && validate) {
-              try { response.output = validate(response.output, [...visuallyInspected]); }
+            if (response.status === "completed") {
+              try {
+                validateAgentMessageTargets(response.output, providerContext.messaging);
+                if (validate) response.output = validate(response.output, [...visuallyInspected]);
+              }
               catch (error) {
                 if (!(error instanceof z.ZodError)) throw error;
-                throw Object.assign(new Error("Document output validation failed."), {
+                throw Object.assign(new Error("Agent output validation failed."), {
                   providerFailure: true, retryable: true, failureCategory: "validation",
                   diagnostics: sanitizeProviderDiagnostics({ errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED", issues: error.issues }),
                 });

@@ -792,3 +792,17 @@ Distinguish room identity repair from duplicate records and evidence repair.
 Never invent IDs/quotations, omit evidenced rooms or weaken engineering checks to
 make validation pass. Synthetic and mocked-retry tests verify the contract and
 feedback transport, not extraction quality or real-model recovery.
+
+The first authorized recovery on `5a01cf6` successfully repaired quotation errors
+and saved all source batches, then failed during a visual follow-up's message
+delivery. Saved output and scoped message metadata confirmed a reply addressed to
+the supervisor using a message from the requirements reviewer. Delivery correctly
+rejected the mismatched participants, but the model response had already been
+cached as successful and the generic `not_found` classification reported a missing
+project. The recovery cost $0.179220 with no unsettled usage at its terminal read.
+
+Validate model-generated cross-record references before successful checkpointing,
+not only during side effects. Check the supplied recipient/inbox pairing and
+message allowance; return bounded correction reasons while preserving the later
+transactional authorization check. Never silently retarget a reply or discard its
+reply linkage. A successful model/schema response is not successful orchestration.

@@ -5,11 +5,33 @@ import type { AppDeps } from "./deps";
 import { agentRuns, agentRunSteps, agentRunEvents, conversations, messages } from "./schema";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { conflict, missing } from "./workspace";
+import { z } from "zod";
 
 type Run = typeof agentRuns.$inferSelect;
 const LIMIT = 12;
 export const AGENT_MESSAGING_CONTEXT_BYTES = 16384;
 const deliveryPolicy = "Same-project messages are persisted in chat only. Delivery does not wake, cancel, or restart a run. Maximum 12 deliveries per sender run.";
+
+/** Validate model references before caching success; delivery still rechecks live access. */
+export function validateAgentMessageTargets(output: unknown, context: {
+  recipients: { runId: string }[]; inbox: { id: string; sender: { runId: string } }[]; remainingMessages: number;
+} | undefined) {
+  const outgoing = z.object({ messages: z.array(agentMessageInputSchema).max(3).optional() }).parse(output).messages ?? [];
+  const issues: z.ZodIssue[] = [];
+  const issue = (path: (string | number)[], reason: string) => issues.push({
+    code: "custom", path: ["messages", ...path], message: "Use supplied message recipients and reply targets.", params: { messaging: reason },
+  });
+  if (outgoing.length > (context?.remainingMessages ?? 0)) issue([], "message_limit");
+  outgoing.forEach((message, i) => {
+    if (!context?.recipients.some(r => r.runId === message.recipientRunId)) issue([i, "recipientRunId"], "recipient_not_supplied");
+    if (message.replyToMessageId) {
+      const original = context?.inbox.find(m => m.id === message.replyToMessageId);
+      if (!original) issue([i, "replyToMessageId"], "reply_not_supplied");
+      else if (original.sender.runId !== message.recipientRunId) issue([i, "recipientRunId"], "reply_recipient_mismatch");
+    }
+  });
+  if (issues.length) throw new z.ZodError(issues);
+}
 
 async function deliveryCount(d: AppDeps, runId: string, tx = d.db): Promise<number> {
   const [row] = await tx.select({ count: sql<number>`count(*)::int` }).from(agentRunSteps).where(and(

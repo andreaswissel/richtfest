@@ -135,6 +135,7 @@ integration("direct tools and supervisor specialists deliver messages into the n
     expect((await db.select().from(agentRuns).where(eq(agentRuns.id, external!.id)))[0]!.status).toBe("needs_review");
     let specialistId = "";
     let sawReply = false;
+    let specialistCalls = 0;
     d.executeSupervisor = async input => {
       const context = input.context as any;
       if (input.phase === "plan") {
@@ -143,9 +144,15 @@ integration("direct tools and supervisor specialists deliver messages into the n
       }
       if (input.phase === "specialist") {
         specialistId = input.runId;
+        specialistCalls++;
         expect(context.messaging.inbox[0].body).toBe("Check the conflicting schedules.");
+        if (specialistCalls > 1) expect(context.outputValidationFeedback).toMatchObject({
+          errorId: "STRUCTURED_OUTPUT_SCHEMA_VALIDATION_FAILED",
+          issues: [{ code: "custom", path: ["messages", 0, "recipientRunId"], messaging: "reply_recipient_mismatch" }],
+        });
         return { status: "completed", output: { summary: "Revision conflict remains.", rationale: "Needs a human source decision.", citations: [], messages: [
-          { recipientRunId: coordinator!.id, body: "Both revisions remain unverified.", replyToMessageId: context.messaging.inbox[0].id },
+          { recipientRunId: specialistCalls === 1 ? external!.id : coordinator!.id,
+            body: "Both revisions remain unverified.", replyToMessageId: context.messaging.inbox[0].id },
         ] } };
       }
       sawReply = context.messaging.inbox.some((message: any) => message.body === "Both revisions remain unverified." && message.sender.runId === specialistId);
@@ -161,6 +168,10 @@ integration("direct tools and supervisor specialists deliver messages into the n
     await send(coordinator!, { recipientRunId: assignment.runId, body: "Check the conflicting schedules." }, "coordinator-question");
     await stepSupervisor(d, coordinator!.id);
     await stepSupervisor(d, coordinator!.id);
+    expect(specialistCalls).toBe(2);
+    const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, assignment.runId)).orderBy(agentRunAttempts.attemptNumber);
+    expect(attempts.map(a => [a.status, a.failureCategory])).toEqual([["failed", "validation"], ["completed", null]]);
+    expect((await runThreadMessages(d, external!)).filter(m => m.body === "Both revisions remain unverified.")).toHaveLength(0);
     expect(sawReply).toBe(true);
     expect((await runThreadMessages(d, coordinator!)).map((message: any) => message.body)).toEqual([
       "Please identify the authoritative revision.", "Check the conflicting schedules.", "Both revisions remain unverified.",

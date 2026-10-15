@@ -78,8 +78,13 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
     const safeAcousticReason = acoustic && issue.code === "custom" && typeof acousticReason === "string"
       && ["invalid_fact_value", "room_fact_id", "source_required", "source_not_in_packet", "quote_not_in_source", "duplicate_room", "room_not_declared"].includes(acousticReason)
       ? acousticReason : undefined;
+    const messagingReason = (issue.params as { messaging?: unknown } | undefined)?.messaging ?? issue.messaging;
+    const safeMessagingReason = issue.path[0] === "messages" && issue.code === "custom" && typeof messagingReason === "string"
+      && ["recipient_not_supplied", "reply_not_supplied", "reply_recipient_mismatch", "message_limit"].includes(messagingReason)
+      ? messagingReason : undefined;
     return [{ code: issue.code as string, path: issue.path as (string | number)[], ...limits,
       ...(safeAcousticReason ? { acoustic: safeAcousticReason } : {}),
+      ...(safeMessagingReason ? { messaging: safeMessagingReason } : {}),
       ...(editorial ? { editorial } : {}),
       ...(sectionKey && acousticSectionKeySchema.safeParse(issue.expected).success ? { expected: issue.expected as string } : {}),
       ...(sectionKey && acousticSectionKeySchema.safeParse(issue.received).success ? { received: issue.received as string } : {}),
