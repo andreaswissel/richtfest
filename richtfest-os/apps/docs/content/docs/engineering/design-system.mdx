@@ -41,6 +41,8 @@ This native-style interaction trades away page-zoom accessibility; browser and o
 
 The project conversation uses shadcn's `MessageScroller`, `Message`, `Bubble`, `Attachment` and `Marker`. OpenUI renders the registered Richtfest components inside conversation turns and artifacts; it cannot generate arbitrary HTML, URLs or mutations. The registry snapshot is generated from the web library and checked against the server parser.
 
+Agent activity in the conversation and run threads uses the official Nova `Trace` primitive. Current tasks and unreviewed findings stay visible; **Activity history** expands into timestamped recorded steps. Queued work and budget waits use a pending indicator, while failed events retain their explicit labels and safe diagnostics. Historical start events do not imply that a call is still running or completed successfully. Trace is a presentation of existing run records, not generated reasoning or an approval signal. Preserve source-version links and the existing conversation scrolling layer.
+
 Assistant and agent message bodies render Markdown for headings, lists, tables, links and code. User-authored messages remain literal text. Raw HTML and remote images are not rendered; preserve the conversation's streaming, selection and reading-position behavior when changing the renderer.
 
 Reading-position, selection, history-restoration and keyboard acceptance criteria are maintained in `DESIGN-PRINCIPLES.md`. Keep route and OpenUI code lazy so the initial bundle remains within budget.

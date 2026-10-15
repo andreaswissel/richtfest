@@ -1,6 +1,23 @@
 import { list, type RecordData } from "../../api";
 import { useT } from "../../i18n";
 import {
+  ActivityIcon,
+  CircleAlertIcon,
+  ClockIcon,
+  HistoryIcon,
+  LoaderCircleIcon,
+} from "lucide-react";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "../ui/trace";
+import {
   currentRunTasks,
   runActivityLabel,
   providerActivityExplanation,
@@ -9,6 +26,7 @@ import {
   agentName,
   budgetActivityMetadata,
   budgetDescription,
+  waitingBudgetCalls,
 } from "./run-activity";
 
 export function RunActivityFeed({
@@ -29,50 +47,60 @@ export function RunActivityFeed({
   const latest = visibleEvents.at(-1);
   const latestLabel = latest && runActivityLabel(latest);
   const latestBudget = latest && budgetActivityMetadata(latest);
+  const latestExplanation = latest && providerActivityExplanation(latest, t);
   const currentTasks = run
     ? currentRunTasks(run, children, t, visibleEvents)
     : [];
   const hasProgress = currentTasks.some((task) => task.hasProgress);
+  const waiting = waitingBudgetCalls(visibleEvents);
 
   if (!active && !visibleEvents.length) return null;
 
   return (
     <div
-      className="run-activity-feed"
+      className="mt-2 min-w-0 text-ui-sm text-muted-foreground"
       role="group"
       aria-label={t("workspaceAgentProgress")}
     >
-      <div role="status" aria-live="polite" aria-atomic="true">
+      <Trace role="status" aria-live="polite" aria-atomic="true">
         {active && currentTasks.length > 0 && (
-          <div className="run-activity-current">
-            <span className="run-activity-current-label">
-              {t("workspaceCurrentTask")}:
-            </span>
-            <div className="run-activity-tasks">
-              {currentTasks.map((task) => (
-                <div key={task.id}>
-                  <p className="font-medium text-foreground">{task.name}</p>
-                  <p
-                    className={`run-activity-current-text${task.hasProgress ? " run-activity-work-text" : ""}`}
-                    title={task.text}
-                  >
-                    {task.text}
-                  </p>
-                  {task.summary && (
-                    <div className="run-activity-finding">
-                      <p className="text-ui-xs">{t("workspaceWorkFindings")}</p>
-                      <p
-                        className="run-activity-finding-text"
-                        title={task.summary}
-                      >
-                        {task.summary}
-                      </p>
-                    </div>
-                  )}
+          <Trace aria-label={t("workspaceCurrentTask")}>
+            {currentTasks.map((task) => {
+              const pending =
+                [run, ...children].find((agent) => agent?.id === task.id)
+                  ?.status === "queued" ||
+                waiting.some((call) => call.runId === task.id);
+              return (
+                <div key={task.id} className="min-w-0">
+                  <Trace>
+                    <TraceLine status={pending ? "pending" : "running"}>
+                      <TraceIcon>
+                        {pending ? (
+                          <ClockIcon />
+                        ) : (
+                          <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+                        )}
+                      </TraceIcon>
+                      <TraceTitle className="whitespace-normal wrap-anywhere">
+                        {task.name}
+                      </TraceTitle>
+                    </TraceLine>
+                  </Trace>
+                  <div className="mt-1 ml-[calc(var(--icon)+0.5rem)] space-y-1 leading-relaxed wrap-anywhere">
+                    <p>{task.text}</p>
+                    {task.summary && (
+                      <div>
+                        <p className="text-ui-xs">
+                          {t("workspaceWorkFindings")}
+                        </p>
+                        <p className="text-foreground">{task.summary}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              );
+            })}
+          </Trace>
         )}
         {latestLabel &&
         (!active ||
@@ -80,62 +108,126 @@ export function RunActivityFeed({
           ["provider_call_retrying", "provider_call_failed"].includes(
             latest?.eventType,
           )) ? (
-          <p>
-            {latestBudget
-              ? budgetDescription(latestBudget.budget, t)
-              : t(latestLabel)}
-          </p>
-        ) : !currentTasks.length ? (
-          <p>
-            {status === "queued"
-              ? t("agentRunWaitingForWorker")
-              : t("workspaceActivityWaiting")}
-          </p>
-        ) : null}
-      </div>
-      {visibleEvents.length > 0 && (
-        <details className="run-activity-history">
-          <summary>
-            {t("workspaceActivityHistory")} · {visibleEvents.length}
-          </summary>
-          <ol>
-            {visibleEvents.map((activity) => {
-              const label = runActivityLabel(activity);
-              if (!label) return null;
-              const work = workProgressMetadata(activity);
-              const owner =
-                work &&
-                [run, ...children].find((agent) => agent?.id === work.runId);
-              const timestamp = activity.createdAt
-                ? new Date(activity.createdAt)
-                : null;
-              return (
-                <li key={activity.id}>
-                  {timestamp && !Number.isNaN(timestamp.getTime()) && (
-                    <time dateTime={timestamp.toISOString()}>
-                      {timestamp.toLocaleTimeString(undefined, {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </time>
+          <div>
+            <Trace>
+              <TraceLine
+                status={
+                  latest?.eventType.includes("failed") ? "error" : undefined
+                }
+              >
+                <TraceIcon>
+                  {latest?.eventType.includes("failed") ? (
+                    <CircleAlertIcon />
+                  ) : (
+                    <ActivityIcon />
                   )}
-                  <div className="min-w-0 text-foreground wrap-anywhere">
-                    {work
-                      ? `${owner ? `${agentName(owner, t)}: ` : ""}${workProgressDescription(work, t)}`
-                      : t(label)}
-                    {work?.summary && (
-                      <p>
-                        {t("workspaceWorkFindings")}: {work.summary}
-                      </p>
-                    )}
-                    {providerActivityExplanation(activity, t) &&
-                      ` · ${providerActivityExplanation(activity, t)}`}
+                </TraceIcon>
+                <TraceTitle className="whitespace-normal wrap-anywhere">
+                  {latestBudget
+                    ? budgetDescription(latestBudget.budget, t)
+                    : t(latestLabel)}
+                </TraceTitle>
+              </TraceLine>
+            </Trace>
+            {latestExplanation && (
+              <p className="mt-1 ml-[calc(var(--icon)+0.5rem)] leading-relaxed wrap-anywhere">
+                {latestExplanation}
+              </p>
+            )}
+          </div>
+        ) : !currentTasks.length ? (
+          <TraceLine status={status === "queued" ? "pending" : "running"}>
+            <TraceIcon>
+              {status === "queued" ? (
+                <ClockIcon />
+              ) : (
+                <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+              )}
+            </TraceIcon>
+            <TraceTitle>
+              {status === "queued"
+                ? t("agentRunWaitingForWorker")
+                : t("workspaceActivityWaiting")}
+            </TraceTitle>
+          </TraceLine>
+        ) : null}
+      </Trace>
+      {visibleEvents.length > 0 && (
+        <TraceCollapsible className="mt-2">
+          <TraceCollapsibleTrigger>
+            <TraceLine>
+              <TraceIcon>
+                <HistoryIcon />
+              </TraceIcon>
+              <TraceTitle>{t("workspaceActivityHistory")}</TraceTitle>
+              <TraceDescription>{visibleEvents.length}</TraceDescription>
+            </TraceLine>
+          </TraceCollapsibleTrigger>
+          <TraceCollapsibleContent>
+            <Trace>
+              {visibleEvents.map((activity) => {
+                const label = runActivityLabel(activity);
+                if (!label) return null;
+                const work = workProgressMetadata(activity);
+                const owner =
+                  work &&
+                  [run, ...children].find((agent) => agent?.id === work.runId);
+                const timestamp = activity.createdAt
+                  ? new Date(activity.createdAt)
+                  : null;
+                const explanation = providerActivityExplanation(activity, t);
+                return (
+                  <div key={activity.id} className="min-w-0">
+                    <Trace>
+                      <TraceLine
+                        status={
+                          activity.eventType.includes("failed")
+                            ? "error"
+                            : undefined
+                        }
+                        className="items-start"
+                      >
+                        <TraceIcon>
+                          {activity.eventType.includes("failed") ? (
+                            <CircleAlertIcon />
+                          ) : (
+                            <ActivityIcon />
+                          )}
+                        </TraceIcon>
+                        <TraceTitle className="whitespace-normal wrap-anywhere">
+                          {work
+                            ? `${owner ? `${agentName(owner, t)}: ` : ""}${workProgressDescription(work, t)}`
+                            : t(label)}
+                        </TraceTitle>
+                        {timestamp && !Number.isNaN(timestamp.getTime()) && (
+                          <TraceDescription>
+                            <time
+                              className="text-ui-2xs"
+                              dateTime={timestamp.toISOString()}
+                            >
+                              {timestamp.toLocaleTimeString(undefined, {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </time>
+                          </TraceDescription>
+                        )}
+                      </TraceLine>
+                    </Trace>
+                    <div className="ml-[calc(var(--icon)+0.5rem)] leading-relaxed wrap-anywhere">
+                      {work?.summary && (
+                        <p>
+                          {t("workspaceWorkFindings")}: {work.summary}
+                        </p>
+                      )}
+                      {explanation && <p>{explanation}</p>}
+                    </div>
                   </div>
-                </li>
-              );
-            })}
-          </ol>
-        </details>
+                );
+              })}
+            </Trace>
+          </TraceCollapsibleContent>
+        </TraceCollapsible>
       )}
     </div>
   );

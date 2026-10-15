@@ -262,7 +262,7 @@ function Conversation({
   conversationTitle,
   projectId,
   readState,
-  runs,
+  runs: allRuns,
   initialMessage,
   onInitialMessageSent,
 }: {
@@ -274,6 +274,8 @@ function Conversation({
   initialMessage?: string;
   onInitialMessageSent?: () => void;
 }) {
+  // Specialist records inform progress, but only root runs own chat output and controls.
+  const runs = allRuns.filter((run) => !run.parentRunId);
   const t = useT(),
     [params, setParams] = useSearchParams();
   const path = `/knowledge/conversations/${conversationId}`;
@@ -972,7 +974,7 @@ function Conversation({
                       <LiveRun
                         run={run}
                         projectId={projectId}
-                        children={runs.filter(
+                        children={allRuns.filter(
                           (candidate) => candidate.parentRunId === run.id,
                         )}
                       />

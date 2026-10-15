@@ -92,7 +92,7 @@ test("budget waiting survives sibling activity and clears only its reservation, 
       events={[wait, sibling]}
     />,
   );
-  expect(html.split("<details")[0]).toContain(en.budgetWaiting);
+  expect(html).toContain(en.budgetWaiting);
   expect(html).toContain(en.budgetNotDispatched);
   for (const amount of [
     "$0.001234 USD",
@@ -224,8 +224,8 @@ test("editorial progress uses localized stages without section summaries or batc
     const html = renderToStaticMarkup(
       <RunActivityFeed active run={run} events={[section, update]} />,
     );
-    expect(html.split("<details")[0]).toContain(en[key]);
-    expect(html.split("<details")[0]).not.toContain("Report section");
+    expect(html).toContain(en[key]);
+    expect(html).not.toContain("Report section");
   }
   const [task] = currentRunTasks(run, [], t, [section]);
   expect(task.text).toBe(`${en.workspaceWorkReviewing} · Batch 2/3`);
@@ -247,14 +247,13 @@ test("activity history is collapsed while the current assignment and latest upda
       ]}
     />,
   );
-  const summary = html.split("<details")[0];
+  const summary = html;
   expect(summary).toContain("Source review");
   expect(summary).toContain("Compare floor plan revisions");
   expect(summary).toContain(en.workspaceActivityProviderCallRetrying);
   expect(summary).not.toContain(en.workspaceActivityProviderCallStarted);
   expect(html).toContain("Activity history");
-  expect(html).toContain(en.workspaceActivityProviderCallStarted);
-  expect(html).not.toMatch(/<details[^>]*\bopen/);
+  expect(html).toContain('aria-expanded="false"');
   const stopped = renderToStaticMarkup(
     <RunActivityFeed
       active={false}
@@ -312,7 +311,7 @@ test("live work replaces assignments with attributed source batches and unreview
     renderToStaticMarkup(
       <RunActivityFeed active run={run} children={children} events={updates} />,
     );
-  const visible = render().split("<details")[0];
+  const visible = render();
   expect(visible).toContain("Batch 2/3");
   expect(visible).toContain("Floor plans.pdf (Version 2)");
   expect(visible).toContain("Room dimensions differ between revisions");
@@ -321,7 +320,6 @@ test("live work replaces assignments with attributed source batches and unreview
   expect(visible).not.toContain("Outdated finding");
   expect(visible).not.toContain("Static assignment");
   expect(visible).not.toContain(en.workspaceActivityProviderCallStarted);
-  expect(render()).toContain("Outdated finding"); // Preserved only in expanded history.
   for (const updates of [
     [...events, { id: "resume", eventType: "resumed" }],
     [
@@ -332,14 +330,12 @@ test("live work replaces assignments with attributed source batches and unreview
       },
     ],
   ]) {
-    const fallback = render(parent, [child], updates).split("<details")[0];
+    const fallback = render(parent, [child], updates);
     expect(fallback).toContain("Static assignment");
     expect(fallback).not.toContain("Room dimensions differ");
     expect(fallback).not.toContain("UNSAFE");
   }
-  const queued = render(parent, [{ ...child, status: "queued" }]).split(
-    "<details",
-  )[0];
+  const queued = render(parent, [{ ...child, status: "queued" }]);
   expect(queued).toContain("Waiting for the worker to start");
   expect(queued).not.toContain("Room dimensions differ");
 });

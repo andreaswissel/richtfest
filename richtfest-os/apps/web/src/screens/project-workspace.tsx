@@ -339,9 +339,7 @@ export function ProjectWorkspace() {
                         setInitialMessageDraft("");
                       }}
                       runs={list(workspace.data?.runs).filter(
-                        (run) =>
-                          run.conversationId === selected.id &&
-                          !run.parentRunId,
+                        (run) => run.conversationId === selected.id,
                       )}
                     />
                   ) : (

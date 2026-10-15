@@ -191,6 +191,58 @@ describe("registered OpenUI boundary", () => {
   });
 });
 describe("workspace records and navigation", () => {
+  test("main conversation shows specialist progress without separate specialist output or controls", () => {
+    const html = render(
+      <Routes>
+        <Route path="/projects/:id" element={<ProjectWorkspace />} />
+      </Routes>,
+      `/projects/${projectId}?conversation=${conversationId}`,
+      {
+        [`/projects/${projectId}`]: { id: projectId, name: "Trace project" },
+        [`/knowledge/workspaces/${projectId}`]: {
+          conversations: [{ id: conversationId, title: "Source review" }],
+          runs: [
+            {
+              id: "parent",
+              conversationId,
+              status: "running",
+              isSupervisor: true,
+            },
+            {
+              id: "child",
+              conversationId,
+              parentRunId: "parent",
+              status: "running",
+              specialistRole: "source_reviewer",
+              goal: "Compare the two source revisions",
+              partialOutput: "Specialist-only draft output",
+            },
+            {
+              id: "queued",
+              conversationId,
+              parentRunId: "parent",
+              status: "queued",
+              specialistRole: "requirements_reviewer",
+              goal: "Check missing wall dimensions",
+            },
+            {
+              id: "other",
+              conversationId: "other-thread",
+              status: "running",
+              goal: "Other thread assignment",
+            },
+          ],
+        },
+      },
+    );
+    expect(html).toContain("Compare the two source revisions");
+    expect(html).toContain("Check missing wall dimensions");
+    expect(html).toContain("Waiting for the worker to start");
+    expect(html).not.toContain("Specialist-only draft output");
+    expect(html).not.toContain("Other thread assignment");
+    // One labeled activity stop control, not one per specialist (the composer has its own icon button).
+    expect(html.match(/>Stop run<\/button>/g)).toHaveLength(1);
+  });
   test("mobile deep links show resources, while thread and message targets show conversation", () => {
     for (const [query, panel] of [
       ["", "conversation"],
