@@ -87,6 +87,50 @@ test("door gap closing only changes segmentation and keeps exact source polygons
   expect(result.coverage.enclosed).toBe(2);
   expect(result.assemblies.map(a=>"polygon" in a.geometry?a.geometry.polygon:null)).toEqual(sources.map(f=>f.geometry.polygon));
 });
+test("portal closure bridges only a strict repeated wall band inside one apartment domain",()=>{
+  const sourceFill={...fill,sourceKey:"apartment",rings:[rectangle(.1,.1,.8,.45)]};
+  const left=footprint("left",.25,.3,.12,.01),right=footprint("right",.39,.3,.12,.01),
+    leftContact=footprint("left-contact",.24,.25,.01,.05),rightContact=footprint("right-contact",.51,.25,.01,.05),
+    repeated=footprint("repeated",.65,.3,.12,.01);
+  const sourceWords=[word("WE 1",.12,.12),word("Bad",.2,.2),word("Schlafen",.45,.38)];
+  const labels=planLabels(sourceWords);
+  const result=inferPlanTopology(labels,[left,right,leftContact,rightContact,repeated],sourceWords,400,[],0,[sourceFill]);
+  expect(result.coverage.portalClosureCount).toBe(1);
+  expect(result.coverage.portalClosureEvidence[0]).toMatchObject({
+    sourceKeys:[left.sourceKey,right.sourceKey], orientation:"horizontal", method:"collinear_exact_wall_pair",
+    segmentationOnly:true, sourcePolygonsExact:true,
+  });
+  expect(result.assemblies.flatMap(a=>"polygon" in a.geometry?[a.geometry.polygon]:[])).toContainEqual(left.geometry.polygon);
+  expect(result.assemblies.flatMap(a=>"polygon" in a.geometry?[a.geometry.polygon]:[])).toContainEqual(right.geometry.polygon);
+});
+test("portal closure rejects a bridge that crosses apartment ownership",()=>{
+  const first={...fill,sourceKey:"first",rings:[rectangle(.1,.1,.24,.45)]},second={...fill,sourceKey:"second",rings:[rectangle(.34,.1,.46,.45)]};
+  const left=footprint("left-domain",.25,.3,.08,.01),right=footprint("right-domain",.36,.3,.08,.01),
+    leftContact=footprint("left-domain-contact",.24,.25,.01,.05),rightContact=footprint("right-domain-contact",.43,.25,.01,.05),repeated=footprint("repeated-domain",.55,.3,.08,.01);
+  const sourceWords=[word("WE 1",.12,.12),word("Bad",.2,.2),word("WE 2",.47,.12),word("Schlafen",.48,.38)];
+  const labels=planLabels(sourceWords);
+  const result=inferPlanTopology(labels,[left,right,leftContact,rightContact,repeated],sourceWords,400,[],0,[first,second]);
+  expect(result.coverage.portalClosureCount).toBe(0);
+});
+test("shape QC accepts rectangular and legitimate L-shaped source-relative rooms",()=>{
+  const rectangular=inferPlanTopology(planLabels([word("Bad",.15,.15)]),[],[],300,[],0,[{...fill,rings:[rectangle(.1,.1,.2,.2)]}]);
+  expect(rectangular.rooms[0].geometry.quality).toBe("enclosed_region");
+  expect(rectangular.rooms[0].geometry.shapeQc).toMatchObject({status:"unreviewed",rectilinearEdgeFraction:1,narrowLobeSignal:false,severeConcavity:false});
+  expect(rectangular.rooms[0].geometry.shapeQc?.convexityRatio).toBeCloseTo(1,5);
+  const lShape=[{x:.1,y:.1},{x:.3,y:.1},{x:.3,y:.18},{x:.18,y:.18},{x:.18,y:.3},{x:.1,y:.3}];
+  const lShaped=inferPlanTopology(planLabels([word("Schlafen",.13,.13)]),[],[],300,[],0,[{...fill,rings:[lShape]}]);
+  expect(lShaped.rooms[0].geometry.quality).toBe("enclosed_region");
+  expect(lShaped.rooms[0].geometry.shapeQc).toMatchObject({status:"unreviewed",rectilinearEdgeFraction:1,narrowLobeSignal:false});
+  expect(lShaped.rooms[0].geometry.shapeQc?.convexityRatio).toBeCloseTo(1.28125,2);
+});
+test("shape QC demotes an extreme doorway tendril instead of presenting it as a room polygon",()=>{
+  const tendril=[{x:.1,y:.1},{x:.3,y:.1},{x:.3,y:.12},{x:.12,y:.12},{x:.12,y:.3},{x:.1,y:.3}];
+  const result=inferPlanTopology(planLabels([word("Diele",.11,.11)]),[],[],300,[],0,[{...fill,rings:[tendril]}]);
+  expect(result.rooms[0].geometry.quality).toBe("anchor");
+  expect(result.rooms[0].geometry.topology).toMatchObject({status:"shape_outlier",method:"shape_qc_guard"});
+  expect(result.rooms[0].geometry.shapeQc).toMatchObject({status:"severe",severeConcavity:true});
+  expect(result.rooms[0].geometry).not.toHaveProperty("polygon");
+});
 test("10 and 30 square metre observations guide constrained area capacities",()=>{
   const words=[word("Bad",.14,.14),word("Schlafen",.34,.14),word("10.00",.14,.152),word("m²",.171,.152),word("30.00",.34,.152),word("m²",.371,.152)];
   const result=inferPlanTopology(planLabels(words),[],words,200,[],0,[{...fill,rings:[rectangle(.1,.1,.35,.1)]}]);
@@ -108,11 +152,16 @@ test.skipIf(!reference)("page two retains all annotations and isolates apartment
   const geometry=await extractPlanFootprints(reference!,2,new AbortController().signal);
   const result=inferPlanTopology(labels,geometry.candidates,words,1200,geometry.supplementaryBarriers,0,geometry.fillRegions,geometry.pageAspectRatio);
   expect(result.coverage).toMatchObject({labelCount:87,printedAreaCount:86,apartmentDomainCount:11,supplementaryBarrierCount:0});
+  expect(result.coverage).toMatchObject({approximateRegionCount:73,unresolvedRegionCount:14,shapeQcAuditedCount:73,shapeOutlierCount:0});
   expect(result.rooms.filter(r=>r.name==="Garderobe")).toHaveLength(1);
   expect(result.rooms.filter(r=>r.geometry.polygon).every(r=>r.geometry.groupLabel&&r.geometry.topology.apartmentOwner===r.geometry.groupSourceKey)).toBe(true);
   expect(new Set(result.rooms.flatMap(r=>r.geometry.groupLabel?[r.geometry.groupLabel]:[]))).toEqual(new Set(Array.from({length:11},(_,i)=>`WE ${i+1}`)));
   expect(result.rooms.filter(r=>r.geometry.polygon&&(r.geometry as {semanticQc?:{duplicateLivingKitchen?:boolean}}).semanticQc?.duplicateLivingKitchen)).toHaveLength(0);
   expect(result.coverage.highEvidenceWallCount).toBeLessThan(result.coverage.wallCount);
+  expect(result.coverage.portalClosureCount).toBeGreaterThan(0);
+  const sleeping6=result.rooms.find(r=>r.name==="Schlafen"&&r.geometry.groupLabel==="WE 6");
+  expect(sleeping6?.geometry.polygon).toBeDefined();
+  expect(Math.min(...sleeping6!.geometry.polygon!.map(point=>point.y))).toBeGreaterThanOrEqual(.445);
   expect(result.assemblies.flatMap(a=>a.geometry.sourceFootprintKeys)).toHaveLength(240);
   const collision=geometry.candidates.find(f=>Math.abs(f.geometry.planRegion.x-.355895)<.00001&&Math.abs(f.geometry.planRegion.y-.411246)<.00001);
   expect(collision).toBeDefined();
@@ -157,6 +206,6 @@ test.skipIf(!reference)("reference basement page demotes the audited whole-apart
   const oversized=result.rooms.filter(room=>room.geometry.topology.status==="oversized_unresolved");
   console.info("page1",{polygons:result.coverage.approximateRegionCount,anchors:result.coverage.unresolvedRegionCount});
   expect(oversized.every(r=>r.geometry.quality==="anchor")).toBe(true);
-  expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(20);
+  expect(result.coverage).toMatchObject({approximateRegionCount:25,unresolvedRegionCount:15,shapeQcAuditedCount:30,shapeOutlierCount:0});
   expect(Math.max(...result.rooms.flatMap(room=>room.geometry.polygon?[room.geometry.planRegion.width*room.geometry.planRegion.height]:[]))).toBeLessThan(.08);
 });

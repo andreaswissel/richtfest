@@ -11,6 +11,60 @@ const hash = (keys: string[]) => createHash("sha256").update([...keys].sort().jo
 const polygonArea = (polygon: Point[]) => Math.abs(polygon.reduce((sum, point, index) => {
   const next = polygon[(index + 1) % polygon.length]; return sum + point.x * next.y - point.y * next.x;
 }, 0)) / 2;
+const exactRectangle = (polygon: Point[]) => {
+  if (polygon.length !== 4) return null;
+  const bounds = box(polygon), corners = new Set([
+    `${bounds.x},${bounds.y}`, `${bounds.x + bounds.width},${bounds.y}`,
+    `${bounds.x + bounds.width},${bounds.y + bounds.height}`, `${bounds.x},${bounds.y + bounds.height}`,
+  ]);
+  return polygon.every(point => corners.has(`${point.x},${point.y}`)) && corners.size === 4 ? bounds : null;
+};
+const simplifyPolygon = (polygon: Point[]) => {
+  const points = polygon.filter((point, index) => {
+    const previous = polygon[(index + polygon.length - 1) % polygon.length];
+    return Math.hypot(point.x - previous.x, point.y - previous.y) > 1e-9;
+  });
+  if (points.length < 3) return points;
+  return points.filter((point, index) => {
+    const previous = points[(index + points.length - 1) % points.length], next = points[(index + 1) % points.length];
+    const cross = (point.x - previous.x) * (next.y - point.y) - (point.y - previous.y) * (next.x - point.x);
+    return Math.abs(cross) > 1e-9;
+  });
+};
+const shapeMetrics = (polygon: Point[], holes: Point[][] = []) => {
+  const outer = simplifyPolygon(polygon), inner = holes.map(simplifyPolygon), all = [outer, ...inner];
+  const area = Math.max(0, polygonArea(outer) - inner.reduce((sum, hole) => sum + polygonArea(hole), 0));
+  const bounds = outer.length ? box(outer) : { x: 0, y: 0, width: 0, height: 0 };
+  const perimeter = all.reduce((sum, ring) => sum + ring.reduce((length, point, index) => {
+    const next = ring[(index + 1) % ring.length]; return length + Math.hypot(next.x - point.x, next.y - point.y);
+  }, 0), 0);
+  const axisAlignedLength = all.reduce((sum, ring) => sum + ring.reduce((length, point, index) => {
+    const next = ring[(index + 1) % ring.length], edge = Math.hypot(next.x - point.x, next.y - point.y);
+    return length + (Math.abs(next.x - point.x) <= 1e-9 || Math.abs(next.y - point.y) <= 1e-9 ? edge : 0);
+  }, 0), 0);
+  const points = outer.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const halfHull = (ordered: Point[]) => ordered.reduce<Point[]>((half, point) => {
+    while (half.length >= 2 && cross(half[half.length - 2], half[half.length - 1], point) <= 1e-9) half.pop();
+    half.push(point);
+    return half;
+  }, []);
+  const lower = halfHull(points), upper = halfHull(points.slice().reverse());
+  const convexHull = points.length > 1 ? [...lower.slice(0, -1), ...upper.slice(0, -1)] : points;
+  const bboxArea = bounds.width * bounds.height;
+  const edgeLengths = all.flatMap(ring => ring.map((point, index) => {
+    const next = ring[(index + 1) % ring.length]; return Math.hypot(next.x - point.x, next.y - point.y);
+  }).filter(length => length > 1e-9));
+  const minEdgeToBboxRatio = edgeLengths.length && Math.max(bounds.width, bounds.height) > 0
+    ? Math.min(...edgeLengths) / Math.max(bounds.width, bounds.height) : 0;
+  const bboxFillRatio = bboxArea > 0 ? area / bboxArea : 0;
+  const compactness = perimeter > 0 ? 4 * Math.PI * area / (perimeter * perimeter) : 0;
+  const convexityRatio = area > 0 && convexHull.length >= 3 ? polygonArea(convexHull) / area : Infinity;
+  const narrowLobeSignal = bboxFillRatio < .35 && convexityRatio > 1.45;
+  const severeConcavity = convexityRatio > 2.5 || bboxFillRatio < .25;
+  return { bboxFillRatio, compactness, rectilinearEdgeFraction: perimeter > 0 ? axisAlignedLength / perimeter : 0,
+    convexityRatio, narrowLobeSignal, severeConcavity, minEdgeToBboxRatio, area, bbox: bounds };
+};
 
 /**
  * A semantic wall proposal needs stronger evidence than mere connectivity.
@@ -186,6 +240,96 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }
   const thicknesses=wallEntries.map(e=>e.classification.pageRelativeMinorDimension*n).sort((a,b)=>a-b);
   closeRadius=closeRadius || (thicknesses.length>=3&&(unitFills.length>0||labels.length<=2)?Math.min(4,Math.max(1,Math.round(thicknesses[Math.floor(thicknesses.length/2)]))):0);
+  // A short, source-supported gap between two aligned wall-like fills can be
+  // a raster escape route. Close only that gap in the segmentation grid. The
+  // exact source polygons and their draft-wall assemblies remain untouched;
+  // this is deliberately not a door, wall-continuity or adjacency claim.
+  const portalClosures: {
+    sourceKeys: [string, string]; orientation: "horizontal" | "vertical"; gap: number;
+    minorThickness: number; gapToMinorThickness: number; thicknessRatio: number;
+    thicknessBand: number; sourceContactCounts: [number, number];
+    midpoint: Point; apartmentOwner: string; method: "collinear_exact_wall_pair";
+    segmentationOnly: true; sourcePolygonsExact: true; rasterCellCount: number;
+  }[] = [];
+  const rectangleByWall = new Map<number, ReturnType<typeof exactRectangle>>();
+  for (const entry of wallEntries) rectangleByWall.set(entry.index, exactRectangle(footprints[entry.index].geometry.polygon));
+  const ownershipAt = (point: Point) => {
+    const x = Math.floor(point.x * n), y = Math.floor(point.y * n);
+    return x >= 0 && y >= 0 && x < n && y < n ? apartmentOwner[y * n + x] : -1;
+  };
+  const sourceContactCount = (index: number) => {
+    const source = footprints[index].geometry.planRegion, epsilon = 1e-6;
+    const contacts = footprints.filter((candidate, candidateIndex) => {
+      if (candidateIndex === index) return false;
+      const other = candidate.geometry.planRegion;
+      const verticalOverlap = Math.min(source.y + source.height, other.y + other.height) - Math.max(source.y, other.y);
+      const horizontalOverlap = Math.min(source.x + source.width, other.x + other.width) - Math.max(source.x, other.x);
+      return ((Math.abs(source.x + source.width - other.x) <= epsilon || Math.abs(other.x + other.width - source.x) <= epsilon) && verticalOverlap >= -epsilon)
+        || ((Math.abs(source.y + source.height - other.y) <= epsilon || Math.abs(other.y + other.height - source.y) <= epsilon) && horizontalOverlap >= -epsilon);
+    });
+    return Math.max(adjacency[index].size, contacts.length);
+  };
+  const bridgeForPair = (aIndex: number, bIndex: number) => {
+    const a = rectangleByWall.get(aIndex), b = rectangleByWall.get(bIndex);
+    if (!a || !b) return null;
+    const aEntry = wallEntries.find(entry => entry.index === aIndex)!, bEntry = wallEntries.find(entry => entry.index === bIndex)!;
+    const aThickness = aEntry.classification.pageRelativeMinorDimension, bThickness = bEntry.classification.pageRelativeMinorDimension;
+    const minorThickness = Math.min(aThickness, bThickness), thicknessRatio = Math.max(aThickness, bThickness) / minorThickness;
+    if (thicknessRatio > 1.1) return null;
+    const alignmentTolerance = minorThickness * .1 + 1e-6;
+    const axis = Math.abs(a.height - b.height) <= alignmentTolerance && Math.abs(a.y - b.y) <= alignmentTolerance && Math.abs(a.y + a.height - b.y - b.height) <= alignmentTolerance
+      ? "horizontal" as const
+      : Math.abs(a.width - b.width) <= alignmentTolerance && Math.abs(a.x - b.x) <= alignmentTolerance && Math.abs(a.x + a.width - b.x - b.width) <= alignmentTolerance
+        ? "vertical" as const : null;
+    if (!axis) return null;
+    let low: ReturnType<typeof box>, high: ReturnType<typeof box>, gap: number, overlapLow: number, overlapHigh: number;
+    if (axis === "horizontal") {
+      if (a.x <= b.x) { low = a; high = b; } else { low = b; high = a; }
+      gap = high.x - (low.x + low.width); overlapLow = Math.max(low.y, high.y); overlapHigh = Math.min(low.y + low.height, high.y + high.height);
+    } else {
+      if (a.y <= b.y) { low = a; high = b; } else { low = b; high = a; }
+      gap = high.y - (low.y + low.height); overlapLow = Math.max(low.x, high.x); overlapHigh = Math.min(low.x + low.width, high.x + high.width);
+    }
+    if (!(gap > 0) || gap / minorThickness > 8 || overlapHigh - overlapLow < minorThickness * .9) return null;
+    const sourceContactCounts: [number, number] = [sourceContactCount(aIndex), sourceContactCount(bIndex)];
+    if (!sourceContactCounts[0] || !sourceContactCounts[1]) return null;
+    const midpoint = axis === "horizontal"
+      ? { x: (low.x + low.width + high.x) / 2, y: (overlapLow + overlapHigh) / 2 }
+      : { x: (overlapLow + overlapHigh) / 2, y: (low.y + low.height + high.y) / 2 };
+    const owner = ownershipAt(midpoint);
+    if (owner < 0) return null;
+    // Every candidate bridge sample must stay in the same hard apartment
+    // owner, rather than relying on the midpoint as a permissive proxy.
+    const bridgeStart = axis === "horizontal" ? low.x + low.width : low.y + low.height;
+    const bridgeEnd = axis === "horizontal" ? high.x : high.y;
+    const samples: Point[] = [];
+    const startCell = Math.max(0, Math.ceil(bridgeStart * n - .5)), endCell = Math.min(n - 1, Math.floor(bridgeEnd * n - .5));
+    const crossStart = Math.max(0, Math.floor(overlapLow * n)), crossEnd = Math.min(n - 1, Math.ceil(overlapHigh * n) - 1);
+    for (let along = startCell; along <= endCell; along++) for (let cross = crossStart; cross <= crossEnd; cross++) {
+      const point = axis === "horizontal" ? { x: (along + .5) / n, y: (cross + .5) / n } : { x: (cross + .5) / n, y: (along + .5) / n };
+      if ((axis === "horizontal" ? point.x : point.y) < bridgeStart || (axis === "horizontal" ? point.x : point.y) > bridgeEnd) continue;
+      samples.push(point);
+    }
+    if (!samples.length || samples.some(point => ownershipAt(point) !== owner)) return null;
+    let rasterCellCount = 0;
+    for (const point of samples) {
+      const x = Math.floor(point.x * n), y = Math.floor(point.y * n);
+      if (!wall[y * n + x]) { wall[y * n + x] = 1; rasterCellCount++; }
+    }
+    const ownerSourceKey = unitFills[owner]?.sourceKey;
+    if (!ownerSourceKey) return null;
+    return { sourceKeys: [footprints[aIndex].sourceKey, footprints[bIndex].sourceKey] as [string, string], orientation: axis,
+      gap, minorThickness, gapToMinorThickness: gap / minorThickness, thicknessRatio,
+      thicknessBand: aEntry.classification.minorDimensionBand, sourceContactCounts, midpoint, apartmentOwner: ownerSourceKey,
+      method: "collinear_exact_wall_pair" as const, segmentationOnly: true as const, sourcePolygonsExact: true as const, rasterCellCount };
+  };
+  const repeatedWallEntries = wallEntries.filter(entry => (bandCounts.get(entry.classification.minorDimensionBand) ?? 0) >= 3);
+  for (let i = 0; i < repeatedWallEntries.length; i++) for (let j = i + 1; j < repeatedWallEntries.length; j++) {
+    const first = repeatedWallEntries[i], second = repeatedWallEntries[j];
+    if (first.classification.minorDimensionBand !== second.classification.minorDimensionBand) continue;
+    const closure = bridgeForPair(first.index, second.index);
+    if (closure) portalClosures.push(closure);
+  }
   // Optional morphological closing joins short gaps only, with the approximation recorded.
   // Sliding-window separable max/min keeps processing linear in page pixel count.
   if (closeRadius > 0) {
@@ -255,7 +399,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }
   if(!needsRefinement)break;
   }
-  const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0 };
+  const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0,shape_outlier:0 };
   const preliminaryRooms = labels.map((label, i) => {
     const lr=label.geometry.planRegion;
     const seedX=Math.min(n-1,Math.floor((lr.x+lr.width/2)*n)),seedY=Math.min(n-1,Math.floor((lr.y+lr.height/2)*n));
@@ -276,9 +420,11 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const finalStatus=oversized?"oversized_unresolved":status;
     counts[finalStatus]++;
     const polygon=oversized?undefined:candidatePolygon;
-    return { ...label, sourceKey:`topology-v4:${label.sourceKey}`, geometry: { ...label.geometry,
+    const roomApartmentOwner=unitId>=0?unitFills[unitId].sourceKey:null;
+    const relevantPortalClosures=roomApartmentOwner?portalClosures.filter(closure=>closure.apartmentOwner===roomApartmentOwner):[];
+    return { ...label, sourceKey:`topology-v5:${label.sourceKey}`, geometry: { ...label.geometry,
       ...(polygon ? { quality: status==="conflicting"?"approximate_partition" as const:"enclosed_region" as const, polygon, holes:contour?.holes, planRegion: box(polygon), labelRegion: label.geometry.planRegion } : {}),
-      topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v4:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost, partitionWeight:"sqrt_printed_area", barrierScenario:"primary", ignoredAlternativeBarrierCount:supplementary.length, apartmentOwner:unitId>=0?unitFills[unitId].sourceKey:null, gapClosing:closeRadius?"inferred_segmentation_only":null },
+      topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v5:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost, partitionWeight:"sqrt_printed_area", barrierScenario:"primary", ignoredAlternativeBarrierCount:supplementary.length, apartmentOwner:roomApartmentOwner, gapClosing:closeRadius||relevantPortalClosures.length?"inferred_segmentation_only":null, portalClosureEvidence:relevantPortalClosures },
       sourceFillEvidence:containingFills.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName})),
       ...(containingFills.length===1&&groupLabels.length===1?{groupLabel:groupLabels[0],groupSourceKey:containingFills[0].sourceKey,
         groupAssociationMethod:fallbackUnitFills.has(containingFills[0].sourceKey)?"bbox_summary_plus_exact_area_closure":"contained_unit_marker",
@@ -286,12 +432,30 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       ...(observations.has(label.sourceKey) ? { printedArea: observations.get(label.sourceKey) } : {}),
       limitations: polygon ? `Approximate raster region seeded by source text, constrained by primary construction fills and apartment ownership. ${status==="conflicting"?"Shared free space is divided by area-guided geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : oversized ? "Source label only: the inferred region exceeded the conservative page-relative room-size guard and may represent multiple rooms or a whole apartment/sheet area. Room boundary remains unresolved." : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } };
   });
+  const shapeQcThresholds={minimumBboxFillRatio:.25,minimumCompactness:.1,maximumConvexityRatio:2.5};
+  type ShapeQc = ReturnType<typeof shapeMetrics> & { thresholds: typeof shapeQcThresholds; status: "unreviewed" | "severe"; method: "source_relative_rectilinear_shape_qc"; limitations: string };
+  type ShapeCheckedRoom = (typeof preliminaryRooms)[number] & { geometry: (typeof preliminaryRooms)[number]["geometry"] & { polygon?: Point[]; holes?: Point[][]; labelRegion?: ReturnType<typeof box>; shapeQc?: ShapeQc } };
+  const shapeCheckedRooms = preliminaryRooms.map(room => {
+    if (!room.geometry.polygon) return room;
+    const shape=shapeMetrics(room.geometry.polygon,room.geometry.holes??[]);
+    const shapeQc={...shape,thresholds:shapeQcThresholds,status:"unreviewed" as const,method:"source_relative_rectilinear_shape_qc" as const,
+      limitations:"Source-relative polygon plausibility metrics only. They do not establish a physical measurement, room use or a verified source boundary."};
+    const severe=shape.severeConcavity||(shape.narrowLobeSignal&&shape.compactness<shapeQcThresholds.minimumCompactness);
+    if(!severe)return {...room,geometry:{...room.geometry,shapeQc}};
+    const previousStatus=room.geometry.topology.status as keyof typeof counts;
+    if(previousStatus in counts)counts[previousStatus]=Math.max(0,counts[previousStatus]-1);
+    counts.shape_outlier++;
+    const {polygon:_polygon,holes:_holes,labelRegion,...remaining}=room.geometry;
+    return {...room,geometry:{...remaining,quality:"anchor" as const,planRegion:labelRegion??room.geometry.planRegion,
+      topology:{...room.geometry.topology,status:"shape_outlier" as const,method:"shape_qc_guard" as const},shapeQc:{...shapeQc,status:"severe" as const},
+      limitations:"Source label only: the inferred polygon has a severe source-relative concavity or low compactness and was demoted to an unresolved anchor. Room boundary remains unresolved."}};
+  }) as ShapeCheckedRoom[];
   const effectiveRoomArea=(geometry:{polygon?:Point[];holes?:Point[][]})=>geometry.polygon
     ?Math.max(0,polygonArea(geometry.polygon)-(geometry.holes??[]).reduce((sum,hole)=>sum+polygonArea(hole),0)):0;
-  const ratios=preliminaryRooms.flatMap(room=>{const value=room.geometry.printedArea?.value;
+  const ratios=shapeCheckedRooms.flatMap(room=>{const value=room.geometry.printedArea?.value;
     return room.geometry.polygon&&value!==undefined&&value>0?[effectiveRoomArea(room.geometry)/value]:[];}).sort((a,b)=>a-b);
   const areaRatioMedian=ratios.length?ratios.length%2?ratios[(ratios.length-1)/2]:(ratios[ratios.length/2-1]+ratios[ratios.length/2])/2:null;
-  const rooms=preliminaryRooms.map(room=>{
+  const rooms=shapeCheckedRooms.map(room=>{
     const printedArea=room.geometry.printedArea?.value;
     if(!room.geometry.polygon||!printedArea||!areaRatioMedian||ratios.length<5)return room;
     const normalizedPolygonArea=effectiveRoomArea(room.geometry),ratio=normalizedPolygonArea/printedArea,relativeToMedian=ratio/areaRatioMedian;
@@ -336,7 +500,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
     highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
-    areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius,
+    areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, portalClosureCount:portalClosures.length, portalClosureEvidence:portalClosures,
+    shapeQcAuditedCount:rooms.filter(room=>room.geometry.shapeQc).length, shapeOutlierCount:counts.shape_outlier,
     alternativeBarrierEvidence:supplementary.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName,polygon:f.geometry.polygon,state:"unresolved_alternative"})),
     relationships: "Not established: source fills alone do not distinguish doors, openings or traversable adjacency.",
     limitations: "Only primary construction fills constrain the selected scenario; alternative layers retain unresolved state provenance. Substantial unit-bearing fills establish hard owner domains. Gap closure affects segmentation only. Shared components use inferred area-guided geodesic partitions; this does not establish doors or room adjacency. Printed-scale QC is unreviewed source evidence. Missing strokes and open gaps remain uncertainty; failed regions remain anchors." } };

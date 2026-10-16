@@ -10,7 +10,7 @@ import { SaxesParser } from "saxes";
 import { extractPlanFootprints } from "./plan-footprints";
 import { inferPlanTopology } from "./plan-topology";
 
-export const buildingExtractorVersion = "topology-v4";
+export const buildingExtractorVersion = "topology-v5";
 
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text"> }; quote: string };
