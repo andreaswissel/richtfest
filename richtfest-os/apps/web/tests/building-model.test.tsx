@@ -5,10 +5,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
 import en from "../src/locales/en.json";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
-import { overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
+import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
+
+test("PDF evidence stays on the authenticated app origin for inline rendering", () => {
+  expect(inlinePdfSource(`/api/projects/${projectId}/files/file/versions/1/download`)).toBe(`/api/projects/${projectId}/files/file/versions/1/download?inline=1`);
+  expect(inlinePdfSource(`/api/projects/${projectId}/files/file/versions/1/download?token=local#page=2`)).toBe(`/api/projects/${projectId}/files/file/versions/1/download?token=local&inline=1#page=2`);
+  expect(inlinePdfSource("https://example.com/plan.pdf")).toBe("https://example.com/plan.pdf");
+});
 
 const wallReviewFixture = {
   revision: 1,

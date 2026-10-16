@@ -607,6 +607,15 @@ describe("accepted API workflow (PostgreSQL)", () => {
           )
         ).text(),
       ).toBe("VERSION-TWO");
+      const inlineVersion = await fetch(
+        base +
+          `/api/projects/${projectId}/files/${file.body.data.id}/versions/2/download?inline=1`,
+        { headers: { cookie } },
+      );
+      expect(inlineVersion.status).toBe(200);
+      expect(inlineVersion.headers.get("cache-control")).toBe("private, no-store");
+      expect(inlineVersion.headers.get("content-disposition")).toBe("inline");
+      expect(await inlineVersion.text()).toBe("VERSION-TWO");
       const unavailable = await request(
         "/api/knowledge/runs",
         {

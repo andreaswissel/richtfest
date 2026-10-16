@@ -1,5 +1,7 @@
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok, projectAddressInput, addressReferenceInput } from "@richtfest/shared";
@@ -907,6 +909,36 @@ export function createRouter(getDeps: GetDeps) {
           error: { code: "not_found" },
           message: "Attached file version not found",
         });
+      if (req.query.inline === "1") {
+        if (row.version.mimeType.split(";", 1)[0]?.trim().toLowerCase() !== "application/pdf")
+          return send(res, 415, {
+            data: null,
+            error: { code: "unsupported_media_type" },
+            message: "Inline rendering is available only for PDF sources",
+          });
+        const abortController = new AbortController();
+        const abort = () => abortController.abort();
+        res.once("close", abort);
+        try {
+          const stream = await d.fileStorage.read(row.version.storageKey, abortController.signal);
+          if (!stream)
+            return send(res, 404, {
+              data: null,
+              error: { code: "not_found" },
+              message: "Attached file object not found",
+            });
+          res
+            .status(200)
+            .type("application/pdf")
+            .set("Cache-Control", "private, no-store")
+            .set("Content-Disposition", "inline")
+            .set("X-Content-Type-Options", "nosniff");
+          await pipeline(Readable.from(stream), res, { signal: abortController.signal });
+          return;
+        } finally {
+          res.off("close", abort);
+        }
+      }
       const result = await d.fileStorage.download(
         row.version.storageKey,
         row.version.mimeType,
@@ -922,6 +954,10 @@ export function createRouter(getDeps: GetDeps) {
       res.type(row.version.mimeType);
       return (result.stream as any).pipe(res);
     } catch (e) {
+      if (res.headersSent) {
+        res.destroy(e instanceof Error ? e : undefined);
+        return;
+      }
       return next(e);
     }
   };

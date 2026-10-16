@@ -6,6 +6,14 @@ import { candidateRole, type BuildingEvidence, type BuildingGeometryPart, type B
 
 export type PdfViewerTransform = { zoom: number; pan: { x: number; y: number } };
 
+/** Keep PDF.js on the authenticated app origin instead of following a bucket redirect that requires browser GET CORS. */
+export function inlinePdfSource(value?: string) {
+  if (!value || !value.startsWith("/api/") || !/\/download(?:[?#]|$)/.test(value)) return value;
+  const [withoutHash, hash] = value.split("#", 2);
+  const separator = withoutHash!.includes("?") ? "&" : "?";
+  return `${withoutHash}${separator}inline=1${hash ? `#${hash}` : ""}`;
+}
+
 /** Render an extracted footprint relative to its normalized bounding box. */
 export function polygonClipPath(region: Pick<BuildingRegion, "box" | "polygon" | "geometryQuality">) {
   if (region.geometryQuality === "anchor" || !region.box || !region.polygon?.length || region.box.width <= 0 || region.box.height <= 0) return undefined;
@@ -182,9 +190,9 @@ export function PdfEvidenceRenderer({
   const dragRef = useRef<{ x: number; y: number; panX: number; panY: number } | undefined>(undefined);
   const pdfRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
-  const source = evidence.pdfUrl || (evidence.fileId
+  const source = inlinePdfSource(evidence.pdfUrl || (evidence.fileId
     ? `/api/projects/${projectId}/files/${evidence.fileId}/versions/${evidence.version || 1}/download`
-    : undefined);
+    : undefined));
 
   const updateTransform = (next: PdfViewerTransform) => {
     setInternalZoom(next.zoom);
