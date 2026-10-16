@@ -34,6 +34,26 @@ test("hidden wall review link preserves exact source context without leaking pro
   }
 });
 
+test("building model presents compact context, source status, and accessible sidebar tabs", () => {
+  const html = render({
+    ...wallReviewFixture,
+    reviewStatus: "reviewed",
+    evidence: { fileName: "Plan.pdf", pageCount: 3 },
+    extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete" }],
+  }, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1");
+  expect(html).toContain('class="building-model-toolbar-source"');
+  expect(html).toContain("Plan.pdf");
+  expect(html).toContain("Page 3");
+  expect(html).toContain('class="building-model-context"');
+  expect(html).toContain('class="building-model-context-title"');
+  expect(html).toContain("Plan context");
+  expect(html).toContain("building-model-sidebar-tabs");
+  expect(html).toContain("building-model-sidebar-tab-list");
+  expect(html).toContain("Objects &amp; review");
+  expect(html).toContain("Display controls");
+  expect(html).toContain('class="building-model-region-create-disclosure"');
+});
+
 test("Proposed review count excludes demolished wall hypotheses that its destination cannot reveal", () => {
   const demolished = { ...wallReviewFixture.extractionCandidates[0]!, id: "demolished-wall", name: "Demolished wall hypothesis", constructionState: "demolished" };
   const mixed = { ...wallReviewFixture, extractionCandidates: [...wallReviewFixture.extractionCandidates, demolished] };

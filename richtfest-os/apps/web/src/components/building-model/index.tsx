@@ -8,6 +8,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Copy, ExternalLink, Link2, LoaderCircle, ScanLine } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
@@ -209,6 +210,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const allExtractions = model.extraction && !model.extractions.some((job) => job.id === model.extraction?.id) ? [...model.extractions, model.extraction] : model.extractions;
   const displayedExtraction = allExtractions.find((job) => job.sourceVersionId === sourceForEvidence?.source?.versionId && job.page === page && job.storeyId === currentSource?.storeyId);
   const activeExtraction = displayedExtraction as BuildingExtractionJob | undefined;
+  const contextNeedsAttention = automaticWorkActive
+    || activeExtraction?.status === "queued"
+    || activeExtraction?.status === "running"
+    || activeExtraction?.status === "failed";
+  const [contextOpen, setContextOpen] = useState(() => contextNeedsAttention);
   const pollingExtractionIds = allExtractions.filter((job) => job.status === "queued" || job.status === "running").map((job) => job.id).join(",");
   useEffect(() => {
     if (!pollingExtractionIds && !automaticWorkActive && !hasUploadedPdfAwaitingModel) return;
@@ -220,6 +226,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       void queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
     }
   }, [activeExtraction?.id, activeExtraction?.status, projectId]);
+  useEffect(() => {
+    if (contextNeedsAttention) setContextOpen(true);
+  }, [contextNeedsAttention]);
   const visibleCandidates = candidateOverlaysForSource(filteredCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, candidateOverlayVisibility);
   const visibleRegions = regionsForSource(regions, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId);
   useEffect(() => {
@@ -365,91 +374,121 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))}
           />
         </div>
+        <div className="building-model-toolbar-source">
+          <span className="building-model-toolbar-label">{t("buildingModelSourceEvidence")}</span>
+          <strong>{evidence.fileName || t("buildingModelNoSource")}</strong>
+          <small>{t("buildingModelPage")} {page}</small>
+        </div>
         <div className="building-model-status-line">
           <Badge>{statusLabel(model.reviewStatus, t)}</Badge>
           <small>{model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}</small>
           {model.reviewStatus === "needs-review" && <span className="muted text-ui-xs">{t("buildingModelReviewInWorkspace")}</span>}
         </div>
       </div>
-      <ExtractionPanel
-        job={activeExtraction}
-        coverage={activeExtraction?.result?.coverage ? { note: activeExtraction.result.coverage } : model.extractionCoverage}
-        source={currentSource}
-        storeys={model.storeys}
-        selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
-        onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceStoreyId(value); } }}
-        canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
-        pending={startExtraction.isPending}
-        onStart={() => startExtraction.mutate()}
-        t={t}
-      />
-      {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")} t={t} />}
-      <div className="building-model-workbench">
-        <aside className="building-model-sidebar" aria-label={t("buildingModelObjects")}>
-          <div className="building-model-sidebar-section">
-            <h2>{t("buildingModelObjects")}</h2>
-            <div className="building-model-list">
-              {regions.map((region) => (
-                <button key={region.id} type="button" aria-pressed={selected?.id === region.id} onClick={() => selectRegion(region.id)}>
-                  <span>{region.label}</span>
-                  <small>{region.kind === "unknown-room" ? t("buildingModelUnknownRoom") : `p. ${region.page}`}</small>
-                </button>
-              ))}
-              {!regions.length && <Empty>{t("buildingModelNoObjects")}</Empty>}
-            </div>
-          </div>
-          <div className="building-model-sidebar-section">
-            <h2>{t("buildingModelExtractionCandidates")}</h2>
-            {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={activeCandidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
-            <div className="building-model-candidate-list">
-              {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
-              {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
-            </div>
-          </div>
-          <div className="building-model-sidebar-section" aria-label={t("buildingModelCandidateOverlayControls")}>
-            <h2>{t("buildingModelCandidateOverlayControls")}</h2>
-            {state !== "proposed" && hiddenWallCount > 0 && <Callout><span>{hiddenWallCount} {t("buildingModelHiddenWallHypotheses")}</span>{" "}<Link className="underline underline-offset-2" to={`?${wallReviewParams}`}>{t("buildingModelReviewWallHypotheses")}</Link></Callout>}
-            <label className="building-model-layer">
-              <input type="checkbox" checked={candidateOverlayVisibility.roomHypotheses ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, roomHypotheses: event.target.checked }))} />
-              <span>{t("buildingModelRoomHypotheses")}</span>
-            </label>
-            <label className="building-model-layer">
-              <input type="checkbox" checked={candidateOverlayVisibility.unresolvedAnchors ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, unresolvedAnchors: event.target.checked }))} />
-              <span>{t("buildingModelUnresolvedAnchors")}</span>
-            </label>
-            {hasDraftWallCandidates && <label className="building-model-layer">
-              <input type="checkbox" checked={candidateOverlayVisibility.draftWalls ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, draftWalls: event.target.checked }))} />
-              <span>{t("buildingModelDraftWalls")}</span>
-            </label>}
-            {hasAssemblyCandidates && <label className="building-model-layer">
-              <input type="checkbox" checked={candidateOverlayVisibility.assemblies ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, assemblies: event.target.checked }))} />
-              <span>{t("buildingModelConstructionAssemblies")}</span>
-            </label>}
-            <label className="building-model-layer">
-              <input type="checkbox" checked={candidateOverlayVisibility.footprints ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, footprints: event.target.checked }))} />
-              <span>{t("buildingModelRawFootprints")}</span>
-            </label>
-            <p className="muted text-ui-2xs">{t("buildingModelCandidateOverlayHint")}</p>
-          </div>
-          <div className="building-model-sidebar-section">
-            <h2>{t("buildingModelEvidenceLayers")}</h2>
-            {sourceLayers.length ? sourceLayers.map((layer) => (
-              <label className="building-model-layer" key={layer.id}>
-                <input type="checkbox" checked={layers[layer.id] ?? layer.visible !== false} onChange={(event) => setLayers((current) => ({ ...current, [layer.id]: event.target.checked }))} />
-                <span>{layer.label}</span>
-              </label>
-            )) : <p className="muted text-ui-xs">{t("buildingModelNoLayers")}</p>}
-            <p className="muted text-ui-2xs">{t("buildingModelLayerHint")}</p>
-          </div>
-          <RegionForm
-            projectId={projectId}
-            modelRevision={model.revision || 0}
-            storeyId={currentSource?.storeyId || undefined}
-            sourcePage={currentSource?.page || page}
-            sourceVersionId={evidence.sourceVersionId || undefined}
-            onComplete={() => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] })}
+      <details className="building-model-context" open={contextOpen} onToggle={(event) => setContextOpen(event.currentTarget.open)}>
+        <summary>
+          <span className="building-model-context-title">{t("buildingModelContext")}</span>
+          <span className="building-model-context-summary">{evidence.fileName || t("buildingModelNoSource")} · {t("buildingModelPage")} {page}</span>
+          <span className="building-model-context-meta">
+            {contextExtractionStatus(activeExtraction?.status, t)} · {contextClassificationStatus(currentAutomaticProcessing, automaticPlanProcessing.length > 0, t)}
+          </span>
+        </summary>
+        <div className="building-model-context-content">
+          <ExtractionPanel
+            job={activeExtraction}
+            coverage={activeExtraction?.result?.coverage ? { note: activeExtraction.result.coverage } : model.extractionCoverage}
+            source={currentSource}
+            storeys={model.storeys}
+            selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
+            onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceStoreyId(value); } }}
+            canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
+            pending={startExtraction.isPending}
+            onStart={() => startExtraction.mutate()}
             t={t}
           />
+          {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")} t={t} />}
+        </div>
+      </details>
+      <div className="building-model-workbench">
+        <aside className="building-model-sidebar" aria-label={t("buildingModelObjects")}>
+          <Tabs defaultValue="objects" className="building-model-sidebar-tabs">
+            <TabsList className="building-model-sidebar-tab-list" aria-label={t("buildingModelControls")}>
+              <TabsTrigger value="objects">{t("buildingModelSidebarObjectsTab")}</TabsTrigger>
+              <TabsTrigger value="display">{t("buildingModelSidebarDisplayTab")}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="objects" forceMount className="building-model-sidebar-tab-content">
+              <div className="building-model-sidebar-section">
+                <h2>{t("buildingModelObjects")}</h2>
+                <div className="building-model-list">
+                  {regions.map((region) => (
+                    <button key={region.id} type="button" aria-pressed={selected?.id === region.id} onClick={() => selectRegion(region.id)}>
+                      <span>{region.label}</span>
+                      <small>{region.kind === "unknown-room" ? t("buildingModelUnknownRoom") : `p. ${region.page}`}</small>
+                    </button>
+                  ))}
+                  {!regions.length && <Empty>{t("buildingModelNoObjects")}</Empty>}
+                </div>
+              </div>
+              <div className="building-model-sidebar-section">
+                <h2>{t("buildingModelExtractionCandidates")}</h2>
+                {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={activeCandidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
+                <div className="building-model-candidate-list">
+                  {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
+                  {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
+                </div>
+              </div>
+              <details className="building-model-region-create-disclosure">
+                <summary>{t("buildingModelAddRegion")}</summary>
+                <RegionForm
+                  projectId={projectId}
+                  modelRevision={model.revision || 0}
+                  storeyId={currentSource?.storeyId || undefined}
+                  sourcePage={currentSource?.page || page}
+                  sourceVersionId={evidence.sourceVersionId || undefined}
+                  compact
+                  onComplete={() => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] })}
+                  t={t}
+                />
+              </details>
+            </TabsContent>
+            <TabsContent value="display" forceMount className="building-model-sidebar-tab-content">
+              <div className="building-model-sidebar-section" aria-label={t("buildingModelCandidateOverlayControls")}>
+                <h2>{t("buildingModelCandidateOverlayControls")}</h2>
+                {state !== "proposed" && hiddenWallCount > 0 && <Callout><span>{hiddenWallCount} {t("buildingModelHiddenWallHypotheses")}</span>{" "}<Link className="underline underline-offset-2" to={`?${wallReviewParams}`}>{t("buildingModelReviewWallHypotheses")}</Link></Callout>}
+                <label className="building-model-layer">
+                  <input type="checkbox" checked={candidateOverlayVisibility.roomHypotheses ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, roomHypotheses: event.target.checked }))} />
+                  <span>{t("buildingModelRoomHypotheses")}</span>
+                </label>
+                <label className="building-model-layer">
+                  <input type="checkbox" checked={candidateOverlayVisibility.unresolvedAnchors ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, unresolvedAnchors: event.target.checked }))} />
+                  <span>{t("buildingModelUnresolvedAnchors")}</span>
+                </label>
+                {hasDraftWallCandidates && <label className="building-model-layer">
+                  <input type="checkbox" checked={candidateOverlayVisibility.draftWalls ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, draftWalls: event.target.checked }))} />
+                  <span>{t("buildingModelDraftWalls")}</span>
+                </label>}
+                {hasAssemblyCandidates && <label className="building-model-layer">
+                  <input type="checkbox" checked={candidateOverlayVisibility.assemblies ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, assemblies: event.target.checked }))} />
+                  <span>{t("buildingModelConstructionAssemblies")}</span>
+                </label>}
+                <label className="building-model-layer">
+                  <input type="checkbox" checked={candidateOverlayVisibility.footprints ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, footprints: event.target.checked }))} />
+                  <span>{t("buildingModelRawFootprints")}</span>
+                </label>
+                <p className="muted text-ui-2xs">{t("buildingModelCandidateOverlayHint")}</p>
+              </div>
+              <div className="building-model-sidebar-section">
+                <h2>{t("buildingModelEvidenceLayers")}</h2>
+                {sourceLayers.length ? sourceLayers.map((layer) => (
+                  <label className="building-model-layer" key={layer.id}>
+                    <input type="checkbox" checked={layers[layer.id] ?? layer.visible !== false} onChange={(event) => setLayers((current) => ({ ...current, [layer.id]: event.target.checked }))} />
+                    <span>{layer.label}</span>
+                  </label>
+                )) : <p className="muted text-ui-xs">{t("buildingModelNoLayers")}</p>}
+                <p className="muted text-ui-2xs">{t("buildingModelLayerHint")}</p>
+              </div>
+            </TabsContent>
+          </Tabs>
         </aside>
         <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>
           <div className="building-model-page-strip" aria-label={t("buildingModelPages")}>
@@ -485,6 +524,19 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       </div>
     </div>
   );
+}
+
+function contextExtractionStatus(status: string | undefined, t: ReturnType<typeof useT>) {
+  if (status === "queued") return t("buildingModelExtractionQueued");
+  if (status === "running") return t("buildingModelExtractionRunning");
+  if (status === "failed") return t("buildingModelExtractionFailed");
+  if (status === "complete" || status === "succeeded") return t("buildingModelExtractionComplete");
+  return t("buildingModelExtractionNotRun");
+}
+
+function contextClassificationStatus(processing: BuildingAutomaticPlanProcessing | undefined, hasProcessing: boolean, t: ReturnType<typeof useT>) {
+  if (processing) return automaticPhaseLabel(processing, t);
+  return hasProcessing ? t("buildingModelPageClassificationAvailable") : t("buildingModelPageClassificationUnavailable");
 }
 
 function automaticStatusLabel(status: string, t: ReturnType<typeof useT>) {
@@ -718,8 +770,8 @@ function slug(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "building";
 }
 
-function RegionForm({ projectId, modelRevision, storeyId, sourcePage, sourceVersionId, onComplete, t }: { projectId: string; modelRevision: number; storeyId?: string; sourcePage: number; sourceVersionId?: string; onComplete: () => void | Promise<void>; t: ReturnType<typeof useT> }) {
-  const [open, setOpen] = useState(false);
+function RegionForm({ projectId, modelRevision, storeyId, sourcePage, sourceVersionId, compact = false, onComplete, t }: { projectId: string; modelRevision: number; storeyId?: string; sourcePage: number; sourceVersionId?: string; compact?: boolean; onComplete: () => void | Promise<void>; t: ReturnType<typeof useT> }) {
+  const [open, setOpen] = useState(compact);
   const [kind, setKind] = useState<"room" | "element">("room");
   const [stableKey, setStableKey] = useState("");
   const [name, setName] = useState("");
@@ -739,18 +791,25 @@ function RegionForm({ projectId, modelRevision, storeyId, sourcePage, sourceVers
         ...(kind === "element" ? { kind: "element" } : {}),
       });
     },
-    onSuccess: async () => { setOpen(false); setFailure(undefined); await onComplete(); },
+    onSuccess: async () => {
+      if (!compact) setOpen(false);
+      setName("");
+      setStableKey("");
+      setBox({ x: "0", y: "0", width: "1", height: "1" });
+      setFailure(undefined);
+      await onComplete();
+    },
     onError: (cause) => setFailure(cause instanceof Error ? cause.message : String(cause)),
   });
   const numericBox = Object.values(box).every((value) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 1);
-  if (!open) return <div className="building-model-sidebar-section building-model-region-create"><Button size="sm" variant="outline" onClick={() => setOpen(true)}>{t("buildingModelAddRegion")}</Button></div>;
-  return <div className="building-model-sidebar-section building-model-region-create"><h2>{t("buildingModelAddRegion")}</h2><p className="muted text-ui-2xs">{t("buildingModelRegionHint")} · {t("buildingModelPage")} {sourcePage}</p>{failure && <Callout tone="error">{failure}</Callout>}<form onSubmit={(event) => { event.preventDefault(); if (name.trim() && numericBox && sourceVersionId) createRegion.mutate(); }}>
+  if (!open) return compact ? null : <div className="building-model-sidebar-section building-model-region-create"><Button size="sm" variant="outline" onClick={() => setOpen(true)}>{t("buildingModelAddRegion")}</Button></div>;
+  return <div className="building-model-sidebar-section building-model-region-create">{!compact && <h2>{t("buildingModelAddRegion")}</h2>}<p className="muted text-ui-2xs">{t("buildingModelRegionHint")} · {t("buildingModelPage")} {sourcePage}</p>{failure && <Callout tone="error">{failure}</Callout>}<form onSubmit={(event) => { event.preventDefault(); if (name.trim() && numericBox && sourceVersionId) createRegion.mutate(); }}>
     <Field label={t("buildingModelRegionType")}><NativeSelect value={kind} onChange={(event) => setKind(event.target.value as "room" | "element")}><option value="room">{t("buildingModelRoom")}</option><option value="element">{t("buildingModelElement")}</option></NativeSelect></Field>
     <Field label={t("buildingModelRegionName")}><Input value={name} onChange={(event) => setName(event.target.value)} required /></Field>
     <Field label={t("buildingModelRegionKey")}><Input value={stableKey} onChange={(event) => setStableKey(event.target.value)} placeholder={slug(name)} /></Field>
     <Field label={t("buildingModelConstructionState")}><NativeSelect value={constructionState} onChange={(event) => setConstructionState(event.target.value)}><option value="existing">{t("buildingModelStateExisting")}</option><option value="demolished">{t("buildingModelStateDemolition")}</option><option value="proposed">{t("buildingModelStateProposed")}</option><option value="retained">{t("buildingModelRetained")}</option></NativeSelect></Field>
     <div className="building-model-region-box">{(["x", "y", "width", "height"] as const).map((key) => <Field key={key} label={key}><Input type="number" min="0" max="1" step="0.001" value={box[key]} onChange={(event) => setBox((current) => ({ ...current, [key]: event.target.value }))} required /></Field>)}</div>
-    <div className="building-model-bootstrap-actions"><Button size="sm" type="submit" disabled={createRegion.isPending || !name.trim() || !numericBox || !sourceVersionId}>{t("buildingModelCreateRegion")}</Button><Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>{t("cancel")}</Button></div>
+    <div className="building-model-bootstrap-actions"><Button size="sm" type="submit" disabled={createRegion.isPending || !name.trim() || !numericBox || !sourceVersionId}>{t("buildingModelCreateRegion")}</Button>{!compact && <Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>{t("cancel")}</Button>}</div>
   </form></div>;
 }
 
@@ -818,7 +877,8 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
   const correction = { ...(name.trim() && name.trim() !== candidate.label ? { name: name.trim() } : {}), ...(targetEntityId ? { targetEntityId } : {}) };
   const formatUnknown = (value: unknown) => value == null || value === "" ? t("buildingModelUnknownValue") : typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value);
   const candidateWarning = role === "draft-wall" ? t("buildingModelDraftWallWarning") : role === "unresolved-anchor" ? t("buildingModelAnchorWarning") : role === "room-region" ? t("buildingModelRoomRegionWarning") : t("buildingModelCandidateWarning");
-  return <>
+  return <div className="building-model-candidate-inspector">
+    <div className="building-model-candidate-inspector-scroll">
     <Callout tone="warning">{candidateWarning}</Callout>
     <dl>
       <dt>{t("buildingModelCandidateType")}</dt><dd>{candidateTypeLabel(candidate, t)}</dd>
@@ -855,8 +915,9 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
     <div className="building-model-inspector-section"><h3>{t("buildingModelProperties")}</h3><Field label={t("buildingModelLabel")} hint={t("buildingModelCandidateCorrectionHint")}><Input value={name} onChange={(event) => setName(event.target.value)} disabled={pending} /></Field>{roomUseProposal && <div className="building-model-evidence-row"><span>{t("buildingModelRoomUseProposal")}</span><small>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} · {candidate.roomUseProposal?.provider || "TypeSafe"} {candidate.roomUseProposal?.model ? `/ ${candidate.roomUseProposal.model}` : ""}</small></div>}{sourceArea && <div className="building-model-evidence-row"><span>{t("buildingModelSourceArea")}</span><small>{sourceArea} · {t("buildingModelUnreviewedProposal")}</small></div>}{propertyEntries.map(([key, value]) => <div className="building-model-evidence-row" key={key}><span>{key}</span><small>{typeof value === "string" ? value : JSON.stringify(value)}</small></div>)}{!hasCandidateProperties && <p className="muted text-ui-xs">{t("buildingModelNoCandidateProperties")}</p>}</div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelMatchExisting")}</h3><Field label={candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")} hint={t("buildingModelMatchHint")}><NativeSelect value={targetEntityId} onChange={(event) => setTargetEntityId(event.target.value)} disabled={pending}><option value="">{t("buildingModelNoMatch")}</option>{regions.filter((region) => region.entityType === candidate.entityType).map((region) => <option key={region.id} value={region.id}>{region.label} · {region.id}</option>)}</NativeSelect></Field><Button size="sm" variant="outline" disabled={pending || !targetEntityId} onClick={() => onReview("approved", { targetEntityId })}>{t("buildingModelReconcile")}</Button></div>
     <div className="building-model-inspector-section"><h3>{t("buildingModelEvidence")}</h3>{candidate.evidence?.length ? candidate.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label || t("buildingModelSourcePage")}</span><small>{item.value || "—"} {item.page ? `· ${t("buildingModelPage")} ${item.page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoEvidence")}</p>}{candidate.uncertainty != null && <p className="muted text-ui-2xs">{t("buildingModelUncertainty")}: {typeof candidate.uncertainty === "string" ? candidate.uncertainty : JSON.stringify(candidate.uncertainty)}</p>}</div>
+    </div>
     <div className="building-model-candidate-actions"><Button size="sm" disabled={pending} onClick={() => onReview("approved", correction)}>{t("buildingModelAcceptCandidate")}</Button><Button size="sm" variant="outline" disabled={pending} onClick={() => onReview("rejected")}>{t("buildingModelRejectCandidate")}</Button></div>
-  </>;
+  </div>;
 }
 
 function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending }: { region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean }) {
