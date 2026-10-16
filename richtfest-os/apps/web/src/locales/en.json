@@ -1418,6 +1418,7 @@
   "buildingModelNoLayers": "No optional-content layers found.",
   "buildingModelLayerHint": "Layers change the PDF evidence view. They do not identify model objects.",
   "buildingModelSourceEvidence": "Exact source PDF evidence",
+  "buildingModelSourceDocument": "Source PDF",
   "buildingModelPages": "Source pages",
   "buildingModelLoadingEvidence": "Loading exact PDF evidence…",
   "buildingModelPdfEmpty": "Exact source preview is available once a linked plan source is attached.",

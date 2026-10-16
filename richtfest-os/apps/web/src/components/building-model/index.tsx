@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
@@ -16,6 +16,7 @@ import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
 const emptyLayerVisibility: Record<string, boolean> = {};
+const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 export async function copyStableObjectId(value: string, clipboard?: { writeText: (text: string) => Promise<void> }) {
   const target = clipboard ?? (typeof navigator !== "undefined" ? navigator.clipboard : undefined);
@@ -115,21 +116,53 @@ export function regionsForSource(regions: BuildingRegion[], page: number, source
   return regions.filter((region) => region.page === page && (!storeyId || region.storeyId === storeyId) && (!sourceVersionId || region.sourceVersionId === sourceVersionId));
 }
 
+function planFileNamePreference(fileName: string) {
+  let score = 0;
+  if (/\b(plan|planning|grundriss|floor[\s_-]*plan|genehmigungsplanung|ausf(?:ü|ue)hrungsplanung|entwurfsplanung|bauantrag|architect)\b/i.test(fileName)) score += 250;
+  if (/\b(din\s*4109|schallschutz|calculation|berechnung|nachweis|report|gutachten)\b/i.test(fileName)) score -= 150;
+  return score;
+}
+
+function planSourcePreference(source: BuildingPlanSource, processing: BuildingAutomaticPlanProcessing[]) {
+  const automatic = processing.find((item) => item.sourceVersionId === source.source?.versionId);
+  let score = planFileNamePreference(source.source?.fileName || "");
+  if (automatic?.floorPlanPages.includes(source.page)) score += 1_000;
+  if (source.storeyId) score += 600;
+  if (automatic?.nonFloorPlanPages.some((item) => item.page === source.page)) score -= 300;
+  return score;
+}
+
+export function preferredPlanSource(sources: BuildingPlanSource[], processing: BuildingAutomaticPlanProcessing[] = []) {
+  return sources.map((source, index) => ({ source, index, score: planSourcePreference(source, processing) }))
+    .sort((a, b) => b.score - a.score || a.source.page - b.source.page || a.index - b.index)[0]?.source;
+}
+
+export function preferredAutomaticProcessing(processing: BuildingAutomaticPlanProcessing[]) {
+  return processing.map((item, index) => ({ item, index, score: planFileNamePreference(item.fileName) + (item.floorPlanPages.length ? 1_000 : 0) - (item.nonFloorPlanPages.length && !item.floorPlanPages.length ? 100 : 0) }))
+    .sort((a, b) => b.score - a.score || (a.item.floorPlanPages[0] || 1) - (b.item.floorPlanPages[0] || 1) || a.index - b.index)[0]?.item;
+}
+
 export function planSourceForView(sources: BuildingPlanSource[], page: number, explicitStoreyId?: string | null,
-  selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">, explicitSourceVersionId?: string | null) {
-  const explicitVersionPage = explicitSourceVersionId ? sources.find((source) => source.source?.versionId === explicitSourceVersionId && source.page === page) : undefined;
-  if (explicitVersionPage) return explicitVersionPage;
+  selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">, explicitSourceVersionId?: string | null,
+  processing: BuildingAutomaticPlanProcessing[] = []) {
+  const explicitVersionSources = explicitSourceVersionId ? sources.filter((source) => source.source?.versionId === explicitSourceVersionId) : [];
+  if (explicitVersionSources.length) return explicitVersionSources.find((source) => source.page === page)
+    || preferredPlanSource(explicitVersionSources, processing);
   const explicitPage = explicitStoreyId ? sources.find((source) => source.storeyId === explicitStoreyId && source.page === page) : undefined;
   if (explicitPage) return explicitPage;
   const selectedPageSource = selected?.page === page ? sources.find((source) => source.storeyId === selected.storeyId
     && source.page === selected.page && (!selected.sourceVersionId || source.source?.versionId === selected.sourceVersionId))
     || sources.find((source) => source.storeyId === selected.storeyId && source.page === selected.page) : undefined;
   if (selectedPageSource) return selectedPageSource;
+  const contextualPageSource = selected?.sourceVersionId ? sources.find((source) => source.source?.versionId === selected.sourceVersionId && source.page === page) : undefined;
+  if (contextualPageSource) return contextualPageSource;
+  const preferred = preferredPlanSource(sources, processing);
+  if (preferred && planSourcePreference(preferred, processing) > 0) return preferred;
   const pageSource = sources.find((source) => source.page === page);
   if (pageSource) return pageSource;
   const explicit = explicitStoreyId ? sources.find((source) => source.storeyId === explicitStoreyId) : undefined;
   const selectedSource = selected ? sources.find((source) => source.storeyId === selected.storeyId) : undefined;
-  return explicit || selectedSource || sources[0];
+  return explicit || selectedSource || preferred;
 }
 
 export function BuildingModelMode({ projectId }: { projectId: string }) {
@@ -154,6 +187,18 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [candidateGroupFilter, setCandidateGroupFilter] = useState("all");
   const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: false, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const paramsKey = params.toString();
+  useBrowserLayoutEffect(() => {
+    const nextPage = Math.max(1, Number(params.get("page") || 1));
+    const nextStorey = params.get("storey") || "";
+    const nextVersion = params.get("sourceVersion") || "";
+    const nextEntity = params.get("entity")?.split(":").slice(1).join(":") || undefined;
+    setPage((current) => current === nextPage ? current : nextPage);
+    setSourceStoreyId((current) => current === nextStorey ? current : nextStorey);
+    setSourceVersionId((current) => current === nextVersion ? current : nextVersion);
+    setSelectedId((current) => current === nextEntity ? current : nextEntity);
+    setSelectedCandidateId(undefined);
+  }, [paramsKey]);
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
   const model = useMemo(() => adaptBuildingModel(modelQuery.data), [modelQuery.data]);
@@ -179,7 +224,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const selected = selectedById && (!explicitPage || regionMatchesView(selectedById)) ? selectedById : explicitPage ? regions.find(regionMatchesView) : regions[0];
   const candidates = useMemo(() => model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed"), [model.extractionCandidates]);
   const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
-  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId);
+  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId, automaticPlanProcessing);
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
   const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
@@ -207,6 +252,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const currentAutomaticProcessing = automaticPlanProcessing.find((item) => item.sourceVersionId === evidence.sourceVersionId);
   const currentAutomaticActive = automaticProcessingActive(currentAutomaticProcessing?.status);
   const sourceLayers = pdfLayers.length ? pdfLayers : evidence.layers || [];
+  const sourceDocuments = useMemo(() => [...new Map(model.planSources.flatMap((source) => source.source?.versionId ? [[source.source.versionId, source]] : [])).values()], [model.planSources]);
   const allExtractions = model.extraction && !model.extractions.some((job) => job.id === model.extraction?.id) ? [...model.extractions, model.extraction] : model.extractions;
   const displayedExtraction = allExtractions.find((job) => job.sourceVersionId === sourceForEvidence?.source?.versionId && job.page === page && job.storeyId === currentSource?.storeyId);
   const activeExtraction = displayedExtraction as BuildingExtractionJob | undefined;
@@ -240,9 +286,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
-    if (currentSource && page !== currentSource.page && !params.get("page")) setPage(currentSource.page);
-    if (!sourceStoreyId && currentSource?.storeyId) setSourceStoreyId(currentSource.storeyId);
-    if (!sourceVersionId && currentSource?.source?.versionId) setSourceVersionId(currentSource.source.versionId);
+    if (currentSource && page !== currentSource.page) setPage(currentSource.page);
+    if (currentSource && sourceStoreyId !== (currentSource.storeyId || "")) setSourceStoreyId(currentSource.storeyId || "");
+    if (currentSource?.source?.versionId && sourceVersionId !== currentSource.source.versionId) setSourceVersionId(currentSource.source.versionId);
   }, [selected?.id, selectedId, currentSource?.id, sourceStoreyId, sourceVersionId]);
   useEffect(() => {
     const next = new URLSearchParams(params);
@@ -492,7 +538,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         </aside>
         <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>
           <div className="building-model-page-strip" aria-label={t("buildingModelPages")}>
-            <span className="muted text-ui-2xs">{evidence.fileName}</span>
+            {sourceDocuments.length > 1 ? <NativeSelect className="building-model-source-select" aria-label={t("buildingModelSourceDocument")} value={evidence.sourceVersionId || ""} onChange={(event) => {
+              const versionSources = model.planSources.filter((source) => source.source?.versionId === event.target.value);
+              const nextSource = preferredPlanSource(versionSources, automaticPlanProcessing) || versionSources[0];
+              if (nextSource) selectSourcePage(nextSource.page, nextSource.source?.versionId || "", nextSource.storeyId || "");
+            }}>{sourceDocuments.map((source) => <option key={source.source!.versionId} value={source.source!.versionId}>{source.source!.fileName}</option>)}</NativeSelect> : <span className="muted text-ui-2xs">{evidence.fileName}</span>}
             {currentAutomaticProcessing && <Badge>{automaticPhaseLabel(currentAutomaticProcessing, t)}</Badge>}
             {(model.planSources.length ? [...new Set(model.planSources.filter((source) => !evidence.sourceVersionId || source.source?.versionId === evidence.sourceVersionId).map((source) => source.page))] : [1]).map((pageNumber) => {
               const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
@@ -579,10 +629,15 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
 }) {
   const active = filesLoading || processing.some((item) => automaticProcessingActive(item.status)) || (!processing.length && files.length > 0);
   const unresolved = processing.length > 0 && processing.every((item) => item.status === "unresolved" || item.status === "partial");
-  const primaryProcessing = processing[0];
-  const sourceFile = files.find((file) => file.id === primaryProcessing?.fileId || file.versionId === primaryProcessing?.sourceVersionId) || files[0];
+  const [previewSourceId, setPreviewSourceId] = useState("");
+  const primaryProcessing = processing.find((item) => item.sourceVersionId === previewSourceId) || preferredAutomaticProcessing(processing);
+  const preferredFile = [...files].sort((a, b) => planFileNamePreference(String(b.name || "")) - planFileNamePreference(String(a.name || "")))[0];
+  const sourceFile = files.find((file) => file.id === primaryProcessing?.fileId || file.versionId === primaryProcessing?.sourceVersionId)
+    || files.find((file) => file.versionId === previewSourceId || file.id === previewSourceId) || preferredFile;
   const [previewPage, setPreviewPage] = useState(1);
   const [previewTransform, setPreviewTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const activePreviewSourceId = primaryProcessing?.sourceVersionId || String(sourceFile?.versionId || sourceFile?.id || "");
+  useEffect(() => { setPreviewPage(primaryProcessing?.floorPlanPages[0] || 1); }, [activePreviewSourceId]);
   const previewPageCount = Math.max(1, primaryProcessing?.pageCount || sourceFile?.pageCount || 1);
   const previewEvidence = sourceFile || primaryProcessing?.renderableSource?.downloadUrl ? { fileName: String(sourceFile?.name || primaryProcessing?.fileName || "Building plan.pdf"), fileId: typeof sourceFile?.id === "string" ? sourceFile.id : primaryProcessing?.fileId, sourceVersionId: typeof sourceFile?.versionId === "string" ? sourceFile.versionId : primaryProcessing?.sourceVersionId, version: typeof sourceFile?.version === "number" ? sourceFile.version : 1, pageCount: previewPageCount, pdfUrl: typeof primaryProcessing?.renderableSource?.downloadUrl === "string" ? primaryProcessing.renderableSource.downloadUrl : typeof sourceFile?.downloadUrl === "string" ? sourceFile.downloadUrl : undefined } : undefined;
   const stage = automaticPhaseLabel(primaryProcessing, t);
@@ -598,7 +653,7 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
       {filesLoading && !processing.length && !files.length && <div className="building-model-automatic-source"><div><strong>{t("buildingModelAutomaticCheckingUploads")}</strong><small>{t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{t("loading")}</Badge></div>}
     </div>
     {previewEvidence && <div className={`building-model-automatic-preview${active ? " is-active" : ""}`}>
-      <div className="building-model-automatic-preview-bar"><div><Badge>{stage}</Badge><span>{previewEvidence.fileName}</span></div>{previewPageCount > 1 && <NativeSelect aria-label={t("buildingModelPage")} value={String(previewPage)} onChange={(event) => setPreviewPage(Number(event.target.value))}>{Array.from({ length: previewPageCount }, (_, index) => <option key={index + 1} value={index + 1}>{t("buildingModelPage")} {index + 1}</option>)}</NativeSelect>}</div>
+      <div className="building-model-automatic-preview-bar"><div><Badge>{stage}</Badge><span>{previewEvidence.fileName}</span></div><div>{(processing.length > 1 || (!processing.length && files.length > 1)) && <NativeSelect aria-label={t("buildingModelSourceDocument")} value={activePreviewSourceId} onChange={(event) => setPreviewSourceId(event.target.value)}>{processing.length ? processing.map((item) => <option key={item.sourceVersionId} value={item.sourceVersionId}>{item.fileName}</option>) : files.map((file) => <option key={String(file.versionId || file.id)} value={String(file.versionId || file.id)}>{String(file.name)}</option>)}</NativeSelect>}{previewPageCount > 1 && <NativeSelect aria-label={t("buildingModelPage")} value={String(previewPage)} onChange={(event) => setPreviewPage(Number(event.target.value))}>{Array.from({ length: previewPageCount }, (_, index) => <option key={index + 1} value={index + 1}>{t("buildingModelPage")} {index + 1}</option>)}</NativeSelect>}</div></div>
       <div className="building-model-automatic-canvas">
         <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
           <LazyPdfEvidenceRenderer projectId={projectId} evidence={previewEvidence} page={previewPage} regions={[]} layerVisibility={emptyLayerVisibility} transform={previewTransform} onTransform={setPreviewTransform} onLayers={() => undefined} onSelect={() => undefined} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView") }} />

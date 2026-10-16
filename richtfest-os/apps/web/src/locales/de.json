@@ -1418,6 +1418,7 @@
   "buildingModelNoLayers": "Keine Ebenen mit optionalem Inhalt gefunden.",
   "buildingModelLayerHint": "Ebenen ändern nur die PDF-Evidenzansicht, nicht die Identität von Modellobjekten.",
   "buildingModelSourceEvidence": "Exakte PDF-Quellansicht",
+  "buildingModelSourceDocument": "Quell-PDF",
   "buildingModelPages": "Quellseiten",
   "buildingModelLoadingEvidence": "Exakte PDF-Quelle wird geladen…",
   "buildingModelPdfEmpty": "Die exakte Quelle ist verfügbar, sobald eine verknüpfte Planquelle vorhanden ist.",

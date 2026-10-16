@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
+import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
 import en from "../src/locales/en.json";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
@@ -58,6 +58,19 @@ test("building model presents compact context, source status, and accessible sid
   expect(html).toContain("Objects &amp; review");
   expect(html).toContain("Display controls");
   expect(html).toContain('class="building-model-region-create-disclosure"');
+});
+
+test("projects with several PDFs expose an exact source selector", () => {
+  const html = render({
+    ...wallReviewFixture,
+    planSources: [
+      { id: "plan", storeyId: "storey-1", page: 3, source: { versionId: "version-1", fileId: "plan", fileName: "Architecture plan.pdf", version: 1 } },
+      { id: "report", storeyId: null, page: 1, source: { versionId: "version-2", fileId: "report", fileName: "Acoustic calculation.pdf", version: 1 } },
+    ],
+  }, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1");
+  expect(html).toContain('aria-label="Source PDF"');
+  expect(html).toContain("Architecture plan.pdf");
+  expect(html).toContain("Acoustic calculation.pdf");
 });
 
 test("Proposed review count excludes demolished wall hypotheses that its destination cannot reveal", () => {
@@ -250,6 +263,12 @@ test("automatic upload processing replaces setup as the primary durable state", 
   expect(html).not.toContain("Manual source setup");
   expect(automaticProcessingActive("extracting")).toBe(true);
   expect(automaticProcessingActive("complete")).toBe(false);
+});
+
+test("automatic preparation previews a detected floor plan instead of the first report", () => {
+  const report = { fileId: "report", fileName: "DIN 4109 Calculation.pdf", sourceVersionId: "report-version", status: "partial", floorPlanPages: [], nonFloorPlanPages: [{ page: 1 }], unresolvedPages: [2] };
+  const plan = { fileId: "plan", fileName: "Architecture plan.pdf", sourceVersionId: "plan-version", status: "extracting", floorPlanPages: [3], nonFloorPlanPages: [], unresolvedPages: [] };
+  expect(preferredAutomaticProcessing([report, plan])?.sourceVersionId).toBe("plan-version");
 });
 
 test("provider wording appears only for an actually active configured inference stage", () => {
@@ -563,6 +582,30 @@ test("explicit page navigation can leave the selected storey for a non-plan or u
   ];
   const selected = { storeyId: "storey-a", sourceVersionId: "version-a", page: 1 };
   expect(planSourceForView(sources, 2, "storey-a", selected)?.id).toBe("source-elevation");
+});
+
+test("default source selection opens a detected plan page instead of a report cover", () => {
+  const sources = [
+    { id: "report-cover", storeyId: null, page: 1, source: { fileId: "report", fileName: "DIN 4109 Calculation.pdf", versionId: "report-version", version: 1, downloadUrl: "/report" } },
+    { id: "report-plan", storeyId: "report-storey", page: 3, source: { fileId: "report", fileName: "DIN 4109 Calculation.pdf", versionId: "report-version", version: 1, downloadUrl: "/report" } },
+    { id: "architecture", storeyId: null, page: 2, source: { fileId: "plan", fileName: "Final Approval Planning.pdf", versionId: "plan-version", version: 1, downloadUrl: "/plan" } },
+  ];
+  const processing = [
+    { fileId: "report", fileName: "DIN 4109 Calculation.pdf", sourceVersionId: "report-version", status: "partial", floorPlanPages: [3], nonFloorPlanPages: [{ page: 1 }], unresolvedPages: [] },
+    { fileId: "plan", fileName: "Final Approval Planning.pdf", sourceVersionId: "plan-version", status: "unresolved", floorPlanPages: [], nonFloorPlanPages: [], unresolvedPages: [2] },
+  ];
+  expect(preferredPlanSource(sources, processing)?.id).toBe("report-plan");
+  expect(planSourceForView(sources, 1, "", undefined, "", processing)?.id).toBe("report-plan");
+  expect(planSourceForView(sources, 1, "", undefined, "report-version", processing)?.id).toBe("report-cover");
+  expect(planSourceForView(sources, 2, "", undefined, "plan-version", processing)?.id).toBe("architecture");
+});
+
+test("an unresolved architectural PDF outranks an unresolved calculation report", () => {
+  const sources = [
+    { id: "report", storeyId: null, page: 1, source: { fileId: "report", fileName: "Schallschutznachweis.pdf", versionId: "report-version", version: 1, downloadUrl: "/report" } },
+    { id: "architecture", storeyId: null, page: 2, source: { fileId: "plan", fileName: "Final Approval Planning.pdf", versionId: "plan-version", version: 1, downloadUrl: "/plan" } },
+  ];
+  expect(planSourceForView(sources, 1)?.id).toBe("architecture");
 });
 
 test("canonical inspector remains the default when candidates exist", () => {
