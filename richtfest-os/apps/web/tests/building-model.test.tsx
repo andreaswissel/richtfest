@@ -2,12 +2,78 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BuildingModelBootstrap, BuildingModelMode, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
+import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
+import en from "../src/locales/en.json";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
+
+const wallReviewFixture = {
+  revision: 1,
+  states: { existing: [], demolition: [], proposed: [{ id: "approved-proposed", kind: "element", label: "Canonical proposed wall", page: 3 }] },
+  planSources: [{ id: "plan", storeyId: "storey-1", page: 3, source: { versionId: "version-1", fileName: "Plan.pdf" } }],
+  extractionCandidates: [
+    { id: "visible-source", page: 3, sourceVersionId: "version-1", storeyId: "storey-1" },
+    { id: "other-page", page: 2, sourceVersionId: "version-1", storeyId: "storey-1" },
+    { id: "other-version", page: 3, sourceVersionId: "version-2", storeyId: "storey-1" },
+    { id: "other-storey", page: 3, sourceVersionId: "version-1", storeyId: "storey-2" },
+  ].map((source) => ({ ...source, entityType: "element", name: `Wall hypothesis ${source.id}`, status: "unreviewed", constructionState: "proposed", geometry: { quality: "draft_wall", semanticKind: "draft_wall", planRegion: { x: .2, y: .2, width: .01, height: .3 }, classification: { pageRelativeMinorDimension: .01, evidenceTier: "medium" } } })),
+};
+
+test("hidden wall review link preserves exact source context without leaking proposed canonical objects", () => {
+  for (const state of ["existing", "demolition"]) {
+    const html = render(wallReviewFixture, `?view=building-model&page=3&sourceVersion=version-1&storey=storey-1&modelState=${state}&context=keep`);
+    expect(html).toContain("1 wall hypotheses hidden by this model state");
+    expect(html).toContain("unreviewed source-layer phase hypotheses");
+    expect(html).toContain(`href="/projects/${projectId}?view=building-model&amp;page=3&amp;sourceVersion=version-1&amp;storey=storey-1&amp;modelState=proposed&amp;context=keep"`);
+    expect(html).toContain("Review wall hypotheses");
+    expect(html).not.toContain("Canonical proposed wall");
+    expect(html).not.toContain("Wall hypothesis visible-source");
+  }
+});
+
+test("Proposed review count excludes demolished wall hypotheses that its destination cannot reveal", () => {
+  const demolished = { ...wallReviewFixture.extractionCandidates[0]!, id: "demolished-wall", name: "Demolished wall hypothesis", constructionState: "demolished" };
+  const mixed = { ...wallReviewFixture, extractionCandidates: [...wallReviewFixture.extractionCandidates, demolished] };
+  const search = "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1&modelState=";
+  const html = render(mixed, `${search}existing`);
+  expect(html).toContain("1 wall hypotheses hidden by this model state");
+  expect(html).not.toContain("2 wall hypotheses hidden by this model state");
+  expect(html).not.toContain("demolished-wall");
+  expect(render(mixed, `${search}proposed`)).not.toContain("Demolished wall hypothesis");
+  const onlyDemolished = render({ ...wallReviewFixture, extractionCandidates: [demolished] }, `${search}existing`);
+  expect(onlyDemolished).not.toContain("wall hypotheses hidden by this model state");
+  expect(onlyDemolished).not.toContain("Review wall hypotheses");
+});
+
+test("Proposed exposes a dedicated wall hypothesis toggle and scoped toggleable overlays", () => {
+  const html = render(wallReviewFixture, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1&modelState=proposed");
+  expect(html).toContain('checked=""/><span>Wall hypotheses</span>');
+  expect(html).toContain("Wall hypothesis visible-source");
+  expect(html).not.toContain("Wall hypothesis other-");
+  expect(html).not.toContain("wall hypotheses hidden by this model state");
+  const candidates = candidatesForModelState(adaptBuildingModel(wallReviewFixture).extractionCandidates, "proposed");
+  expect(candidateOverlaysForSource(candidates, 3, "version-1", "storey-1", { draftWalls: true }).map((candidate) => candidate.candidateId)).toEqual(["visible-source"]);
+  expect(candidateOverlaysForSource(candidates, 3, "version-1", "storey-1", { draftWalls: false })).toEqual([]);
+  expect(candidatesForModelState(candidates.map((candidate) => ({ ...candidate, constructionState: "demolished" })), "existing")).toEqual([]);
+});
+
+test("wall and assembly inspectors distinguish inferred phase and source geometry from physical properties", () => {
+  const wall = adaptBuildingModel(wallReviewFixture).extractionCandidates[0]!;
+  for (const candidateRole of ["draft-wall", "construction-assembly"] as const) {
+    const html = renderToStaticMarkup(<CandidateInspector candidate={{ ...wall, candidateRole, wallThickness: 0.42, material: "Unverified concrete" }} regions={[]} t={(key) => en[key]} pending={false} onPage={() => undefined} onReview={() => undefined} />);
+    expect(html).toContain('Wall thickness</dt><dd class="building-model-unknown">Unknown');
+    expect(html).toContain('Material</dt><dd class="building-model-unknown">Unknown');
+    expect(html).not.toContain("Unverified concrete");
+    expect(html).toContain("Unreviewed source-layer inference");
+    expect(html).toContain("Source-relative minor dimension ratio (not physical thickness)");
+    expect(html).toContain("1.000%");
+    expect(html).toContain("Geometry evidence tier (unreviewed)");
+    expect(html).toContain("medium");
+  }
+});
 
 function render(model: unknown, search = "?view=building-model") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -186,7 +252,8 @@ test("automatic page coverage distinguishes floor, non-plan, and unresolved page
   expect(html).toContain("Floor plan detected");
   expect(html).toContain("Non-floor-plan page · elevation");
   expect(html).toContain("Unresolved page");
-  expect(html).toContain("building-model-region element candidate assembly");
+  expect(html).toContain("Construction assemblies");
+  expect(html).not.toContain("building-model-region element candidate assembly");
   expect(html).toContain("not a verified wall");
   expect(html).not.toContain("Walls detected");
   expect(automaticPageDisposition(automatic, 1)).toBe("floor_plan");
