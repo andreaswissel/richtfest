@@ -64,8 +64,8 @@
 .building-model-region.candidate.draft-wall:hover .building-model-region-shape, .building-model-region.candidate.draft-wall:focus-visible .building-model-region-shape, .building-model-region.candidate.draft-wall.selected .building-model-region-shape { border-color: color-mix(in oklch, oklch(.58 .15 28) 92%, white); background: color-mix(in oklch, oklch(.58 .15 28) 46%, transparent); opacity: 1; box-shadow: 0 0 0 var(--building-model-overlay-focus-ring, 2px) color-mix(in oklch, oklch(.58 .15 28) 28%, transparent); }
 .building-model-inspector { overflow: auto; }
 .building-model-inspector-header { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
-.building-model-inspector dl { display: grid; grid-template-columns: minmax(80px, auto) 1fr; gap: 8px 12px; margin: 14px 0 0; }
-.building-model-inspector dt { color: var(--muted-foreground); font-size: var(--ui-2xs); }
+.building-model-inspector dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px 12px; margin: 14px 0 0; }
+.building-model-inspector dt { min-width: 0; color: var(--muted-foreground); font-size: var(--ui-2xs); overflow-wrap: anywhere; }
 .building-model-inspector dd { min-width: 0; margin: 0; font-size: var(--ui-xs); overflow-wrap: anywhere; }
 .building-model-source-coordinates { display: block; color: var(--foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); white-space: normal; }
 .building-model-polygon-coordinates { display: block; margin-top: 4px; color: var(--muted-foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); line-height: 1.45; }
