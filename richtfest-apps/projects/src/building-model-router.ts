@@ -156,7 +156,9 @@ const readModel = async (d: AppDeps, model: any) => {
       .innerJoin(sourceExtractions, and(eq(sourceExtractions.versionId, fileVersions.id), eq(sourceExtractions.tenantId, d.tenantId)))
       .innerJoin(sourceModels, and(eq(sourceModels.versionId, fileVersions.id), eq(sourceModels.tenantId, d.tenantId)))
       .where(and(eq(files.projectId, model.projectId), eq(files.tenantId, d.tenantId), eq(files.purpose, "project_evidence"),
-        sql`(${fileVersions.mimeType} = 'application/pdf' or ${files.name} ~* '\\.pdf$')`)),
+        sql`(${fileVersions.mimeType} = 'application/pdf' or ${files.name} ~* '\\.pdf$')`,
+        // Only sources enrolled for automatic processing; others would never progress.
+        sql`${sourceModels.metadata}->'automaticBuildingModel' is not null`)),
   ]);
   const [buildings, storeys, rooms, elements, properties, propertyVersions, measurements, planSources, placementRows, relationships, conflicts, proposals, revisions, alternatives] = await Promise.all([
     d.db.select().from(buildingBuildings).where(eq(buildingBuildings.modelId, model.id)).orderBy(asc(buildingBuildings.createdAt)),
@@ -201,12 +203,14 @@ const readModel = async (d: AppDeps, model: any) => {
       : extractionJobs.length && extractionJobs.every((job: any) => job.status === "complete") ? "complete"
       : extractionJobs.some((job: any) => job.status === "failed") ? "partial"
       : metadata?.status === "unresolved" ? "unresolved"
+      : metadata?.status === "failed" ? "failed"
       : ["queued", "running"].includes(source.sourceStatus) ? "reading_source"
       : ["queued", "running"].includes(source.classificationStatus) ? "classifying_pages"
       : metadata?.status ?? "planning";
     const activeJob = extractionJobs.find((job: any) => job.status === "running");
     const currentPhase = ["queued", "running"].includes(source.sourceStatus) ? "reading_plan"
       : ["queued", "running"].includes(source.classificationStatus) ? "identifying_floors"
+      : status === "failed" ? "failed"
       : !metadata || metadata.status === "processing" ? "identifying_floors"
       : activeJob?.result?.phase ?? (extractionJobs.some((job: any) => job.status === "queued") ? "extracting_geometry"
         : status === "complete" ? "complete" : status === "partial" ? "partial"
@@ -250,6 +254,10 @@ const readModel = async (d: AppDeps, model: any) => {
   };
 };
 
+/** Automatic draft storeys/buildings are page hypotheses, not reviewed structure; label them for agents. */
+const inferredStructure = (entity: any) => ["unreviewed_page_hypothesis", "unreviewed_source_container"].includes(entity.geometry?.quality)
+  ? { provenance: "inferred" as const, reviewStatus: "unreviewed" as const } : {};
+
 export type BuildingModelContextOptions = { objectId?: string };
 export type BuildingModelProposalInput = {
   entityType: z.infer<typeof buildingEntityTypeSchema>;
@@ -291,7 +299,7 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
     .map(room => ({ entityType: "room" as const, entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) }));
   return {
     projectId, modelId: row.model.id, revision: row.model.revision,
-    entities: selected.map(({ entityType, entity }) => ({ id: entity.id, entityType, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, deepLink: buildingDeepLink(projectId, entityType, entity.id) })),
+    entities: selected.map(({ entityType, entity }) => ({ id: entity.id, entityType, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entityType, entity.id) })),
     properties: reviewedProperties,
     measurements: (data.measurements as any[]).filter(measurement => measurement.reviewStatus === "approved" && (!options.objectId || selectedIds.has(measurement.entityId))).slice(0, 500),
     planSources: (data.planSources as any[]).slice(0, 100),
@@ -364,7 +372,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           ...(data.storeys as any[]).map(entity => ({ ...entity, entityType: "storey" as const })),
           ...(data.rooms as any[]).map(entity => ({ ...entity, entityType: "room" as const })),
           ...(data.elements as any[]).map(entity => ({ ...entity, entityType: "element" as const })),
-        ].map((entity: any) => ({ id: entity.id, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, deepLink: buildingDeepLink(projectId, entity.entityType, entity.id) })),
+        ].map((entity: any) => ({ id: entity.id, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entity.entityType, entity.id) })),
         missingInputs: (data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
         draftCandidates: draftCandidates.slice(0, 500).map(candidate => {
           const evidence = Array.isArray(candidate.evidence) ? candidate.evidence.find((item: any) => item?.kind === "page") : null;

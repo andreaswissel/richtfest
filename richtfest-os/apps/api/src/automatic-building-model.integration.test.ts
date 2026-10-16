@@ -35,7 +35,8 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
           probabilities: { floor_plan: inferredFloor ? 0.95 : 0.05, other: inferredFloor ? 0.05 : 0.95 } } } };
     });
     await pool.query("insert into projects_source_models (version_id,tenant_id,status,method,metadata) values ($1,$2,'unconfigured','document',$3)",
-      [version, tenant, JSON.stringify({ imageClassification: { totalPages: 12, attemptedPages: 12, completedPages: 12, receipts } })]);
+      [version, tenant, JSON.stringify({ automaticBuildingModel: { status: "pending", enrolledAt: new Date().toISOString(), provenance: "inferred", reviewStatus: "unreviewed" },
+        imageClassification: { totalPages: 12, attemptedPages: 12, completedPages: 12, receipts } })]);
     for (let page = 1; page <= 12; page++) {
       const text = page <= 5 ? `${page === 1 ? "Schnittmarke " : ""}Genehmigungsplanung ${"x".repeat(9_000)} Grundriss Seite ${page}` : page === 6 || page === 12 ? "Schnitt A-A" : page <= 8 ? "Ansicht" : page === 9 ? "FREIFLÄCHENPLAN zeichnerischer Nachweis" : "Weitere Planunterlage";
       await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,$3,$4)",
@@ -52,18 +53,67 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(receipt).toMatchObject({ status: "planned", pageCount: 12, registeredPageCount: 12,
       floorPlanPages: [1, 2, 3, 4, 5], unresolvedPages: [] });
     expect(receipt.nonFloorPlanPages).toHaveLength(7);
+    // Sources without an upload-time enrollment receipt are never claimed (no backfill).
+    const legacyFile = crypto.randomUUID(), legacyVersion = crypto.randomUUID(), stuckFile = crypto.randomUUID(), stuckVersion = crypto.randomUUID();
+    for (const [fileId, versionId, name] of [[legacyFile, legacyVersion, "legacy.pdf"], [stuckFile, stuckVersion, "stuck.pdf"]]) {
+      await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,purpose,created_by) values ($1,$2,$3,$4,'upload','project_evidence',$5)", [fileId, tenant, project, name, actor]);
+      await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [versionId, tenant, fileId, actor]);
+      await pool.query("insert into projects_source_extractions (version_id,tenant_id,status,result) values ($1,$2,'complete',$3)", [versionId, tenant, JSON.stringify({ pages: 1 })]);
+    }
+    await pool.query("insert into projects_source_models (version_id,tenant_id,status,method,metadata) values ($1,$2,'unconfigured','document','{}')", [legacyVersion, tenant]);
+    expect(await ensureAutomaticPlanExtractions(deps, new AbortController().signal)).toBe(false);
+    // A planner that keeps failing becomes terminal after three claims instead of being reclaimed forever.
+    await pool.query("insert into projects_source_models (version_id,tenant_id,status,method,metadata) values ($1,$2,'unconfigured','document',$3)", [stuckVersion, tenant,
+      JSON.stringify({ automaticBuildingModel: { status: "processing", attempts: 3, claimedAt: "2000-01-01T00:00:00Z" } })]);
+    expect(await ensureAutomaticPlanExtractions(deps, new AbortController().signal)).toBe(true);
+    expect((await pool.query("select metadata->'automaticBuildingModel' receipt from projects_source_models where version_id=$1", [stuckVersion])).rows[0].receipt)
+      .toMatchObject({ status: "failed", attempts: 3 });
     expect(await ensureAutomaticPlanExtractions(deps, new AbortController().signal)).toBe(false);
     expect((await pool.query("select count(*)::int n from projects_building_extractions")).rows[0].n).toBe(5);
     await pool.query("update projects_building_extractions set status='complete'");
-    await pool.query("update projects_source_models set metadata=jsonb_set(jsonb_set(metadata,'{automaticBuildingModel,status}','\"partial\"'),'{automaticBuildingModel,unresolvedPages}','[12]')");
+    await pool.query("update projects_source_models set metadata=jsonb_set(jsonb_set(metadata,'{automaticBuildingModel,status}','\"partial\"'),'{automaticBuildingModel,unresolvedPages}','[12]') where version_id=$1", [version]);
     const app = express(); app.use(express.json());
     app.use(createBuildingModelRouter(() => ({ db, tenantId: tenant, actorId: actor, requirePermission: () => {},
       audit: async () => {}, validateCustomer: async () => false, customerNames: async () => ({}), fileStorage: {} as any })));
     const server = app.listen(0);
     const response = await fetch(`http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`).then(result => result.json());
-    expect(response.data.automaticPlanProcessing[0]).toMatchObject({ status: "partial", currentPhase: "partial", unresolvedPages: [12] });
+    const processing = response.data.automaticPlanProcessing;
+    expect(processing).toHaveLength(2);
+    expect(processing.find((item: any) => item.sourceVersionId === version)).toMatchObject({ status: "partial", currentPhase: "partial", unresolvedPages: [12] });
+    expect(processing.find((item: any) => item.sourceVersionId === stuckVersion)).toMatchObject({ status: "failed", currentPhase: "failed" });
     server.close();
   } finally {
     await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end();
   }
 }, 30_000);
+
+(local ? test : test.skip)("idle workers upgrade finished older-extractor jobs in place, never legacy duplicates or running jobs", async () => {
+  const { upgradeOutdatedExtraction, buildingExtractorVersion } = await import("@richtfest/projects/building-extraction");
+  const namespace = `extraction_upgrade_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(isolated.href);
+  try {
+    await pool.query("CREATE TABLE projects_building_extractions (LIKE public.projects_building_extractions INCLUDING ALL)");
+    const tenant = crypto.randomUUID(), model = crypto.randomUUID(), storey = crypto.randomUUID(), actor = crypto.randomUUID();
+    const job = async (version: string, page: number, extractorVersion: string, status: string) => (await pool.query(
+      "insert into projects_building_extractions (tenant_id,model_id,source_version_id,storey_id,page,extractor_version,status,created_by) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id",
+      [tenant, model, version, storey, page, extractorVersion, status, actor])).rows[0].id as string;
+    const source = crypto.randomUUID();
+    const outdated = await job(source, 1, "topology-v5", "complete");
+    const legacyDuplicate = await job(source, 2, "topology-v4", "complete");
+    await job(source, 2, buildingExtractorVersion, "complete");
+    const running = await job(source, 3, "topology-v5", "running");
+    const audits: string[] = [];
+    const d = { db, audit: async (_tx: unknown, _tenant: string, action: string) => { audits.push(action); } } as any;
+    expect(await upgradeOutdatedExtraction(d)).toBe(true);
+    expect(await upgradeOutdatedExtraction(d)).toBe(false);
+    const rows = new Map((await pool.query("select id, extractor_version, status, attempts from projects_building_extractions")).rows.map(row => [row.id, row]));
+    expect(rows.get(outdated)).toMatchObject({ extractor_version: buildingExtractorVersion, status: "queued", attempts: 0 });
+    expect(rows.get(legacyDuplicate)).toMatchObject({ extractor_version: "topology-v4", status: "complete" });
+    expect(rows.get(running)).toMatchObject({ extractor_version: "topology-v5", status: "running" });
+    expect(audits).toEqual(["projects.building.extraction.upgraded"]);
+  } finally {
+    await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end();
+  }
+});

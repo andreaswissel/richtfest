@@ -308,13 +308,15 @@ export function createRouter(getDeps: GetDeps) {
         // Do not race an in-flight upload or its still-valid signed upload URL.
         if (versions.some((version: any) => version.status === "pending"))
           throw Object.assign(new Error("Finish or cancel pending uploads before deleting this file."), { status: 409 });
-        // Keep the keys until every removal succeeds so a failed delete can be retried.
-        for (const version of versions)
-          if (version.storageKey) await d.fileStorage.remove(version.storageKey);
+        // Delete rows first so a constraint failure aborts before any object is
+        // removed. Objects go last inside the transaction: a failed removal rolls
+        // back the rows and keeps their keys so the delete can be retried.
         await tx.delete(fileVersions).where(and(
           eq(fileVersions.fileId, fileId), eq(fileVersions.tenantId, d.tenantId),
         ));
         await tx.delete(files).where(eq(files.id, fileId));
+        for (const version of versions)
+          if (version.storageKey) await d.fileStorage.remove(version.storageKey);
         await d.audit(tx, "projects.file.deleted", "file", fileId, {
           projectId, name: file.name, versionIds: versions.map((version: any) => version.id),
         });
@@ -768,8 +770,14 @@ export function createRouter(getDeps: GetDeps) {
               code: "upload_already_completed",
             });
           await tx.insert(sourceExtractions).values({ versionId: updated.id, tenantId: d.tenantId });
-          await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId });
-          if (updated.mimeType === "application/pdf" || /\.pdf$/i.test(row.file.name))
+          // Only project-evidence PDFs uploaded from here on are enrolled; the
+          // automatic planner never claims sources without this explicit receipt.
+          const enrolled = row.file.purpose === "project_evidence" &&
+            (updated.mimeType === "application/pdf" || /\.pdf$/i.test(row.file.name));
+          await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId,
+            ...(enrolled ? { metadata: { automaticBuildingModel: { status: "pending", enrolledAt: new Date().toISOString(),
+              provenance: "inferred", reviewStatus: "unreviewed" } } } : {}) });
+          if (enrolled)
             await bootstrapAutomaticBuildingModel(tx, d, { projectId, sourceVersionId: updated.id, fileName: row.file.name });
           await d.audit(tx, "projects.file.upload.completed", "file", fileId, {
             projectId,

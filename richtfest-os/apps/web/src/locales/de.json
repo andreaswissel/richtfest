@@ -1488,6 +1488,7 @@
   "buildingModelAutomaticComplete": "Entwurfsgeometrie bereit",
   "buildingModelAutomaticPartial": "Teilweise verarbeitet",
   "buildingModelAutomaticUnresolved": "Seitentyp ungeklärt",
+  "buildingModelAutomaticFailed": "Automatische Verarbeitung fehlgeschlagen",
   "buildingModelAutomaticNoFakeProgress": "Der Bearbeitungsstand ist gespeichert; der Fertigstellungsgrad wird nicht geschätzt.",
   "buildingModelAutomaticRetryScheduled": "Automatischer Wiederholungsversuch geplant",
   "buildingModelManualFallback": "Manuelle Quelleneinrichtung",

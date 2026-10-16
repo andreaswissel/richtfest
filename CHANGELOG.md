@@ -22,6 +22,11 @@
 
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
+## 2026-10-17
+
+- Building model plan parsing now handles doors and non-rectangular rooms. Openings between wall ends, including doors marked only by their swing arc, are closed so rooms no longer leak into each other or outdoors through windows. L-shaped rooms and corridors, curved walls and merged CAD wall fills are traced, and each room records which rooms its doors connect to (unreviewed). Room-label recognition covers more German names, and OCR labels show their source. Existing plans are re-extracted automatically whenever the parser improves, one page at a time while no new uploads are waiting; accepted and rejected candidates are kept. Plan parsing now runs in a background thread so large sheets no longer slow down the app.
+- Building model processing fixes: deleting a plan PDF no longer fails; sections that mention a floor plan are no longer treated as floor plans; automatic processing applies only to newly uploaded project-evidence PDFs, with no backfill of older sources; repeatedly failing sources stop with a visible failed state; re-extracted geometry fences stale reviews; agent links open the linked object's own plan page; and agents see automatic draft storeys as unreviewed. Includes database migration 0042.
+
 ## 2026-10-16
 
 - Building model now opens the strongest identified floor-plan page instead of an arbitrary report cover, including for older automatically generated links. Projects with several PDFs provide an explicit source-PDF selector, and deliberate source or page choices remain fixed in shareable links.

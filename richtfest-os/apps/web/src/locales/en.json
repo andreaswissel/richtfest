@@ -1488,6 +1488,7 @@
   "buildingModelAutomaticComplete": "Draft geometry ready",
   "buildingModelAutomaticPartial": "Partially processed",
   "buildingModelAutomaticUnresolved": "Page type unresolved",
+  "buildingModelAutomaticFailed": "Automatic processing failed",
   "buildingModelAutomaticNoFakeProgress": "Stage is persisted; no completion percentage is estimated.",
   "buildingModelAutomaticRetryScheduled": "Automatic retry scheduled",
   "buildingModelManualFallback": "Manual source setup",

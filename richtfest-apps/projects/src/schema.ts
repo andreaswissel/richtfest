@@ -388,7 +388,7 @@ export const buildingExtractionJobs = pgTable("projects_building_extractions", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
-  sourceVersionId: uuid("source_version_id").notNull().references(() => fileVersions.id),
+  sourceVersionId: uuid("source_version_id").notNull().references(() => fileVersions.id, { onDelete: "cascade" }),
   storeyId: uuid("storey_id").notNull().references(() => buildingStoreys.id),
   page: integer("page").notNull(),
   extractorVersion: text("extractor_version").notNull().default("labels-v1"),

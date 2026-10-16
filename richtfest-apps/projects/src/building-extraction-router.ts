@@ -41,6 +41,8 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
           if(existing.status==="queued"&&existing.extractorVersion!==buildingExtractorVersion){
             const [upgraded]=await tx.update(jobs).set({extractorVersion:buildingExtractorVersion,updatedAt:new Date()})
               .where(eq(jobs.id,existing.id)).returning();
+            await d.audit(tx,"projects.building.extraction.upgraded","building_extraction",existing.id,
+              {projectId,previousStatus:existing.status,previousExtractorVersion:existing.extractorVersion,extractorVersion:buildingExtractorVersion});
             return upgraded;
           }
           return existing;
@@ -62,6 +64,11 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
         const [job]=await tx.select().from(jobs).where(and(eq(jobs.id,candidate.jobId),eq(jobs.tenantId,d.tenantId),eq(jobs.modelId,model.id)));
         if(!job || !["room","element"].includes(candidate.entityType))throw error(422,"invalid_candidate","Unsupported extraction candidate");
         const table=candidate.entityType==="room"?buildingRooms:buildingElements;
+        // Another job row for the same source page may already have reconciled this key.
+        const sourceEntityKey=`plan:${job.storeyId}:${job.page}:${candidate.sourceKey}`;
+        const [reconciled]=await tx.select({id:buildingReconciliations.id}).from(buildingReconciliations).where(and(eq(buildingReconciliations.modelId,model.id),
+          eq(buildingReconciliations.tenantId,d.tenantId),eq(buildingReconciliations.sourceVersionId,job.sourceVersionId),eq(buildingReconciliations.sourceEntityKey,sourceEntityKey))).limit(1);
+        if(reconciled)throw error(409,"already_reconciled","This plan source entity was already reviewed from another extraction run; reload the building model.");
         let entity:any=null;
         if(input.decision==="approved") {
           if(input.targetEntityId) {
@@ -82,7 +89,7 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
         }
         // Explicit reconciliation never overwrites a person's accepted geometry, name or use.
         await tx.insert(buildingReconciliations).values({tenantId:d.tenantId,modelId:model.id,sourceVersionId:job.sourceVersionId,
-          sourceEntityKey:`plan:${job.storeyId}:${job.page}:${candidate.sourceKey}`,targetEntityType:candidate.entityType,targetEntityId:entity?.id??null,
+          sourceEntityKey,targetEntityType:candidate.entityType,targetEntityId:entity?.id??null,
           method:"manual",status:input.decision==="approved"?"accepted":"rejected",reviewedBy:d.actorId,reviewedAt:new Date(),createdBy:d.actorId});
         const [proposal]=await tx.insert(buildingProposals).values({tenantId:d.tenantId,modelId:model.id,proposalType:`plan_${candidate.entityType}_candidate`,targetEntityType:entity?candidate.entityType:null,targetEntityId:entity?.id??null,
           expectedRevision:input.baseRevision,payload:{candidateId,name:input.name??candidate.name,evidence:candidate.evidence,geometryQuality:(candidate.geometry as any).quality},status:input.decision,createdBy:d.actorId}).returning();

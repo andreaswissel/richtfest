@@ -166,8 +166,8 @@ export type BuildingAutomaticPlanProcessing = {
   fileId?: string;
   fileName: string;
   sourceVersionId: string;
-  status: "reading_source" | "classifying_pages" | "planning" | "queued" | "extracting" | "complete" | "partial" | "unresolved" | string;
-  currentPhase?: "reading_plan" | "identifying_floors" | "extracting_geometry" | "preparing_draft" | "complete" | "partial" | "unsupported" | string;
+  status: "reading_source" | "classifying_pages" | "planning" | "queued" | "extracting" | "complete" | "partial" | "unresolved" | "failed" | string;
+  currentPhase?: "reading_plan" | "identifying_floors" | "extracting_geometry" | "preparing_draft" | "complete" | "partial" | "unsupported" | "failed" | string;
   inference?: { provider?: string; active?: boolean; configured?: boolean | null } | null;
   renderableSource?: { mimeType?: string | null; downloadUrl?: string | null } | null;
   sourceStatus?: string | null;

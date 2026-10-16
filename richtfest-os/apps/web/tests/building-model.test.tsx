@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
+import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, isEntityDeepLink, planSourceForSelection, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
 import en from "../src/locales/en.json";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
@@ -609,6 +609,25 @@ test("default source selection opens a detected plan page instead of a report co
   expect(planSourceForView(sources, 1, "", undefined, "", processing)?.id).toBe("report-plan");
   expect(planSourceForView(sources, 1, "", undefined, "report-version", processing)?.id).toBe("report-cover");
   expect(planSourceForView(sources, 2, "", undefined, "plan-version", processing)?.id).toBe("architecture");
+});
+
+test("an agent entity deep link pins the room's own PDF page instead of the preferred plan", () => {
+  const sources = [
+    { id: "preferred-plan", storeyId: "storey-a", page: 1, source: { fileId: "plan", fileName: "Genehmigungsplanung.pdf", versionId: "plan-version", version: 1, downloadUrl: "/plan" } },
+    { id: "room-source", storeyId: "storey-b", page: 4, source: { fileId: "other", fileName: "Bestand.pdf", versionId: "other-version", version: 1, downloadUrl: "/other" } },
+  ];
+  const processing = [{ fileId: "plan", fileName: "Genehmigungsplanung.pdf", sourceVersionId: "plan-version", status: "complete", floorPlanPages: [1], nonFloorPlanPages: [], unresolvedPages: [] }];
+  const room = { storeyId: "storey-b", sourceVersionId: "other-version", page: 4 };
+  const deepLink = new URLSearchParams("view=building-model&entity=room:room-1");
+  expect(isEntityDeepLink(deepLink)).toBe(true);
+  expect(isEntityDeepLink(new URLSearchParams("view=building-model&entity=room:room-1&page=1"))).toBe(false);
+  expect(isEntityDeepLink(new URLSearchParams("view=building-model"))).toBe(false);
+  // Initial deep-link render: state page is still 1 with no storey/source.
+  expect(planSourceForSelection(sources, { page: 1, storeyId: "", sourceVersionId: "", pinned: true, selected: room, deepLinked: room }, processing)?.id).toBe("room-source");
+  // After the view state follows the entity, the pinned selection stays on that source.
+  expect(planSourceForSelection(sources, { page: 4, storeyId: "storey-b", sourceVersionId: "other-version", pinned: true, selected: room }, processing)?.id).toBe("room-source");
+  // Links without entity/page/source keep the automatic best-plan choice.
+  expect(planSourceForSelection(sources, { page: 1, pinned: false, selected: room }, processing)?.id).toBe("preferred-plan");
 });
 
 test("an unresolved architectural PDF outranks an unresolved calculation report", () => {

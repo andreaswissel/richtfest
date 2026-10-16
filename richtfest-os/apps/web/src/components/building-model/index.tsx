@@ -142,6 +142,22 @@ export function preferredAutomaticProcessing(processing: BuildingAutomaticPlanPr
     .sort((a, b) => b.score - a.score || (a.item.floorPlanPages[0] || 1) - (b.item.floorPlanPages[0] || 1) || a.index - b.index)[0]?.item;
 }
 
+/** An agent deep link (`buildingDeepLink`: `?entity=type:id` without page or source) is a deliberate selection. */
+export function isEntityDeepLink(params: URLSearchParams) {
+  return params.has("entity") && !params.has("page") && !params.has("sourceVersion") && !params.has("storey");
+}
+
+/** Resolve the shown source page. A deep-linked entity pins its own source/page/storey; otherwise only a
+ * pinned (manual) selection overrides the automatic best-plan choice. */
+export function planSourceForSelection(sources: BuildingPlanSource[], view: { page: number; storeyId?: string; sourceVersionId?: string; pinned: boolean;
+  selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">; deepLinked?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page"> },
+  processing: BuildingAutomaticPlanProcessing[] = []) {
+  if (view.deepLinked) return planSourceForView(sources, view.deepLinked.page, view.deepLinked.storeyId || "", view.deepLinked,
+    view.deepLinked.sourceVersionId || "", processing);
+  return planSourceForView(sources, view.page, view.pinned ? view.storeyId : "", view.pinned ? view.selected : undefined,
+    view.pinned ? view.sourceVersionId : "", processing);
+}
+
 export function planSourceForView(sources: BuildingPlanSource[], page: number, explicitStoreyId?: string | null,
   selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">, explicitSourceVersionId?: string | null,
   processing: BuildingAutomaticPlanProcessing[] = []) {
@@ -178,7 +194,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(Math.max(1, Number(params.get("page") || 1)));
   const [sourceStoreyId, setSourceStoreyId] = useState(params.get("storey") || "");
   const [sourceVersionId, setSourceVersionId] = useState(params.get("sourceVersion") || "");
-  const [sourceSelectionPinned, setSourceSelectionPinned] = useState(params.get("sourceSelection") === "manual");
+  const [sourceSelectionPinned, setSourceSelectionPinned] = useState(params.get("sourceSelection") === "manual" || isEntityDeepLink(params));
   const deepLinkedEntity = params.get("entity")?.split(":").slice(1).join(":");
   const [selectedId, setSelectedId] = useState<string | undefined>(deepLinkedEntity || undefined);
   const [layers, setLayers] = useState<Record<string, boolean>>({});
@@ -193,7 +209,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     const nextPage = Math.max(1, Number(params.get("page") || 1));
     const nextStorey = params.get("storey") || "";
     const nextVersion = params.get("sourceVersion") || "";
-    const nextSourceSelectionPinned = params.get("sourceSelection") === "manual";
+    const nextSourceSelectionPinned = params.get("sourceSelection") === "manual" || isEntityDeepLink(params);
     const nextEntity = params.get("entity")?.split(":").slice(1).join(":") || undefined;
     setPage((current) => current === nextPage ? current : nextPage);
     setSourceStoreyId((current) => current === nextStorey ? current : nextStorey);
@@ -227,9 +243,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const selected = selectedById && (!explicitPage || regionMatchesView(selectedById)) ? selectedById : explicitPage ? regions.find(regionMatchesView) : regions[0];
   const candidates = useMemo(() => model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed"), [model.extractionCandidates]);
   const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
-  const sourceSelectionIsExplicit = sourceSelectionPinned;
-  const currentSource = planSourceForView(model.planSources, page, sourceSelectionIsExplicit ? sourceStoreyId : "", sourceSelectionIsExplicit ? selected : undefined,
-    sourceSelectionIsExplicit ? sourceVersionId : "", automaticPlanProcessing);
+  const entityDeepLink = isEntityDeepLink(params);
+  const deepLinkedRegion = entityDeepLink && selectedById?.id === deepLinkedEntity ? selectedById : undefined;
+  const currentSource = planSourceForSelection(model.planSources, { page, storeyId: sourceStoreyId, sourceVersionId, pinned: sourceSelectionPinned, selected,
+    deepLinked: deepLinkedRegion }, automaticPlanProcessing);
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
   const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
@@ -295,7 +312,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     if (currentSource && sourceStoreyId !== (currentSource.storeyId || "")) setSourceStoreyId(currentSource.storeyId || "");
     if (currentSource?.source?.versionId && sourceVersionId !== currentSource.source.versionId) setSourceVersionId(currentSource.source.versionId);
   }, [selected?.id, selectedId, currentSource?.id, sourceStoreyId, sourceVersionId]);
+  // Keep an entity-only deep link in the URL until the model has loaded and the view state has moved to its source page.
+  const deepLinkPending = entityDeepLink && (modelQuery.isLoading || Boolean(deepLinkedRegion && currentSource && (page !== currentSource.page
+    || sourceStoreyId !== (currentSource.storeyId || "") || (currentSource.source?.versionId && sourceVersionId !== currentSource.source.versionId))));
   useEffect(() => {
+    if (deepLinkPending) return;
     const next = new URLSearchParams(params);
     next.set("modelState", state);
     next.set("page", String(page));
@@ -309,7 +330,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     else next.delete("sourceSelection");
     next.delete("object");
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned]);
+  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned, deepLinkPending]);
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
@@ -459,7 +480,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             source={currentSource}
             storeys={model.storeys}
             selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
-            onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceStoreyId(value); } }}
+            onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceSelectionPinned(true); setSourceStoreyId(value); } }}
             canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
             pending={startExtraction.isPending}
             onStart={() => startExtraction.mutate()}
@@ -613,6 +634,7 @@ function automaticStatusLabel(status: string, t: ReturnType<typeof useT>) {
     complete: "buildingModelAutomaticComplete",
     partial: "buildingModelAutomaticPartial",
     unresolved: "buildingModelAutomaticUnresolved",
+    failed: "buildingModelAutomaticFailed",
   };
   return t(labels[status] || "buildingModelAutomaticPlanning");
 }
@@ -628,6 +650,7 @@ function automaticPhaseLabel(processing: BuildingAutomaticPlanProcessing | undef
     complete: "buildingModelAutomaticComplete",
     partial: "buildingModelAutomaticPartial",
     unsupported: "buildingModelAutomaticUnresolved",
+    failed: "buildingModelAutomaticFailed",
   };
   return processing.currentPhase && labels[processing.currentPhase] ? t(labels[processing.currentPhase]!) : automaticStatusLabel(processing.status, t);
 }
@@ -641,7 +664,7 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
   t: ReturnType<typeof useT>;
 }) {
   const active = filesLoading || processing.some((item) => automaticProcessingActive(item.status)) || (!processing.length && files.length > 0);
-  const unresolved = processing.length > 0 && processing.every((item) => item.status === "unresolved" || item.status === "partial");
+  const unresolved = processing.length > 0 && processing.every((item) => item.status === "unresolved" || item.status === "partial" || item.status === "failed");
   const [previewSourceId, setPreviewSourceId] = useState("");
   const primaryProcessing = processing.find((item) => item.sourceVersionId === previewSourceId) || preferredAutomaticProcessing(processing);
   const preferredFile = [...files].sort((a, b) => planFileNamePreference(String(b.name || "")) - planFileNamePreference(String(a.name || "")))[0];

@@ -1,5 +1,5 @@
 import { expect,test } from "bun:test";
-import { constructionFootprints,multiplyPlanTransform } from "./plan-footprints";
+import { alternativeConstructionLayer,constructionFootprints,multiplyPlanTransform } from "./plan-footprints";
 const codes={save:1,restore:2,transform:3,beginMarkedContentProps:4,endMarkedContent:5,constructPath:6,fill:7,stroke:8,eoClip:9};
 const viewport={transform:[1,0,0,-1,0,200],width:200,height:200};
 const polygon=[0,0,0,1,10,0,1,10,5,1,0,5,4];
@@ -12,8 +12,30 @@ test("native construction polygons respect graphics transforms, layer scope and 
   expect(result.candidates[0].geometry.polygon).toHaveLength(4);
   expect(multiplyPlanTransform([1,0,0,1,10,20],[2,0,0,3,4,5])).toEqual([2,0,0,3,14,25]);
 });
-test("open paths, curves, compound fills, specks and non-construction layers are not geometry claims",()=>{
-  const inputs=[[0,0,0,1,10,0,1,10,10],[0,0,0,2,1,2,3,4,5,6,4],[...polygon,...polygon],[0,0,0,1,.01,0,1,.01,.01,1,0,.01,4]];
-  const result=constructionFootprints({fnArray:[4,...inputs.map(()=>6)],argsArray:[["OC",{type:"OCG",id:"c"}],...inputs.map(p=>[7,[p]])]},codes,new Map([["c","Konstruktion"]]),viewport);
-  expect(result.candidates).toHaveLength(0);expect(result.omittedUnsupported).toBe(3);expect(result.omittedSmall).toBe(1);
+test("fills close implicitly, curves flatten, compound fills keep rings; specks and other layers are not geometry",()=>{
+  const open=[0,0,0,1,10,0,1,10,10],curve=[0,0,10,2,5,15,10,15,10,10,1,10,0,1,0,0,4],compound=[...polygon,0,20,20,1,30,20,1,30,30,1,20,30,4];
+  const speck=[0,0,0,1,.01,0,1,.01,.01,1,0,.01,4];
+  const ops={fnArray:[4,6,6,6,6,5,4,6],argsArray:[["OC",{type:"OCG",id:"c"}],[7,[open]],[7,[curve]],[7,[compound]],[7,[speck]],[],["OC",{type:"OCG",id:"text"}],[7,[polygon]]]};
+  const result=constructionFootprints(ops,codes,new Map([["c","Konstruktion"],["text","Beschriftung"]]),viewport);
+  expect(result.candidates).toHaveLength(3);expect(result.omittedSmall).toBe(1);
+  expect(result.candidates[0].geometry.polygon).toHaveLength(3);
+  expect(result.candidates[1].geometry).toMatchObject({curvesFlattened:true});
+  expect(result.candidates[1].geometry.polygon.length).toBeGreaterThan(8);
+  expect(result.candidates[2].geometry.rings).toHaveLength(2);
+  expect(result.candidates[2].geometry.planRegion.height).toBeCloseTo(.15);
+});
+test("existing/demolition and hidden layers never become primary barriers",()=>{
+  const ops={fnArray:[4,6,5,4,6,5],argsArray:[["OC",{type:"OCG",id:"existing"}],[7,[polygon]],[],["OC",{type:"OCG",id:"hidden"}],[7,[polygon]],[]]};
+  const layers=new Map([["existing","Konstruktion Bestand"],["hidden","Konstruktion"]]);
+  const primary=constructionFootprints(ops,codes,layers,viewport,undefined,undefined,new Set(["hidden"]));
+  expect(primary.candidates).toHaveLength(0);expect(primary.omittedHiddenLayer).toBe(1);
+  expect(constructionFootprints(ops,codes,layers,viewport,alternativeConstructionLayer,null).candidates.map(c=>c.layerId)).toEqual(["existing"]);
+});
+test("a stroked quarter-circle arc is recorded as door-swing evidence with its hinge",()=>{
+  const k=.5523,arc=[0,100,100,1,100,110,0,100,110,2,100+10*k,110,110,100+10*k,110,100];
+  const result=constructionFootprints({fnArray:[6],argsArray:[[8,[arc]]]},codes,new Map(),viewport);
+  expect(result.doorSwings).toHaveLength(1);
+  expect(result.doorSwings[0].hinge.x).toBeCloseTo(.5,3);expect(result.doorSwings[0].hinge.y).toBeCloseTo(.5,3);
+  expect(result.doorSwings[0].radius).toBeCloseTo(.05,3);
+  expect(result.candidates).toHaveLength(0);
 });

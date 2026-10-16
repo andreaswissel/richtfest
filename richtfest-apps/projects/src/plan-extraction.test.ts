@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { parsePlanBbox, parsePlanTsv, planLabels } from "./plan-extraction";
+import { extractPlanLabels, parsePlanBbox, parsePlanTsv, planLabels } from "./plan-extraction";
+import { syntheticBayArea, syntheticPlanPdf, syntheticPlanRooms, type SyntheticPlanOptions } from "./test-fixtures/synthetic-plan";
 
 test("PDF words use source dimensions and stable source keys, never invented room outlines",()=>{
   const words=parsePlanBbox('<doc><page width="400" height="200"><word xMin="100" yMin="50" xMax="140" yMax="60">Bad</word><word xMin="220" yMin="80" xMax="240" yMax="90">Beton</word></page></doc>');
@@ -18,4 +19,55 @@ test("OCR TSV coordinates retain page dimensions and exclude low-confidence text
   const header="level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
   const rows="1\t1\t0\t0\t0\t0\t0\t0\t1000\t500\t-1\t\n5\t1\t1\t1\t1\t1\t100\t50\t80\t20\t95\tFlur\n5\t1\t1\t1\t1\t2\t300\t50\t80\t20\t12\tBad";
   expect(planLabels(parsePlanTsv(header+rows))).toMatchObject([{name:"Flur",geometry:{planRegion:{x:.1,y:.1,width:.08,height:.04}}}]);
+});
+test("German room names, punctuation and decomposed umlauts are labels; drawing titles are not",()=>{
+  const word=(text:string,x:number)=>({text,x,y:.5,width:.04,height:.01});
+  const names=["Badezimmer","Gäste-WC","Wohn-/Essbereich","Arbeitszimmer","Waschküche","Bad:","Schlafzi.","Küche"];
+  expect(names.map((name,i)=>planLabels([word(name,i*.1)]).length)).toEqual(names.map(()=>1));
+  expect(planLabels([word("Bad:",.1)])[0].name).toBe("Bad");
+  expect(planLabels([word("Beton",.1),word("Badenweiler",.2),word("Kindergarten",.3)])).toHaveLength(0);
+  expect(planLabels([word("Grundriss",.1),word("Keller",.145)])).toHaveLength(0);
+});
+test("OCR labels carry their text source and confidence",()=>{
+  const header="level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+  const words=parsePlanTsv(header+"1\t1\t0\t0\t0\t0\t0\t0\t1000\t500\t-1\t\n5\t1\t1\t1\t1\t1\t100\t50\t80\t20\t61\tFlur");
+  expect(planLabels(words,"ocr")[0].geometry.textSource).toEqual({method:"ocr",confidence:61});
+  expect(planLabels(words)[0].geometry.textSource).toEqual({method:"native_text",confidence:null});
+});
+
+const popplerAvailable=Bun.spawnSync(["which","pdftotext"]).exitCode===0;
+const extract=async(options:SyntheticPlanOptions={})=>{
+  const pdf=syntheticPlanPdf(options),result=await extractPlanLabels((async function*(){yield pdf;})(),1,new AbortController().signal);
+  const [width,height]=options.page??[1190.55,841.89],k=72/25.4*1000/(options.scale??100);
+  const area=(g:any)=>g.polygon?(polygonArea(g.polygon)-(g.holes??[]).reduce((s:number,h:any)=>s+polygonArea(h),0))*width*height/k/k:null;
+  const rooms=new Map(result.labels.map(l=>[l.name,{...l,area:area(l.geometry)}]));
+  const connects=(a:string,b:string)=>(rooms.get(a)!.geometry as any).topology.openings.find((o:any)=>o.connectsTo===rooms.get(b)!.sourceKey);
+  return {result,rooms,connects};
+};
+const polygonArea=(p:{x:number;y:number}[])=>Math.abs(p.reduce((s,a,i)=>{const b=p[(i+1)%p.length];return s+a.x*b.y-b.x*a.y;},0))/2;
+test.skipIf(!popplerAvailable)("synthetic CAD plan: doors and windows close, L-shaped rooms are traced and connections recorded",async()=>{
+  const {result,rooms,connects}=await extract();
+  expect([...rooms.keys()].sort()).toEqual(["Bad","Flur","Küche","Schlafen","Wohnen"]);
+  for(const room of syntheticPlanRooms){
+    const traced=rooms.get(room.label)!;
+    expect(traced.geometry).toMatchObject({quality:"enclosed_region",topology:{status:"enclosed"}});
+    // Traced free space excludes half of each 12 cm partition, so it stays slightly below the printed area.
+    expect(traced.area!/room.area).toBeGreaterThan(.88);expect(traced.area!/room.area).toBeLessThan(1.01);
+  }
+  expect((rooms.get("Wohnen")!.geometry as any).polygon).toHaveLength(6);
+  expect((rooms.get("Flur")!.geometry as any).polygon).toHaveLength(6);
+  for(const room of ["Wohnen","Küche","Bad","Schlafen"])expect(connects("Flur",room)).toMatchObject({kind:"jamb_pair"});
+  expect(connects("Wohnen","Küche")).toBeUndefined();
+  expect(result.topologyCoverage).toMatchObject({openingCount:11,doorSwingCount:5,doorSwingSupportedOpeningCount:5});
+});
+test.skipIf(!popplerAvailable)("synthetic CAD plan variants: corner door, curved bay, merged wall fill and other scales",async()=>{
+  const corner=await extract({cornerDoor:true});
+  expect(corner.connects("Wohnen","Küche")).toMatchObject({kind:"door_swing_jamb"});
+  expect(corner.rooms.get("Küche")!.geometry).toMatchObject({quality:"enclosed_region"});
+  const bay=await extract({curvedBay:true});
+  expect(bay.rooms.get("Schlafen")!.area!/(27+syntheticBayArea)).toBeGreaterThan(.9);
+  for(const options of [{mergedWalls:true},{scale:50,page:[1190.55,1683.78] as [number,number]},{scale:200,page:[841.89,595.28] as [number,number]}]){
+    const {rooms}=await extract(options);
+    expect([...rooms.values()].map(r=>r.geometry.quality)).toEqual(syntheticPlanRooms.map(()=>"enclosed_region"));
+  }
 });
