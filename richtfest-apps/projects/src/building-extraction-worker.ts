@@ -30,9 +30,9 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
     const result = await extractPlanLabels(stream,job.page,bounded);
     const existing = await d.db.select({sourceKey:candidates.sourceKey,status:candidates.status,geometry:candidates.geometry}).from(candidates)
       .where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId)));
-    const current = new Map(existing.map((row:any)=>[row.sourceKey,row]));
+    const existingBySource = new Map(existing.map((row:any)=>[row.sourceKey,row]));
     const eligibleLabels = result.labels.filter(label => {
-      const row=current.get(label.sourceKey) as any;
+      const row=existingBySource.get(label.sourceKey) as any;
       return !row || (row.status==="unreviewed" && !(row.geometry as any)?.roomUseProposal);
     });
     await d.db.update(jobs).set({result:{phase:"preparing_draft",candidateCount:result.labels.length+result.footprints.length,
@@ -42,13 +42,20 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
     const classified = new Map(classification.labels.map(label=>[label.sourceKey,label]));
     result.labels=result.labels.map(label=>classified.get(label.sourceKey)??label);
     await d.db.transaction(async (tx:any) => {
-      const [current] = await tx.select().from(jobs).where(owned).for("update"); if (!current) return;
+      const [currentJob] = await tx.select().from(jobs).where(owned).for("update"); if (!currentJob) return;
       const activeKeys=[...result.labels,...result.footprints].map(c=>c.sourceKey);
       // Preserve accepted history; obsolete unreviewed hypotheses are superseded on extractor upgrades.
       if(activeKeys.length) await tx.update(candidates).set({status:"superseded"}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),eq(candidates.status,"unreviewed"),notInArray(candidates.sourceKey,activeKeys)));
-      for (const candidate of [...result.labels,...result.footprints]) await tx.insert(candidates).values({tenantId:job.tenantId,modelId:job.modelId,jobId:job.id,
-        sourceKey:candidate.sourceKey,entityType:candidate.entityType,name:candidate.name,geometry:candidate.geometry,
-        evidence:[{kind:"page",sourceVersionId:job.sourceVersionId,page:job.page,region:candidate.geometry.planRegion,quote:candidate.quote,...("layerId" in candidate?{layerId:candidate.layerId,layerName:candidate.layerName}:{})}]}).onConflictDoNothing();
+      for (const candidate of [...result.labels,...result.footprints]) {
+        const previous=existingBySource.get(candidate.sourceKey) as any;
+        const previousProposal=previous?.status==="unreviewed"&&(previous.geometry as any)?.roomUseProposal;
+        const geometry=previousProposal?{...candidate.geometry,roomUseProposal:previousProposal}:candidate.geometry;
+        const evidence=[{kind:"page",sourceVersionId:job.sourceVersionId,page:job.page,region:candidate.geometry.planRegion,quote:candidate.quote,...("layerId" in candidate?{layerId:candidate.layerId,layerName:candidate.layerName}:{})}];
+        await tx.insert(candidates).values({tenantId:job.tenantId,modelId:job.modelId,jobId:job.id,
+          sourceKey:candidate.sourceKey,entityType:candidate.entityType,name:candidate.name,geometry,evidence}).onConflictDoNothing();
+        await tx.update(candidates).set({name:candidate.name,geometry,evidence}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),
+          eq(candidates.sourceKey,candidate.sourceKey),eq(candidates.status,"unreviewed")));
+      }
       // Upgrades may revisit an existing unreviewed candidate. Add the proposal
       // without modifying any reviewed candidate or canonical room.
       for (const label of classification.labels) if ((label.geometry as any).roomUseProposal)

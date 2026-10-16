@@ -51,6 +51,15 @@ export function candidatesForGroup(candidates: BuildingExtractionCandidate[], gr
   return group === "all" ? candidates : candidates.filter((candidate) => candidate.groupLabel === group);
 }
 
+export function candidatesForModelState(candidates: BuildingExtractionCandidate[], state: BuildingModelState) {
+  return candidates.filter((candidate) => {
+    if (candidate.entityType === "room" || !candidate.constructionState || candidate.constructionState === "unknown") return true;
+    if (state === "proposed") return candidate.constructionState === "proposed" || candidate.constructionState === "retained";
+    if (state === "demolition") return candidate.constructionState === "demolished" || candidate.constructionState === "retained";
+    return candidate.constructionState !== "proposed" && candidate.constructionState !== "demolished";
+  });
+}
+
 export type CandidateOverlayVisibility = {
   roomAnchors?: boolean;
   footprints?: boolean;
@@ -136,7 +145,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [conflict, setConflict] = useState<string>();
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
   const [candidateGroupFilter, setCandidateGroupFilter] = useState("all");
-  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: true, footprints: false });
+  const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: false, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
@@ -166,7 +175,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId);
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
-  const sourceCandidates = useMemo(() => candidatesForSource(candidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId), [candidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId]);
+  const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
+  const sourceCandidates = useMemo(() => candidatesForSource(stateCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId), [stateCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId]);
   const candidateGroupOptions = useMemo(() => [...new Set(sourceCandidates.flatMap((candidate) => candidate.groupLabel ? [candidate.groupLabel] : []))].sort(), [sourceCandidates]);
   const activeCandidateGroupFilter = candidateGroupFilter === "all" || candidateGroupOptions.includes(candidateGroupFilter) ? candidateGroupFilter : "all";
   const filteredCandidates = useMemo(() => candidatesForGroup(sourceCandidates, activeCandidateGroupFilter), [sourceCandidates, activeCandidateGroupFilter]);
@@ -181,6 +191,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     return grouped;
   }, [filteredCandidates]);
   const selectedCandidate = sourceCandidates.find((candidate) => candidate.id === selectedCandidateId);
+  const hasDraftWallCandidates = sourceCandidates.some((candidate) => candidateOverlayBucket(candidate) === "draftWalls");
+  const hasAssemblyCandidates = sourceCandidates.some((candidate) => candidateOverlayBucket(candidate) === "assemblies");
   const currentAutomaticProcessing = automaticPlanProcessing.find((item) => item.sourceVersionId === evidence.sourceVersionId);
   const currentAutomaticActive = automaticProcessingActive(currentAutomaticProcessing?.status);
   const sourceLayers = pdfLayers.length ? pdfLayers : evidence.layers || [];
@@ -394,14 +406,14 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               <input type="checkbox" checked={candidateOverlayVisibility.unresolvedAnchors ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, unresolvedAnchors: event.target.checked }))} />
               <span>{t("buildingModelUnresolvedAnchors")}</span>
             </label>
-            <label className="building-model-layer">
+            {hasDraftWallCandidates && <label className="building-model-layer">
               <input type="checkbox" checked={candidateOverlayVisibility.draftWalls ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, draftWalls: event.target.checked }))} />
               <span>{t("buildingModelDraftWalls")}</span>
-            </label>
-            <label className="building-model-layer">
+            </label>}
+            {hasAssemblyCandidates && <label className="building-model-layer">
               <input type="checkbox" checked={candidateOverlayVisibility.assemblies ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, assemblies: event.target.checked }))} />
               <span>{t("buildingModelConstructionAssemblies")}</span>
-            </label>
+            </label>}
             <label className="building-model-layer">
               <input type="checkbox" checked={candidateOverlayVisibility.footprints ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, footprints: event.target.checked }))} />
               <span>{t("buildingModelRawFootprints")}</span>

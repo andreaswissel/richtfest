@@ -58,15 +58,16 @@ export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) 
   return observations;
 }
 
-/** Conservative bounded raster topology. Only source polygons are barriers; exterior and
- * shared components remain anchors. No artificial nearest-label partitions or door claims. */
-export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1) {
+/** Bounded raster topology with one construction scenario, hard unit ownership,
+ * inferred gap closure and printed-area-guided partitions. No door claims. */
+export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1, normalizedPageAreaM2?: number) {
   const n = Math.max(64, Math.min(1600, Math.floor(resolution))), size = n * n;
   const wall = new Uint8Array(size), owner = new Int32Array(size).fill(-1);
   const adjacency = footprints.map(() => new Set<number>());
   const connect = (a: number, b: number) => { if (a === b) return; adjacency[a].add(b); adjacency[b].add(a); };
   // Scanline fill preserves source concavity; its grid approximation is never called exact.
-  [...footprints, ...supplementary].forEach((footprint, index) => {
+  // Alternative construction states are evidence, never simultaneous barriers.
+  footprints.forEach((footprint, index) => {
     const id = index < footprints.length ? index : -1;
     const polygon = footprint.geometry.polygon;
     const r = footprint.geometry.planRegion;
@@ -88,7 +89,11 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     if (p % n && owner[p - 1] >= 0) connect(owner[p], owner[p - 1]);
     if (p >= n && owner[p - n] >= 0) connect(owner[p], owner[p - n]);
   }
-  const wallIndexes = new Set(footprints.map((footprint, index) => draftWallEvidence(footprint, pageAspectRatio).wallLike ? index : -1).filter(index => index >= 0));
+  const collidesWithLabel = (footprint: PlanFootprint) => labels.some(label => {
+    const a = footprint.geometry.planRegion, b = label.geometry.planRegion;
+    return a.x < b.x+b.width && a.x+a.width > b.x && a.y < b.y+b.height && a.y+a.height > b.y;
+  });
+  const wallIndexes = new Set(footprints.map((footprint, index) => draftWallEvidence(footprint, pageAspectRatio).wallLike && !collidesWithLabel(footprint) ? index : -1).filter(index => index >= 0));
   const wallEntries=[...wallIndexes].map(index=>({index,classification:draftWallEvidence(footprints[index],pageAspectRatio)}));
   const bandCounts=new Map<number,number>();
   for(const entry of wallEntries)bandCounts.set(entry.classification.minorDimensionBand,(bandCounts.get(entry.classification.minorDimensionBand)??0)+1);
@@ -98,10 +103,12 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       name: `Draft wall ${i + 1}`, quote: "Exact elongated rectangular fill from source construction layer",
       layerId: footprint.layerId, layerName: footprint.layerName,
       geometry: { quality: "draft_wall" as const, semanticKind: "draft_wall" as const,
+        constructionState: "proposed" as const,
+        phaseEvidence: { state: "proposed" as const, method: "source_layer_role" as const, layerId: footprint.layerId, layerName: footprint.layerName, status: "unreviewed" as const },
         coordinateSpace: "normalized-page" as const, polygon: footprint.geometry.polygon,
         sourceFootprintKeys: [footprint.sourceKey], planRegion: footprint.geometry.planRegion,
-        classification:{...classification,thicknessBandCount,evidenceTier:thicknessBandCount>=3?"high" as const:"medium" as const},
-        limitations: "Unreviewed wall-like source construction fill selected only by conservative shape evidence. Exact source polygon is preserved. The repeated minor-dimension band is page-relative evidence, not a measured thickness. Wall continuity, zero-side/common-core interpretation, material, construction state, physical scale, openings and completeness are not established." } };
+        classification:{...classification,thicknessBandCount,contextualContactCount:adjacency[index].size,evidenceTier:thicknessBandCount>=3&&adjacency[index].size>=2?"high" as const:"medium" as const},
+        limitations: "Unreviewed wall-like source construction fill selected by conservative shape and label-collision checks. High evidence additionally requires a repeated thickness band and at least two source contacts. Exact source polygon is preserved. Bands and contacts are page-relative evidence, not a measured thickness or verified continuity. Material, construction state, physical scale, openings and completeness are not established." } };
   });
   // Unsupported construction fills are grouped only through direct contact with
   // each other. A wall-like polygon may not bridge unrelated fragments into a
@@ -118,6 +125,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     name: `Unsupported construction fragment ${i + 1}`, quote: `${members.length} connected non-wall source construction fills`,
     layerId: members[0].layerId, layerName: members[0].layerName,
     geometry: { quality: "construction_fragment_assembly" as const, semanticKind: "construction_fragment" as const,
+      constructionState: "proposed" as const,
+      phaseEvidence: { state: "proposed" as const, method: "source_layer_role" as const, layerIds: [...new Set(members.map(m => m.layerId))], layerNames: [...new Set(members.map(m => m.layerName))], status: "unreviewed" as const },
       coordinateSpace: "normalized-page" as const,
       polygons: members.map(m => m.geometry.polygon), sourceFootprintKeys: members.map(m => m.sourceKey),
       planRegion: box(members.flatMap(m => m.geometry.polygon)),
@@ -125,6 +134,32 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }));
   const assemblies = [...walls, ...fragmentAssemblies];
   const supportedFills = fillRegions.filter(f => f.fillRule === "evenodd");
+  const observations = printedAreaObservations(labels, words);
+  const units = words.flatMap(word => {
+    if (/^WE\s*\d{1,4}$/i.test(word.text)) return [{...word,text:word.text.replace(/\s+/g," ")}];
+    if (!/^WE$/i.test(word.text)) return [];
+    const numbers = words.filter(w => /^\d{1,4}$/.test(w.text) && ((Math.abs(w.y-word.y)<word.height*.5 && w.x>word.x && w.x-word.x-word.width<word.height*2)||(Math.abs(w.x-word.x)<word.width*.5&&w.y<word.y&&word.y-w.y-w.height<word.width*2)));
+    return numbers.length===1?[{...word,text:`WE ${numbers[0].text}`,width:numbers[0].x+numbers[0].width-word.x}]:[];
+  });
+  const unitForFill = new Map(supportedFills.map(f => [f.sourceKey, [...new Set(units.filter(u => insideFill({x:u.x+u.width/2,y:u.y+u.height/2},f)).map(u=>u.text))]]));
+  // CAD unit markers sometimes occupy a hole just outside the floor fill. Only
+  // an unassigned, unique nearby marker may associate with a substantial compound fill.
+  const assignedUnits=new Set([...unitForFill.values()].filter(v=>v.length===1).flat());
+  const fallbackUnitFills=new Set<string>();
+  for(const f of supportedFills)if(!unitForFill.get(f.sourceKey)?.length&&f.rings.length>1) {
+    const r=box(f.rings.flat());
+    const within=(w:PlanWord)=>w.x+w.width/2>=r.x&&w.x+w.width/2<=r.x+r.width&&w.y+w.height/2>=r.y&&w.y+w.height/2<=r.y+r.height;
+    const nearby=[...new Set(units.filter(u=>within(u)).map(u=>u.text))];
+    const roomAreas=labels.filter(l=>{const b=l.geometry.planRegion;return insideFill({x:b.x+b.width/2,y:b.y+b.height/2},f);}).map(l=>observations.get(l.sourceKey)?.value);
+    const sum=roomAreas.length>=2&&roomAreas.every(v=>v!==undefined)?roomAreas.reduce<number>((s,v)=>s+v!,0):null;
+    const summaries=words.filter(w=>within(w)&&/^Wfl\.:?$/i.test(w.text));
+    const closure=sum!==null&&summaries.some(s=>words.some(w=>within(w)&&/^\d+[.,]\d{2}(?:m[²2])?$/.test(w.text)&&Math.abs(w.y-s.y)<s.height*.5&&w.x>s.x&&w.x-s.x-s.width<s.height*2&&Math.abs(Number.parseFloat(w.text.replace(",","."))-sum)<.011));
+    if(nearby.length===1&&!assignedUnits.has(nearby[0])&&closure){unitForFill.set(f.sourceKey,nearby);fallbackUnitFills.add(f.sourceKey);}
+  }
+  const unitFills = supportedFills.filter(f => unitForFill.get(f.sourceKey)?.length === 1 && labels.filter(l => {
+    const r=l.geometry.planRegion; return insideFill({x:r.x+r.width/2,y:r.y+r.height/2},f);
+  }).length >= 2).sort((a,b)=>polygonArea(b.rings[0])-polygonArea(a.rings[0]));
+  const apartmentOwner = new Int32Array(size).fill(-1);
   if (supportedFills.length) {
     const interior = new Uint8Array(size);
     for (const fill of supportedFills) {
@@ -141,6 +176,16 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     }
     for (let p = 0; p < size; p++) if (!interior[p]) wall[p] = 1;
   }
+  // Largest substantial unit fill wins overlaps; decorative fills cannot own cells.
+  for (let id=0;id<unitFills.length;id++) {
+    const fill=unitFills[id],r=box(fill.rings.flat());
+    for(let y=Math.max(0,Math.floor(r.y*n));y<Math.min(n,Math.ceil((r.y+r.height)*n));y++)
+      for(let x=Math.max(0,Math.floor(r.x*n));x<Math.min(n,Math.ceil((r.x+r.width)*n));x++) {
+        const p=y*n+x;if(apartmentOwner[p]<0&&insideFill({x:(x+.5)/n,y:(y+.5)/n},fill))apartmentOwner[p]=id;
+      }
+  }
+  const thicknesses=wallEntries.map(e=>e.classification.pageRelativeMinorDimension*n).sort((a,b)=>a-b);
+  closeRadius=closeRadius || (thicknesses.length>=3&&(unitFills.length>0||labels.length<=2)?Math.min(4,Math.max(1,Math.round(thicknesses[Math.floor(thicknesses.length/2)]))):0);
   // Optional morphological closing joins short gaps only, with the approximation recorded.
   // Sliding-window separable max/min keeps processing linear in page pixel count.
   if (closeRadius > 0) {
@@ -171,7 +216,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       region.count++; region.minX = Math.min(region.minX, x); region.maxX = Math.max(region.maxX, x); region.minY = Math.min(region.minY, y); region.maxY = Math.max(region.maxY, y);
       region.exterior ||= x === 0 || y === 0 || x === n - 1 || y === n - 1;
       const next = [x > 0 ? p - 1 : -1, x < n - 1 ? p + 1 : -1, y > 0 ? p - n : -1, y < n - 1 ? p + n : -1];
-      for (const q of next) if (q >= 0 && !wall[q] && component[q] < 0) { component[q] = id; queue[tail++] = q; }
+      for (const q of next) if (q >= 0 && !wall[q] && component[q] < 0 && apartmentOwner[q]===apartmentOwner[p]) { component[q] = id; queue[tail++] = q; }
     }
     regions.push(region);
   }
@@ -180,32 +225,42 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const id = component[y * n + x]; if (id >= 0) regions[id].seeds.push(i); return id;
   });
   // Multi-source geodesic partition stays inside each source-filled connected component
-  // and cannot cross retained walls. Its equal-distance seams are explicitly inferred.
+  // and cannot cross retained walls or apartment owners. Its capacity-guided seams are inferred.
   const partition = new Int32Array(size).fill(-1), distances = new Float64Array(size).fill(Infinity);
   const heap:{p:number;distance:number}[]=[];
   const push=(entry:{p:number;distance:number})=>{let i=heap.length;heap.push(entry);while(i>0){const parent=(i-1)>>1;if(heap[parent].distance<=entry.distance)break;heap[i]=heap[parent];i=parent;}heap[i]=entry;};
   const pop=()=>{const result=heap[0],last=heap.pop()!;if(heap.length){let i=0;while(i*2+1<heap.length){let child=i*2+1;if(child+1<heap.length&&heap[child+1].distance<heap[child].distance)child++;if(heap[child].distance>=last.distance)break;heap[i]=heap[child];i=child;}heap[i]=last;}return result;};
+  const capacityEnabled=unitFills.length>0||footprints.length===0;
+  const weights=labels.map(l=>capacityEnabled?Math.sqrt(observations.get(l.sourceKey)?.value||1):1);
+  const horizontalCost=Number.isFinite(pageAspectRatio)&&pageAspectRatio>0?pageAspectRatio:1;
+  for(let iteration=0;iteration<6;iteration++) {
+  partition.fill(-1);distances.fill(Infinity);
   labels.forEach((label,i)=>{
     if(seedRegions[i]<0||regions[seedRegions[i]].exterior)return;
     const r=label.geometry.planRegion,x=Math.min(n-1,Math.floor((r.x+r.width/2)*n)),y=Math.min(n-1,Math.floor((r.y+r.height/2)*n)),p=y*n+x;
     if(partition[p]>=0)return;partition[p]=i;distances[p]=0;push({p,distance:0});
   });
-  const horizontalCost=Number.isFinite(pageAspectRatio)&&pageAspectRatio>0?pageAspectRatio:1;
   while(heap.length){const {p,distance}=pop();if(distance!==distances[p])continue;const x=p%n,y=Math.floor(p/n);
-    for(const q of [x>0?p-1:-1,x<n-1?p+1:-1,y>0?p-n:-1,y<n-1?p+n:-1])if(q>=0&&component[q]===component[p]){const next=distance+(Math.abs(q-p)===1?horizontalCost:1);if(next<distances[q]){distances[q]=next;partition[q]=partition[p];push({p:q,distance:next});}}
+    for(const q of [x>0?p-1:-1,x<n-1?p+1:-1,y>0?p-n:-1,y<n-1?p+n:-1])if(q>=0&&component[q]===component[p]){const next=distance+(Math.abs(q-p)===1?horizontalCost:1)/weights[partition[p]];if(next<distances[q]){distances[q]=next;partition[q]=partition[p];push({p:q,distance:next});}}
   }
-  const observations = printedAreaObservations(labels, words);
-  const units = words.flatMap(word => {
-    if (/^WE\s*\d{1,4}$/i.test(word.text)) return [{...word,text:word.text.replace(/\s+/g," ")}];
-    if (!/^WE$/i.test(word.text)) return [];
-    const numbers = words.filter(w => /^\d{1,4}$/.test(w.text) && Math.abs(w.y-word.y)<word.height*.5 && w.x>word.x && w.x-word.x-word.width<word.height*2);
-    return numbers.length===1?[{...word,text:`WE ${numbers[0].text}`,width:numbers[0].x+numbers[0].width-word.x}]:[];
-  });
-  const unitForFill = new Map(supportedFills.map(f => [f.sourceKey, [...new Set(units.filter(u => insideFill({x:u.x+u.width/2,y:u.y+u.height/2},f)).map(u=>u.text))]]));
+  const capacities=new Int32Array(labels.length);for(let p=0;p<size;p++)if(partition[p]>=0)capacities[partition[p]]++;
+  let needsRefinement=false;
+  for(const region of regions) {
+    const values=region.seeds.map(i=>observations.get(labels[i].sourceKey)?.value);
+    if(!capacityEnabled||region.seeds.length<2||!values.every(v=>v!==undefined&&v>0))continue;
+    const total=values.reduce<number>((s,v)=>s+v!,0);
+    region.seeds.forEach((i,j)=>{const target=region.count*values[j]!/total,actual=capacities[i];
+      if(actual&&Math.abs(actual/target-1)>.12){weights[i]*=Math.max(.7,Math.min(1.4,Math.sqrt(target/actual)));needsRefinement=true;}
+    });
+  }
+  if(!needsRefinement)break;
+  }
   const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0 };
   const preliminaryRooms = labels.map((label, i) => {
     const lr=label.geometry.planRegion;
-    const containingFills=supportedFills.filter(f=>insideFill({x:lr.x+lr.width/2,y:lr.y+lr.height/2},f));
+    const seedX=Math.min(n-1,Math.floor((lr.x+lr.width/2)*n)),seedY=Math.min(n-1,Math.floor((lr.y+lr.height/2)*n));
+    const unitId=apartmentOwner[seedY*n+seedX];
+    const containingFills=unitId>=0?[unitFills[unitId]]:supportedFills.filter(f=>insideFill({x:lr.x+lr.width/2,y:lr.y+lr.height/2},f));
     const groupLabels=[...new Set(containingFills.flatMap(f=>unitForFill.get(f.sourceKey)??[]))];
     const id = seedRegions[i], region = id >= 0 ? regions[id] : null;
     const status = supportedFills.length&&!containingFills.length?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior" : region.seeds.length !== 1 ? "conflicting" : "enclosed";
@@ -221,14 +276,15 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const finalStatus=oversized?"oversized_unresolved":status;
     counts[finalStatus]++;
     const polygon=oversized?undefined:candidatePolygon;
-    return { ...label, sourceKey:`topology-v3:${label.sourceKey}`, geometry: { ...label.geometry,
+    return { ...label, sourceKey:`topology-v4:${label.sourceKey}`, geometry: { ...label.geometry,
       ...(polygon ? { quality: status==="conflicting"?"approximate_partition" as const:"enclosed_region" as const, polygon, holes:contour?.holes, planRegion: box(polygon), labelRegion: label.geometry.planRegion } : {}),
-      topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v3:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost },
+      topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v4:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost, partitionWeight:"sqrt_printed_area", barrierScenario:"primary", ignoredAlternativeBarrierCount:supplementary.length, apartmentOwner:unitId>=0?unitFills[unitId].sourceKey:null, gapClosing:closeRadius?"inferred_segmentation_only":null },
       sourceFillEvidence:containingFills.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName})),
       ...(containingFills.length===1&&groupLabels.length===1?{groupLabel:groupLabels[0],groupSourceKey:containingFills[0].sourceKey,
+        groupAssociationMethod:fallbackUnitFills.has(containingFills[0].sourceKey)?"bbox_summary_plus_exact_area_closure":"contained_unit_marker",
         groupObservation:units.filter(u=>u.text===groupLabels[0]&&insideFill({x:u.x+u.width/2,y:u.y+u.height/2},containingFills[0])).map(u=>({quote:u.text,planRegion:{x:u.x,y:u.y,width:u.width,height:u.height},provenance:"inferred"}))}:{}),
       ...(observations.has(label.sourceKey) ? { printedArea: observations.get(label.sourceKey) } : {}),
-      limitations: polygon ? `Approximate raster region seeded by source text, constrained by construction/existing-layer fills and source fill outlines. ${status==="conflicting"?"Shared free space is divided by geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : oversized ? "Source label only: the inferred region exceeded the conservative page-relative room-size guard and may represent multiple rooms or a whole apartment/sheet area. Room boundary remains unresolved." : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } };
+      limitations: polygon ? `Approximate raster region seeded by source text, constrained by primary construction fills and apartment ownership. ${status==="conflicting"?"Shared free space is divided by area-guided geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : oversized ? "Source label only: the inferred region exceeded the conservative page-relative room-size guard and may represent multiple rooms or a whole apartment/sheet area. Room boundary remains unresolved." : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } };
   });
   const effectiveRoomArea=(geometry:{polygon?:Point[];holes?:Point[][]})=>geometry.polygon
     ?Math.max(0,polygonArea(geometry.polygon)-(geometry.holes??[]).reduce((sum,hole)=>sum+polygonArea(hole),0)):0;
@@ -251,12 +307,39 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       topology:{...room.geometry.topology,status:"area_ratio_outlier" as const,method:"area_ratio_outlier_guard" as const},areaRatioQc,
       limitations:"Source label only: the inferred polygon-to-printed-area ratio was outside 0.5×–2× of this page's robust median. This relative QC flags a likely merge, split or area-association mismatch; it is not a scale or area validation. Room boundary remains unresolved."}};
   });
+  for (let i=0;i<rooms.length;i++) {
+    const room=rooms[i],g=room.geometry,region=seedRegions[i]>=0?regions[seedRegions[i]]:null;
+    const siblings=rooms.filter(r=>g.groupSourceKey&&r.geometry.groupSourceKey===g.groupSourceKey);
+    const duplicateLiving=siblings.filter(r=>/^Wo\./i.test(r.name)).length>1;
+    Object.assign(g,{semanticQc:{status:duplicateLiving?"group_conflict":"unreviewed",duplicateLivingKitchen:duplicateLiving}});
+    if(!g.polygon)continue;
+    const containsOther=labels.some((l,j)=>j!==i&&insideFill({x:l.geometry.planRegion.x+l.geometry.planRegion.width/2,y:l.geometry.planRegion.y+l.geometry.planRegion.height/2},{rings:[g.polygon!,...(g.holes??[])]} as PlanFillRegion));
+    const printed=g.printedArea?.value;
+    const allAreas=region?.seeds.map(j=>observations.get(labels[j].sourceKey)?.value);
+    const total=allAreas?.every(a=>a!==undefined&&a>0)?allAreas.reduce<number>((s,a)=>s+a!,0):null;
+    const target=capacityEnabled&&printed&&total&&region&&region.seeds.length>1?region.count/(n*n)*printed/total:null;
+    const relative=target?effectiveRoomArea(g)/target:null;
+    const estimatedArea=normalizedPageAreaM2&&printed?effectiveRoomArea(g)*normalizedPageAreaM2:null;
+    const physicalConflict=estimatedArea!==null&&printed!==undefined&&Math.abs(estimatedArea-printed)>Math.max(.5,printed*.1);
+    const inconsistent=(relative!==null&&(relative<.6||relative>1.4))||physicalConflict;
+    Object.assign(g,{printedScaleQc:estimatedArea!==null?{estimatedArea,printedArea:printed,toleranceM2:Math.max(.5,printed!*.1),status:physicalConflict?"conflict":"unreviewed",limitations:"Uses the source printed scale as unreviewed evidence, not a verified physical measurement."}:null});
+    Object.assign(g,{capacityQc:{relativeToPrintedTarget:relative,tolerance:.4,status:inconsistent?"conflict":"unreviewed"}});
+    if(containsOther||inconsistent){
+      const prior=g.topology.status as keyof typeof counts;if(prior in counts)counts[prior]=Math.max(0,counts[prior]-1);
+      counts.area_ratio_outlier++;
+      g.planRegion=g.labelRegion??g.planRegion;g.quality="anchor";
+      delete g.polygon;delete g.holes;delete g.labelRegion;
+      g.topology.status="area_ratio_outlier";
+      g.limitations=containsOther?"Source label only: candidate contained another room label center.":physicalConflict?"Source label only: polygon area at the printed source scale differs from the room annotation by more than 10% or 0.5 m². Scale, association and boundary require review.":"Source label only: constrained region differs by more than 40% from its printed-area capacity target. Association and boundary require review.";
+    }
+  }
   return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
     highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
-    fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: supplementary.length, printedAreaCount: observations.size,
+    fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
     areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius,
+    alternativeBarrierEvidence:supplementary.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName,polygon:f.geometry.polygon,state:"unresolved_alternative"})),
     relationships: "Not established: source fills alone do not distinguish doors, openings or traversable adjacency.",
-    limitations: "Source construction/existing-layer fills and even-odd filled regions constrain approximate topology. Draft walls are conservative elongated rectangular source-fill proposals; unsupported construction fragments remain separate. Shared components use inferred geodesic partitions; this does not establish doors or room adjacency. Missing strokes and open gaps remain uncertainty; outside/obstructed seeds remain anchors." } };
+    limitations: "Only primary construction fills constrain the selected scenario; alternative layers retain unresolved state provenance. Substantial unit-bearing fills establish hard owner domains. Gap closure affects segmentation only. Shared components use inferred area-guided geodesic partitions; this does not establish doors or room adjacency. Printed-scale QC is unreviewed source evidence. Missing strokes and open gaps remain uncertainty; failed regions remain anchors." } };
 }
 
 function insideFill(p:Point,fill:PlanFillRegion) {

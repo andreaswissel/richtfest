@@ -3,6 +3,8 @@ import express from "express";
 import { createReadStream } from "node:fs";
 import { createBuildingModelRouter } from "@richtfest/projects/building-model";
 import { runBuildingExtraction } from "@richtfest/projects/building-extraction";
+import { ensureAutomaticExtractionJob } from "@richtfest/projects/automatic-building-model";
+import { buildingExtractionJobs } from "@richtfest/projects/schema";
 import { createDatabase } from "./db/client";
 
 const url=process.env.BUILDING_EXTRACTION_TEST_DATABASE_URL;
@@ -33,6 +35,12 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     await pool.query("insert into projects_building_storeys (id,tenant_id,model_id,building_id,stable_key,name,created_by) values ($1,$2,$3,$4,'test','Test',$5)",[storey,tenant,model,building,actor]);
     await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'plan.pdf','upload',$4)",[file,tenant,project,actor]);
     await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)",[version,tenant,file,actor]);
+    const [legacyJob]=await db.insert(buildingExtractionJobs).values({tenantId:tenant,modelId:model,
+      sourceVersionId:version,storeyId:storey,page:3,extractorVersion:"topology-v3",status:"complete",createdBy:actor}).returning();
+    const upgradedJob=await db.transaction((tx:any)=>ensureAutomaticExtractionJob(tx,{tenantId:tenant,modelId:model,
+      sourceVersionId:version,storeyId:storey,page:3,createdBy:actor}));
+    expect(upgradedJob.id).toBe(legacyJob.id);expect(upgradedJob).toMatchObject({extractorVersion:"topology-v4",status:"queued"});
+    expect((await pool.query("select count(*)::int as n from projects_building_extractions")).rows[0].n).toBe(1);
     const input={baseRevision:0,sourceVersionId:version,page:3,storeyId:storey};
     expect((await post("/extractions",input,{"x-other":"1"})).status).toBe(404);
     expect((await post("/extractions",input,{"x-denied":"1"})).status).toBe(403);
@@ -48,16 +56,17 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     expect(rooms.some(r=>r.geometry.quality==="anchor")).toBe(true);
     expect(rooms.some(r=>r.geometry.quality==="approximate_partition")).toBe(true);
     expect(walls).toHaveLength(164);expect(assemblies).toHaveLength(64);
-    expect(walls.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="draft_wall"&&Array.isArray(r.geometry.polygon)&&r.geometry.polygon.length===4
+    expect(walls.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="draft_wall"&&r.geometry.constructionState==="proposed"&&r.geometry.phaseEvidence.status==="unreviewed"&&Array.isArray(r.geometry.polygon)&&r.geometry.polygon.length===4
       &&r.geometry.classification.sourcePolygonExact&&r.evidence[0].layerName.includes("Konstruktion")&&!Object.hasOwn(r.geometry,"thickness")&&!Object.hasOwn(r.geometry,"material"))).toBe(true);
-    expect(assemblies.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="construction_fragment"&&Array.isArray(r.geometry.polygons)&&r.geometry.polygons.length>0
+    expect(assemblies.every(r=>r.status==="unreviewed"&&r.geometry.semanticKind==="construction_fragment"&&r.geometry.constructionState==="proposed"&&Array.isArray(r.geometry.polygons)&&r.geometry.polygons.length>0
       &&r.evidence[0].layerName.includes("Konstruktion"))).toBe(true);
-    expect(walls.filter(r=>r.geometry.classification.evidenceTier==="high")).toHaveLength(164);
+    expect(walls.filter(r=>r.geometry.classification.evidenceTier==="high")).toHaveLength(76);
     expect(walls.every(r=>r.geometry.classification.thicknessBandCount>=1&&r.geometry.classification.minorDimensionBand>0)).toBe(true);
     const completedJob=(await pool.query("select result from projects_building_extractions where id=$1",[queued[0].body.data.id])).rows[0].result;
-    expect(completedJob).toMatchObject({candidateCount:319,roomCandidateCount:91,roomHypothesisCount:48,unresolvedAnchorCount:43,
-      draftWallCount:164,constructionFragmentCount:64,topologyCoverage:{area_ratio_outlier:28,wallCount:164,
-        highEvidenceWallCount:164,mediumEvidenceWallCount:0,fragmentAssemblyCount:64,sourceFootprintCount:235}});
+    expect(completedJob).toMatchObject({candidateCount:319,roomCandidateCount:91,roomHypothesisCount:72,unresolvedAnchorCount:19,
+      draftWallCount:164,constructionFragmentCount:64,topologyCoverage:{area_ratio_outlier:4,wallCount:164,
+        highEvidenceWallCount:76,mediumEvidenceWallCount:88,fragmentAssemblyCount:64,sourceFootprintCount:235,
+        apartmentDomainCount:11,alternativeBarrierCount:74,barrierScenario:"primary"}});
     const agentContext=await (await fetch(base+"/agent-context")).json();
     expect(agentContext.data.entities).toHaveLength(2); // building + storey; candidates are never canonical entities
     expect(agentContext.data.missingInputs).toHaveLength(0);
@@ -74,12 +83,14 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     expect(reviews.map(r=>r.status).sort()).toEqual([200,409]);
     expect((await pool.query("select name,room_use,construction_state from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction",room_use:null,construction_state:"unknown"}]);
     // Upgrade an older labels-only job in place; never replace reviewed candidate IDs.
+    await pool.query("update projects_building_extraction_candidates set geometry=geometry-'constructionState'-'phaseEvidence' where id=$1",[walls[0].id]);
     await pool.query("update projects_building_extractions set extractor_version='labels-v1'");
     const upgraded=await post("/extractions",{...input,baseRevision:1});
-    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("topology-v3");
+    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("topology-v4");
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     expect((await pool.query("select count(*)::int as n from projects_building_extraction_candidates")).rows[0].n).toBe(rows.length);
     expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[candidate.id])).rows[0]).toEqual({name:"Reviewed correction",status:"approved"});
+    expect((await pool.query("select geometry->>'constructionState' as state from projects_building_extraction_candidates where id=$1",[walls[0].id])).rows[0].state).toBe("proposed");
     expect((await pool.query("select name from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction"}]);
     const second=rooms[1];
     if(second)expect((await post(`/extraction-candidates/${second.id}/review`,{baseRevision:1,decision:"rejected"})).status).toBe(200);

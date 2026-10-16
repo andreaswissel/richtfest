@@ -102,7 +102,7 @@ export async function extractPlanFootprints(path:string,pageNumber:number,signal
   const abort=()=>{void task.destroy().catch(()=>{});};signal.addEventListener("abort",abort,{once:true});
   try{signal.throwIfAborted();const pdf=await task.promise;const page=await pdf.getPage(pageNumber);const config=await pdf.getOptionalContentConfig();
     const layers=new Map<string,string>();for(const [id,group]of config)if(typeof group.name==="string")layers.set(id,group.name.replace(/\0/g,"\\u0000"));
-    const ops=await page.getOperatorList();signal.throwIfAborted();const viewport=page.getViewport({scale:1});return { ...constructionFootprints(ops,OPS,layers,viewport),pageAspectRatio:viewport.width/viewport.height,
+    const ops=await page.getOperatorList();signal.throwIfAborted();const viewport=page.getViewport({scale:1});return { ...constructionFootprints(ops,OPS,layers,viewport),pageAspectRatio:viewport.width/viewport.height,pageWidthPoints:viewport.width,pageHeightPoints:viewport.height,
       supplementaryBarriers: constructionFootprints(ops,OPS,layers,page.getViewport({scale:1}), /Abbruch|Bestand/i).candidates };
   }finally{signal.removeEventListener("abort",abort);await task.destroy();}
 }

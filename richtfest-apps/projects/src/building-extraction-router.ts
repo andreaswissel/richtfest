@@ -6,6 +6,7 @@ import type { AppDeps } from "./deps";
 import { buildingModels, buildingStoreys, buildingRooms, buildingElements, buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates,
   buildingRevisions, buildingReconciliations, buildingProposals, buildingReviews, fileVersions, files } from "./schema";
 import { reviewedCandidateGeometry } from "./room-use-classifier";
+import { buildingExtractorVersion } from "./plan-extraction";
 
 const uuid=z.string().uuid();
 const error=(status:number,code:string,message:string)=>Object.assign(new Error(message),{status,code});
@@ -28,17 +29,23 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
         const [source]=await tx.select({version:fileVersions,file:files}).from(fileVersions).innerJoin(files,eq(files.id,fileVersions.fileId)).where(and(eq(fileVersions.id,input.sourceVersionId),eq(fileVersions.tenantId,d.tenantId),eq(fileVersions.status,"ready"),eq(files.projectId,projectId),eq(files.tenantId,d.tenantId)));
         if(!source || !(source.version.mimeType==="application/pdf" || /\.pdf$/i.test(source.file.name)))throw error(422,"invalid_source_revision","Choose a ready PDF revision in this project");
         const identity=and(eq(jobs.modelId,model.id),eq(jobs.sourceVersionId,input.sourceVersionId),eq(jobs.storeyId,input.storeyId),eq(jobs.page,input.page));
-        const [existing]=await tx.select().from(jobs).where(identity);
+        const existingJobs=await tx.select().from(jobs).where(identity).for("update");
+        const existing=existingJobs.find((candidate:any)=>candidate.extractorVersion===buildingExtractorVersion)??existingJobs[0];
         if(existing){
           if(!["queued","running"].includes(existing.status)){
-            const [requeued]=await tx.update(jobs).set({extractorVersion:"topology-v3",status:"queued",attempts:0,
+            const [requeued]=await tx.update(jobs).set({extractorVersion:buildingExtractorVersion,status:"queued",attempts:0,
               leaseToken:null,leaseUntil:null,result:null,updatedAt:new Date()}).where(eq(jobs.id,existing.id)).returning();
             await d.audit(tx,"projects.building.extraction.requeued","building_extraction",existing.id,
-              {projectId,previousStatus:existing.status,upgrade:existing.extractorVersion!=="topology-v3"});return requeued;
+              {projectId,previousStatus:existing.status,upgrade:existing.extractorVersion!==buildingExtractorVersion});return requeued;
+          }
+          if(existing.status==="queued"&&existing.extractorVersion!==buildingExtractorVersion){
+            const [upgraded]=await tx.update(jobs).set({extractorVersion:buildingExtractorVersion,updatedAt:new Date()})
+              .where(eq(jobs.id,existing.id)).returning();
+            return upgraded;
           }
           return existing;
         }
-        const [created]=await tx.insert(jobs).values({tenantId:d.tenantId,modelId:model.id,sourceVersionId:input.sourceVersionId,storeyId:input.storeyId,page:input.page,extractorVersion:"topology-v3",createdBy:d.actorId}).returning();
+        const [created]=await tx.insert(jobs).values({tenantId:d.tenantId,modelId:model.id,sourceVersionId:input.sourceVersionId,storeyId:input.storeyId,page:input.page,extractorVersion:buildingExtractorVersion,createdBy:d.actorId}).returning();
         await d.audit(tx,"projects.building.extraction.queued","building_extraction",created.id,{projectId,sourceVersionId:input.sourceVersionId,page:input.page});return created;
       });res.status(202).json(ok(job));
     }catch(e){if((e as any).code && (e as any).status)return res.status((e as any).status).json({data:null,error:{code:(e as any).code},message:(e as Error).message});next(e);}
