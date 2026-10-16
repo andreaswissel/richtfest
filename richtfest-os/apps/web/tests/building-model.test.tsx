@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BuildingModelBootstrap, BuildingModelMode, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, copyStableObjectId, planSourceForView, regionsForSource } from "../src/components/building-model";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
-import { partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
+import { overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
@@ -75,6 +75,63 @@ test("plan viewer exposes fit, zoom and pan affordances while keeping one transf
   expect(html).toContain("Fit plan to view");
   expect(html).toContain("building-model-plan-surface");
   expect(html).toContain("building-model-region-layer");
+  expect(html).toContain("building-model-region-hit-area");
+  expect(html).toContain("building-model-region-layer has-selection");
+});
+
+test("plan overlays counter-scale interaction affordances without changing source geometry", () => {
+  expect(overlayInteractionStyle(1)).toMatchObject({
+    "--building-model-overlay-inverse-scale": 1,
+    "--building-model-overlay-hit-size": "16px",
+    "--building-model-overlay-label-gap": "3px",
+  });
+  expect(overlayInteractionStyle(4)).toMatchObject({
+    "--building-model-overlay-inverse-scale": .25,
+    "--building-model-overlay-hit-size": "4px",
+    "--building-model-overlay-label-gap": "0.75px",
+    "--building-model-overlay-stroke": "0.25px",
+  });
+  expect(overlayInteractionStyle(Number.NaN)["--building-model-overlay-inverse-scale"]).toBe(1);
+});
+
+test("overlapping overlay hit areas resolve to the exact wall geometry instead of DOM order", () => {
+  const wall31 = {
+    id: "wall-31", kind: "element" as const, label: "Draft wall 31", page: 2,
+    box: { x: .355, y: .411, width: .052, height: .002 },
+    polygon: [{ x: .355, y: .411 }, { x: .407, y: .411 }, { x: .407, y: .413 }, { x: .355, y: .413 }],
+  };
+  const wall112 = {
+    id: "wall-112", kind: "element" as const, label: "Draft wall 112", page: 2,
+    box: { x: .38, y: .417, width: .003, height: .03 },
+    polygon: [{ x: .38, y: .417 }, { x: .383, y: .417 }, { x: .383, y: .447 }, { x: .38, y: .447 }],
+  };
+  const wall31Center = { x: wall31.box.x + wall31.box.width / 2, y: wall31.box.y + wall31.box.height / 2 };
+  expect(overlayRegionAtPoint([wall31, wall112], wall31Center, { width: 640, height: 420 })?.id).toBe("wall-31");
+  expect(overlayRegionAtPoint([wall112, wall31], wall31Center, { width: 1440, height: 945 })?.id).toBe("wall-31");
+});
+
+test("overlay hit arbitration uses nearest screen geometry and a stable smaller-area tie break", () => {
+  const large = { id: "large", kind: "element" as const, label: "Large", page: 1, box: { x: .2, y: .2, width: .08, height: .04 } };
+  const small = { id: "small", kind: "element" as const, label: "Small", page: 1, box: { x: .2, y: .2, width: .02, height: .01 } };
+  expect(overlayRegionAtPoint([large, small], { x: .205, y: .205 }, { width: 1000, height: 1000 })?.id).toBe("small");
+  expect(overlayRegionAtPoint([large], { x: .285, y: .22 }, { width: 1000, height: 1000 })?.id).toBe("large");
+  expect(overlayRegionAtPoint([large], { x: .30, y: .22 }, { width: 1000, height: 1000 })).toBeUndefined();
+});
+
+test("an off-page or stale selection does not dim the visible plan overlays", () => {
+  const html = renderToStaticMarkup(<PdfEvidenceRenderer
+    projectId={projectId}
+    evidence={{ fileName: "Plan.pdf", pageCount: 3 }}
+    page={3}
+    selectedId="region-on-another-page"
+    regions={[{ id: "room-1", kind: "room", label: "Room", page: 3, box: { x: .1, y: .2, width: .3, height: .2 } }]}
+    layerVisibility={{}}
+    onLayers={() => undefined}
+    onSelect={() => undefined}
+    labels={{ empty: "No PDF", loading: "Loading", region: "Regions", zoom: "Controls", zoomIn: "In", zoomOut: "Out", fit: "Fit" }}
+  />);
+  expect(html).toContain('class="building-model-region-layer"');
+  expect(html).not.toContain("building-model-region-layer has-selection");
 });
 
 test("clipboard denial resolves calmly without an unhandled rejection", async () => {

@@ -21,6 +21,129 @@ export function partOverlayStyle(part: BuildingGeometryPart, parentBox?: Buildin
   return { left: `${((part.box.x - parentBox.x) / parentBox.width) * 100}%`, top: `${((part.box.y - parentBox.y) / parentBox.height) * 100}%`, width: `${(part.box.width / parentBox.width) * 100}%`, height: `${(part.box.height / parentBox.height) * 100}%` };
 }
 
+type OverlayPoint = { x: number; y: number };
+type OverlayViewport = { width: number; height: number };
+
+function pointInBox(point: OverlayPoint, box: NonNullable<BuildingRegion["box"]>) {
+  return point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height;
+}
+
+function pointInPolygon(point: OverlayPoint, polygon: NonNullable<BuildingRegion["polygon"]>) {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const currentPoint = polygon[index]!;
+    const previousPoint = polygon[previous]!;
+    const crosses = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
+      && point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / (previousPoint.y - currentPoint.y) + currentPoint.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function regionPolygons(region: BuildingRegion) {
+  const polygons = region.polygon && region.polygon.length >= 3 ? [region.polygon] : [];
+  for (const part of region.parts || []) {
+    if (part.polygon && part.polygon.length >= 3) polygons.push(part.polygon);
+  }
+  return polygons;
+}
+
+function containsRegionGeometry(region: BuildingRegion, point: OverlayPoint) {
+  const polygons = regionPolygons(region);
+  if (polygons.length) return polygons.some((polygon) => pointInPolygon(point, polygon));
+  const partBoxes = (region.parts || []).flatMap((part) => part.box ? [part.box] : []);
+  if (partBoxes.length) return partBoxes.some((box) => pointInBox(point, box));
+  return region.box ? pointInBox(point, region.box) : false;
+}
+
+function pointToSegmentDistance(point: OverlayPoint, start: OverlayPoint, end: OverlayPoint, viewport: OverlayViewport) {
+  const pointX = point.x * viewport.width;
+  const pointY = point.y * viewport.height;
+  const startX = start.x * viewport.width;
+  const startY = start.y * viewport.height;
+  const deltaX = (end.x - start.x) * viewport.width;
+  const deltaY = (end.y - start.y) * viewport.height;
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+  const amount = lengthSquared ? Math.min(1, Math.max(0, ((pointX - startX) * deltaX + (pointY - startY) * deltaY) / lengthSquared)) : 0;
+  return Math.hypot(pointX - (startX + amount * deltaX), pointY - (startY + amount * deltaY));
+}
+
+function boxPolygon(box: NonNullable<BuildingRegion["box"]>) {
+  return [
+    { x: box.x, y: box.y },
+    { x: box.x + box.width, y: box.y },
+    { x: box.x + box.width, y: box.y + box.height },
+    { x: box.x, y: box.y + box.height },
+  ];
+}
+
+function regionDistance(region: BuildingRegion, point: OverlayPoint, viewport: OverlayViewport) {
+  if (containsRegionGeometry(region, point)) return 0;
+  const polygons = regionPolygons(region);
+  if (!polygons.length) {
+    const partBoxes = (region.parts || []).flatMap((part) => part.box ? [part.box] : []);
+    if (partBoxes.length) polygons.push(...partBoxes.map(boxPolygon));
+    else if (region.box) polygons.push(boxPolygon(region.box));
+  }
+  return polygons.reduce((nearest, polygon) => polygon.reduce((distance, start, index) => {
+    const end = polygon[(index + 1) % polygon.length]!;
+    return Math.min(distance, pointToSegmentDistance(point, start, end, viewport));
+  }, nearest), Number.POSITIVE_INFINITY);
+}
+
+function regionGeometryArea(region: BuildingRegion) {
+  const polygons = regionPolygons(region);
+  if (polygons.length) return polygons.reduce((total, polygon) => total + Math.abs(polygon.reduce((area, point, index) => {
+    const next = polygon[(index + 1) % polygon.length]!;
+    return area + point.x * next.y - next.x * point.y;
+  }, 0)) / 2, 0);
+  const boxes = (region.parts || []).flatMap((part) => part.box ? [part.box] : []);
+  if (boxes.length) return boxes.reduce((total, box) => total + box.width * box.height, 0);
+  return region.box ? region.box.width * region.box.height : Number.POSITIVE_INFINITY;
+}
+
+/** Resolve overlapping screen-sized hit areas using the source geometry, not DOM paint order. */
+export function overlayRegionAtPoint(regions: BuildingRegion[], point: OverlayPoint, viewport: OverlayViewport, hitRadius = 8) {
+  if (viewport.width <= 0 || viewport.height <= 0) return undefined;
+  const ranked = regions.map((region, renderOrder) => ({
+    region,
+    renderOrder,
+    contains: containsRegionGeometry(region, point),
+    distance: regionDistance(region, point, viewport),
+    area: regionGeometryArea(region),
+  })).filter((candidate) => candidate.contains || candidate.distance <= hitRadius);
+  ranked.sort((left, right) => Number(right.contains) - Number(left.contains)
+    || left.distance - right.distance
+    || left.area - right.area
+    || left.renderOrder - right.renderOrder
+    || left.region.id.localeCompare(right.region.id));
+  return ranked[0]?.region;
+}
+
+type OverlayInteractionStyle = CSSProperties & {
+  "--building-model-overlay-inverse-scale": number;
+  "--building-model-overlay-hit-size": string;
+  "--building-model-overlay-label-gap": string;
+  "--building-model-overlay-stroke": string;
+  "--building-model-overlay-focus-ring": string;
+  "--building-model-overlay-marker-size": string;
+  "--building-model-overlay-marker-offset": string;
+};
+
+/** Keep overlay interaction affordances legible without changing source geometry. */
+export function overlayInteractionStyle(zoom: number): OverlayInteractionStyle {
+  const safeZoom = Number.isFinite(zoom) ? Math.min(4, Math.max(1, zoom)) : 1;
+  return {
+    "--building-model-overlay-inverse-scale": 1 / safeZoom,
+    "--building-model-overlay-hit-size": `${16 / safeZoom}px`,
+    "--building-model-overlay-label-gap": `${3 / safeZoom}px`,
+    "--building-model-overlay-stroke": `${1 / safeZoom}px`,
+    "--building-model-overlay-focus-ring": `${2 / safeZoom}px`,
+    "--building-model-overlay-marker-size": `${7 / safeZoom}px`,
+    "--building-model-overlay-marker-offset": `${-5 / safeZoom}px`,
+  };
+}
+
 /** PDF.js is isolated behind this lazy component. OCGs affect rendering only. */
 export function PdfEvidenceRenderer({
   projectId,
@@ -49,6 +172,7 @@ export function PdfEvidenceRenderer({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const evidenceCanvas = useRef<HTMLDivElement>(null);
+  const regionButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [internalZoom, setInternalZoom] = useState(1);
@@ -163,6 +287,27 @@ export function PdfEvidenceRenderer({
     if (dragRef.current) event.currentTarget.releasePointerCapture?.(event.pointerId);
     dragRef.current = undefined;
   };
+  const pageRegions = regions.filter((region) => region.page === page);
+  const hasSelectedRegion = Boolean(selectedId && pageRegions.some((region) => region.id === selectedId));
+  const selectOverlayRegion = (event: React.MouseEvent<HTMLButtonElement>, focusedRegion: BuildingRegion) => {
+    // Keyboard-generated clicks have no pointer coordinates. Preserve native
+    // button semantics and select the region that owns keyboard focus.
+    if (event.detail === 0) {
+      onSelect(focusedRegion.id);
+      return;
+    }
+    const layer = event.currentTarget.parentElement;
+    const bounds = layer?.getBoundingClientRect();
+    if (!bounds?.width || !bounds.height) return;
+    const region = overlayRegionAtPoint(pageRegions, {
+      x: (event.clientX - bounds.left) / bounds.width,
+      y: (event.clientY - bounds.top) / bounds.height,
+    }, bounds);
+    if (region) {
+      if (region.id !== focusedRegion.id) regionButtonRefs.current.get(region.id)?.focus({ preventScroll: true });
+      onSelect(region.id);
+    }
+  };
   return (
     <div ref={evidenceCanvas} className="building-model-evidence-canvas" data-page={page} onPointerDown={beginPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan}>
       <div className="building-model-view-controls" aria-label={labels.zoom} onPointerDown={(event) => event.stopPropagation()}>
@@ -173,12 +318,13 @@ export function PdfEvidenceRenderer({
       </div>
       <div className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         {source ? <canvas ref={canvas} className="building-model-pdf" aria-label={`${evidence.fileName} · page ${page}`} /> : <div className="building-model-pdf-empty"><span className="mono">PDF</span><p>{labels.empty}</p></div>}
-        <div className="building-model-region-layer" aria-label={labels.region}>
-          {regions.filter((region) => region.page === page).map((region) => {
+        <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
+          {pageRegions.map((region) => {
             const role = region.isCandidate ? region.candidateRole || candidateRole(region) : undefined;
             const candidateClass = role === "draft-wall" ? "draft-wall" : role === "raw-footprint" ? "footprint" : role === "construction-assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : "";
             return (
-            <button key={region.id} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}`} style={regionOverlayStyle(region)} onClick={() => onSelect(region.id)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
+            <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}`} style={regionOverlayStyle(region)} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
+              <span className="building-model-region-hit-area" aria-hidden="true" />
               {region.isCandidate && region.parts?.length ? region.parts.map((part, index) => <span key={`${region.id}-part-${index}`} className="building-model-region-shape" style={{ ...partOverlayStyle(part, region.box), clipPath: polygonClipPath({ box: part.box, polygon: part.polygon, geometryQuality: "assembly" }) }} aria-hidden="true" />) : region.isCandidate && polygonClipPath(region) ? <span className="building-model-region-shape" style={{ clipPath: polygonClipPath(region) }} aria-hidden="true" /> : null}
               <span className="building-model-region-label">{region.label}</span>
             </button>
