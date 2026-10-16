@@ -10,9 +10,11 @@ import { SaxesParser } from "saxes";
 import { extractPlanFootprints } from "./plan-footprints";
 import { inferPlanTopology } from "./plan-topology";
 
+export const buildingExtractorVersion = "topology-v4";
+
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text"> }; quote: string };
-const roomLabel = /^(raum|zimmer|wohnen|wohnzimmer|schlafen|schlafzimmer|kinderzimmer|kind|küche|kueche|bad|duschbad|wc|flur|diele|ankleide|vorrat|treppenhaus|abstellraum|abstellr\.?|abstell|büro|buero|keller|lager|technik|hwr|balkon|terrasse|room|bedroom|kitchen|bathroom|office|corridor|wo\.-?)(?:$|[\s/\d])/i;
+const roomLabel = /^(raum|zimmer|wohnen|wohnzimmer|schlafen|schlafzimmer|gästezimmer|gaestezimmer|garderobe|kinderzimmer|kind|küche|kueche|bad|duschbad|wc|flur|diele|ankleide|vorrat|treppenhaus|abstellraum|abstellr\.?|abstell|büro|buero|keller|lager|technik|hwr|balkon|terrasse|room|bedroom|kitchen|bathroom|office|corridor|wo\.-?)(?:$|[\s/\d])/i;
 
 /** Only source text anchors: no room boundary, material, state, use or wall inference. */
 export function planLabels(words: PlanWord[]): PlanLabel[] {
@@ -78,9 +80,12 @@ export async function extractPlanLabels(stream: AsyncIterable<Uint8Array>, page:
     let footprints: Awaited<ReturnType<typeof extractPlanFootprints>> | null = null;
     try { footprints = await extractPlanFootprints(path,page,signal); } catch { signal.throwIfAborted(); }
     const { candidates: footprintCandidates, supplementaryBarriers = [], fillRegions = [], pageAspectRatio = 1, ...geometryExtraction } = footprints ?? {candidates:[],status:"unavailable",limitations:"Native PDF geometry could not be read; only text anchors are available."};
+    const scales=[...new Set(words.flatMap(w=>/^1:\d{2,4}$/.test(w.text)?[Number(w.text.slice(2))]:[]))];
+    const scaleObservation=scales.length===1?{denominator:scales[0],quote:`1:${scales[0]}`,status:"unreviewed",limitations:"Title-block scale is not used for physical area validation until a source dimension chain corroborates it."}:null;
     const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio);
     return { labels:topology.rooms, footprints: topology.assemblies, geometryExtraction,topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",
+      scaleObservation,
       truncated: allLabels.length > labels.length,
-      reason: "Unreviewed source labels, enclosed regions or explicitly approximate wall-constrained partitions, conservative draft-wall proposals from exact elongated rectangular construction fills, and separate unsupported construction fragments. Page-local polygon/printed-area ratio QC demotes severe relative outliers but does not validate scale or area. Partition seams are not source walls. Printed areas are observations requiring separate review, not approved measurements. Doors, adjacency, wall continuity, thickness, materials, state, physical scale and completeness remain unestablished." };
+      reason: "Unreviewed source labels, apartment-contained regions or explicitly approximate wall-constrained partitions, conservative draft-wall proposals from exact elongated rectangular construction fills, and separate unsupported construction fragments. Alternative construction-state geometry is retained as evidence but never unioned into the active barrier scenario. Printed areas guide relative partition capacity and flag severe mismatches; they do not validate physical scale or area. Partition seams are not source walls. Doors, adjacency, wall continuity, thickness, materials, state, physical scale and completeness remain unestablished." };
   } finally { (stream as {destroy?:()=>void}).destroy?.(); await rm(directory,{recursive:true,force:true}); }
 }

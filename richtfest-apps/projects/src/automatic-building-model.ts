@@ -14,6 +14,7 @@ import {
   sourceModels,
   sourcePages,
 } from "./schema";
+import { buildingExtractorVersion } from "./plan-extraction";
 
 type PageDisposition = {
   page: number;
@@ -34,6 +35,29 @@ const automaticBuildingKey = "automatic:uploaded-plans";
 const pageStoreyKey = (versionId: string, page: number) => `automatic:plan:${versionId}:page:${page}`;
 const savedFloorTitleMarker = "__RICHTFEST_SAVED_FLOOR_PLAN_TITLE__";
 const savedNonFloorTitleMarker = "__RICHTFEST_SAVED_NON_FLOOR_TITLE__";
+
+/** Preserve the page-scoped job identity across extractor upgrades. The schema's
+ * versioned unique key prevents duplicate identical runs, but the product identity
+ * is the source page and storey: reviewed candidates must stay on that job. */
+export async function ensureAutomaticExtractionJob(tx: any, input: {
+  tenantId: string; modelId: string; sourceVersionId: string; storeyId: string; page: number; createdBy: string;
+}) {
+  const identity = and(eq(buildingExtractionJobs.modelId, input.modelId),
+    eq(buildingExtractionJobs.sourceVersionId, input.sourceVersionId), eq(buildingExtractionJobs.storeyId, input.storeyId),
+    eq(buildingExtractionJobs.page, input.page));
+  const existingJobs = await tx.select().from(buildingExtractionJobs).where(identity).for("update");
+  let job = existingJobs.find((candidate: any) => candidate.extractorVersion === buildingExtractorVersion) ?? existingJobs[0];
+  if (job && job.extractorVersion !== buildingExtractorVersion && job.status !== "running") {
+    [job] = await tx.update(buildingExtractionJobs).set({ extractorVersion: buildingExtractorVersion,
+      ...(job.status === "queued" ? {} : { status: "queued", attempts: 0, leaseToken: null, leaseUntil: null, result: null }),
+      updatedAt: new Date() }).where(eq(buildingExtractionJobs.id, job.id)).returning();
+  }
+  if (!job) [job] = await tx.insert(buildingExtractionJobs).values({ tenantId: input.tenantId, modelId: input.modelId,
+    sourceVersionId: input.sourceVersionId, storeyId: input.storeyId, page: input.page,
+    extractorVersion: buildingExtractorVersion, status: "queued", createdBy: input.createdBy }).onConflictDoNothing().returning();
+  if (!job) [job] = await tx.select().from(buildingExtractionJobs).where(identity).limit(1);
+  return job;
+}
 
 /**
  * Convert bounded upload-time visual triage into an honest page register.
@@ -239,17 +263,9 @@ export async function ensureAutomaticPlanExtractions(d: SourceExtractionDeps, si
         changed = true;
       }
       if (storey) {
-        const [job] = await tx.insert(buildingExtractionJobs).values({ tenantId: version.tenantId, modelId: model.id,
-          sourceVersionId: version.id, storeyId: storey.id, page: page.page, extractorVersion: "topology-v3",
-          status: "queued", createdBy: version.createdBy }).onConflictDoNothing().returning();
+        const job = await ensureAutomaticExtractionJob(tx, { tenantId: version.tenantId, modelId: model.id,
+          sourceVersionId: version.id, storeyId: storey.id, page: page.page, createdBy: version.createdBy });
         if (job) jobIds.push(job.id);
-        else {
-          const [existing] = await tx.select({ id: buildingExtractionJobs.id }).from(buildingExtractionJobs).where(and(
-            eq(buildingExtractionJobs.modelId, model.id), eq(buildingExtractionJobs.sourceVersionId, version.id),
-            eq(buildingExtractionJobs.storeyId, storey.id), eq(buildingExtractionJobs.page, page.page),
-            eq(buildingExtractionJobs.extractorVersion, "topology-v3"))).limit(1);
-          if (existing) jobIds.push(existing.id);
-        }
       }
     }
     const status = floorPages.length ? (unresolvedPages.length ? "partial" : "planned") : "unresolved";
