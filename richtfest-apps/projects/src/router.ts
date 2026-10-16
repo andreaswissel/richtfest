@@ -289,6 +289,41 @@ export function createRouter(getDeps: GetDeps) {
       return next(e);
     }
   });
+  router.delete("/projects/:projectId/files/:fileId", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      const fileId = z.string().uuid().parse(req.params.fileId);
+      const deleted = await d.db.transaction(async (tx: any) => {
+        const [file] = await tx.select().from(files).where(and(
+          eq(files.id, fileId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId),
+        )).for("update");
+        if (!file) return false;
+        const versions = await tx.select().from(fileVersions).where(and(
+          eq(fileVersions.fileId, fileId), eq(fileVersions.tenantId, d.tenantId),
+        )).for("update");
+        // Do not race an in-flight upload or its still-valid signed upload URL.
+        if (versions.some((version: any) => version.status === "pending"))
+          throw Object.assign(new Error("Finish or cancel pending uploads before deleting this file."), { status: 409 });
+        // Keep the keys until every removal succeeds so a failed delete can be retried.
+        for (const version of versions)
+          if (version.storageKey) await d.fileStorage.remove(version.storageKey);
+        await tx.delete(fileVersions).where(and(
+          eq(fileVersions.fileId, fileId), eq(fileVersions.tenantId, d.tenantId),
+        ));
+        await tx.delete(files).where(eq(files.id, fileId));
+        await d.audit(tx, "projects.file.deleted", "file", fileId, {
+          projectId, name: file.name, versionIds: versions.map((version: any) => version.id),
+        });
+        return true;
+      });
+      if (!deleted) return send(res, 404, { data: null, error: { code: "not_found" }, message: "File not found" });
+      return send(res, 200, ok({ deleted: true }, "File deleted"));
+    } catch (e) {
+      return next(e);
+    }
+  });
   router.get(
     "/projects/:projectId/source-versions/:versionId",
     async (req, res, next) => {
@@ -559,6 +594,11 @@ export function createRouter(getDeps: GetDeps) {
         const versionId = crypto.randomUUID();
         const storageKey = `${d.tenantId}/${projectId}/${fileId}/${versionId}`;
         await d.db.transaction(async (tx: any) => {
+          // Serialize revision creation with whole-file deletion.
+          const [current] = await tx.select({ id: files.id }).from(files).where(and(
+            eq(files.id, fileId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId),
+          )).for("update");
+          if (!current) throw Object.assign(new Error("File not found"), { status: 404 });
           await tx.insert(fileVersions).values({
             id: versionId,
             tenantId: d.tenantId,
