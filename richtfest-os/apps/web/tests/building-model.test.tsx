@@ -61,16 +61,27 @@ test("building model presents compact context, source status, and accessible sid
 });
 
 test("projects with several PDFs expose an exact source selector", () => {
-  const html = render({
+  const model = {
     ...wallReviewFixture,
+    states: { ...wallReviewFixture.states, existing: [{ id: "report-room", kind: "room", label: "Report-linked room", page: 1, sourceVersionId: "version-2", storeyId: "report-storey", box: { x: .1, y: .1, width: .2, height: .2 } }] },
     planSources: [
       { id: "plan", storeyId: "storey-1", page: 3, source: { versionId: "version-1", fileId: "plan", fileName: "Architecture plan.pdf", version: 1 } },
-      { id: "report", storeyId: null, page: 1, source: { versionId: "version-2", fileId: "report", fileName: "Acoustic calculation.pdf", version: 1 } },
+      { id: "report", storeyId: "report-storey", page: 1, source: { versionId: "version-2", fileId: "report", fileName: "Acoustic calculation.pdf", version: 1 } },
     ],
-  }, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1");
+    automaticPlanProcessing: [
+      { fileId: "plan", fileName: "Architecture plan.pdf", sourceVersionId: "version-1", status: "complete", floorPlanPages: [3], nonFloorPlanPages: [], unresolvedPages: [] },
+      { fileId: "report", fileName: "Acoustic calculation.pdf", sourceVersionId: "version-2", status: "partial", floorPlanPages: [], nonFloorPlanPages: [{ page: 1 }], unresolvedPages: [] },
+    ],
+  };
+  const html = render(model, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1");
   expect(html).toContain('aria-label="Source PDF"');
   expect(html).toContain("Architecture plan.pdf");
   expect(html).toContain("Acoustic calculation.pdf");
+
+  const legacyAutomatic = render(model, "?view=building-model&page=1&sourceVersion=version-2");
+  expect(legacyAutomatic).toContain("<strong>Architecture plan.pdf</strong>");
+  const deliberatelyPinned = render(model, "?view=building-model&page=1&sourceVersion=version-2&sourceSelection=manual");
+  expect(deliberatelyPinned).toContain("<strong>Acoustic calculation.pdf</strong>");
 });
 
 test("Proposed review count excludes demolished wall hypotheses that its destination cannot reveal", () => {

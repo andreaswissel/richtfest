@@ -157,7 +157,7 @@ export function ProjectWorkspace() {
     next.delete("panel");
     next.delete("message");
     next.delete("agentRun");
-    for (const key of ["artifact", "revision", "file", "sourceVersion", "page"])
+    for (const key of ["artifact", "revision", "file", "sourceVersion", "sourceSelection", "page"])
       next.delete(key);
     setParams(next);
   });
@@ -303,6 +303,7 @@ export function ProjectWorkspace() {
                     "revision",
                     "file",
                     "sourceVersion",
+                    "sourceSelection",
                     "page",
                   ])
                     next.delete(key);

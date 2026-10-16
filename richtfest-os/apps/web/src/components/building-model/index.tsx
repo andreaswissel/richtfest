@@ -178,6 +178,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(Math.max(1, Number(params.get("page") || 1)));
   const [sourceStoreyId, setSourceStoreyId] = useState(params.get("storey") || "");
   const [sourceVersionId, setSourceVersionId] = useState(params.get("sourceVersion") || "");
+  const [sourceSelectionPinned, setSourceSelectionPinned] = useState(params.get("sourceSelection") === "manual");
   const deepLinkedEntity = params.get("entity")?.split(":").slice(1).join(":");
   const [selectedId, setSelectedId] = useState<string | undefined>(deepLinkedEntity || undefined);
   const [layers, setLayers] = useState<Record<string, boolean>>({});
@@ -192,10 +193,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     const nextPage = Math.max(1, Number(params.get("page") || 1));
     const nextStorey = params.get("storey") || "";
     const nextVersion = params.get("sourceVersion") || "";
+    const nextSourceSelectionPinned = params.get("sourceSelection") === "manual";
     const nextEntity = params.get("entity")?.split(":").slice(1).join(":") || undefined;
     setPage((current) => current === nextPage ? current : nextPage);
     setSourceStoreyId((current) => current === nextStorey ? current : nextStorey);
     setSourceVersionId((current) => current === nextVersion ? current : nextVersion);
+    setSourceSelectionPinned((current) => current === nextSourceSelectionPinned ? current : nextSourceSelectionPinned);
     setSelectedId((current) => current === nextEntity ? current : nextEntity);
     setSelectedCandidateId(undefined);
   }, [paramsKey]);
@@ -224,7 +227,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const selected = selectedById && (!explicitPage || regionMatchesView(selectedById)) ? selectedById : explicitPage ? regions.find(regionMatchesView) : regions[0];
   const candidates = useMemo(() => model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed"), [model.extractionCandidates]);
   const selectedProposals = selected ? model.proposals.filter((proposal) => proposal.status === "pending" && proposal.targetEntityId === selected.id) : [];
-  const currentSource = planSourceForView(model.planSources, page, sourceStoreyId, selected, sourceVersionId, automaticPlanProcessing);
+  const sourceSelectionIsExplicit = sourceSelectionPinned;
+  const currentSource = planSourceForView(model.planSources, page, sourceSelectionIsExplicit ? sourceStoreyId : "", sourceSelectionIsExplicit ? selected : undefined,
+    sourceSelectionIsExplicit ? sourceVersionId : "", automaticPlanProcessing);
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
   const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
@@ -300,9 +305,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     else next.delete("storey");
     if (sourceVersionId) next.set("sourceVersion", sourceVersionId);
     else next.delete("sourceVersion");
+    if (sourceSelectionPinned) next.set("sourceSelection", "manual");
+    else next.delete("sourceSelection");
     next.delete("object");
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId]);
+  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned]);
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
@@ -345,7 +352,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     },
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
-  const referenceHref = `/projects/${projectId}?view=building-model&entity=${encodeURIComponent(`${selected?.entityType || "room"}:${selected?.id || ""}`)}&modelState=${state}&page=${page}`;
+  const referenceParams = new URLSearchParams({ view: "building-model", entity: `${selected?.entityType || "room"}:${selected?.id || ""}`, modelState: state, page: String(page), sourceSelection: "manual" });
+  if (sourceVersionId) referenceParams.set("sourceVersion", sourceVersionId);
+  if (sourceStoreyId) referenceParams.set("storey", sourceStoreyId);
+  const referenceHref = `/projects/${projectId}?${referenceParams.toString()}`;
 
   if (needsBootstrap) {
     return <BuildingModelBootstrap
@@ -359,6 +369,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       error={modelError || filesQuery.error || versionsQuery.error}
       onComplete={async (sourcePage) => {
         await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
+        setSourceSelectionPinned(true);
         setPage(sourcePage);
       }}
       t={t}
@@ -381,7 +392,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         versions={bootstrapVersions}
         filesLoading={filesQuery.isLoading || versionsQuery.isLoading}
         error={filesQuery.error || versionsQuery.error}
-        onComplete={async (sourcePage) => { await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }); setPage(sourcePage); }}
+        onComplete={async (sourcePage) => { await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }); setSourceSelectionPinned(true); setPage(sourcePage); }}
         t={t}
       />}
       t={t}
@@ -392,6 +403,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     const region = regions.find((item) => item.id === id);
     setSelectedCandidateId(undefined);
     setSelectedId(id);
+    setSourceSelectionPinned(true);
     if (region) {
       setSourceVersionId(region.sourceVersionId || "");
       setSourceStoreyId(region.storeyId || "");
@@ -402,6 +414,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const selectSourcePage = (nextPage: number, nextVersion = "", nextStorey = "") => {
     setSelectedId(undefined);
     setSelectedCandidateId(undefined);
+    setSourceSelectionPinned(true);
     setSourceVersionId(nextVersion);
     setSourceStoreyId(nextStorey);
     setPage(nextPage);
@@ -479,7 +492,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 <h2>{t("buildingModelExtractionCandidates")}</h2>
                 {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={activeCandidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
                 <div className="building-model-candidate-list">
-                  {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
+                  {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); setSourceSelectionPinned(true); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
                   {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
                 </div>
               </div>
@@ -569,7 +582,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             </div>
             {!selectedCandidate && <Link className="text-ui-xs" to={referenceHref} title={t("buildingModelOpenReference")}><Link2 className="size-icon-sm" aria-hidden="true" /></Link>}
           </div>
-          {selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} onPage={setPage} onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} /> : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} onPage={setPage} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} /> : <Empty>{t("buildingModelSelectObject")}</Empty>}
+          {selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} onPage={(nextPage) => selectSourcePage(nextPage, selectedCandidate.sourceVersionId || evidence.sourceVersionId || "", selectedCandidate.storeyId || currentSource?.storeyId || "")} onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} /> : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} /> : <Empty>{t("buildingModelSelectObject")}</Empty>}
         </aside>
       </div>
     </div>

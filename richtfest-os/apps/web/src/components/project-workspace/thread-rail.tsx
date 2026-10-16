@@ -135,7 +135,7 @@ export function ThreadRail({
     next.delete("panel");
     next.delete("agentRun");
     next.delete("message");
-    for (const key of ["artifact", "revision", "file", "sourceVersion", "page"])
+    for (const key of ["artifact", "revision", "file", "sourceVersion", "sourceSelection", "page"])
       next.delete(key);
     const query = next.toString();
     return `/projects/${projectId}${query ? `?${query}` : ""}`;
