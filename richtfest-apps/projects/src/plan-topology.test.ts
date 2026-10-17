@@ -152,11 +152,11 @@ test.skipIf(!reference)("page two retains all annotations and isolates apartment
   const xml=Bun.spawnSync(["pdftotext","-f","2","-l","2","-bbox",reference!,"-"]);
   const words=parsePlanBbox(xml.stdout.toString()),labels=planLabels(words);
   const geometry=await extractPlanFootprints(reference!,2,new AbortController().signal);
-  const result=inferPlanTopology(labels,geometry.candidates,words,1200,geometry.supplementaryBarriers,0,geometry.fillRegions,geometry.pageAspectRatio,undefined,{doorSwings:geometry.doorSwings});
-  // Topology-v5 baseline: 87 labels, 73 polygons, 14 anchors. v6 must not regress; exact v6 counts await recalibration on the reference PDF.
+  const result=inferPlanTopology(labels,geometry.candidates,words,1200,geometry.supplementaryBarriers,0,geometry.fillRegions,geometry.pageAspectRatio,undefined,{doorSwings:geometry.doorSwings,barrierLines:geometry.barrierLines,metresPerPageHeight:geometry.pageHeightPoints/72*.0254*100});
+  // Topology-v7 (stroked partitions, segmented door arcs, furniture gaps): 87 labels, 74 polygons on the reference PDF.
   expect(result.coverage.labelCount).toBeGreaterThanOrEqual(87);
   expect(result.coverage).toMatchObject({apartmentDomainCount:11,supplementaryBarrierCount:0});
-  expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(73);
+  expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(74);
   expect(result.rooms.filter(r=>r.name==="Garderobe")).toHaveLength(1);
   expect(result.rooms.filter(r=>r.geometry.polygon).every(r=>r.geometry.groupLabel&&r.geometry.topology.apartmentOwner===r.geometry.groupSourceKey)).toBe(true);
   expect(new Set(result.rooms.flatMap(r=>r.geometry.groupLabel?[r.geometry.groupLabel]:[]))).toEqual(new Set(Array.from({length:11},(_,i)=>`WE ${i+1}`)));

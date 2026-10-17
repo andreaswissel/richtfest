@@ -71,3 +71,14 @@ test.skipIf(!popplerAvailable)("synthetic CAD plan variants: corner door, curved
     expect([...rooms.values()].map(r=>r.geometry.quality)).toEqual(syntheticPlanRooms.map(()=>"enclosed_region"));
   }
 });
+test.skipIf(!popplerAvailable)("synthetic plan with stroked walls, segmented door arcs and furniture cut out of the floor fill",async()=>{
+  const {result,rooms,connects}=await extract({strokedWalls:true});
+  expect(result.topologyCoverage).toMatchObject({doorSwingCount:5});
+  for(const room of syntheticPlanRooms){
+    const traced=rooms.get(room.label)!;
+    expect(traced.geometry).toMatchObject({quality:"enclosed_region",topology:{status:"enclosed"}});
+    // Bed and table cut-outs (4.9 m² in Schlafen) belong to the room, not to a wall.
+    expect(traced.area!/room.area).toBeGreaterThan(.9);expect(traced.area!/room.area).toBeLessThan(1.01);
+  }
+  for(const room of ["Wohnen","Bad","Schlafen"])expect(connects("Flur",room)).toMatchObject({kind:"door_swing_doorway"});
+});

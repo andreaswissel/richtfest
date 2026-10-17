@@ -10,7 +10,7 @@ import { SaxesParser } from "saxes";
 import { extractPlanFootprints } from "./plan-footprints";
 import { inferPlanTopology } from "./plan-topology";
 
-export const buildingExtractorVersion = "topology-v6";
+export const buildingExtractorVersion = "topology-v7";
 
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number; confidence?: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text" | "confidence">;
@@ -123,13 +123,13 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
     const labels = allLabels.slice(0,500);
     let footprints: Awaited<ReturnType<typeof extractPlanFootprints>> | null = null;
     try { footprints = await extractPlanFootprints(path,page,signal); } catch { signal.throwIfAborted(); }
-    const { candidates: footprintCandidates, supplementaryBarriers = [], fillRegions = [], doorSwings = [], pageAspectRatio = 1, ...geometryExtraction } = footprints ?? {candidates:[],status:"unavailable",limitations:"Native PDF geometry could not be read; only text anchors are available."};
+    const { candidates: footprintCandidates, supplementaryBarriers = [], fillRegions = [], doorSwings = [], barrierLines = [], pageAspectRatio = 1, ...geometryExtraction } = footprints ?? {candidates:[],status:"unavailable",limitations:"Native PDF geometry could not be read; only text anchors are available."};
     const scales=[...new Set(words.flatMap(w=>/^1:\d{2,4}$/.test(w.text)?[Number(w.text.slice(2))]:[]))];
     const scaleObservation=scales.length===1?{denominator:scales[0],quote:`1:${scales[0]}`,status:"unreviewed",limitations:"Title-block scale is not used for physical area validation until a source dimension chain corroborates it."}:null;
     // The printed scale is unreviewed: it only bounds plausible opening widths and room sizes, never measures them.
     const pageHeightPoints = footprints && "pageHeightPoints" in footprints ? footprints.pageHeightPoints : null;
     const metresPerPageHeight = scaleObservation && pageHeightPoints ? pageHeightPoints / 72 * .0254 * scaleObservation.denominator : null;
-    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight});
+    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines});
     return { labels:topology.rooms, footprints: topology.assemblies, geometryExtraction,topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",
       scaleObservation,
       truncated: allLabels.length > labels.length,

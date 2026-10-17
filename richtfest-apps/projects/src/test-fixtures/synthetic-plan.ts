@@ -56,7 +56,15 @@ export type SyntheticPlanOptions = {
   curvedBay?: boolean;
   /** Drawing scale denominator (default 1:100) and page size in points (default A3 landscape). */
   scale?: number; page?: [number, number];
+  /**
+   * Walls drawn as stroked outlines only, door arcs as separate short line
+   * strokes on the construction layer, and an apartment floor fill with
+   * furniture cut-outs, as the Bendenweg reference export does.
+   */
+  strokedWalls?: boolean;
 };
+/** Furniture cut out of the floor fill in stroked mode: a bed against the bedroom wall and a free-standing table. */
+export const syntheticFurniture: Rect[] = [[12, 6, 13.95, 8], [9, 7, 10, 8]];
 export const syntheticBayArea = Math.PI * 1.5 ** 2 / 2;
 export function syntheticPlan(options: SyntheticPlanOptions = {}) {
   const walls = syntheticPlanWalls.slice(), doors = syntheticPlanDoors.slice();
@@ -95,15 +103,24 @@ export function syntheticPlanPdf(options: SyntheticPlanOptions = {}) {
     return `${X(12.5)} ${Y(10)} m ${quarter(1.5, 0, Math.PI / 2)} ${quarter(1.5, Math.PI / 2, Math.PI)} ${X(9.2)} ${Y(10)} l ${quarter(1.8, Math.PI, Math.PI / 2)} ${quarter(1.8, Math.PI / 2, 0)} h`;
   };
   const latin = (value: string) => value.replace(/ü/g, "\\374").replace(/²/g, "\\262");
+  // Flattened quarter arc from the open leaf end to the closed jamb, one stroke per segment.
+  const segmentedArc = ({ hinge: [hx, hy], open: [ax, ay], closed: [bx, by] }: SyntheticDoor) => {
+    const r = Math.hypot(ax - hx, ay - hy), a0 = Math.atan2(ay - hy, ax - hx), a1 = Math.atan2(by - hy, bx - hx);
+    let sweep = a1 - a0; while (sweep > Math.PI) sweep -= 2 * Math.PI; while (sweep < -Math.PI) sweep += 2 * Math.PI;
+    const p = (i: number) => [hx + r * Math.cos(a0 + sweep * i / 10), hy + r * Math.sin(a0 + sweep * i / 10)];
+    return [`${X(hx)} ${Y(hy)} m ${X(ax)} ${Y(ay)} l S`, ...Array.from({ length: 10 }, (_, i) => `${X(p(i)[0])} ${Y(p(i)[1])} m ${X(p(i + 1)[0])} ${Y(p(i + 1)[1])} l S`)].join(" ");
+  };
+  const stroked = options.strokedWalls ?? false;
   const content = [
-    ...(unitFill ? ["/OC /oc3 BDC 0.9 g", path(rect([0, 0, 14, 10])), "f* EMC"] : []),
+    ...(unitFill || stroked ? ["/OC /oc3 BDC 0.9 g", [rect([0, 0, 14, 10]), ...(stroked ? syntheticFurniture.map(rect) : [])].map(path).join(" "), "f* EMC"] : []),
+    ...(stroked ? ["/OC /oc1 BDC 0.25 w 0 G", ...walls.map(path).map(p => p + " S"), ...doors.map(segmentedArc), "EMC"] : [
     "/OC /oc1 BDC 0.25 g", ...(options.mergedWalls ? [walls.map(path).join(" ") + " f"] : walls.map(path).map(p => p + " f")),
     ...(options.curvedBay ? [bay() + " f"] : []), "EMC",
-    "/OC /oc2 BDC 0.4 w 0 G", ...doors.map(arc), "EMC",
+    "/OC /oc2 BDC 0.4 w 0 G", ...doors.map(arc), "EMC"]),
     "/OC /oc4 BDC 0 g",
     ...rooms.flatMap(room => [text(latin(room.label), room.labelAt[0] - .4, room.labelAt[1]),
       text(latin(`${room.area.toFixed(2).replace(".", ",")} m²`), room.labelAt[0] - .4, room.labelAt[1] + .45, 7)]),
-    ...(unitFill ? [text("WE 1", 12.5, 9.3)] : []),
+    ...(unitFill || stroked ? [text("WE 1", 12.5, 9.3)] : []),
     `BT /F1 12 Tf ${width - 220} 60 Td (Grundriss EG) Tj ET`, `BT /F1 9 Tf ${width - 220} 40 Td (M 1:${options.scale ?? 100}) Tj ET`, "EMC",
   ].join("\n");
   const layers = ["Konstruktion", "Türen", "Füllflächen", "Beschriftung"];

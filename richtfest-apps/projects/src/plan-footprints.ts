@@ -49,6 +49,50 @@ function ringsFromPath(path:ArrayLike<number>,transform:Matrix,maxPoints=5000) {
 const ringArea=(ring:Point[])=>Math.abs(ring.reduce((sum,p,j)=>{const q=ring[(j+1)%ring.length];return sum+p.x*q.y-q.x*p.y;},0))/2;
 const polygonFromPath=(path:ArrayLike<number>,transform:Matrix)=>{const r=ringsFromPath(path,transform);return r&&r.rings.length===1&&!r.curved?r.rings[0]:null;};
 
+export type PlanBarrierLine={layerId:string;points:Point[];closed:boolean};
+/** A door swing drawn as a polyline: every vertex on one circle around a hinge, sweeping about 90°. */
+export function doorSwingFromPolyline(points:Point[]) {
+  if(points.length<5)return null;
+  const a=points[0],b=points[Math.floor(points.length/2)],c=points.at(-1)!;
+  const d=2*(a.x*(b.y-c.y)+b.x*(c.y-a.y)+c.x*(a.y-b.y));if(Math.abs(d)<1e-9)return null;
+  const sq=(p:Point)=>p.x*p.x+p.y*p.y;
+  const hinge={x:(sq(a)*(b.y-c.y)+sq(b)*(c.y-a.y)+sq(c)*(a.y-b.y))/d,y:(sq(a)*(c.x-b.x)+sq(b)*(a.x-c.x)+sq(c)*(b.x-a.x))/d};
+  const radius=Math.hypot(a.x-hinge.x,a.y-hinge.y);
+  // Short, evenly bent chords: a few corners of a polygon can also lie on one circle.
+  if(!(radius>0)||points.some(p=>Math.abs(Math.hypot(p.x-hinge.x,p.y-hinge.y)-radius)>radius*.06)
+    ||points.some((p,i)=>i>0&&Math.hypot(p.x-points[i-1].x,p.y-points[i-1].y)>radius*.6))return null;
+  const sweep=Math.acos(Math.max(-1,Math.min(1,((a.x-hinge.x)*(c.x-hinge.x)+(a.y-hinge.y)*(c.y-hinge.y))/(radius*Math.hypot(c.x-hinge.x,c.y-hinge.y)))))*180/Math.PI;
+  return sweep<70||sweep>110?null:{hinge,start:a,end:c,radius,sweepDegrees:sweep};
+}
+/**
+ * Chain single-segment strokes that share endpoints and bend gently in one
+ * direction with similar lengths, as a flattened arc does. A door leaf or wall
+ * line meeting the arc breaks the chain by its length or turn.
+ */
+function segmentChains(segments:{a:Point;b:Point}[]) {
+  const key=(p:Point)=>`${Math.round(p.x*20)},${Math.round(p.y*20)}`,at=new Map<string,number[]>();
+  segments.forEach((s,i)=>{for(const p of [s.a,s.b])at.set(key(p),[...(at.get(key(p))??[]),i]);});
+  const length=(s:{a:Point;b:Point})=>Math.hypot(s.b.x-s.a.x,s.b.y-s.a.y);
+  const used=new Set<number>(),chains:{points:Point[];members:number[]}[]=[];
+  const turn=(p:Point,q:Point,r:Point)=>{const a=Math.atan2(q.y-p.y,q.x-p.x),b=Math.atan2(r.y-q.y,r.x-q.x);let d=b-a;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return d;};
+  for(let i=0;i<segments.length;i++){
+    if(used.has(i)||length(segments[i])===0)continue;
+    used.add(i);let points=[segments[i].a,segments[i].b];const members=[i];let sign=0;
+    for(const forward of [true,false]){
+      for(;;){
+        const end=forward?points.at(-1)!:points[0],before=forward?points.at(-2)!:points[1],last=forward?members.at(-1)!:members[0];
+        const next=(at.get(key(end))??[]).filter(j=>!used.has(j)&&length(segments[j])>0).map(j=>{const s=segments[j],other=key(s.a)===key(end)?s.b:s.a;
+          const t=forward?turn(before,end,other):turn(other,end,before);return {j,other,t};})
+          .filter(({j,t})=>{const ratio=length(segments[j])/length(segments[last]);return ratio<2.5&&ratio>.4&&Math.abs(t)>.03&&Math.abs(t)<.7&&(sign===0||Math.sign(t)===sign);});
+        if(next.length!==1)break;
+        const {j,other,t}=next[0];sign=Math.sign(t);used.add(j);
+        if(forward){points.push(other);members.push(j);}else{points.unshift(other);members.unshift(j);}
+      }
+    }
+    if(members.length>=4)chains.push({points,members});
+  }
+  return chains;
+}
 export type PlanDoorSwing={sourceKey:string;layerId:string|null;layerName:string|null;hinge:Point;start:Point;end:Point;radius:number;sweepDegrees:number};
 /** A stroked cubic that is a circular arc of roughly 90° is the conventional
  * door swing symbol. Its centre (the hinge) is recovered from the end normals;
@@ -67,13 +111,17 @@ export function doorSwingFromCurve({from,c1,c2,to}:Omit<PathSegment,"ring">) {
 
 export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},codes:Record<string,number>,layers:Map<string,string>,viewport:{transform:number[];width:number;height:number}, layerPattern = /\bKonstruktion\b/i, excludePattern:RegExp|null = alternativeConstructionLayer, hidden?:Set<string>) {
   let transform:Matrix=[...identity],clip:{x:number;y:number;width:number;height:number}|null=null,unsupportedClip=false,pendingClip=false;
-  const saves:{transform:Matrix;clip:Box|null;unsupportedClip:boolean}[]=[];const marked:(string|null)[]=[];
+  let dashed=false;
+  const saves:{transform:Matrix;clip:Box|null;unsupportedClip:boolean;dashed:boolean}[]=[];const marked:(string|null)[]=[];
+  const barrierLines:(PlanBarrierLine|null)[]=[];let barrierPoints=0;
+  // Single-segment strokes, chained after the walk: CAD exports often draw an arc as many separate lines.
+  const segments:{a:Point;b:Point;layerId:string|null;barrier:number}[]=[];
   const candidates:PlanFootprint[]=[];const seen=new Set<string>();
   const fillRegions:PlanFillRegion[]=[];
   const doorSwings:PlanDoorSwing[]=[];
-  const stats={constructionFilledPaths:0,retainedFootprints:0,omittedSmall:0,omittedUnsupported:0,omittedDuplicate:0,omittedHiddenLayer:0,flattenedCurveFootprints:0,compoundFootprints:0,truncated:false,fillRegionsTruncated:false};
-  const save=()=>saves.push({transform:[...transform],clip,unsupportedClip});
-  const restore=()=>{const s=saves.pop();if(s){transform=s.transform;clip=s.clip;unsupportedClip=s.unsupportedClip;}};
+  const stats={constructionFilledPaths:0,retainedFootprints:0,omittedSmall:0,omittedUnsupported:0,omittedDuplicate:0,omittedHiddenLayer:0,flattenedCurveFootprints:0,compoundFootprints:0,truncated:false,fillRegionsTruncated:false,barrierLineCount:0,omittedDashedLines:0,barrierLinesTruncated:false};
+  const save=()=>saves.push({transform:[...transform],clip,unsupportedClip,dashed});
+  const restore=()=>{const s=saves.pop();if(s){transform=s.transform;clip=s.clip;unsupportedClip=s.unsupportedClip;dashed=s.dashed;}};
   const maxOps=300000;
   for(let i=0;i<Math.min(ops.fnArray.length,maxOps);i++) {
     const op=ops.fnArray[i],a=ops.argsArray[i]??[];
@@ -90,6 +138,7 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     else if(op===codes.beginMarkedContent)marked.push(null);
     else if(op===codes.endMarkedContent)marked.pop();
     else if(op===codes.clip||op===codes.eoClip)pendingClip=true;
+    else if(op===codes.setDash)dashed=Array.isArray(a[0])?a[0].some((v:number)=>v>0):Boolean(a[0]?.length);
     else if(op===codes.constructPath) {
       const matrix=multiplyPlanTransform(viewport.transform as Matrix,transform);
       const clipPolygon=pendingClip?polygonFromPath(a[1]?.[0]??[],matrix):null;
@@ -111,16 +160,41 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
           if(!fillRegions.some(r=>r.sourceKey===key)){if(fillRegions.length<100)fillRegions.push({sourceKey:key,layerId,layerName:layers.get(layerId)!,rings:normalized,fillRule:evenOdd?"evenodd":"nonzero"});else stats.fillRegionsTruncated=true;}
         }
       }
-      // Door swing arcs are drawing evidence on any visible layer; they never become geometry claims themselves.
-      if(strokeOps.includes(a[0])&&(!layerId||hidden?.has(layerId)!==true)&&doorSwings.length<1000) {
-        for(const curve of walkPath(a[1]?.[0]??[],matrix)?.curves??[]){const swing=doorSwingFromCurve(curve);
+      const layerName=layers.get(layerId??"")??"";
+      // Door swing arcs (Bézier curves or short polylines) are drawing evidence on any visible
+      // layer except alternative construction states; they never become geometry claims themselves.
+      const walked=strokeOps.includes(a[0])?walkPath(a[1]?.[0]??[],matrix):null;
+      const arcRings=new Set<number>(),pendingSegments=new Map<number,number>();
+      if(walked&&(!layerId||hidden?.has(layerId)!==true)&&!excludePattern?.test(layerName)&&doorSwings.length<1000) {
+        const arcs=walked.rings.map((ring,r)=>{
+          const curves=walked.curves.filter(c=>c.ring===r);
+          const swing=curves.length?curves.map(doorSwingFromCurve).find(Boolean)??null:walked.closed[r]?null:doorSwingFromPolyline(ring);
+          // A subpath that is only the arc (no leaf or wall segments) is not a barrier.
+          if(swing&&(!curves.length||ring.length===curves.length*8+1))arcRings.add(r);
+          if(!swing&&!curves.length&&!walked.closed[r]&&ring.length===2&&segments.length<100000)pendingSegments.set(r,segments.push({a:ring[0],b:ring[1],layerId:layerId??null,barrier:-1})-1);
+          return swing;
+        });
+        for(const swing of arcs){
           if(!swing||[swing.hinge,swing.start,swing.end].some(p=>p.x<0||p.y<0||p.x>viewport.width||p.y>viewport.height))continue;
           const norm=(p:Point)=>({x:p.x/viewport.width,y:p.y/viewport.height});
           const hinge=norm(swing.hinge),key=createHash("sha256").update(`${hinge.x.toFixed(6)},${hinge.y.toFixed(6)},${swing.radius.toFixed(3)}`).digest("hex");
           if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId:layerId??null,layerName:layerId?layers.get(layerId)??null:null,
             hinge,start:norm(swing.start),end:norm(swing.end),radius:swing.radius/viewport.height,sweepDegrees:swing.sweepDegrees});}
       }
-      const layerName=layers.get(layerId??"")??"";
+      // Solid strokes on the primary construction layer outline walls, partitions, door leaves and
+      // windows on many CAD exports. They are kept as barrier lines; dashed strokes mean overhead or hidden.
+      if(layerId&&layerPattern.test(layerName)&&!excludePattern?.test(layerName)&&hidden?.has(layerId)!==true&&!unsupportedClip&&strokeOps.includes(a[0])) {
+        if(dashed)stats.omittedDashedLines++;
+        // Swing arcs are excluded: they would wall off the swept area as a separate region.
+        else for(const [r,ring] of (walked?.rings??[]).entries()){
+          if(arcRings.has(r)||ring.length<2||ring.some(p=>p.x<0||p.y<0||p.x>viewport.width||p.y>viewport.height))continue;
+          if(barrierPoints+ring.length>200000){stats.barrierLinesTruncated=true;break;}
+          barrierPoints+=ring.length;
+          if(pendingSegments.has(r))segments[pendingSegments.get(r)!].barrier=barrierLines.length;
+          const closed=[codes.closeStroke,codes.closeFillStroke,codes.closeEOFillStroke].includes(a[0])||walked!.closed[r];
+          barrierLines.push({layerId,points:ring.map(p=>({x:p.x/viewport.width,y:p.y/viewport.height})),closed});
+        }
+      }
       if(!layerId||!layerPattern.test(layerName)||excludePattern?.test(layerName)||!fillOps.includes(a[0]))continue;
       stats.constructionFilledPaths++;
       if(hidden?.has(layerId)){stats.omittedHiddenLayer++;continue;}
@@ -147,7 +221,19 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     }
   }
   stats.truncated ||= ops.fnArray.length>maxOps;stats.retainedFootprints=candidates.length;
-  return {candidates,fillRegions,doorSwings,...stats,limitations};
+  for(const chain of segmentChains(segments)){
+    if(doorSwings.length>=1000)break;
+    const swing=doorSwingFromPolyline(chain.points);if(!swing||[swing.hinge,swing.start,swing.end].some(p=>p.x<0||p.y<0||p.x>viewport.width||p.y>viewport.height))continue;
+    for(const index of chain.members)if(segments[index].barrier>=0)barrierLines[segments[index].barrier]=null;
+    const layerId=segments[chain.members[0]].layerId;
+    const norm=(p:Point)=>({x:p.x/viewport.width,y:p.y/viewport.height});
+    const hinge=norm(swing.hinge),key=createHash("sha256").update(`${hinge.x.toFixed(6)},${hinge.y.toFixed(6)},${swing.radius.toFixed(3)}`).digest("hex");
+    if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId,layerName:layerId?layers.get(layerId)??null:null,
+      hinge,start:norm(swing.start),end:norm(swing.end),radius:swing.radius/viewport.height,sweepDegrees:swing.sweepDegrees});
+  }
+  const barriers=barrierLines.filter((line):line is PlanBarrierLine=>line!==null);
+  stats.barrierLineCount=barriers.length;
+  return {candidates,fillRegions,doorSwings,barrierLines:barriers,...stats,limitations};
 }
 
 export async function extractPlanFootprints(path:string,pageNumber:number,signal:AbortSignal) {
