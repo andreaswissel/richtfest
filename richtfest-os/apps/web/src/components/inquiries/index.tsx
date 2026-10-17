@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { api, ApiError, list, type RecordData } from "../../api";
+import { api, ApiError, list, uploadFile, type RecordData } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
 import { Section } from "../layout";
@@ -12,6 +12,7 @@ import { Badge, Callout, Empty, Field, RowLink, Segmented, Table } from "../ui/p
 import { inquiryDirectionLabel, inquiryEntryKindLabel, inquiryStatusLabel } from "./labels";
 import { inquiryLink, type InquiryDetail, type InquiryDirection, type InquiryEntry, type InquiryStatus, type InquirySummary } from "./types";
 import { fieldLabel, optionLabel } from "../building-model/component-properties";
+import { importEmail } from "./email-import";
 import "./inquiries.css";
 
 type T = ReturnType<typeof useT>;
@@ -144,6 +145,27 @@ function NewEntry({ projectId, path, t }: { projectId: string; path: string; t: 
   const [subject, setSubject] = useState(""), [body, setBody] = useState(""), [fileId, setFileId] = useState("_none"), [occurredAt, setOccurredAt] = useState<string | null>(null);
   const filesQuery = useApi(`/projects/${projectId}/files`);
   const files = list(filesQuery.data, "files");
+  const me = useApi("/auth/me");
+  const ownAddress: string | null = me.data?.user?.email ?? me.data?.email ?? null;
+  const emailInput = useRef<HTMLInputElement>(null);
+  // The original email and its attachments are kept in Sources; the form is filled for review before adding.
+  const importMail = useMutation({
+    mutationFn: async (file: File) => {
+      const email = await importEmail(file, ownAddress);
+      const upload = async (item: File) => { const form = new FormData(); form.set("file", item); form.set("label", ""); return uploadFile<{ id: string; name: string }>(`/projects/${projectId}/files`, form); };
+      const original = await upload(file);
+      const attachments = [];
+      for (const attachment of email.attachments) attachments.push(await upload(attachment));
+      return { email, original, attachments };
+    },
+    onSuccess: async ({ email, original, attachments }) => {
+      setKind("email"); setDirection(email.direction); setSubject(email.subject); setBody(email.body);
+      setOccurredAt(email.occurredAt ? toLocalInput(new Date(email.occurredAt)) : null);
+      // A PDF attachment carries the content worth reading; the original email stays in Sources either way.
+      setFileId((attachments.find((item) => /\.pdf$/i.test(item.name)) ?? original).id);
+      await invalidate(projectId);
+    },
+  });
   const add = useMutation({
     mutationFn: () => api(`${path}/entries`, { kind, direction: kind === "note" ? "internal" : direction, subject: subject.trim() || null, body: body.trim() ? body : null,
       fileId: fileId === "_none" ? null : fileId, occurredAt: occurredAt ? new Date(occurredAt).toISOString() : null }),
@@ -153,6 +175,14 @@ function NewEntry({ projectId, path, t }: { projectId: string; path: string; t: 
   const ready = Boolean(body.trim() || fileId !== "_none") && (!occurredAt || !Number.isNaN(new Date(occurredAt).getTime()));
   return <form className="inquiry-form" onSubmit={(event) => { event.preventDefault(); if (ready) add.mutate(); }}>
     <h3 className="inquiry-subtitle">{t("inquiryAddEntry")}</h3>
+    <div className="inline-actions">
+      <input ref={emailInput} type="file" accept=".eml,message/rfc822" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) importMail.mutate(file); }} />
+      <Button type="button" size="sm" variant="outline" disabled={importMail.isPending} onClick={() => emailInput.current?.click()}>{t("inquiryImportEmail")}</Button>
+      <span className="muted text-ui-xs" role="status">{importMail.isPending ? t("inquiryImportEmailPending")
+        : importMail.data ? t("inquiryImportEmailDone").replace("{from}", importMail.data.email.from || "—").replace("{files}", [importMail.data.original, ...importMail.data.attachments].map((item) => item.name).join(", "))
+        : t("inquiryImportEmailHint")}</span>
+    </div>
+    {importMail.isError && <Callout tone="error">{(importMail.error as Error).message}</Callout>}
     <div className="inquiry-form-row">
       <Field label={t("inquiryEntryKind")}><Segmented value={kind} onChange={(value) => setKind(value as typeof kind)} items={entryKinds.map((value) => ({ value, label: inquiryEntryKindLabel(value, t) }))} /></Field>
       <Field label={t("inquiryEntryDirection")}><Segmented value={kind === "note" ? "internal" : direction} onChange={(value) => setDirection(value as typeof direction)}

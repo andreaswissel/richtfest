@@ -17,7 +17,7 @@ import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
-import { componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
+import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
@@ -448,6 +448,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/inquiries`] }),
     onError: (error) => setConflict(error.message),
   });
+  const readBebauungsplan = useMutation({
+    mutationFn: (sourceVersionId: string) => api<{ summary: BebauungsplanReadResult }>(`/projects/${projectId}/building-model/regulatory-sources`, { baseRevision: model.revision, sourceVersionId }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
   const readDescription = useMutation({
     mutationFn: (sourceVersionId: string) => api<{ summary: DescriptionReadResult }>(`/projects/${projectId}/building-model/component-sources`, { baseRevision: model.revision, sourceVersionId }),
     onMutate: () => setConflict(undefined),
@@ -810,6 +816,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               <h2 className="building-model-panel-title">{t("buildingRegulatoryBasis")}</h2>
               <RegulatoryBasis properties={model.buildings[0].componentProperties} t={t} pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
                 onSave={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+              <BebauungsplanReader documents={((componentSources.data as { documents?: ComponentSourceDocument[] } | undefined)?.documents) ?? []} t={t} pending={readBebauungsplan.isPending}
+                result={readBebauungsplan.data?.summary} onRead={(sourceVersionId) => readBebauungsplan.mutate(sourceVersionId)} />
             </>}
             <h2 className="building-model-panel-title">{t("buildingSoundInsulation")}</h2>
             <SoundInsulationOverview components={modelComponents} level={model.buildings[0]?.componentProperties.soundInsulationLevel} t={t}

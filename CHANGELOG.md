@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Building model: **Read noise requirements** reads a Bebauungsplan's text into the regulatory basis: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation, prescribed measures and the cited DIN 4109 edition, each quoted for review.
+- Inquiries: **Import email (.eml)** fills an entry from an exported email and keeps the email and its attachments in Sources.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

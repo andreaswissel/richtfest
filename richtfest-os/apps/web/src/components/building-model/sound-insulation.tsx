@@ -160,7 +160,28 @@ export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { 
   </>;
 }
 
-export type ComponentSourceDocument = { fileId: string; name: string; sourceVersionId: string; version: number; likelyConstructionDescription: boolean };
+export type ComponentSourceDocument = { fileId: string; name: string; sourceVersionId: string; version: number; likelyConstructionDescription: boolean;
+  documentType?: { documentType: string | null; provenance: "manual" | "inferred" | null } | null };
+export type BebauungsplanReadResult = { statements: unknown[]; summary: string | null; proposals: number };
+
+/** Reads the noise requirements a Bebauungsplan's text states into the regulatory basis, as quoted proposals. */
+export function BebauungsplanReader({ documents, t, pending, result, onRead }: { documents: ComponentSourceDocument[]; t: T; pending: boolean; result?: BebauungsplanReadResult; onRead: (sourceVersionId: string) => void }) {
+  const plans = documents.filter((document) => document.documentType?.documentType === "development_plan");
+  const [chosen, setChosen] = useState("");
+  const selected = plans.find((document) => document.sourceVersionId === chosen) ?? plans[0];
+  if (!plans.length) return <p className="muted text-ui-2xs">{t("buildingBebauungsplanNone")}</p>;
+  return <div className="building-model-component-derive">
+    <div className="building-model-description-row">
+      <NativeSelect aria-label={t("buildingBebauungsplanDocument")} value={selected?.sourceVersionId ?? ""} disabled={pending} onChange={(event) => setChosen(event.target.value)}>
+        {plans.map((document) => <option key={document.sourceVersionId} value={document.sourceVersionId}>{document.name}</option>)}
+      </NativeSelect>
+      <Button size="xs" variant="outline" disabled={pending || !selected} onClick={() => selected && onRead(selected.sourceVersionId)}>{t("buildingBebauungsplanRead")}</Button>
+    </div>
+    <p className="muted text-ui-2xs" role="status">{!result ? t("buildingBebauungsplanHint")
+      : result.summary ? t("buildingBebauungsplanResult").replace("{statements}", String(result.statements.length)).replace("{proposals}", String(result.proposals))
+      : t("buildingBebauungsplanNothing")}</p>
+  </div>;
+}
 export type DescriptionReadResult = { statements: number; proposals: number; groups: Array<{ componentType: "wall" | "ceiling"; wallRole: string | null; conflicts: string[]; components: number; proposed: number }> };
 
 /** Reads stated component data from a construction description into unreviewed proposals per wall type. */

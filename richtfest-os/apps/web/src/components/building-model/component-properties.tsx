@@ -3,12 +3,14 @@ import { bebauungsplanSchema, componentConstructionSchema, componentInputGaps, c
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge } from "../ui/primitives";
 import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
 
 type T = ReturnType<typeof useT>;
+// Statements rather than values: shown in full.
+const longText = new Set(["bebauungsplanNoise"]);
 type Key = Parameters<T>[0];
 export type ComponentPropertySave = { key: string; value: string | number | null; unit: string | null };
 
@@ -76,6 +78,9 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
             <option value="">{placeholder ? `${t("buildingComponentInferredPrefix")} ${optionLabel(propertyKey, placeholder, t)}` : t("buildingModelUnknownValue")}</option>
             {options.map((option) => <option key={option} value={option}>{optionLabel(propertyKey, option, t)}</option>)}
           </NativeSelect>
+        : longText.has(propertyKey) ? <Textarea aria-label={label} rows={3} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
+            onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) commit(event.currentTarget.value); }} />
         : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />}

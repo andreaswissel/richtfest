@@ -1890,5 +1890,15 @@
   "documentTypeUnknown": "Not classified",
   "documentTypeSuggested": "Suggested",
   "documentTypeConfirm": "Confirm",
-  "inquiryKind": "Kind"
+  "inquiryKind": "Kind",
+  "buildingBebauungsplanDocument": "Bebauungsplan document",
+  "buildingBebauungsplanRead": "Read noise requirements",
+  "buildingBebauungsplanHint": "Reads Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation, prescribed measures and the cited DIN 4109 edition from the text, as unreviewed proposals. Zones drawn only in the Planzeichnung are not read.",
+  "buildingBebauungsplanResult": "{statements} noise statements read · {proposals} values proposed",
+  "buildingBebauungsplanNothing": "No noise requirements in the text. Check the Planzeichnung, then enter what applies.",
+  "buildingBebauungsplanNone": "Mark the Bebauungsplan's document type in Sources to read its noise requirements here.",
+  "inquiryImportEmail": "Import email (.eml)",
+  "inquiryImportEmailHint": "Fills the entry from an exported email; the email and its attachments are kept in Sources.",
+  "inquiryImportEmailPending": "Reading email and saving attachments…",
+  "inquiryImportEmailDone": "From {from} · saved to Sources: {files}. Check the entry, then add it."
 }

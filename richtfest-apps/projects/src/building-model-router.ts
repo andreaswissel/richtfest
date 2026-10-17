@@ -57,6 +57,7 @@ import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
 import { planStoreyLevels, storeyLevelFromText, type StoreyLevelReading } from "./storey-levels";
 import { sourcePages } from "./schema";
 import { documentTypesFor } from "./document-types";
+import { developmentPlanNoiseMethod, readDevelopmentPlanNoise } from "./development-plan";
 import { constructionDescriptionMethod, mergeComponentStatements, readConstructionDescription } from "./construction-description";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -874,6 +875,47 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       if (!pages.length) return send(res, 422, { data: null, error: { code: "no_source_text" }, message: "No text has been read from this document yet" });
       const result = await proposeStatedComponentData(d, projectId, modelRow.model, input.baseRevision, (pages as any[]).map(row => ({ page: Number(row.page), text: String(row.text) })),
         stated => ({ kind: "page", sourceVersionId: input.sourceVersionId, page: stated.page, quote: stated.quote }), { sourceVersionId: input.sourceVersionId });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
+      return res.json(ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Reads a Bebauungsplan's noise requirements into the regulatory basis of every building, as unreviewed proposals
+  // quoting each statement. Reading one also proposes that a Bebauungsplan applies. People's values are kept.
+  router.post("/projects/:projectId/building-model/regulatory-sources", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), sourceVersionId: uuid }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (modelRow.model.revision !== input.baseRevision) return revisionConflict(res, modelRow.model.revision);
+      if (!(await evidenceVersionsForProject(d.db, d, projectId, [{ kind: "page", sourceVersionId: input.sourceVersionId, page: 1 } as any])))
+        return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "The document must be a ready file revision in this project" });
+      const pages = await d.db.select({ page: sourcePages.page, text: sql<string>`left(coalesce(${sourcePages.content}->>'text',''), 60000)` }).from(sourcePages)
+        .where(and(eq(sourcePages.versionId, input.sourceVersionId), eq(sourcePages.tenantId, d.tenantId))).orderBy(asc(sourcePages.page)).limit(300);
+      if (!(pages as any[]).some(row => String(row.text).trim())) return send(res, 422, { data: null, error: { code: "no_source_text" }, message: "No text has been read from this document yet" });
+      const noise = readDevelopmentPlanNoise((pages as any[]).map(row => ({ page: Number(row.page), text: String(row.text) })));
+      const data = await readModel(d, modelRow.model);
+      const props = new Map((data.properties as any[]).filter(property => property.entityType === "building").map(property => [`${property.entityId}:${property.propertyKey}`, property]));
+      const first = (pages as any[]).find(row => String(row.text).trim());
+      const planEvidence = buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: Number(first.page), quote: String(first.text).trim().split("\n")[0].slice(0, 240) });
+      // One evidence item per quoted sentence, even when it states several requirements.
+      const noiseEvidence = [...new Map(noise.statements.map(statement => [`${statement.page}:${statement.quote}`, statement])).values()].slice(0, 20).map(statement => buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: statement.page, quote: statement.quote }));
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        let proposals = 0;
+        for (const building of data.buildings as any[]) {
+          for (const [key, value, evidence] of [["bebauungsplan", "applies", [planEvidence]], ["bebauungsplanNoise", noise.summary, noiseEvidence]] as const) {
+            if (value === null || !derivedWritable(props.get(`${building.id}:${key}`), value)) continue;
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "building", entityId: building.id, propertyKey: key, claimKind: "requirement", value, unit: null, provenance: "inferred", evidence: [...evidence] });
+            proposals++;
+          }
+        }
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.regulatory.bebauungsplan_read", "building_model", modelRow.model.id, { projectId, modelRevision: revision, sourceVersionId: input.sourceVersionId,
+          method: developmentPlanNoiseMethod, statements: noise.statements.length, proposals });
+        return { revision, summary: { ...noise, proposals, method: developmentPlanNoiseMethod } };
+      });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
       return res.json(ok(result));
     } catch (e) { return next(e); }

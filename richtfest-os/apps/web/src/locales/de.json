@@ -1890,5 +1890,15 @@
   "documentTypeUnknown": "Nicht zugeordnet",
   "documentTypeSuggested": "Vorschlag",
   "documentTypeConfirm": "Bestätigen",
-  "inquiryKind": "Art"
+  "inquiryKind": "Art",
+  "buildingBebauungsplanDocument": "Bebauungsplan-Dokument",
+  "buildingBebauungsplanRead": "Lärmschutz-Festsetzungen lesen",
+  "buildingBebauungsplanHint": "Liest Lärmpegelbereiche, maßgebliche Außenlärmpegel, erforderliche Schalldämmung der Fassade, vorgeschriebene Maßnahmen und die zitierte DIN-4109-Ausgabe aus dem Text, als ungeprüfte Vorschläge. Nur in der Planzeichnung eingetragene Bereiche werden nicht gelesen.",
+  "buildingBebauungsplanResult": "{statements} Lärmschutz-Angaben gelesen · {proposals} Werte vorgeschlagen",
+  "buildingBebauungsplanNothing": "Keine Lärmschutz-Festsetzungen im Text. Planzeichnung prüfen und Zutreffendes eintragen.",
+  "buildingBebauungsplanNone": "Dokumenttyp des Bebauungsplans in den Quellen setzen, um seine Lärmschutz-Festsetzungen hier zu lesen.",
+  "inquiryImportEmail": "E-Mail importieren (.eml)",
+  "inquiryImportEmailHint": "Füllt den Eintrag aus einer exportierten E-Mail; E-Mail und Anhänge werden in den Quellen abgelegt.",
+  "inquiryImportEmailPending": "E-Mail wird gelesen, Anhänge werden gespeichert …",
+  "inquiryImportEmailDone": "Von {from} · in den Quellen abgelegt: {files}. Eintrag prüfen, dann hinzufügen."
 }

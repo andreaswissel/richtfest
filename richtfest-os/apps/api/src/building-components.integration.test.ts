@@ -256,5 +256,23 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(closed.body.data.closedAt).toBeTruthy();
     expect((await (await fetch(base + "/agent-context")).json()).data.soundInsulation.inquiries).toEqual([]);
     expect(audits).toEqual(expect.arrayContaining(["projects.inquiry.created", "projects.inquiry.entry_added", "projects.inquiry.reply_read", "projects.inquiry.updated"]));
+
+    // A Bebauungsplan's text fills the noise requirements as quoted proposals; a person's "applies" is kept, not re-proposed.
+    const plan = crypto.randomUUID(), planVersion = crypto.randomUUID();
+    await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'B-Plan 12.pdf','upload',$4)", [plan, tenant, project, actor]);
+    await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [planVersion, tenant, plan, actor]);
+    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,2,$3)", [planVersion, tenant,
+      JSON.stringify({ status: "available", text: "Textliche Festsetzungen\n6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989).\n6.2 Flachdächer sind zu begrünen." })]);
+    expect((await (await fetch(base + "/component-sources")).json()).data.documents.find((doc: any) => doc.name === "B-Plan 12.pdf").documentType.documentType).toBe("development_plan");
+    const planRead = await post("/regulatory-sources", { baseRevision: await revision(), sourceVersionId: planVersion });
+    expect(planRead.status).toBe(200);
+    expect(planRead.body.data.summary).toMatchObject({ summary: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", proposals: 1 });
+    const planNoise = (await (await fetch(base + "/agent-context")).json()).data.soundInsulation.regulatoryBasis;
+    expect(planNoise.bebauungsplanNoise).toEqual({ value: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", reviewStatus: "unreviewed" });
+    expect(planNoise.bebauungsplan).toEqual({ value: "applies", reviewStatus: "unreviewed" });
+    const noiseEvidence = (await pool.query(`select v.evidence, v.provenance from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.property_key='bebauungsplanNoise'`)).rows;
+    expect(noiseEvidence).toEqual([{ provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: planVersion, page: 2, quote: "6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989)." }] }]);
+    expect((await post("/regulatory-sources", { baseRevision: await revision(), sourceVersionId: planVersion })).body.data.summary.proposals).toBe(0);
+    expect(audits).toContain("projects.building.regulatory.bebauungsplan_read");
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);
