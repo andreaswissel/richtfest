@@ -1,12 +1,13 @@
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { componentDataRequest, dataRequestProgress, followUpRequest, ok, type ComponentRequestGroup } from "@richtfest/shared";
+import { componentDataRequest, dataRequestProgress, followUpRequest, noiseRequestProgress, ok, type ComponentRequestGroup, type NoiseRequestItem } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, inquiries, inquiryEntries, projects, sourcePages } from "./schema";
 import { statusAfter } from "./inquiry-status";
 import { inquiryReplyAddress } from "./inbound-email";
 import { modelForProject, proposeStatedComponentData, readComponentRecords } from "./building-model-router";
+import { readNoiseSources } from "./noise-sources";
 
 /**
  * Inquiries are tickets to a stakeholder (usually the architect). Each bundles
@@ -59,8 +60,10 @@ export function createInquiriesRouter(getDeps: (req: Request) => AppDeps) {
       const rows = await d.db.select({ inquiry: inquiries, entries: sql<number>`(select count(*)::int from ${inquiryEntries} where ${inquiryEntries.inquiryId} = ${inquiries.id})` })
         .from(inquiries).where(and(eq(inquiries.projectId, projectId), eq(inquiries.tenantId, d.tenantId))).orderBy(desc(inquiries.updatedAt));
       const records = rows.some((row: any) => row.inquiry.kind === "component_data") ? await readComponentRecords(d, projectId) : [];
+      const sources = rows.some((row: any) => row.inquiry.kind === "noise_data") ? await readNoiseSources(d, projectId) : [];
       return res.json(ok(rows.map((row: any) => ({ ...row.inquiry, entryCount: row.entries,
-        progress: row.inquiry.kind === "component_data" ? dataRequestProgress(row.inquiry.items, records) : null }))));
+        progress: row.inquiry.kind === "component_data" ? dataRequestProgress(row.inquiry.items, records)
+          : row.inquiry.kind === "noise_data" ? noiseRequestProgress(row.inquiry.items, sources) : null }))));
     } catch (e) { return next(e); }
   });
 
@@ -73,7 +76,8 @@ export function createInquiriesRouter(getDeps: (req: Request) => AppDeps) {
       const entries = await d.db.select({ entry: inquiryEntries, fileName: files.name }).from(inquiryEntries).leftJoin(files, eq(files.id, inquiryEntries.fileId))
         .where(and(eq(inquiryEntries.inquiryId, inquiryId), eq(inquiryEntries.tenantId, d.tenantId))).orderBy(asc(inquiryEntries.occurredAt), asc(inquiryEntries.createdAt));
       const records = inquiry.kind === "component_data" ? await readComponentRecords(d, projectId) : [];
-      const progress = inquiry.kind === "component_data" ? dataRequestProgress(inquiry.items as ComponentRequestGroup[], records) : null;
+      const progress = inquiry.kind === "component_data" ? dataRequestProgress(inquiry.items as ComponentRequestGroup[], records)
+        : inquiry.kind === "noise_data" ? noiseRequestProgress(inquiry.items as NoiseRequestItem[], await readNoiseSources(d, projectId)) : null;
       // What to ask again, with today's proposed values to confirm; empty once everything is answered.
       const followUp = inquiry.kind === "component_data" ? followUpRequest(inquiry.items as ComponentRequestGroup[], records) : [];
       return res.json(ok({ ...inquiry, progress, followUp, replyAddress: await inquiryReplyAddress(d, projectId, inquiryId), entries: entries.map((row: any) => ({ ...row.entry, fileName: row.fileName ?? null })) }));

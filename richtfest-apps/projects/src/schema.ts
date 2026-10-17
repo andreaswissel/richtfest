@@ -13,7 +13,7 @@ import {
   foreignKey,
   check,
 } from "drizzle-orm/pg-core";
-import type { AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress, SourceText, SourceFactInput, BuildingEvidence, BuildingPropertyValue } from "@richtfest/shared";
+import type { MappedNoiseSource, AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress, SourceText, SourceFactInput, BuildingEvidence, BuildingPropertyValue } from "@richtfest/shared";
 
 export const projectLocations = pgTable("projects_locations", {
   projectId: uuid("project_id").primaryKey(),
@@ -507,7 +507,7 @@ export const inquiries = pgTable("projects_inquiries", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  kind: text("kind").$type<"component_data" | "general">().notNull(),
+  kind: text("kind").$type<"component_data" | "noise_data" | "general">().notNull(),
   title: text("title").notNull(),
   counterpart: text("counterpart").notNull(),
   status: text("status").$type<"open" | "waiting" | "answered" | "closed">().notNull().default("open"),
@@ -518,7 +518,7 @@ export const inquiries = pgTable("projects_inquiries", {
   closedAt: timestamp("closed_at", { withTimezone: true }),
 }, table => ({
   project: index("projects_inquiries_project").on(table.tenantId, table.projectId, table.updatedAt),
-  kindCheck: check("projects_inquiries_kind_check", sql`${table.kind} in ('component_data','general')`),
+  kindCheck: check("projects_inquiries_kind_check", sql`${table.kind} in ('component_data','noise_data','general')`),
   statusCheck: check("projects_inquiries_status_check", sql`${table.status} in ('open','waiting','answered','closed')`),
 }));
 
@@ -584,4 +584,45 @@ export const inboundEmails = pgTable("projects_inbound_emails", {
   provider: uniqueIndex("projects_inbound_emails_provider_unique").on(table.provider, table.providerEmailId),
   project: index("projects_inbound_emails_project").on(table.tenantId, table.projectId, table.status, table.receivedAt),
   statusCheck: check("projects_inbound_emails_status_check", sql`${table.status} in ('filed','unfiled','dismissed')`),
+}));
+
+/**
+ * A road or railway whose noise reaches the project's facades. Added from the
+ * mapped objects of an environment survey (a snapshot is kept) or by hand.
+ * Its inputs are versioned in projects_noise_source_values.
+ */
+export const noiseSources = pgTable("projects_noise_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<"road" | "rail">().notNull(),
+  name: text("name").notNull(),
+  mappedRef: text("mapped_ref"),
+  mapped: jsonb("mapped").$type<(MappedNoiseSource & { surveyFileId: string; connectorVersion: string; retrievedAt: string }) | null>(),
+  /** The inquiry that last requested this source's inputs. */
+  inquiryId: uuid("inquiry_id").references(() => inquiries.id, { onDelete: "set null" }),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  project: index("projects_noise_sources_project").on(table.tenantId, table.projectId),
+  mapped: uniqueIndex("projects_noise_sources_mapped_unique").on(table.projectId, table.mappedRef),
+  kindCheck: check("projects_noise_sources_kind_check", sql`${table.kind} in ('road','rail')`),
+}));
+
+/** Every value entered for a noise source input; the highest version is current, null clears it. */
+export const noiseSourceValues = pgTable("projects_noise_source_values", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  sourceId: uuid("source_id").notNull().references(() => noiseSources.id, { onDelete: "cascade" }),
+  key: text("key").notNull(),
+  version: integer("version").notNull(),
+  value: jsonb("value").$type<unknown>(),
+  unit: text("unit"),
+  /** Where the value comes from, e.g. "Hessen Mobil, Verkehrsmengenkarte 2021". */
+  basis: text("basis"),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  version: uniqueIndex("projects_noise_source_values_version").on(table.sourceId, table.key, table.version),
 }));

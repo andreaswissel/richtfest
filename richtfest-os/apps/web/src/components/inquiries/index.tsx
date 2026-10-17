@@ -15,6 +15,8 @@ import { fieldLabel, optionLabel } from "../building-model/component-properties"
 import { dataRequestText } from "../building-model/sound-insulation";
 import { importEmail } from "./email-import";
 import { CopyAddress, ForwardingInbox } from "./inbox";
+import { noiseInputLabel } from "../noise-sources";
+import type { DataRequestProgress, NoiseRequestProgress } from "@richtfest/shared";
 import "./inquiries.css";
 
 type T = ReturnType<typeof useT>;
@@ -96,12 +98,22 @@ function InquiryView({ projectId, inquiryId, t }: { projectId: string; inquiryId
       {inquiry.replyAddress && <><dt>{t("inquiryReplyAddress")}</dt><dd className="inquiry-stack"><CopyAddress address={inquiry.replyAddress} t={t} />
         <span className="muted text-ui-xs">{t("inquiryReplyAddressHint")}</span></dd></>}
       <dt>{t("inquiryKind")}</dt>
-      <dd>{inquiry.kind === "component_data" ? t("inquiryKindComponentData") : t("inquiryKindGeneral")}</dd>
-      {inquiry.progress && <>
+      <dd>{inquiry.kind === "component_data" ? t("inquiryKindComponentData") : inquiry.kind === "noise_data" ? t("inquiryKindNoiseData") : t("inquiryKindGeneral")}</dd>
+      {inquiry.progress && inquiry.kind === "noise_data" && <>
         <dt>{t("inquiryOutstanding")}</dt>
         <dd className="inquiry-stack">
           <span>{progressText(inquiry, t)}</span>
-          {inquiry.progress.outstanding.length ? inquiry.progress.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-xs">
+          {inquiry.progress.outstanding.length ? (inquiry.progress as NoiseRequestProgress).outstanding.map((item) => <span key={item.sourceId} className="muted text-ui-xs">
+            {item.name}: {item.fields.map((field) => noiseInputLabel(field, t)).join(", ")}
+          </span>) : <span className="muted text-ui-xs">{t("inquiryAllAnswered")}</span>}
+          <Link className="text-ui-xs" to={`/projects/${projectId}?view=noise`}>{t("inquiryOpenNoise")} →</Link>
+        </dd>
+      </>}
+      {inquiry.progress && inquiry.kind === "component_data" && <>
+        <dt>{t("inquiryOutstanding")}</dt>
+        <dd className="inquiry-stack">
+          <span>{progressText(inquiry, t)}</span>
+          {inquiry.progress.outstanding.length ? (inquiry.progress as DataRequestProgress).outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-xs">
             {group.componentType === "ceiling" ? t("buildingSoundCeilings") : group.wallRole ? optionLabel("wallRole", group.wallRole, t) : t("buildingSoundWallsWithoutRole")}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}
           </span>) : <span className="muted text-ui-xs">{t("inquiryAllAnswered")}</span>}
           <Link className="text-ui-xs" to={`/projects/${projectId}?view=building-model`}>{t("inquiryOpenModel")} →</Link>

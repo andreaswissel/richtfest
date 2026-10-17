@@ -16,6 +16,7 @@ import { readPdfRepresentations } from "./source-representations";
 import { createBuildingModelRouter } from "./building-model-router";
 import { createDocumentTypesRouter, documentTypesFor } from "./document-types";
 import { createInquiriesRouter } from "./inquiries";
+import { createNoiseSourcesRouter } from "./noise-sources";
 import { createInboundEmailRouter } from "./inbound-email";
 import { enrollReadyVersion } from "./project-files";
 
@@ -83,6 +84,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(createBuildingModelRouter(getDeps));
   router.use(createDocumentTypesRouter(getDeps));
   router.use(createInquiriesRouter(getDeps));
+  router.use(createNoiseSourcesRouter(getDeps));
   router.use(createInboundEmailRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {

@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup } from "@richtfest/shared";
+import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup, type DataRequestProgress } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
@@ -106,7 +106,7 @@ export function DataRequest({ projectId, components, inquiries, t, pending, onCr
         <dt className="building-model-request-group"><Link to={inquiryLink(projectId, inquiry.id)}>{inquiry.counterpart}</Link><span className="muted text-ui-2xs">{inquiryStatusLabel(inquiry.status, t)} · {formatDate(inquiry.updatedAt)}</span></dt>
         <dd className="building-model-stack">
           {inquiry.progress && <span>{t("buildingRequestProgress").replace("{answered}", String(inquiry.progress.answered)).replace("{total}", String(inquiry.progress.total))}</span>}
-          {inquiry.progress?.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-2xs">{groupLabel(group, t)}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}</span>)}
+          {(inquiry.progress as DataRequestProgress | null)?.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-2xs">{groupLabel(group, t)}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}</span>)}
         </dd>
       </Fragment>)}
     </dl>}

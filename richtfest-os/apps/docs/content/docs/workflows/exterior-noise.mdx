@@ -1,0 +1,34 @@
+---
+title: Exterior noise
+description: The roads and railways around a project and the traffic data an exterior noise assessment needs.
+---
+
+Open **Exterior noise** in the project bar. It lists the project's noise sources: the roads and railways whose noise reaches the facades, each with the inputs an emission calculation needs. Richtfest collects and requests these inputs; it does not calculate road (RLS-19) or rail (Schall 03) levels.
+
+## Mapped roads and railways
+
+**Look up roads and railways** runs the [environmental survey](/docs/workflows/project-onboarding#environmental-survey) and lists what the official topographic model (ATKIS Basis-DLM) maps within about 1 km, nearest first:
+
+- **Roads**: name, class (Bundesautobahn, Bundesstraße, Landes-, Kreis- or Gemeindestraße, non-public), number such as B 43, lanes and carriageway width. ATKIS splits a street into several objects; named streets of one class are shown once.
+- **Railways**: VzG route number (what DB InfraGO answers train volume requests by), category (passenger, freight, S-Bahn, tram, U-Bahn), lines, single or double track and electrification.
+
+The distance runs from the address point to the nearest mapped axis, not from a facade. Coverage: Hessen addresses (house coordinates and ATKIS from HVBG, dl-de/zero-2-0) and Rheinland-Pfalz sites with an imported location. Traffic counts are not part of ATKIS and are not open data in Hessen (Hessen Mobil publishes only an interactive map), so they are entered or requested.
+
+Choose **Add** to make a mapped road or railway a noise source; Richtfest keeps a snapshot of what was mapped. **Add road** and **Add railway** add a source by hand.
+
+## Inputs
+
+Select a source to enter its inputs. Each value has a **Basis**, for example "Hessen Mobil, Verkehrsmengenkarte 2021" or "site visit". Every save is a new version; a value changed by someone else in the meantime is not overwritten.
+
+| Road | Railway |
+| --- | --- |
+| Traffic volume (DTV, Kfz/24h) | Train volumes and types, day and night |
+| Heavy vehicle share (%) | Line speed (km/h) |
+| Speed limit (km/h) | Track type |
+| Road surface | Distance to facade (m) |
+| Distance to facade (m) | Data basis (count year or forecast) |
+| Data basis (count year or forecast) | |
+
+## Request traffic data
+
+**Request traffic data** creates an [inquiry](/docs/workflows/inquiries) for the chosen sources with the inputs still missing that an authority or operator supplies (not the facade distance). Ask the road traffic authority or Hessen Mobil for roads and DB InfraGO for railways; send the text yourself. The inquiry counts an item as answered once the value is entered on the source.

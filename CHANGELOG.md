@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Exterior noise**: a new project view lists the roads and railways around the site from official map data (now also for Hessen addresses, e.g. Frankfurt and Hanau) with class, route number and distance. Added sources collect traffic volume, speed, surface, train volumes and facade distance with their basis, and missing traffic data can be requested from the authority as an inquiry that tracks its answers.
+
 - Inquiries: emails from classic Outlook (`.msg`) can be imported, and component data inquiries offer a **Follow-up** with only the items still open. Values the architect already sent are reviewed in Richtfest rather than asked again.
 
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.

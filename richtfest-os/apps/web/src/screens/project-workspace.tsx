@@ -26,6 +26,7 @@ import { ProjectAnalytics } from "../components/project-workspace/analytics";
 import { LocationMode } from "../components/location/mode";
 import { BuildingModelMode } from "../components/building-model";
 import { Inquiries } from "../components/inquiries";
+import { NoiseSources } from "../components/noise-sources";
 import { AddressSelect } from "../components/address-select";
 import { ArrowUp } from "lucide-react";
 
@@ -123,7 +124,7 @@ export function ProjectWorkspace() {
   const project = useApi(`/projects/${id}`),
     workspace = useApi(
       `/knowledge/workspaces/${id}`,
-      view !== "location" && view !== "analytics" && view !== "building-model" && view !== "inquiries",
+      view !== "location" && view !== "analytics" && view !== "building-model" && view !== "inquiries" && view !== "noise",
     ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
@@ -185,6 +186,7 @@ export function ProjectWorkspace() {
         "details",
         "sources",
         "inquiries",
+        "noise",
         "knowledge",
         "analytics",
       ].map((key) => (
@@ -201,6 +203,8 @@ export function ProjectWorkspace() {
                 ? t("buildingModel")
               : key === "details"
                 ? t("projectDetails")
+                : key === "noise"
+                ? t("noiseNav")
                 : t(key as "sources" | "inquiries")}
         </Link>
       ))}
@@ -586,6 +590,7 @@ export function ProjectWorkspace() {
         <Sources projectId={id!} initial={project.data || {}} />
       )}
       {view === "inquiries" && <Inquiries projectId={id!} selectedId={params.get("inquiry")} />}
+      {view === "noise" && <NoiseSources projectId={id!} selectedId={params.get("source")} />}
       {view === "knowledge" && <Knowledge projectId={id!} />}
     </Page>
   );

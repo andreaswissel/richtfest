@@ -19,7 +19,8 @@
     "./inbound-email": "./src/inbound-email.ts",
     "./building-extraction": "./src/building-extraction-worker.ts",
     "./automatic-building-model": "./src/automatic-building-model.ts",
-    "./environment": "./src/environment.ts"
+    "./environment": "./src/environment.ts",
+    "./noise-sources": "./src/noise-sources.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
