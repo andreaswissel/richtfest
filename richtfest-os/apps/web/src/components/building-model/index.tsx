@@ -12,8 +12,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
-import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
+import { ComponentProperties, regionComponentType, type ComponentPropertySave } from "./component-properties";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
 import "./building-model.css";
@@ -387,6 +388,31 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  const saveComponentProperty = useMutation({
+    mutationFn: ({ region, save }: { region: BuildingRegion; save: ComponentPropertySave }) => {
+      const sourceVersion = region.sourceVersionId || evidence.sourceVersionId;
+      return api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id,
+        propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual",
+        evidence: sourceVersion ? [{ kind: "page", sourceVersionId: sourceVersion, page: region.page, ...(region.box ? { region: region.box } : {}) }] : [] });
+    },
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const reviewComponentProperty = useMutation({
+    mutationFn: ({ state, decision }: { state: BuildingComponentPropertyState; decision: "approved" | "rejected" }) =>
+      api(`/projects/${projectId}/building-model/properties/${state.propertyId}/versions/${state.version}/review`, { baseRevision: model.revision, reviewRevision: state.reviewRevision, decision }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const deriveWallRoles = useMutation({
+    mutationFn: () => api<{ summary: { walls: number; bothSides: number; roles: number; roleProposals: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const roomNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "room").map((region) => [region.id, region.label])), [model]);
   const startExtraction = useMutation({
     mutationFn: () => {
       if (!evidence.sourceVersionId || !currentSource?.storeyId) throw new Error(t("buildingModelExtractionSourceRequired"));
@@ -765,7 +791,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onPage={(nextPage) => selectSourcePage(nextPage, selectedCandidate.sourceVersionId || evidence.sourceVersionId || "", selectedCandidate.storeyId || currentSource?.storeyId || "")}
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
               : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
-                onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} />
+                onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
+                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                  onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
+                  derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
         </aside>
@@ -1416,7 +1445,7 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
   </>;
 }
 
-function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry }: { region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
+function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry, components }: { components?: ReactNode; region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
   const [label, setLabel] = useState(region.label);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -1440,6 +1469,7 @@ function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, pr
           <dt>{t("buildingModelObjectId")}</dt><dd><button type="button" className="building-model-id-copy mono" onClick={copyId} title={t("buildingModelCopyObjectId")} aria-label={`${t("buildingModelCopyObjectId")}: ${region.id}`}><span>{region.id}</span><Copy className="size-icon-sm" aria-hidden="true" />{copied && <small>{t("buildingModelCopiedObjectId")}</small>}{copyFailed && <small>{t("buildingModelCopyUnavailable")}</small>}</button></dd>
         </dl>
       </PropertySection>
+      {components && <PropertySection title={region.entityType === "room" ? t("buildingComponentSpace") : t("buildingComponentComponent")}>{components}</PropertySection>}
       {geometry}
       <PropertySection title={t("buildingModelMeasurements")} defaultOpen={Boolean(region.measurements?.length)}>
         {region.measurements?.length ? region.measurements.map((measurement) => (

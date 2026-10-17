@@ -61,6 +61,19 @@ On narrower screens the outliner and properties open as drawers from the toolbar
 
 Select an overlay or outliner row to inspect its stable ID, exact source page, properties, measurements and pending proposals. Wall hypotheses expose their source-relative minor dimension and geometry evidence tier, but those values are not a physical wall thickness. Physical thickness, material and plan scale remain **Unknown** until reviewed evidence establishes them; a source-layer construction phase remains visibly inferred. Enter room use only when the shown source page supports it. Numeric wall thicknesses and distances retain value, unit, method, uncertainty and page evidence; a measured thickness does not imply a material or acoustic performance.
 
+### Component data and wall roles
+
+Every accepted wall, ceiling and room carries the same shared component data, which every discipline reads instead of keeping its own copy. In **Properties → Component**, a wall has component type, construction (masonry, concrete, drywall, timber, steel, other), material, thickness in cm, bulk density in kg/m³ and wall role. In **Properties → Space**, a room has its apartment and space type (apartment room, common corridor, stairwell, other common space, balcony or outdoor space). Each value is a versioned property with its source page. Entries start **Unreviewed**; **Approve** or reject each one. Invalid values or units are refused.
+
+Wall roles follow DIN 4109-1's distinctions: apartment partition wall, corridor partition wall, stairwell wall, exterior wall and wall within an apartment. On a selected wall, **Derive wall roles** finds the accepted rooms on both sides of every accepted wall on the same plan page and shows them as Side 1 and Side 2. It then proposes a role from the rooms' apartments and space types:
+
+- rooms in different apartments give an apartment partition wall; rooms in one apartment give a wall within an apartment;
+- an apartment room next to a common corridor, stairwell or balcony gives a corridor partition, stairwell or exterior wall.
+
+A room's apartment comes from its entered value or, failing that, the apartment marker found by plan extraction. A room outside every apartment counts as a common corridor or stairwell only by its label. Proposals are marked **Inferred** and stay unreviewed. A wall facing rooms that would give different roles, a side without accepted rooms, or a facade towards the outside gets no proposal; set those by hand. Re-running replaces earlier derived adjacency and never overwrites a role a person entered or reviewed.
+
+Under the fields, **Needed for sound insulation** lists what a calculation still lacks for this wall or ceiling: construction, thickness, bulk density (not for drywall or timber) and, for walls, the wall role, each marked missing or unreviewed. Agents receive the same list and the derived adjacency in their building-model context. Sound insulation calculations do not read these values yet.
+
 ### Extract room and construction candidates from a plan
 
 Automatic upload processing creates one durable job for each confidently identified floor-plan page. The extraction panel shows its queued, running, complete, partial or failed state and still permits an explicit re-run for the exact linked revision, storey and page. Native PDF text is preferred; when no labels are found, bounded German/English OCR is used. Repeating planning or recovering a worker does not create duplicate jobs or candidates. Automatic recovery is leased and bounded to three attempts; a deploy or restart interrupting a job does not count as an attempt. Deleting a source PDF also removes its extraction jobs and unreviewed candidates.

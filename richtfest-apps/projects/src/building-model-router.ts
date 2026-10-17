@@ -12,6 +12,9 @@ import {
   buildingPropertyValueSchema,
   buildingReviewStatusSchema,
   ok,
+  componentInputGaps,
+  validateBuildingComponentProperty,
+  type ComponentType,
 } from "@richtfest/shared";
 import {
   buildingAlternatives,
@@ -41,6 +44,7 @@ import {
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
+import { effectiveValue, planWallAdjacency, wallAdjacencyMethod } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates } from "./schema";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -144,6 +148,16 @@ const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string
   const rows = await db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId)).where(and(inArray(fileVersions.id, ids), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready"), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
   return rows.length === ids.length;
 };
+
+/** Append a property version; a differing value over an approved one records a conflict instead of overwriting it. */
+export async function appendPropertyVersion(tx: any, d: AppDeps, modelId: string, input: { entityType: string; entityId: string; propertyKey: string; claimKind?: string; value: unknown; unit?: string | null; provenance: string; evidence: unknown[] }) {
+  let property = (await tx.select().from(buildingProperties).where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.entityType, input.entityType), eq(buildingProperties.entityId, input.entityId), eq(buildingProperties.propertyKey, input.propertyKey))).limit(1))[0];
+  if (!property) property = (await tx.insert(buildingProperties).values({ tenantId: d.tenantId, modelId, entityType: input.entityType, entityId: input.entityId, propertyKey: input.propertyKey, claimKind: input.claimKind ?? "observed_fact", createdBy: d.actorId }).returning())[0];
+  const latest = (await tx.select({ version: buildingPropertyVersions.version, value: buildingPropertyVersions.value, reviewStatus: buildingPropertyVersions.reviewStatus, evidence: buildingPropertyVersions.evidence }).from(buildingPropertyVersions).where(eq(buildingPropertyVersions.propertyId, property.id)).orderBy(desc(buildingPropertyVersions.version)).limit(1))[0];
+  const version = (await tx.insert(buildingPropertyVersions).values({ tenantId: d.tenantId, propertyId: property.id, version: (latest?.version ?? 0) + 1, value: input.value, unit: input.unit ?? null, provenance: input.provenance, evidence: input.evidence, createdBy: d.actorId }).returning())[0];
+  if (latest && latest.reviewStatus === "approved" && JSON.stringify(latest.value) !== JSON.stringify(input.value)) await tx.insert(buildingConflicts).values({ tenantId: d.tenantId, modelId, propertyId: property.id, entityType: input.entityType, entityId: input.entityId, propertyKey: input.propertyKey, claims: [{ value: latest.value, evidence: latest.evidence }, { value: input.value, evidence: input.evidence }], createdBy: d.actorId });
+  return { property, version, previous: latest ?? null };
+}
 
 const readModel = async (d: AppDeps, model: any) => {
   const [allExtractions, allExtractionCandidates, allAutomaticSources, supersededRows] = await Promise.all([
@@ -275,6 +289,19 @@ const readModel = async (d: AppDeps, model: any) => {
   };
 };
 
+/** Missing or unreviewed component inputs per wall/ceiling, for agents and the model view. */
+const componentGaps = (projectId: string, data: any, objectId?: string) => {
+  const latest = new Map<string, any>();
+  for (const property of data.properties as any[]) if (property.entityType === "element") latest.set(`${property.entityId}:${property.propertyKey}`, property);
+  return (data.elements as any[]).filter(element => !objectId || element.id === objectId).flatMap(element => {
+    const state = (key: string) => { const property = latest.get(`${element.id}:${key}`); return property?.current ? { value: property.current.value, reviewStatus: property.current.reviewStatus } : null; };
+    const declared = effectiveValue(latest.get(`${element.id}:componentType`));
+    const componentType = typeof declared === "string" ? declared as ComponentType : element.kind === "draft_wall" ? "wall" : null;
+    const properties = Object.fromEntries(["construction", "thickness", "bulkDensity", "wallRole"].map(key => [key, state(key)]));
+    return componentInputGaps(componentType, properties).map(gap => ({ entityType: "element" as const, entityId: element.id, ...gap, deepLink: buildingDeepLink(projectId, "element", element.id) }));
+  });
+};
+
 /** Automatic draft storeys/buildings are page hypotheses, not reviewed structure; label them for agents. */
 const inferredStructure = (entity: any) => ["unreviewed_page_hypothesis", "unreviewed_source_container"].includes(entity.geometry?.quality)
   ? { provenance: "inferred" as const, reviewStatus: "unreviewed" as const } : {};
@@ -318,6 +345,9 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
   const missingInputs = (data.rooms as any[])
     .filter(room => !room.roomUse && (!options.objectId || room.id === options.objectId))
     .map(room => ({ entityType: "room" as const, entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) }));
+  const missingComponentInputs = componentGaps(projectId, data, options.objectId);
+  const wallAdjacency = (data.relationships as any[]).filter(relationship => relationship.relationshipType === "separates" && (!options.objectId || relationship.fromEntityId === options.objectId || relationship.toEntityId === options.objectId))
+    .map(relationship => ({ wallId: relationship.fromEntityId, roomId: relationship.toEntityId, side: relationship.metadata?.side ?? null, method: relationship.metadata?.method ?? null, reviewStatus: relationship.reviewStatus }));
   return {
     projectId, modelId: row.model.id, revision: row.model.revision,
     entities: selected.map(({ entityType, entity }) => ({ id: entity.id, entityType, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entityType, entity.id) })),
@@ -326,9 +356,10 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
     planSources: (data.planSources as any[]).slice(0, 100),
     placement: data.placement,
     conflicts: (data.conflicts as any[]).filter(conflict => !options.objectId || selectedIds.has(conflict.entityId)),
-    missingInputs,
+    missingInputs: [...missingInputs, ...missingComponentInputs.slice(0, 500)],
+    wallAdjacency: wallAdjacency.slice(0, 1000),
     pendingProposals: (data.proposals as any[]).filter(proposal => proposal.status === "pending").slice(0, 100).map(proposal => ({ id: proposal.id, proposalType: proposal.proposalType, payload: proposal.payload, expectedRevision: proposal.expectedRevision, deepLink: proposal.deepLink })),
-    truncated: selectedAll.length > selected.length || reviewedPropertiesAll.length > reviewedProperties.length || (data.planSources as any[]).length > 100,
+    truncated: selectedAll.length > selected.length || reviewedPropertiesAll.length > reviewedProperties.length || (data.planSources as any[]).length > 100 || missingComponentInputs.length > 500 || wallAdjacency.length > 1000,
   };
 }
 
@@ -343,6 +374,8 @@ export async function proposeBuildingModelChange(d: AppDeps, projectId: string, 
   if (!Number.isInteger(input.baseRevision) || input.baseRevision < 0 || input.baseRevision !== row.model.revision)
     throw Object.assign(new Error("The building model changed; reload before proposing a change."), { status: 409, code: "revision_conflict" });
   const proposedValue = buildingPropertyValueSchema.parse(input.value);
+  const invalidComponent = validateBuildingComponentProperty(input.entityType, input.propertyKey, proposedValue, input.unit ?? null);
+  if (invalidComponent) throw Object.assign(new Error(invalidComponent), { status: 422, code: "invalid_component_property" });
   const evidence = z.array(buildingEvidenceSchema).max(20).parse(input.evidence ?? []);
   if (JSON.stringify(proposedValue).length > 8000) throw Object.assign(new Error("Proposed value exceeds context limit"), { status: 422, code: "value_too_large" });
   if (!(await evidenceVersionsForProject(tx, d, projectId, evidence))) throw Object.assign(new Error("Every evidence item must reference a ready source revision in this project"), { status: 422, code: "invalid_source_revision" });
@@ -394,7 +427,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           ...(data.rooms as any[]).map(entity => ({ ...entity, entityType: "room" as const })),
           ...(data.elements as any[]).map(entity => ({ ...entity, entityType: "element" as const })),
         ].map((entity: any) => ({ id: entity.id, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entity.entityType, entity.id) })),
-        missingInputs: (data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
+        missingInputs: [...(data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
+          ...componentGaps(projectId, data).slice(0, 500)],
         draftCandidates: draftCandidates.slice(0, 500).map(candidate => {
           const evidence = Array.isArray(candidate.evidence) ? candidate.evidence.find((item: any) => item?.kind === "page") : null;
           const geometry = candidate.geometry && typeof candidate.geometry === "object" ? candidate.geometry : {};
@@ -488,8 +522,10 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
   router.post("/projects/:projectId/building-model/properties", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId)); const input = propertyInput.parse(req.body); const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const invalidComponent = validateBuildingComponentProperty(input.entityType, input.propertyKey, input.value, input.unit);
+      if (invalidComponent) return send(res, 422, { data: null, error: { code: "invalid_component_property" }, message: invalidComponent });
       if (!(await evidenceVersionsForProject(d.db, d, projectId, input.evidence))) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "Every evidence item must reference a ready source revision in this project" });
-      const result = await modelTransaction(d.db, async (tx: any) => { if (!(await entityExists(tx, d, modelRow.model.id, input.entityType, input.entityId))) return { missing: true }; const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; let property = (await tx.select().from(buildingProperties).where(and(eq(buildingProperties.modelId, modelRow.model.id), eq(buildingProperties.entityType, input.entityType), eq(buildingProperties.entityId, input.entityId), eq(buildingProperties.propertyKey, input.propertyKey))).limit(1))[0]; if (!property) property = (await tx.insert(buildingProperties).values({ tenantId: d.tenantId, modelId: modelRow.model.id, entityType: input.entityType, entityId: input.entityId, propertyKey: input.propertyKey, claimKind: input.claimKind, createdBy: d.actorId }).returning())[0]; const latest = (await tx.select({ version: buildingPropertyVersions.version, value: buildingPropertyVersions.value, reviewStatus: buildingPropertyVersions.reviewStatus, evidence: buildingPropertyVersions.evidence }).from(buildingPropertyVersions).where(eq(buildingPropertyVersions.propertyId, property.id)).orderBy(desc(buildingPropertyVersions.version)).limit(1))[0]; const version = (await tx.insert(buildingPropertyVersions).values({ tenantId: d.tenantId, propertyId: property.id, version: (latest?.version ?? 0) + 1, value: input.value, unit: input.unit ?? null, provenance: input.provenance, evidence: input.evidence, createdBy: d.actorId }).returning())[0]; if (latest && latest.reviewStatus === "approved" && JSON.stringify(latest.value) !== JSON.stringify(input.value)) await tx.insert(buildingConflicts).values({ tenantId: d.tenantId, modelId: modelRow.model.id, propertyId: property.id, entityType: input.entityType, entityId: input.entityId, propertyKey: input.propertyKey, claims: [{ value: latest.value, evidence: latest.evidence }, { value: input.value, evidence: input.evidence }], createdBy: d.actorId }); await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.property.created", "building_property", property.id, { projectId, propertyKey: input.propertyKey, claimKind: input.claimKind, version: version.version, modelRevision: revision }); return { property, version, revision }; });
+      const result = await modelTransaction(d.db, async (tx: any) => { if (!(await entityExists(tx, d, modelRow.model.id, input.entityType, input.entityId))) return { missing: true }; const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; const { property, version } = await appendPropertyVersion(tx, d, modelRow.model.id, input); await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.property.created", "building_property", property.id, { projectId, propertyKey: input.propertyKey, claimKind: input.claimKind, version: version.version, modelRevision: revision }); return { property, version, revision }; });
       if ((result as any).missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Entity not found" }); if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 201, ok(result));
     } catch (e) { return next(e); }
   });
@@ -529,6 +565,42 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId)); const input = relationshipInput.parse(req.body); const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       const result = await modelTransaction(d.db, async (tx: any) => { if (!(await entityExists(tx, d, modelRow.model.id, input.fromEntityType, input.fromEntityId)) || !(await entityExists(tx, d, modelRow.model.id, input.toEntityType, input.toEntityId))) return { missing: true }; const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; const { baseRevision: _baseRevision, ...relationshipValues } = input; const [relationship] = await tx.insert(buildingRelationships).values({ ...relationshipValues, tenantId: d.tenantId, modelId: modelRow.model.id, createdBy: d.actorId }).returning(); await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.relationship.created", "building_relationship", relationship.id, { projectId, modelRevision: revision }); return { relationship, revision }; });
       if ((result as any).missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Entity not found" }); if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 201, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Deterministic: re-running replaces earlier derived adjacency and never overrides a person's wall role.
+  router.post("/projects/:projectId/building-model/wall-adjacency", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = revisionInput.strict().parse(req.body); const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (modelRow.model.revision !== input.baseRevision) return revisionConflict(res, modelRow.model.revision);
+      const data = await readModel(d, modelRow.model);
+      const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[] });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
+          eq(buildingRelationships.relationshipType, "separates"), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' = ${wallAdjacencyMethod}`));
+        const relationships = walls.flatMap(wall => wall.sides.flatMap((side, sideIndex) => (side ?? []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id,
+          fromEntityType: "element", fromEntityId: wall.wallId, toEntityType: "room", toEntityId: room.roomId, relationshipType: "separates",
+          metadata: { method: wallAdjacencyMethod, side: sideIndex, probeHits: room.hits, sourceVersionId: wall.sourceVersionId, page: wall.page }, createdBy: d.actorId }))));
+        if (relationships.length) await tx.insert(buildingRelationships).values(relationships);
+        let roleProposals = 0;
+        for (const wall of walls.filter(item => item.writeRole)) {
+          const region = wall.planRegion && wall.planRegion.width > 0 && wall.planRegion.height > 0 ? { region: wall.planRegion } : {};
+          const evidence = buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: wall.sourceVersionId, page: wall.page, ...region });
+          await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: wall.wallId, propertyKey: "wallRole", value: wall.role, unit: null, provenance: "inferred", evidence: [evidence] });
+          roleProposals++;
+        }
+        const summary = { walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
+          oneSide: walls.filter(wall => Boolean(wall.sides[0]) !== Boolean(wall.sides[1])).length, noSide: walls.filter(wall => !wall.sides[0] && !wall.sides[1]).length,
+          roles: walls.filter(wall => wall.role).length, roleProposals, relationships: relationships.length, method: wallAdjacencyMethod };
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.wall_adjacency.derived", "building_model", modelRow.model.id, { projectId, modelRevision: revision, ...summary });
+        return { revision, summary };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
+      return res.json(ok(result));
     } catch (e) { return next(e); }
   });
 

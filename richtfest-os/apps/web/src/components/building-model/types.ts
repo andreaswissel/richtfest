@@ -88,6 +88,12 @@ export type BuildingRegion = {
     uncertainty?: unknown;
     evidence?: Array<RecordData>;
   }>;
+  /** Raw element kind such as `draft_wall`; region `kind` only distinguishes rooms from elements. */
+  elementKind?: string | null;
+  /** Latest version of each shared component property (componentType, thickness, wallRole, ...). */
+  componentProperties?: Record<string, BuildingComponentPropertyState>;
+  /** Rooms on each face of a wall, from derived plan adjacency. */
+  separates?: Array<{ side: number; roomIds: string[] }>;
   status?: "unreviewed" | "reviewed" | "needs-review" | "accepted" | "rejected" | "matched" | string;
   /** Extraction candidates use the same normalized geometry as reviewed regions. */
   isCandidate?: boolean;
@@ -197,6 +203,17 @@ export type BuildingExtractionCandidate = BuildingRegion & {
 };
 
 export type BuildingSupersededSource = { sourceVersionId: string; fileName: string; supersededByVersionId: string | null };
+
+export type BuildingComponentPropertyState = {
+  propertyId: string;
+  version: number;
+  value: unknown;
+  unit: string | null;
+  provenance: string;
+  reviewStatus: string;
+  reviewRevision: number;
+  reviewedValue: unknown;
+};
 
 export type BuildingModel = {
   id?: string;
@@ -334,6 +351,13 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
       outlineEdit: outlineEdit(geometry?.outlineEdit),
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       evidence: Array.isArray(row.evidence) ? row.evidence : fieldEvidence.concat(geometryEvidence),
+      elementKind: entityType === "element" && typeof row.kind === "string" ? row.kind : null,
+      groupLabel: typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null,
+      componentProperties: Object.fromEntries(entityProperties.filter((property) => property.current).map((property) => [String(property.propertyKey), {
+        propertyId: String(property.id), version: asNumber(property.current.version, 1), value: property.current.value, unit: typeof property.current.unit === "string" ? property.current.unit : null,
+        provenance: asString(property.current.provenance), reviewStatus: asString(property.current.reviewStatus, "unreviewed"), reviewRevision: asNumber(property.current.reviewRevision, 0),
+        reviewedValue: property.reviewed ? property.reviewed.value : null,
+      }])),
       measurements: Array.isArray(row.measurements) ? row.measurements : entityMeasurements.map((item) => ({ key: item.id, label: item.label || item.quantity || "Measurement", semanticQuantity: item.quantity, value: item.value == null ? null : Number(item.value), sourceValue: item.method === "manual" ? null : item.value ?? item.quantity, calibratedValue: item.method === "manual" ? item.value : item.calibratedValue, unit: item.unit, sourcePage: item.evidence?.[0]?.page, method: item.method, uncertainty: item.uncertainty, evidence: item.evidence })),
       status: row.status === "reviewed" || row.status === "needs-review" ? row.status : "unreviewed",
     }];
@@ -409,6 +433,18 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
 
 const propertyLabel = (properties: RecordData[]) => properties[0]?.propertyKey || "Property";
 
+function separatesByWall(relationships: RecordData[]) {
+  const result = new Map<string, Array<{ side: number; roomIds: string[] }>>();
+  for (const relationship of relationships) {
+    if (relationship.relationshipType !== "separates" || relationship.fromEntityType !== "element") continue;
+    const side = asNumber(relationship.metadata?.side, 0), faces = result.get(relationship.fromEntityId) ?? [];
+    const face = faces.find((item) => item.side === side);
+    if (face) face.roomIds.push(relationship.toEntityId); else faces.push({ side, roomIds: [relationship.toEntityId] });
+    result.set(relationship.fromEntityId, faces.sort((a, b) => a.side - b.side));
+  }
+  return result;
+}
+
 function entityRows(raw: RecordData, state: BuildingModelState, kind: BuildingRegion["kind"], entityType: BuildingRegion["entityType"], properties: RecordData[], measurements: RecordData[]) {
   const rows = Array.isArray(raw) ? raw.filter((row) => {
     const constructionState = row.constructionState;
@@ -452,9 +488,10 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     ...region,
     page: region.sourceVersionId ? region.page : planSources.find((source) => source.storeyId && source.storeyId === region.storeyId)?.page ?? region.page,
   }));
+  const separates = separatesByWall(Array.isArray(raw.relationships) ? raw.relationships : []);
   const entityRowsForState = (state: BuildingModelState) => [
     ...entityRows(raw.rooms, state, "room", "room", properties, measurements),
-    ...entityRows(raw.elements, state, "element", "element", properties, measurements),
+    ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => separates.has(region.id) ? { ...region, separates: separates.get(region.id) } : region),
   ];
   return {
     id: asString(source.id) || undefined,

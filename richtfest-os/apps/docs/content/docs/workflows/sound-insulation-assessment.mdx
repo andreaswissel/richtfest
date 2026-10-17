@@ -1,0 +1,72 @@
+---
+title: Sound insulation assessment
+description: How a specialist produces a Schallschutznachweis and concept, and which parts Richtfest supports today.
+---
+
+This page records the specialist workflow for a sound insulation assessment (Schallschutznachweis) as described by the firm's acoustics specialist. It is domain knowledge for building Richtfest's agents and tools. It does not replace the norm texts: rules marked **practice** come from the specialist and must be checked against the applicable edition before a deterministic tool implements them. For how to run the current acoustic agents, see [project onboarding](/docs/workflows/project-onboarding#first-calculation-workflow).
+
+## Requirement levels
+
+| Level | Status | Use |
+| --- | --- | --- |
+| DIN 4109-1 | Statutory minimum (baurechtlicher Mindestschallschutz), always mandatory | Lower bound of every assessment |
+| Elevated civil-law level (zivilrechtlich erhöhter Schallschutz) | Contractually agreed, roughly 3 dB better | The firm's default recommendation |
+| DEGA 103 | Voluntary guideline for higher residential quality | Only when agreed |
+
+3 dB is the difference almost everyone can hear. The firm recommends the elevated level as a buffer: the calculation assumes perfect execution and built quality is always worse. Without a buffer, the finished building can miss the statutory minimum and the planner becomes liable.
+
+## Regulatory hierarchy
+
+1. **Bebauungsplan**: legally binding and checked first. It can prescribe noise zones directly or add unusual requirements, for example protection with tilted windows (Hanau). If it specifies nothing, calculate independently; if none exists, state that in the concept. Contesting it is possible in theory but takes years, so it is treated as fixed.
+2. **VVTB and Landesbauordnung**: state law. DIN norms become binding only where the VVTB references them. The VVTB requires an exterior noise assessment (Außenlärmnachweis) when the maßgeblicher Außenlärmpegel is at least 61 dB.
+3. **DIN norms referenced by the VVTB**, for example DIN 4109-1.
+4. **Anerkannte Regeln der Technik**: consensus established by practice and court rulings.
+
+DEGA 103 sits outside this hierarchy. Several levels can apply at once. VVTB and Landesbauordnung change rarely but do change: a new VVTB annex once introduced simplifications for residential Bestand mid-project, and the client noticed before the firm did. Check for new editions at project start and have the user confirm which edition applies.
+
+## Workflow
+
+1. **Review plans.** Establish scope, number of units and obvious problems such as stairwell walls that are too thin. Plans use a colour convention, usually with a legend: red is new construction, yellow is demolition, black is existing structure. Architects often deliver layered PDFs (Bestand, Abbruch, Neubau); the firm hides irrelevant layers and adds its own sound insulation annotation layer.
+2. **Agree the requirement level** with the client and architect: minimum or elevated.
+3. **Collect component data** from the architect and client, often by email. The Baubeschreibung required for the permit can contain it but is rarely complete.
+   - Walls: type (masonry, drywall), material (for example Kalksandstein), thickness, bulk density.
+   - Ceilings: type and thickness.
+   - Ventilation: central or decentralised; this changes the exterior noise calculation.
+   - Exterior elements: roller shutter boxes, blinds and similar.
+   - Wall roles carry different requirements: apartment partition walls (Wohnungstrennwände), corridor partition walls (Flurtrennwände) and stairwell walls (Treppenraumwände).
+   - Thickness can suggest construction (24 cm is likely masonry, 12.5 cm likely drywall) but is always confirmed before calculating.
+4. **Calculate (Nachweis).** The calculation determines the required component properties such as thickness and density.
+5. **Write the concept (Konzept)** from the calculation: annotated plans showing what each wall and ceiling needs. The building authority checks only the pass/fail summary; the full calculation is the legal record in a dispute.
+
+### Unknown inputs
+
+Do not guess. Prepare everything that can be calculated, leave the unknown component open, calculate the plausible variants and ask the user which to assume. Calculation is cheap; a wrong assumption is not.
+
+## Exterior noise
+
+Sources are road, rail, air, industry and shipping. In practice road, rail and air matter; shipping is almost always negligible.
+
+- **Road and rail**: DIN 18005 as referenced by DIN 4109, with RLS-19 for road traffic. Classify nearby roads (Autobahn, Bundesstraße, Landstraße, municipal street), measure the distance to the facade and enter traffic volume, speed limit and road surface. Practice: a 30 km/h zone lowers the level by 2.5 dB; rail levels receive a 5 dB reduction per the norm. Rail data depends on train type (long-distance, regional, with or without freight) and often has to be requested from the rail or environmental authority. If unsure whether rail matters, include it; it will usually be negligible.
+- **Air**: use the noise mapping that major airports must publish (Fraport publishes yearly Leq layers). Use the latest year, except that 2019 data replaced 2020–2023 because of reduced pandemic traffic. Without airport coverage, air noise is 0 dB.
+- **Combination**: levels add logarithmically, so the dominant source drives the total and distant minor sources barely change it.
+- **Day and night**: day is 06:00–22:00, night 22:00–06:00. Practice: if the day–night difference is below 10 dB, add 10 dB to the night level.
+- **Result**: Beurteilungspegel + 3 dB = maßgeblicher Außenlärmpegel.
+
+## One model, several disciplines
+
+The specialist's central point: extract each wall, ceiling and floor once from the architect's plans and attach every discipline to that same record — sound, thermal, fire protection and cost. Disciplines conflict (lightweight blocks help thermal performance and hurt sound insulation; fire and sound requirements compete on partition walls), so solving them together is the actual product. Fire protection is expected to be easier to automate than sound insulation: its norms, such as the Landesbauordnung, are public and it depends less on detailed material parameters.
+
+## Richtfest coverage today
+
+| Step | Status |
+| --- | --- |
+| Requirement levels | Not modelled. Only DIN 4109-1/-2:2018-01 exterior-noise facade screening exists; the elevated level and DEGA 103 appear only as report headings. |
+| Regulatory hierarchy and editions | No Bebauungsplan retrieval or parsing, no VVTB or Landesbauordnung records, no edition tracking. The DIN 4109 edition is fixed in code. |
+| Plan review | PDF extraction derives rooms, walls and openings from construction layers and assigns Existing, Demolition or Proposed by layer name. Colour legends, physical wall thickness and apartment units are not established. |
+| Component data | Accepted walls, ceilings and rooms carry shared, reviewed component data: construction, material, thickness, bulk density, wall role, apartment and space type. Wall roles are proposed from the rooms on both sides of each wall ([component data](/docs/workflows/project-onboarding#component-data-and-wall-roles)). Still missing: ceilings and floors from plan extraction, thickness from the drawing scale, a request workflow to architect or client, Baubeschreibung parsing, and links to the [Components catalog](/docs/workflows/components). |
+| Interior calculation | Not implemented: no airborne (R'w) or impact (L'n,w) sound insulation and no flanking transmission. |
+| Exterior calculation | Room requirement and facade check (R'w,ges against La) are deterministic and versioned. La must be supplied; no road (RLS-19), rail or industry calculation exists, pending the norm texts. |
+| Site context | Rheinland-Pfalz topographic road, rail and industry records and Fraport contour extents. No noise levels at the site, no traffic data, no Hessen connector. |
+| Unknown inputs | Missing inputs stay explicit and calculations report them. Variants are manual scenarios; the agent does not yet calculate options and ask. |
+| Output | Calculation sheet, PDF and agent-drafted interior and exterior concepts with source attachments. No annotated plans. |
+| Other disciplines | No thermal, fire protection or cost attributes. |

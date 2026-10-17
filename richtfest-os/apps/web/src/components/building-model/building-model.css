@@ -327,3 +327,9 @@
   .building-model-toolbar > .segmented, .building-model-context-trigger > span { display: none; }
   .building-model-statusbar { flex-wrap: wrap; }
 }
+.building-model-component-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.building-model-component-status:empty { display: none; }
+.building-model-component-derive { display: grid; justify-items: start; gap: 4px; }
+.building-model-properties dl.building-model-component-rows { align-items: start; }
+.building-model-component-rows > dt { min-height: var(--control-sm); display: flex; align-items: center; }
+.building-model-component-rows > dd:not(:has([data-slot])) { min-height: var(--control-sm); display: flex; align-items: center; }
