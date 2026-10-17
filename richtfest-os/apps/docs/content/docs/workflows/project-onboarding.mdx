@@ -75,6 +75,8 @@ A room's apartment comes from its entered value or, failing that, the apartment 
 
 Architects usually specify construction per wall type. After entering construction, material, thickness or bulk density on one wall, **Copy to other walls with this role** fills the same values on every wall with that role. Only values a person entered or approved are copied, never a derived guess. A target wall keeps any value entered or reviewed on it; copies are unreviewed entries.
 
+On a wall with a role, **Properties → Wall type review** lists, for each field, the values found on every wall with that role, with the number of walls and how many are approved. **Approve on N** approves exactly the unreviewed versions shown; a value changed in the meantime is skipped and stays unreviewed. When walls of one role disagree, the section shows **Values differ** so the outliers can be checked, and it counts walls without a value.
+
 Under the fields, **Needed for sound insulation** lists what a calculation still lacks for this wall or ceiling: construction, thickness, bulk density (not for drywall or timber) and, for walls, the wall role, each marked missing or unreviewed. Agents receive the same list and the derived adjacency in their building-model context. Sound insulation calculations do not read these values yet.
 
 ### Extract room and construction candidates from a plan

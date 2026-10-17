@@ -1746,5 +1746,12 @@
   "buildingComponentOutside": "Outside",
   "buildingComponentCopyToRole": "Copy to other walls with this role ({count})",
   "buildingComponentCopyHint": "Copies construction, material, thickness and bulk density. Values entered or reviewed on those walls are kept; copies stay unreviewed.",
-  "buildingComponentCopyResult": "{updated} values copied · {kept} entered values kept"
+  "buildingComponentCopyResult": "{updated} values copied · {kept} entered values kept",
+  "buildingComponentTypeReview": "Wall type review",
+  "buildingComponentTypeReviewHint": "All {count} walls with this role. Approve a value once for every wall that has it; walls with other values stay listed.",
+  "buildingComponentWallCount": "{count} walls",
+  "buildingComponentApprovedCount": "{count} approved",
+  "buildingComponentApproveCount": "Approve on {count}",
+  "buildingComponentValuesDiffer": "Values differ within this wall type.",
+  "buildingComponentMissingCount": "{count} walls without a value"
 }

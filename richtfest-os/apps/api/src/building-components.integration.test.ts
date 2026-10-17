@@ -121,13 +121,28 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(after.get(corridorWall)).toMatchObject({ value: 25, provenance: "manual" });
     expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: bathWall, keys: ["construction", "thickness", "bulkDensity"] })).body.data.summary.updated).toEqual({});
 
+    // Bulk review approves exactly the versions shown; stale or unrelated items are skipped, never approved unseen.
+    const latestVersion = async (entityId: string, key: string) => (await pool.query(`select p.id as "propertyId", v.version, v.review_revision as "reviewRevision" from projects_building_properties p
+      join lateral (select * from projects_building_property_versions v where v.property_id=p.id order by version desc limit 1) v on true where p.entity_id=$1 and p.property_key=$2`, [entityId, key])).rows[0];
+    const shown = [await latestVersion(bathWall, "thickness"), await latestVersion(kitchenWall, "thickness")];
+    const stale = { ...(await latestVersion(corridorWall, "thickness")) }; stale.version -= 1;
+    // Free-form keys outside the shared component set keep their individual review path.
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "element", entityId: bathWall, propertyKey: "fireRating", value: "REI 90", provenance: "manual", evidence })).status).toBe(201);
+    const freeForm = await latestVersion(bathWall, "fireRating");
+    const bulk = await post("/properties/review", { baseRevision: await revision(), decision: "approved", items: [...shown, stale, freeForm] });
+    expect(bulk.status).toBe(200); expect(bulk.body.data).toMatchObject({ reviewed: 2, skipped: 2 });
+    expect((await pool.query(`select v.review_status from projects_building_property_versions v where (v.property_id, v.version) in (($1::uuid,$2::int),($3::uuid,$4::int))`, [shown[0].propertyId, shown[0].version, shown[1].propertyId, shown[1].version])).rows.map(r => r.review_status)).toEqual(["approved", "approved"]);
+    const before = await revision();
+    expect((await post("/properties/review", { baseRevision: before, decision: "approved", items: shown })).status).toBe(409);
+    expect(await revision()).toBe(before);
+
     // A derived thickness is not passed on as if a person had entered it.
     const facade = [...byWall.entries()].find(([, names]) => names === "Küche+Wohnen|outside")![0];
     expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: facade, keys: ["thickness"] })).body.data.summary).toMatchObject({ wallRole: "exterior", updated: {} });
 
     const context = await (await fetch(base + "/agent-context")).json();
     const wallGaps = context.data.missingInputs.filter((gap: any) => gap.entityId === kitchenWall).map((gap: any) => `${gap.field}:${gap.status}`);
-    expect(wallGaps).toEqual(["construction:unreviewed", "thickness:unreviewed", "bulkDensity:unreviewed", "wallRole:unreviewed"]);
+    expect(wallGaps).toEqual(["construction:unreviewed", "bulkDensity:unreviewed", "wallRole:unreviewed"]);
     expect(context.data.wallAdjacency.some((item: any) => item.exterior && item.roomId === null)).toBe(true);
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);

@@ -753,3 +753,13 @@ test("plan points convert to metres with the page aspect for measuring and verte
   expect(planDistanceM({ x: 0, y: 0 }, { x: 0, y: .1 }, scale)).toBeCloseTo(4);
   expect(planDistanceM({ x: 0, y: 0 }, { x: .1, y: 0 }, { pageAspectRatio: 1.5, metresPerPageHeight: null })).toBeNull();
 });
+
+test("wall type review groups values by value and unit, and only offers unreviewed versions", async () => {
+  const { wallTypeGroups } = await import("../src/components/building-model/component-properties");
+  const state = (value: unknown, unit: string | null, reviewStatus: string, n: number) => ({ propertyId: `p${n}`, version: 2, value, unit, provenance: "manual", reviewStatus, reviewRevision: 0, reviewedValue: null });
+  const wall = (n: number, thickness?: ReturnType<typeof state>) => ({ id: `w${n}`, kind: "element" as const, entityType: "element" as const, label: `Wall ${n}`, page: 1, componentProperties: thickness ? { thickness } : {} });
+  const { groups, missing } = wallTypeGroups([wall(1, state(24, "cm", "unreviewed", 1)), wall(2, state(24, "cm", "approved", 2)), wall(3, state(24, "cm", "unreviewed", 3)),
+    wall(4, state(25, "cm", "unreviewed", 4)), wall(5, state(24, "cm", "rejected", 5)), wall(6)] as any, "thickness");
+  expect(groups.map((group) => [group.value, group.walls, group.approved, group.pending.map((item) => item.propertyId)])).toEqual([[24, 3, 1, ["p1", "p3"]], [25, 1, 0, ["p4"]]]);
+  expect(missing).toBe(2);
+});

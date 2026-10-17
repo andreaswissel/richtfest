@@ -123,3 +123,48 @@ export function ComponentProperties({ region, roomNames, t, pending, onSave, onR
     </div>}
   </>;
 }
+
+type ReviewItem = { propertyId: string; version: number; reviewRevision: number };
+export type WallTypeGroup = { value: unknown; unit: string | null; walls: number; approved: number; pending: ReviewItem[] };
+
+/** Current values of one property across walls of one type, grouped by value so outliers stand out. */
+export function wallTypeGroups(walls: BuildingRegion[], key: string) {
+  const groups = new Map<string, WallTypeGroup>(); let missing = 0;
+  for (const wall of walls) {
+    const state = wall.componentProperties?.[key];
+    if (!state || state.value === null || state.reviewStatus === "rejected") { missing++; continue; }
+    const id = JSON.stringify([state.value, state.unit]);
+    const group = groups.get(id) ?? { value: state.value, unit: state.unit, walls: 0, approved: 0, pending: [] };
+    group.walls++;
+    if (state.reviewStatus === "approved") group.approved++;
+    else group.pending.push({ propertyId: state.propertyId, version: state.version, reviewRevision: state.reviewRevision });
+    groups.set(id, group);
+  }
+  return { groups: [...groups.values()].sort((a, b) => b.walls - a.walls), missing };
+}
+
+const reviewKeys = ["wallRole", "construction", "material", "thickness", "bulkDensity"];
+
+/** Approve one value for every wall of a type at once; walls with another value stay visible as outliers. */
+export function WallTypeReview({ walls, t, pending, onApprove }: { walls: BuildingRegion[]; t: T; pending: boolean; onApprove: (items: ReviewItem[]) => void }) {
+  const value = (key: string, group: WallTypeGroup) => enumOptions[key] ? optionLabel(key, String(group.value), t) : `${String(group.value)}${group.unit ? ` ${group.unit}` : ""}`;
+  return <>
+    <p className="muted text-ui-2xs">{t("buildingComponentTypeReviewHint").replace("{count}", String(walls.length))}</p>
+    <dl className="building-model-component-rows">
+      {reviewKeys.map((key) => {
+        const { groups, missing } = wallTypeGroups(walls, key);
+        return <Fragment key={key}>
+          <dt>{fieldLabel(key, t)}</dt>
+          <dd className="building-model-type-review">
+            {groups.map((group) => <div key={JSON.stringify([group.value, group.unit])} className="building-model-type-review-row">
+              <span><strong>{value(key, group)}</strong> · {t("buildingComponentWallCount").replace("{count}", String(group.walls))}{group.approved ? ` · ${t("buildingComponentApprovedCount").replace("{count}", String(group.approved))}` : ""}</span>
+              {group.pending.length > 0 && <Button size="xs" variant="outline" disabled={pending} onClick={() => onApprove(group.pending)}>{t("buildingComponentApproveCount").replace("{count}", String(group.pending.length))}</Button>}
+            </div>)}
+            {groups.length > 1 && <span className="muted text-ui-2xs">{t("buildingComponentValuesDiffer")}</span>}
+            {missing > 0 && <span className="muted text-ui-2xs">{t("buildingComponentMissingCount").replace("{count}", String(missing))}</span>}
+          </dd>
+        </Fragment>;
+      })}
+    </dl>
+  </>;
+}

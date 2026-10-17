@@ -12,6 +12,7 @@ import {
   buildingPropertyValueSchema,
   buildingReviewStatusSchema,
   ok,
+  buildingComponentProperties,
   componentInputGaps,
   validateBuildingComponentProperty,
   type ComponentType,
@@ -533,6 +534,44 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       if (!(await evidenceVersionsForProject(d.db, d, projectId, input.evidence))) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "Every evidence item must reference a ready source revision in this project" });
       const result = await modelTransaction(d.db, async (tx: any) => { if (!(await entityExists(tx, d, modelRow.model.id, input.entityType, input.entityId))) return { missing: true }; const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; const { property, version } = await appendPropertyVersion(tx, d, modelRow.model.id, input); await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.property.created", "building_property", property.id, { projectId, propertyKey: input.propertyKey, claimKind: input.claimKind, version: version.version, modelRevision: revision }); return { property, version, revision }; });
       if ((result as any).missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Entity not found" }); if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 201, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Review many component values at once. The client sends exactly the versions it showed; anything
+  // changed since then is skipped rather than approved unseen.
+  router.post("/projects/:projectId/building-model/properties/review", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), decision: z.enum(["approved", "rejected"]), note: z.string().max(2000).nullable().optional(),
+        items: z.array(z.object({ propertyId: uuid, version: z.number().int().positive(), reviewRevision: z.number().int().nonnegative() }).strict()).min(1).max(2000) }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const properties = await tx.select({ id: buildingProperties.id, entityType: buildingProperties.entityType, propertyKey: buildingProperties.propertyKey }).from(buildingProperties)
+          .where(and(inArray(buildingProperties.id, [...new Set(input.items.map(item => item.propertyId))]), eq(buildingProperties.modelId, modelRow.model.id), eq(buildingProperties.tenantId, d.tenantId)));
+        // Shared component keys only: room use keeps its own review path, which also updates the room.
+        const reviewable = new Set((properties as any[]).filter(property => Object.hasOwn((buildingComponentProperties as any)[property.entityType] ?? {}, property.propertyKey)).map(property => property.id));
+        const latest = new Map<string, number>();
+        const latestRows = reviewable.size ? await tx.select({ propertyId: buildingPropertyVersions.propertyId, version: sql<number>`max(${buildingPropertyVersions.version})` }).from(buildingPropertyVersions)
+          .where(inArray(buildingPropertyVersions.propertyId, [...reviewable])).groupBy(buildingPropertyVersions.propertyId) : [];
+        for (const row of latestRows as any[]) latest.set(row.propertyId, Number(row.version));
+        const reviewed: string[] = []; let skipped = 0;
+        for (const item of input.items) {
+          if (!reviewable.has(item.propertyId) || latest.get(item.propertyId) !== item.version) { skipped++; continue; }
+          const updated = await tx.update(buildingPropertyVersions).set({ reviewStatus: input.decision, reviewRevision: sql`${buildingPropertyVersions.reviewRevision} + 1`, reviewedBy: d.actorId, reviewedAt: new Date(), reviewNote: input.note ?? null })
+            .where(and(eq(buildingPropertyVersions.propertyId, item.propertyId), eq(buildingPropertyVersions.version, item.version), eq(buildingPropertyVersions.reviewRevision, item.reviewRevision),
+              eq(buildingPropertyVersions.reviewStatus, "unreviewed"), eq(buildingPropertyVersions.tenantId, d.tenantId))).returning({ id: buildingPropertyVersions.id });
+          if (updated.length) reviewed.push(item.propertyId); else skipped++;
+        }
+        if (!reviewed.length) return { reviewConflict: true };
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: input.decision === "approved" ? "approved" : "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.property.bulk_reviewed", "building_model", modelRow.model.id, { projectId, decision: input.decision, reviewed: reviewed.length, skipped, propertyIds: reviewed.slice(0, 200), modelRevision: revision });
+        return { revision, reviewed: reviewed.length, skipped };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
+      if ((result as any).reviewConflict) return send(res, 409, { data: null, error: { code: "review_revision_conflict" }, message: "These values changed or were already reviewed; reload before reviewing." });
+      return res.json(ok(result));
     } catch (e) { return next(e); }
   });
 

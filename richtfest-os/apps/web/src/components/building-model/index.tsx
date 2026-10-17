@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
-import { ComponentProperties, regionComponentType, type ComponentPropertySave } from "./component-properties";
+import { ComponentProperties, WallTypeReview, regionComponentType, type ComponentPropertySave } from "./component-properties";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
 import "./building-model.css";
@@ -418,6 +418,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  const reviewWallType = useMutation({
+    mutationFn: (items: Array<{ propertyId: string; version: number; reviewRevision: number }>) => api<{ reviewed: number; skipped: number }>(`/projects/${projectId}/building-model/properties/review`, { baseRevision: model.revision, decision: "approved", items }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const modelWalls = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region) === "wall").map((region) => [region.id, region])).values()], [model]);
   const wallRoles = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element").map((region) => {
     const role = region.componentProperties?.wallRole;
     return [region.id, role && role.reviewStatus !== "rejected" ? role.value : role?.reviewedValue ?? null] as const;
@@ -806,7 +813,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
-                    sameRoleCount: [...wallRoles].filter(([id, role]) => id !== selected.id && role != null && role === wallRoles.get(selected.id)).length }} /> : undefined} />
+                    sameRoleCount: [...wallRoles].filter(([id, role]) => id !== selected.id && role != null && role === wallRoles.get(selected.id)).length }} /> : undefined}
+                wallType={wallRoles.get(selected.id) != null ? <WallTypeReview walls={modelWalls.filter((wall) => wallRoles.get(wall.id) === wallRoles.get(selected.id))} t={t} pending={reviewWallType.isPending} onApprove={(items) => reviewWallType.mutate(items)} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
         </aside>
@@ -1457,7 +1465,7 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
   </>;
 }
 
-function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry, components }: { components?: ReactNode; region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
+function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry, components, wallType }: { components?: ReactNode; wallType?: ReactNode; region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
   const [label, setLabel] = useState(region.label);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -1482,6 +1490,7 @@ function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, pr
         </dl>
       </PropertySection>
       {components && <PropertySection title={region.entityType === "room" ? t("buildingComponentSpace") : t("buildingComponentComponent")}>{components}</PropertySection>}
+      {wallType && <PropertySection title={t("buildingComponentTypeReview")} defaultOpen={false}>{wallType}</PropertySection>}
       {geometry}
       <PropertySection title={t("buildingModelMeasurements")} defaultOpen={Boolean(region.measurements?.length)}>
         {region.measurements?.length ? region.measurements.map((measurement) => (

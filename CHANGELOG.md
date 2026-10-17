@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Building model walls, ceilings and rooms now carry shared component data (construction, material, thickness, bulk density, wall role, apartment, space type) with review per value. **Derive from plan** finds the rooms on both sides of each wall, detects facades, proposes apartment partition, corridor, stairwell, exterior or internal roles and measures wall thickness at the printed plan scale. Construction data can be copied to all walls of the same role, and agents see which sound-insulation inputs are still missing.
+- Building model walls, ceilings and rooms now carry shared component data (construction, material, thickness, bulk density, wall role, apartment, space type) with review per value. **Derive from plan** finds the rooms on both sides of each wall, detects facades, proposes apartment partition, corridor, stairwell, exterior or internal roles and measures wall thickness at the printed plan scale. Construction data can be copied to all walls of the same role and approved per wall type in one step, and agents see which sound-insulation inputs are still missing.
 
 - Richtfest Docs gains a Sound insulation assessment page: the specialist workflow from requirement levels and regulatory hierarchy to exterior noise, and what Richtfest covers today.
 

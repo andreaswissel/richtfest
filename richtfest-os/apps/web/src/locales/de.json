@@ -1746,5 +1746,12 @@
   "buildingComponentOutside": "Außen",
   "buildingComponentCopyToRole": "Auf weitere Wände mit dieser Funktion übertragen ({count})",
   "buildingComponentCopyHint": "Überträgt Bauweise, Material, Dicke und Rohdichte. Auf diesen Wänden eingetragene oder geprüfte Werte bleiben erhalten; Kopien bleiben ungeprüft.",
-  "buildingComponentCopyResult": "{updated} Werte übertragen · {kept} eingetragene Werte beibehalten"
+  "buildingComponentCopyResult": "{updated} Werte übertragen · {kept} eingetragene Werte beibehalten",
+  "buildingComponentTypeReview": "Wandtyp prüfen",
+  "buildingComponentTypeReviewHint": "Alle {count} Wände mit dieser Funktion. Einen Wert einmal für alle Wände freigeben, die ihn haben; Wände mit anderen Werten bleiben aufgeführt.",
+  "buildingComponentWallCount": "{count} Wände",
+  "buildingComponentApprovedCount": "{count} freigegeben",
+  "buildingComponentApproveCount": "Für {count} freigeben",
+  "buildingComponentValuesDiffer": "Die Werte unterscheiden sich innerhalb dieses Wandtyps.",
+  "buildingComponentMissingCount": "{count} Wände ohne Wert"
 }

@@ -333,3 +333,5 @@
 .building-model-properties dl.building-model-component-rows { align-items: start; }
 .building-model-component-rows > dt { min-height: var(--control-sm); display: flex; align-items: center; }
 .building-model-component-rows > dd:not(:has([data-slot])) { min-height: var(--control-sm); display: flex; align-items: center; }
+.building-model-type-review { display: grid; gap: 4px; }
+.building-model-type-review-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
