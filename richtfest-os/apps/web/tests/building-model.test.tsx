@@ -2,11 +2,12 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BuildingModelBootstrap, BuildingModelMode, CandidateInspector, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, isEntityDeepLink, planSourceForSelection, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
+import { AutomaticPlanCoverage, BuildingModelBootstrap, BuildingModelMode, CandidateInspector, ExtractionPanel, outlineTargetsAt, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, isEntityDeepLink, planSourceForSelection, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
 import en from "../src/locales/en.json";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
+import { metresToPoint, planDistanceM, pointToMetres } from "../src/components/building-model/outline-geometry";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -40,24 +41,23 @@ test("hidden wall review link preserves exact source context without leaking pro
   }
 });
 
-test("building model presents compact context, source status, and accessible sidebar tabs", () => {
+test("building model is one workbench: toolbar, outliner, tool rail, properties and status bar", () => {
   const html = render({
     ...wallReviewFixture,
     reviewStatus: "reviewed",
     evidence: { fileName: "Plan.pdf", pageCount: 3 },
     extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete" }],
   }, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1");
-  expect(html).toContain('class="building-model-toolbar-source"');
-  expect(html).toContain("Plan.pdf");
-  expect(html).toContain("Page 3");
-  expect(html).toContain('class="building-model-context"');
-  expect(html).toContain('class="building-model-context-title"');
-  expect(html).toContain("Plan context");
-  expect(html).toContain("building-model-sidebar-tabs");
-  expect(html).toContain("building-model-sidebar-tab-list");
-  expect(html).toContain("Objects &amp; review");
-  expect(html).toContain("Display controls");
-  expect(html).toContain('class="building-model-region-create-disclosure"');
+  expect(html).toContain('class="building-model is-workbench"');
+  expect(html).toContain('<strong title="Plan.pdf">Plan.pdf</strong>');
+  expect(html).toContain('aria-label="Page 3 · Unresolved page" title="Unresolved page" aria-pressed="true"');
+  expect(html).toContain('aria-label="Plan context: Extraction complete"');
+  expect(html).toContain('<aside class="building-model-outliner" aria-label="Outliner">');
+  expect(html).toContain('aria-label="Add plan region"');
+  expect(html).toContain('role="toolbar" aria-orientation="vertical" aria-label="Plan tools"');
+  for (const key of ["V", "W", "E", "H", "M"]) expect(html).toContain(`<kbd>${key}</kbd>`);
+  expect(html).toContain('aria-label="Fit plan to view"');
+  expect(html).toContain('class="building-model-statusbar"');
 });
 
 test("projects with several PDFs expose an exact source selector", () => {
@@ -79,9 +79,9 @@ test("projects with several PDFs expose an exact source selector", () => {
   expect(html).toContain("Acoustic calculation.pdf");
 
   const legacyAutomatic = render(model, "?view=building-model&page=1&sourceVersion=version-2");
-  expect(legacyAutomatic).toContain("<strong>Architecture plan.pdf</strong>");
+  expect(legacyAutomatic).toContain('<option value="version-1" selected="">Architecture plan.pdf</option>');
   const deliberatelyPinned = render(model, "?view=building-model&page=1&sourceVersion=version-2&sourceSelection=manual");
-  expect(deliberatelyPinned).toContain("<strong>Acoustic calculation.pdf</strong>");
+  expect(deliberatelyPinned).toContain('<option value="version-2" selected="">Acoustic calculation.pdf</option>');
 });
 
 test("Proposed review count excludes demolished wall hypotheses that its destination cannot reveal", () => {
@@ -100,7 +100,8 @@ test("Proposed review count excludes demolished wall hypotheses that its destina
 
 test("Proposed exposes a dedicated wall hypothesis toggle and scoped toggleable overlays", () => {
   const html = render(wallReviewFixture, "?view=building-model&page=3&sourceVersion=version-1&storey=storey-1&modelState=proposed");
-  expect(html).toContain('checked=""/><span>Wall hypotheses</span>');
+  // Overlay categories are outliner rows with an eye toggle; wall hypotheses are shown by default.
+  expect(html).toContain('aria-pressed="true" aria-label="Hide: Wall hypotheses"');
   expect(html).toContain("Wall hypothesis visible-source");
   expect(html).not.toContain("Wall hypothesis other-");
   expect(html).not.toContain("wall hypotheses hidden by this model state");
@@ -124,6 +125,17 @@ test("wall and assembly inspectors distinguish inferred phase and source geometr
     expect(html).toContain("medium");
   }
 });
+
+/** The Plan context popover content (extraction status and PDF page coverage) for one page. */
+function renderPlanContext(raw: unknown, page: number) {
+  const model = adaptBuildingModel(raw);
+  const t = (key: keyof typeof en) => en[key];
+  const job = model.extractions.find((item) => item.page === page);
+  return renderToStaticMarkup(<MemoryRouter>
+    <ExtractionPanel job={job} coverage={job?.result?.coverage ? { note: job.result.coverage } : model.extractionCoverage} source={model.planSources.find((source) => source.page === page)} storeys={model.storeys} selectedStoreyId="" onStorey={() => undefined} canStart pending={false} onStart={() => undefined} t={t} />
+    {model.automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={model.automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} onPage={() => undefined} superseded={model.supersededSources} onSupersede={() => undefined} onRestore={() => undefined} t={t} />}
+  </MemoryRouter>);
+}
 
 function render(model: unknown, search = "?view=building-model") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -172,7 +184,7 @@ test("building model keeps source evidence distinct from stable model object ide
   expect(html).toContain("room-101");
   expect(html).not.toContain("<small>room-101</small>");
   expect(html).toContain("Review proposals in the project workspace");
-  expect(html).toContain("Layers change the PDF evidence view");
+  expect(html).toContain('aria-label="Hide: Räume"');
 });
 test("plan viewer exposes fit, zoom and pan affordances while keeping one transformed overlay surface", () => {
   const html = renderToStaticMarkup(<PdfEvidenceRenderer
@@ -293,7 +305,7 @@ test("provider wording appears only for an actually active configured inference 
 
 test("automatic page coverage distinguishes floor, non-plan, and unresolved pages without claiming walls", () => {
   const automatic = { fileId: "file-1", fileName: "Plan packet.pdf", sourceVersionId: "version-1", status: "complete", pageCount: 3, registeredPageCount: 3, floorPlanPages: [1], nonFloorPlanPages: [{ page: 2, pageType: "elevation", confidence: .94 }], unresolvedPages: [3], reason: "One floor-plan page produced unreviewed draft geometry.", jobStatuses: { complete: 1 } };
-  const html = render({
+  const coverageModel = {
     model: { id: "model-1", revision: 2 }, rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
     storeys: [{ id: "storey-1", name: "Plan page 1 (draft)" }],
     planSources: [1, 2, 3].map((page) => ({ id: `plan-${page}`, storeyId: page === 1 ? "storey-1" : null, page, pageCount: 3, source: { fileId: "file-1", fileName: "Plan packet.pdf", versionId: "version-1", version: 1, downloadUrl: "/api/projects/p/files/file-1/versions/1/download" } })),
@@ -304,7 +316,8 @@ test("automatic page coverage distinguishes floor, non-plan, and unresolved page
     ],
     automaticPlanProcessing: [automatic],
     supersededSources: [{ sourceVersionId: "version-0", fileName: "Old plans.pdf", supersededByVersionId: "version-1" }],
-  }, "?view=building-model&page=1");
+  };
+  const html = render(coverageModel, "?view=building-model&page=1") + renderPlanContext(coverageModel, 1);
   expect(html).toContain("PDF page coverage");
   // A replaced plan set is listed for restore; superseding needs a second active plan set to choose.
   expect(html).toContain("Old plans.pdf");
@@ -427,14 +440,16 @@ test("new geometry keeps normalized plan region and exact source page metadata",
 });
 
 test("extraction candidates stay spatially unreviewed and distinguish anchor geometry", () => {
-  const html = render({
+  const raw = {
     model: { id: "model-1", revision: 8 },
     storeys: [{ id: "storey-1", name: "Ground" }],
     rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
     planSources: [{ id: "plan-1", storeyId: "storey-1", page: 3, source: { fileId: "f", fileName: "Plan.pdf", versionId: "v", version: 2, downloadUrl: "/api/projects/p/files/f/versions/2/download" } }],
     extractions: [{ id: "job-1", sourceVersionId: "v", storeyId: "storey-1", page: 3, status: "complete", result: { method: "native_text", coverage: "selected_page_labels_and_construction_footprints", geometryQuality: "mixed", candidateCount: 326, roomAnchorCount: 91, elementFootprintCount: 235, geometryExtraction: { status: "complete", retainedFootprints: 235, limitations: "Observed construction-layer paths are not verified walls or room boundaries." }, reason: "Room boundaries, materials, construction state and completeness are not established." } }],
     extractionCandidates: [{ id: "candidate-1", jobId: "job-1", sourceKey: "room-a", entityType: "room", name: "Room A", geometry: { quality: "anchor", coordinateSpace: "normalized-page", planRegion: { x: .1, y: .2, width: .02, height: .02 } }, evidence: [{ kind: "page", sourceVersionId: "v", page: 3, region: { x: .1, y: .2, width: .02, height: .02 }, quote: "Room A" }], status: "unreviewed", targetEntityId: null }],
-  }, "?view=building-model&page=3");
+  };
+  const workbench = render(raw, "?view=building-model&page=3");
+  const html = renderPlanContext(raw, 3);
   expect(html).toContain("Plan extraction");
   expect(html).toContain("Extraction complete");
   expect(html).toContain("<strong>1</strong><small>Pages covered</small>");
@@ -445,11 +460,12 @@ test("extraction candidates stay spatially unreviewed and distinguish anchor geo
   expect(html).toContain("Room boundaries, materials, construction state and completeness are not established.");
   expect(html).not.toContain("Objects identified");
   expect(html).not.toContain("<small>Unresolved</small>");
-  expect(html).toContain("Room A");
-  expect(html).toContain("Candidate overlays");
   expect(html).toContain("Construction footprints");
-  expect(html).toContain("Unreviewed candidate");
-  expect(html).not.toContain("This is an extraction candidate, not an approved model object");
+  // The label-only anchor is listed for review but its overlay category starts hidden.
+  expect(workbench).toContain("Room A");
+  expect(workbench).toContain('aria-pressed="false" aria-label="Show: Room A"');
+  expect(workbench).toContain("Plan context: Extraction complete");
+  expect(workbench).not.toContain("This is an extraction candidate, not an approved model object");
   const adapted = adaptBuildingModel({
     extractions: [{ id: "job-1", sourceVersionId: "v", storeyId: "storey-1", page: 3, status: "complete", result: { geometryQuality: "anchor" } }],
     extractionCandidates: [{ id: "candidate-1", jobId: "job-1", name: "Room A", entityType: "room", geometry: { quality: "anchor", planRegion: { x: .1, y: .2, width: .02, height: .02 } }, status: "unreviewed" }],
@@ -532,12 +548,13 @@ test("room candidates draw their extracted outline with holes, not their boundin
 });
 
 test("semantic extraction coverage names hypotheses, unresolved anchors, assemblies, and source-area observations", () => {
-  const html = render({
+  const raw = {
     model: { id: "model-1", revision: 4 }, storeys: [{ id: "storey-1", name: "Ground" }], rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
     planSources: [{ id: "plan-1", storeyId: "storey-1", page: 3, source: { fileId: "f", fileName: "Plan.pdf", versionId: "version-1", version: 1, downloadUrl: "/api/projects/p/files/f/versions/1/download" } }],
     extractions: [{ id: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, status: "complete", result: { candidateCount: 163, roomAnchorCount: 15, elementFootprintCount: 235, draftWallCount: 41, constructionFragmentCount: 72, topologyCoverage: { approximateRegionCount: 76, unresolvedRegionCount: 15, wallCount: 41, fragmentAssemblyCount: 72, sourceFootprintCount: 235, printedAreaCount: 90 } } }],
     extractionCandidates: [{ id: "candidate-partition", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 3, entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, polygon: [{ x: .1, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .3 }, { x: .1, y: .3 }], printedArea: { value: 27.32, unit: "m²", status: "unreviewed" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0", status: "unreviewed" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }],
-  }, "?view=building-model&page=3");
+  };
+  const html = render(raw, "?view=building-model&page=3") + renderPlanContext(raw, 3);
   expect(html).toContain("<strong>76</strong><small>Room hypotheses</small>");
   expect(html).toContain("<strong>15</strong><small>Unresolved anchors</small>");
   expect(html).toContain("<strong>41</strong><small>Draft wall candidates</small>");
@@ -545,7 +562,8 @@ test("semantic extraction coverage names hypotheses, unresolved anchors, assembl
   expect(html).toContain("<strong>90</strong><small>Source area observations</small>");
   expect(html).toContain("<strong>163</strong><small>Total candidates</small>");
   expect(html).toContain("building-model-region room candidate approximate");
-  expect(html).toContain("Spatial room region");
+  const partition = adaptBuildingModel(raw).extractionCandidates[0]!;
+  expect(renderToStaticMarkup(<CandidateInspector candidate={partition} regions={[]} t={(key) => en[key]} pending={false} onPage={() => undefined} onReview={() => undefined} />)).toContain("Spatial room region");
   const adapted = adaptBuildingModel({ extractionCandidates: [{ id: "candidate-partition", entityType: "room", name: "Living", status: "unreviewed", geometry: { quality: "approximate_partition", planRegion: { x: .1, y: .1, width: .2, height: .2 }, printedArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82, provider: "typesafe", model: "jev-1.13.0" }, sourceFillEvidence: [{ layerId: "98R", layerName: "01-10 Grundriss Füllflächen" }], topology: { method: "wall_constrained_geodesic_partition", competingSourceKeys: [] } } }] });
   expect(adapted.extractionCandidates[0]).toMatchObject({ sourceArea: { value: 27.32, unit: "m²" }, roomUseProposal: { roomUse: "living_dining_kitchen", confidence: .82 }, layerId: "98R", layerName: "01-10 Grundriss Füllflächen", algorithm: "wall_constrained_geodesic_partition" });
 });
@@ -707,4 +725,31 @@ test("candidate sidebar and inspector stay scoped to the explicit source page, r
   expect(html).not.toContain("Page three candidate");
   expect(html).toContain("Select a room or element");
   expect(html).not.toContain("<h2>Canonical page three</h2>");
+});
+
+test("magic selection targets the room under the click, then label-only candidates inside the detected outline, selected first", () => {
+  const square = (x: number, y: number, size: number) => [{ x, y }, { x: x + size, y }, { x: x + size, y: y + size }, { x, y: y + size }];
+  const regions = [
+    { id: "room-big", kind: "room" as const, entityType: "room" as const, label: "Wohnen", page: 1, polygon: square(0, 0, .5), box: { x: 0, y: 0, width: .5, height: .5 } },
+    { id: "candidate:small", candidateId: "small", isCandidate: true, kind: "room" as const, entityType: "room" as const, label: "Diele", page: 1, polygon: square(.1, .1, .2), box: { x: .1, y: .1, width: .2, height: .2 } },
+    { id: "candidate:anchor", candidateId: "anchor", isCandidate: true, kind: "room" as const, entityType: "room" as const, label: "Abst.", page: 1, box: { x: .35, y: .35, width: .02, height: .01 } },
+    { id: "candidate:far-anchor", candidateId: "far", isCandidate: true, kind: "room" as const, entityType: "room" as const, label: "Bad", page: 1, box: { x: .8, y: .8, width: .02, height: .01 } },
+    { id: "wall", kind: "element" as const, entityType: "element" as const, label: "Wall", page: 1, polygon: square(.15, .15, .05) },
+  ];
+  const detected = square(.05, .05, .4);
+  // Smallest containing outline first, then the anchor whose label is inside the detection; walls and outside anchors are ignored.
+  expect(outlineTargetsAt(regions, { x: .2, y: .2 }, detected).map((target) => target.type === "new_room" ? "new" : `${target.type}:${target.id}`))
+    .toEqual(["candidate:small", "room:room-big", "candidate:anchor", "new"]);
+  expect(outlineTargetsAt(regions, { x: .2, y: .2 }, detected, "room-big")[0]).toMatchObject({ type: "room", id: "room-big" });
+  expect(outlineTargetsAt(regions, { x: .9, y: .1 }, square(.85, .05, .1))).toEqual([{ type: "new_room" }]);
+});
+
+test("plan points convert to metres with the page aspect for measuring and vertex editing", () => {
+  // A landscape page 1.5× as wide as tall, 40 m per page height: page width is 60 m.
+  const scale = { pageAspectRatio: 1.5, metresPerPageHeight: 40 };
+  expect(pointToMetres({ x: .5, y: .25 }, scale)).toEqual({ x: 30, y: 10 });
+  expect(metresToPoint({ x: 30, y: 10 }, scale)).toEqual({ x: .5, y: .25 });
+  expect(planDistanceM({ x: 0, y: 0 }, { x: .1, y: 0 }, scale)).toBeCloseTo(6);
+  expect(planDistanceM({ x: 0, y: 0 }, { x: 0, y: .1 }, scale)).toBeCloseTo(4);
+  expect(planDistanceM({ x: 0, y: 0 }, { x: .1, y: 0 }, { pageAspectRatio: 1.5, metresPerPageHeight: null })).toBeNull();
 });

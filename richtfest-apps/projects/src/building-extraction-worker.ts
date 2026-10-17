@@ -1,8 +1,15 @@
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { SourceExtractionDeps } from "./deps";
-import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingModels, buildingRevisions, buildingSupersededSources, fileVersions } from "./schema";
+import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingModels, buildingRevisions, buildingSelectionMasks, buildingSupersededSources, fileVersions } from "./schema";
 import { buildingExtractorVersion, extractPlanLabels } from "./plan-extraction";
 export { buildingExtractorVersion };
+
+/** A planner's outline edit outlives re-extraction: the new run refreshes evidence and QC around it. */
+const keepOutlineEdit = (geometry: any, previous: any) => {
+  if (!previous?.outlineEdit) return geometry;
+  const { parts: _parts, polygons: _polygons, ...rest } = geometry;
+  return { ...rest, quality: previous.quality, polygon: previous.polygon, holes: previous.holes, planRegion: previous.planRegion, outlineEdit: previous.outlineEdit };
+};
 import { proposeRoomUses } from "./room-use-classifier";
 import { ensureAutomaticPlanExtractions } from "./automatic-building-model";
 
@@ -55,11 +62,11 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
       let refreshed=0;
       const activeKeys=[...result.labels,...result.footprints].map(c=>c.sourceKey);
       // Preserve accepted history; obsolete unreviewed hypotheses are superseded on extractor upgrades.
-      if(activeKeys.length) refreshed+=(await tx.update(candidates).set({status:"superseded"}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),eq(candidates.status,"unreviewed"),notInArray(candidates.sourceKey,activeKeys))).returning({id:candidates.id})).length;
+      if(activeKeys.length) refreshed+=(await tx.update(candidates).set({status:"superseded"}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),eq(candidates.status,"unreviewed"),notInArray(candidates.sourceKey,activeKeys),sql`${candidates.geometry}->'outlineEdit' is null`)).returning({id:candidates.id})).length;
       for (const candidate of [...result.labels,...result.footprints]) {
         const previous=existingBySource.get(candidate.sourceKey) as any;
         const previousProposal=previous?.status==="unreviewed"&&(previous.geometry as any)?.roomUseProposal;
-        const geometry=previousProposal?{...candidate.geometry,roomUseProposal:previousProposal}:candidate.geometry;
+        const geometry=keepOutlineEdit(previousProposal?{...candidate.geometry,roomUseProposal:previousProposal}:candidate.geometry,previous?.status==="unreviewed"?previous.geometry:null);
         const evidence=[{kind:"page",sourceVersionId:job.sourceVersionId,page:job.page,region:candidate.geometry.planRegion,quote:candidate.quote,...("layerId" in candidate?{layerId:candidate.layerId,layerName:candidate.layerName}:{})}];
         await tx.insert(candidates).values({tenantId:job.tenantId,modelId:job.modelId,jobId:job.id,
           sourceKey:candidate.sourceKey,entityType:candidate.entityType,name:candidate.name,geometry,evidence}).onConflictDoNothing();
@@ -70,9 +77,12 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
       // Upgrades may revisit an existing unreviewed candidate. Add the proposal
       // without modifying any reviewed candidate or canonical room.
       for (const label of classification.labels) if ((label.geometry as any).roomUseProposal)
-        await tx.update(candidates).set({geometry:label.geometry}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),
+        await tx.update(candidates).set({geometry:keepOutlineEdit(label.geometry,(existingBySource.get(label.sourceKey) as any)?.geometry)}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),
           eq(candidates.sourceKey,label.sourceKey),eq(candidates.status,"unreviewed")));
-      const {labels,footprints,...summary}=result;
+      const {labels,footprints,selectionMask,...summary}=result;
+      const mask={tenantId:job.tenantId,modelId:job.modelId,extractorVersion:buildingExtractorVersion,gridSize:selectionMask.gridSize,encoding:selectionMask.encoding,data:selectionMask.data,
+        pageAspectRatio:String(result.pageScale.pageAspectRatio),metresPerPageHeight:result.pageScale.metresPerPageHeight==null?null:String(result.pageScale.metresPerPageHeight),updatedAt:new Date()};
+      await tx.insert(buildingSelectionMasks).values({jobId:job.id,...mask}).onConflictDoUpdate({target:buildingSelectionMasks.jobId,set:mask});
       const candidateCount=labels.length+footprints.length;
       const unresolvedAnchorCount=labels.filter(l=>l.geometry.quality==="anchor").length;
       const roomHypothesisCount=labels.length-unresolvedAnchorCount;

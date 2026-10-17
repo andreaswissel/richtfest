@@ -159,9 +159,12 @@ export function App({ initializing = false }: { initializing?: boolean }) {
       </div>
     </>
   );
+  // Inside a project the workspace navigation steps aside: the project bar carries
+  // the way back to Projects, so the project gets the full window.
+  const inProject = /^\/projects\/[^/]+/.test(pathname);
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell${inProject ? " is-project" : ""}`}>
+      {!inProject && <aside className="sidebar">
         <Link to="/" className="brand">
           <span className="brand-symbol">R</span> richtfest
           <span className="brand-dot">.</span>
@@ -179,17 +182,11 @@ export function App({ initializing = false }: { initializing?: boolean }) {
         </div>
         <div className="nav-label">{t("home")}</div>
         {workspaceNavigation}
-      </aside>
+      </aside>}
       <div className="main-shell">
-        <div className="topbar">
-          {/^\/projects\/[^/]+/.test(pathname) ? (
-            <Link className="back-link" to="/projects">
-              ← {t("backProjects")}
-            </Link>
-          ) : (
-            <span>{t("workspace")}</span>
-          )}
-        </div>
+        {!inProject && <div className="topbar">
+          <span>{t("workspace")}</span>
+        </div>}
         <main id="main" aria-busy={pending}>
           {session.isError ? (
             <Page>

@@ -40,6 +40,7 @@ import {
 } from "./schema";
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
+import { createBuildingOutlineRouter } from "./building-outline-router";
 import { buildingExtractionJobs, buildingExtractionCandidates } from "./schema";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -626,5 +627,6 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
   });
 
   router.use(createBuildingExtractionRouter(getDeps));
+  router.use(createBuildingOutlineRouter(getDeps));
   return router;
 }

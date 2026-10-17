@@ -39,7 +39,7 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
       sourceVersionId:version,storeyId:storey,page:3,extractorVersion:"topology-v3",status:"complete",createdBy:actor}).returning();
     const upgradedJob=await db.transaction((tx:any)=>ensureAutomaticExtractionJob(tx,{tenantId:tenant,modelId:model,
       sourceVersionId:version,storeyId:storey,page:3,createdBy:actor}));
-    expect(upgradedJob.id).toBe(legacyJob.id);expect(upgradedJob).toMatchObject({extractorVersion:"topology-v8",status:"queued"});
+    expect(upgradedJob.id).toBe(legacyJob.id);expect(upgradedJob).toMatchObject({extractorVersion:"topology-v9",status:"queued"});
     expect((await pool.query("select count(*)::int as n from projects_building_extractions")).rows[0].n).toBe(1);
     const input={baseRevision:0,sourceVersionId:version,page:3,storeyId:storey};
     expect((await post("/extractions",input,{"x-other":"1"})).status).toBe(404);
@@ -68,6 +68,41 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     expect(completedJob).toMatchObject({roomCandidateCount:91,topologyCoverage:{apartmentDomainCount:11,barrierScenario:"primary"}});
     expect(completedJob.roomHypothesisCount).toBeGreaterThanOrEqual(74);
     expect(completedJob.topologyCoverage.openingCount).toBeGreaterThan(0);
+    // Magic selection floods the clicked room from the stored barriers; outline edits are logged as training data.
+    const enclosed=rooms.slice(3).find(r=>r.geometry.quality==="enclosed_region")!,label=enclosed.geometry.labelRegion??enclosed.geometry.planRegion;
+    const click={x:label.x+label.width/2,y:label.y+label.height/2};
+    expect((await post("/magic-selection",{sourceVersionId:version,page:3,point:click},{"x-other":"1"})).status).toBe(404);
+    expect((await post("/magic-selection",{sourceVersionId:version,page:2,point:click})).body.error.code).toBe("selection_unavailable");
+    const magic=await post("/magic-selection",{sourceVersionId:version,page:3,point:click});
+    expect(magic.status).toBe(200);expect(magic.body.data.status).toBe("found");
+    const proposal=magic.body.data.options[0];
+    expect(proposal.areaM2).toBeGreaterThan(0);expect(proposal.polygon.length).toBeGreaterThanOrEqual(4);
+    const moved=proposal.polygon.map((p:any,i:number)=>i===0?{x:p.x+.002,y:p.y}:p);
+    const outline={target:{type:"candidate",id:enclosed.id},polygon:moved,holes:[],method:"magic_selection",magic:{point:click,polygon:proposal.polygon,holes:proposal.holes}};
+    expect((await post("/outline-edits",{...outline,baseRevision:1})).status).toBe(409);
+    expect((await post("/outline-edits",{...outline,baseRevision:0,polygon:[moved[0],moved[1]]})).status).toBeGreaterThanOrEqual(400);
+    const crossing=[{x:.1,y:.1},{x:.2,y:.2},{x:.2,y:.1},{x:.1,y:.2}];
+    expect((await post("/outline-edits",{...outline,baseRevision:0,polygon:crossing})).body.error.code).toBe("invalid_outline");
+    const edited=await post("/outline-edits",{...outline,baseRevision:0});
+    expect(edited.status).toBe(200);expect(edited.body.data).toMatchObject({entityType:"candidate",entityId:enclosed.id,revision:1});
+    const editedRow=(await pool.query("select status,geometry from projects_building_extraction_candidates where id=$1",[enclosed.id])).rows[0];
+    expect(editedRow.status).toBe("unreviewed");
+    expect(editedRow.geometry).toMatchObject({quality:"manual_outline",polygon:moved,outlineEdit:{method:"magic_selection",editCount:1}});
+    const log=(await pool.query("select * from projects_building_outline_edits")).rows;
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({target_type:"candidate",action:"reshape",method:"magic_selection",page:3,extractor_version:"topology-v9",
+      before:{quality:"enclosed_region",polygon:enclosed.geometry.polygon},after:{polygon:moved},magic:{point:click,polygon:proposal.polygon},model_revision:1});
+    expect(log[0].metrics.areaAfterM2).toBeGreaterThan(0);expect(log[0].metrics.vertexCountBefore).toBe(enclosed.geometry.polygon.length);
+    const drawn=await post("/outline-edits",{baseRevision:1,target:{type:"new_room",storeyId:storey,sourceVersionId:version,page:3,name:"Drawn room"},polygon:proposal.polygon,method:"manual"});
+    expect(drawn.status).toBe(201);
+    const drawnRoom=(await pool.query("select name,geometry from projects_building_rooms where id=$1",[drawn.body.data.entityId])).rows[0];
+    expect(drawnRoom).toMatchObject({name:"Drawn room",geometry:{quality:"manual_outline",source:{sourceVersionId:version,page:3}}});
+    const reshaped=await post("/outline-edits",{baseRevision:2,target:{type:"room",id:drawn.body.data.entityId},polygon:moved,method:"manual"});
+    expect(reshaped.status).toBe(200);
+    expect((await pool.query("select action,before is not null as has_before from projects_building_outline_edits order by created_at")).rows.map(r=>[r.action,r.has_before])).toEqual([["reshape",true],["create",false],["reshape",true]]);
+    await pool.query("delete from projects_building_rooms where id=$1",[drawn.body.data.entityId]);
+    // Rewind the revision so the review assertions below keep their original numbering.
+    await pool.query("delete from projects_building_revisions where model_id=$1",[model]);await pool.query("update projects_building_models set revision=0 where id=$1",[model]);
     const agentContext=await (await fetch(base+"/agent-context")).json();
     expect(agentContext.data.entities).toHaveLength(2); // building + storey; candidates are never canonical entities
     expect(agentContext.data.missingInputs).toHaveLength(0);
@@ -87,11 +122,12 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     await pool.query("update projects_building_extraction_candidates set geometry=geometry-'constructionState'-'phaseEvidence' where id=$1",[walls[0].id]);
     await pool.query("update projects_building_extractions set extractor_version='labels-v1'");
     const upgraded=await post("/extractions",{...input,baseRevision:1});
-    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("topology-v8");
+    expect(upgraded.body.data.id).toBe(queued[0].body.data.id);expect(upgraded.body.data.extractorVersion).toBe("topology-v9");
     expect(await runBuildingExtraction(worker,new AbortController().signal)).toBe(true);
     expect((await pool.query("select count(*)::int as n from projects_building_extraction_candidates")).rows[0].n).toBe(rows.length);
     expect((await pool.query("select name,status from projects_building_extraction_candidates where id=$1",[candidate.id])).rows[0]).toEqual({name:"Reviewed correction",status:"approved"});
     expect((await pool.query("select geometry->>'constructionState' as state from projects_building_extraction_candidates where id=$1",[walls[0].id])).rows[0].state).toBe("proposed");
+    expect((await pool.query("select geometry from projects_building_extraction_candidates where id=$1",[enclosed.id])).rows[0].geometry).toMatchObject({quality:"manual_outline",polygon:moved,topology:{status:"enclosed"}});
     expect((await pool.query("select name from projects_building_rooms")).rows).toEqual([{name:"Reviewed correction"}]);
     // Refreshing unreviewed hypotheses bumps the revision, so a review based on what the reviewer saw before is fenced.
     expect(Number((await pool.query("select revision from projects_building_models where id=$1",[model])).rows[0].revision)).toBe(2);

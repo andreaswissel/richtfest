@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { extractPlanLabels, parsePlanBbox, parsePlanTsv, planLabels } from "./plan-extraction";
+import { decodeSelectionMask, magicSelection } from "./plan-selection";
 import { syntheticBayArea, syntheticPlanPdf, syntheticPlanRooms, type SyntheticPlanOptions } from "./test-fixtures/synthetic-plan";
 
 test("PDF words use source dimensions and stable source keys, never invented room outlines",()=>{
@@ -81,4 +82,20 @@ test.skipIf(!popplerAvailable)("synthetic plan with stroked walls, segmented doo
     expect(traced.area!/room.area).toBeGreaterThan(.9);expect(traced.area!/room.area).toBeLessThan(1.01);
   }
   for(const room of ["Wohnen","Bad","Schlafen"])expect(connects("Flur",room)).toMatchObject({kind:"door_swing_doorway"});
+});
+test.skipIf(!popplerAvailable)("magic selection fills the clicked room from the stored barriers, and nothing outside the building",async()=>{
+  const {result,rooms}=await extract({strokedWalls:true});
+  const cells=decodeSelectionMask(result.selectionMask.data,result.selectionMask.gridSize);
+  expect(result.pageScale.metresPerPageHeight).toBeGreaterThan(0);
+  for(const room of syntheticPlanRooms){
+    const label=rooms.get(room.label)!.geometry.labelRegion??rooms.get(room.label)!.geometry.planRegion;
+    const picked=magicSelection(cells,result.selectionMask.gridSize,{x:label.x+label.width/2,y:label.y+label.height/2},result.pageScale);
+    if(picked.status!=="found")throw new Error(`${room.label}: ${picked.status}`);
+    const outline=picked.options[0];
+    // Door leaves and furniture are not walls: the room comes back whole, with few editable anchors.
+    expect(outline.areaM2!/room.area).toBeGreaterThan(.88);expect(outline.areaM2!/room.area).toBeLessThan(1.05);
+    expect(outline.polygon.length).toBeLessThanOrEqual(14);
+    expect(outline.polygon.every((p,i,ring)=>{const q=ring[(i+1)%ring.length];return p.x===q.x||p.y===q.y;})).toBe(true);
+  }
+  expect(magicSelection(cells,result.selectionMask.gridSize,{x:.02,y:.02},result.pageScale).status).toBe("not_enclosed");
 });

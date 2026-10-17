@@ -239,6 +239,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   const apartmentOwner = new Int32Array(size).fill(-1);
   let furnitureGapCount = 0;
   const adopted = new Uint8Array(size);
+  // Magic selection separates source construction (hard) from "outside the floor fill" (soft).
+  let structural: Uint8Array | null = null, filled: Uint8Array | null = null;
   if (supportedFills.length) {
     const interior = new Uint8Array(size);
     for (const fill of supportedFills) {
@@ -286,6 +288,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
         if (!edge && touchesFill && cells.length <= maxCells) { furnitureGapCount++; for (const p of cells) { interior[p] = 1; adopted[p] = 1; } }
       }
     }
+    structural = wall.slice(); filled = interior;
     for (let p = 0; p < size; p++) if (!interior[p]) wall[p] = 1;
   }
   // Largest substantial unit fill wins overlaps; decorative fills cannot own cells.
@@ -340,6 +343,14 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       return output;
     };
     wall.set(pass(pass(pass(pass(wall, true, true), false, true), true, false), false, false));
+  }
+  // Barrier flags for magic selection: 2 = construction, closed opening or apartment boundary;
+  // 1 = only outside the floor fill; 4 (added below) = seam between rooms sharing an open space.
+  const selectionCells = new Uint8Array(size);
+  for (let p = 0; p < size; p++) {
+    if (wall[p]) { selectionCells[p] = !structural || structural[p] || filled![p] ? 2 : 1; continue; }
+    const x = p % n, unit = apartmentOwner[p];
+    if ((x < n - 1 && !wall[p + 1] && apartmentOwner[p + 1] !== unit) || (p + n < size && !wall[p + n] && apartmentOwner[p + n] !== unit)) selectionCells[p] = 2;
   }
   const component = new Int32Array(size).fill(-1), queue = new Int32Array(size);
   const regions: { count: number; exterior: boolean; minX: number; minY: number; maxX: number; maxY: number; seeds: number[] }[] = [];
@@ -399,6 +410,10 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     chordSeamCount+=result.cuts;
     for(const [p,owner] of result.owners)partition[p]=owner;
   });
+  for (let p = 0; p < size; p++) if (partition[p] >= 0) {
+    const x = p % n;
+    if ((x < n - 1 && partition[p + 1] >= 0 && partition[p + 1] !== partition[p]) || (p + n < size && partition[p + n] >= 0 && partition[p + n] !== partition[p])) selectionCells[p] |= 4;
+  }
   const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0,shape_outlier:0,trace_failed:0 };
   const metresPerPageHeight = options.metresPerPageHeight && Number.isFinite(options.metresPerPageHeight) && options.metresPerPageHeight > 0 ? options.metresPerPageHeight : null;
   // Each opening records which seeded partition (room) lies on either side.
@@ -519,7 +534,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       g.limitations=containsOther?"Source label only: candidate contained another room label center.":physicalConflict?"Source label only: polygon area at the printed source scale differs from the room annotation by more than 10% or 0.5 m². Scale, association and boundary require review.":"Source label only: constrained region differs by more than 40% from its printed-area capacity target. Association and boundary require review.";
     }
   }
-  return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
+  return { rooms, assemblies, selectionMask: { gridSize: n, cells: selectionCells }, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
     highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
     areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, straightSeamCount:chordSeamCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
@@ -806,7 +821,7 @@ function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, as
  * corner) take the right-hand turn, matching the 4-connected regions, so they
  * never break tracing. Outer rings are clockwise on the page (y down), holes
  * counter-clockwise; disconnected parts are counted, not merged. */
-function traceRegion(grid: Int32Array, n: number, id: number, region: { minX: number; minY: number; maxX: number; maxY: number }) {
+export function traceRegion(grid: Int32Array, n: number, id: number, region: { minX: number; minY: number; maxX: number; maxY: number }) {
   const edges = new Map<number, number[]>(), key = (x: number, y: number) => y * (n + 1) + x;
   const step = [[1, 0], [0, 1], [-1, 0], [0, -1]];
   const add = (x: number, y: number, dir: number) => { const k = key(x, y), list = edges.get(k); if (list) list.push(dir); else edges.set(k, [dir]); };

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import { Button } from "../ui/button";
-import { candidateRole, type BuildingEvidence, type BuildingGeometryPart, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { candidateRole, type BuildingEvidence, type BuildingGeometryPart, type BuildingPlanPoint, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { OutlineEditorLayer } from "./outline-editor";
+import type { OutlineDraft } from "./outline-geometry";
 
 export type PdfViewerTransform = { zoom: number; pan: { x: number; y: number } };
 
@@ -172,6 +174,11 @@ export function PdfEvidenceRenderer({
   transform,
   onTransform,
   labels,
+  tool = "select",
+  onPlanPick,
+  outline,
+  measure,
+  hideViewControls = false,
 }: {
   projectId: string;
   evidence: BuildingEvidence;
@@ -183,7 +190,17 @@ export function PdfEvidenceRenderer({
   onSelect: (id: string) => void;
   transform?: PdfViewerTransform;
   onTransform?: (transform: PdfViewerTransform) => void;
-  labels: { empty: string; loading: string; region: string; zoom: string; zoomIn: string; zoomOut: string; fit: string };
+  labels: { empty: string; loading: string; region: string; zoom: string; zoomIn: string; zoomOut: string; fit: string; magicSurface?: string; point?: string; addPoint?: string };
+  /** "magic" and "measure": a click on the plan reports its normalized point instead of selecting a region.
+   * "pan": regions are inert, so a drag anywhere moves the plan. */
+  tool?: "select" | "magic" | "pan" | "measure";
+  onPlanPick?: (point: BuildingPlanPoint) => void;
+  /** An outline being edited; other regions stay visible but inert. */
+  outline?: { draft: OutlineDraft; onBegin: () => void; onChange: (draft: OutlineDraft) => void; snap?: boolean } | null;
+  /** Measurement points (one or two) with an optional label for the measured distance. */
+  measure?: { points: BuildingPlanPoint[]; label?: string } | null;
+  /** The workbench renders its own zoom controls in the tool rail. */
+  hideViewControls?: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const evidenceCanvas = useRef<HTMLDivElement>(null);
@@ -222,7 +239,8 @@ export function PdfEvidenceRenderer({
       event.preventDefault();
       const currentZoom = transform?.zoom ?? internalZoom;
       const next = Math.min(4, Math.max(1, Number((currentZoom + (event.deltaY > 0 ? -0.1 : 0.1)).toFixed(2))));
-      updateTransform({ zoom: next, pan: next === 1 ? { x: 0, y: 0 } : pan });
+      // Scale the pan with the zoom so the point at the centre of the view stays put.
+      updateTransform({ zoom: next, pan: { x: pan.x * next / currentZoom, y: pan.y * next / currentZoom } });
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
@@ -285,11 +303,11 @@ export function PdfEvidenceRenderer({
 
   const adjustZoom = (delta: number) => {
     const next = Math.min(4, Math.max(1, Number((zoom + delta).toFixed(2))));
-    updateTransform({ zoom: next, pan: next === 1 ? { x: 0, y: 0 } : pan });
+    updateTransform({ zoom: next, pan: { x: pan.x * next / zoom, y: pan.y * next / zoom } });
   };
   const fit = () => updateTransform({ zoom: 1, pan: { x: 0, y: 0 } });
   const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (zoom <= 1 || (event.target as HTMLElement).closest("button")) return;
+    if ((event.target as HTMLElement).closest("button")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
   };
@@ -303,6 +321,21 @@ export function PdfEvidenceRenderer({
     dragRef.current = undefined;
   };
   const pageRegions = regions.filter((region) => region.page === page);
+  const pickStart = useRef<{ x: number; y: number } | undefined>(undefined);
+  const magicSurface = useRef<HTMLDivElement>(null);
+  // Magic picks are resolved on the canvas: panning captures the pointer there, so the
+  // surface itself never sees the click. A press that moved more than 4 px was a pan.
+  const pointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    pickStart.current = magicSurface.current && event.target === magicSurface.current ? { x: event.clientX, y: event.clientY } : undefined;
+    beginPan(event);
+  };
+  const pointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    endPan(event);
+    const start = pickStart.current, bounds = magicSurface.current?.getBoundingClientRect();
+    pickStart.current = undefined;
+    if (!start || !bounds?.width || !bounds.height || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+    onPlanPick?.({ x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height });
+  };
   const hasSelectedRegion = Boolean(selectedId && pageRegions.some((region) => region.id === selectedId));
   const selectOverlayRegion = (event: React.MouseEvent<HTMLButtonElement>, focusedRegion: BuildingRegion) => {
     // Keyboard-generated clicks have no pointer coordinates. Preserve native
@@ -324,20 +357,20 @@ export function PdfEvidenceRenderer({
     }
   };
   return (
-    <div ref={evidenceCanvas} className="building-model-evidence-canvas" data-page={page} onPointerDown={beginPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan}>
-      <div className="building-model-view-controls" aria-label={labels.zoom} onPointerDown={(event) => event.stopPropagation()}>
+    <div ref={evidenceCanvas} className="building-model-evidence-canvas" data-page={page} onPointerDown={pointerDown} onPointerMove={movePan} onPointerUp={pointerUp} onPointerCancel={endPan}>
+      {!hideViewControls && <div className="building-model-view-controls" aria-label={labels.zoom} onPointerDown={(event) => event.stopPropagation()}>
         <Button size="sm" variant="outline" type="button" onClick={() => adjustZoom(-0.25)} disabled={zoom <= 1} aria-label={labels.zoomOut} title={labels.zoomOut}><Minus className="size-icon-sm" aria-hidden="true" /></Button>
         <span aria-live="polite">{Math.round(zoom * 100)}%</span>
         <Button size="sm" variant="outline" type="button" onClick={() => adjustZoom(0.25)} disabled={zoom >= 4} aria-label={labels.zoomIn} title={labels.zoomIn}><Plus className="size-icon-sm" aria-hidden="true" /></Button>
         <Button size="sm" variant="ghost" type="button" onClick={fit} aria-label={labels.fit} title={labels.fit}><RotateCcw className="size-icon-sm" aria-hidden="true" /></Button>
-      </div>
+      </div>}
       <div className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         {source ? <canvas ref={canvas} className="building-model-pdf" aria-label={`${evidence.fileName} · page ${page}`} /> : <div className="building-model-pdf-empty"><span className="mono">PDF</span><p>{labels.empty}</p></div>}
-        <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
+        <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}${outline || tool !== "select" ? " is-inert" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
           {pageRegions.map((region) => {
             const role = region.isCandidate ? region.candidateRole || candidateRole(region) : undefined;
             // Room outlines are drawn as their exact polygon; the bounding-box button only provides focus and hit area.
-            const shapePath = region.isCandidate && !region.parts?.length && region.entityType !== "element" ? regionShapePath(region) : undefined;
+            const shapePath = !region.parts?.length && region.entityType !== "element" && region.kind !== "element" ? regionShapePath(region) : undefined;
             const candidateClass = role === "draft-wall" ? "draft-wall" : role === "raw-footprint" ? "footprint" : role === "construction-assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : "";
             return (
             <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}${shapePath ? " has-outline" : ""}`} style={regionOverlayStyle(region)} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
@@ -347,6 +380,13 @@ export function PdfEvidenceRenderer({
             </button>
           );})}
         </div>
+        {(tool === "magic" || tool === "measure") && !outline && <div ref={magicSurface} className="building-model-magic-surface" aria-label={labels.magicSurface} />}
+        {measure && measure.points.length > 0 && <svg className="building-model-measure" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+          {measure.points.length === 2 && <line x1={measure.points[0]!.x * 1000} y1={measure.points[0]!.y * 1000} x2={measure.points[1]!.x * 1000} y2={measure.points[1]!.y * 1000} vectorEffect="non-scaling-stroke" />}
+        </svg>}
+        {measure?.points.map((point, index) => <span key={index} className="building-model-measure-point" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%`, ...overlayInteractionStyle(zoom) }} aria-hidden="true" />)}
+        {measure?.label && measure.points.length === 2 && <span className="building-model-measure-label" style={{ left: `${(measure.points[0]!.x + measure.points[1]!.x) * 50}%`, top: `${(measure.points[0]!.y + measure.points[1]!.y) * 50}%`, ...overlayInteractionStyle(zoom) }}>{measure.label}</span>}
+        {outline && <OutlineEditorLayer style={overlayInteractionStyle(zoom)} snap={outline.snap ?? true} draft={outline.draft} onBegin={outline.onBegin} onChange={outline.onChange} labels={{ point: labels.point || "Point", addPoint: labels.addPoint || "Add point" }} />}
       </div>
       {loading && source && <div className="building-model-pdf-loading" role="status">{labels.loading} {page}…</div>}
       {error && <div className="building-model-pdf-error" role="alert">{error}</div>}

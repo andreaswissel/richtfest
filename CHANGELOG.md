@@ -24,6 +24,9 @@
 
 ## 2026-10-17
 
+- Building Model: planners can edit any room outline on the plan by dragging, adding and removing points, with the area updating live, or use **Magic select** to detect a room's outline with one click and then edit, confirm or name it as a new room. Every saved outline is logged as training data for plan detection. Existing plans are re-extracted automatically so magic select works on them. Includes database migration 0044.
+- Building Model is now a workbench: one toolbar, an outliner of rooms by apartment with show/hide eyes, a tool rail (Select V, Magic select W, Edit points E, Pan H, Measure M), a sectioned properties panel with editable outline points in metres, and a status bar with Accept/Save on Enter. The plan can be panned at any zoom.
+- Projects open without the workspace sidebar: a slim project bar keeps the project's views, and **← Projects** leads back to open another project.
 - Building model plan parsing splits open-plan rooms (for example a living room and its hall) along straight wall-to-wall lines instead of jagged diagonal seams. Existing plans are re-extracted automatically.
 - Building Model: an older plan set can be marked as superseded by a newer one. Its draft storeys, rooms and candidates leave the model and agent context without deleting the file, and it can be restored at any time. Includes database migration 0043.
 - The Building Model plan view now draws each detected room as its actual outline instead of a rectangle around it, so L-shaped rooms, notches and door closures are visible where they were extracted.

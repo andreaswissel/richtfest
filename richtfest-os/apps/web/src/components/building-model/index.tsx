@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState, type ReactElement } from "react";
+import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
@@ -8,10 +8,14 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { Copy, ExternalLink, Link2, LoaderCircle, ScanLine } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Switch } from "../ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
+import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
+import type { BuildingPlanPoint } from "./types";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -80,15 +84,18 @@ export function candidateOverlayBucket(candidate: Pick<BuildingExtractionCandida
   return candidate.entityType === "room" ? "roomHypotheses" as const : "assemblies" as const;
 }
 
+/** Whether a candidate's overlay category is shown by the display defaults/toggles. */
+export function overlayBucketVisible(candidate: Pick<BuildingExtractionCandidate, "entityType" | "geometryQuality" | "semanticType">, visibility: CandidateOverlayVisibility) {
+  const bucket = candidateOverlayBucket(candidate);
+  if (bucket === "roomHypotheses") return visibility.roomHypotheses ?? visibility.roomAnchors ?? true;
+  if (bucket === "unresolvedAnchors") return visibility.unresolvedAnchors ?? visibility.roomAnchors ?? false;
+  if (bucket === "draftWalls") return visibility.draftWalls ?? true;
+  if (bucket === "assemblies") return visibility.assemblies ?? visibility.footprints ?? false;
+  return visibility.footprints ?? false;
+}
+
 export function candidateOverlaysForSource(candidates: BuildingExtractionCandidate[], page: number, sourceVersionId: string | undefined, storeyId: string | null | undefined, visibility: CandidateOverlayVisibility) {
-  return candidatesForSource(candidates, page, sourceVersionId, storeyId).filter((candidate) => {
-    const bucket = candidateOverlayBucket(candidate);
-    if (bucket === "roomHypotheses") return visibility.roomHypotheses ?? visibility.roomAnchors ?? true;
-    if (bucket === "unresolvedAnchors") return visibility.unresolvedAnchors ?? visibility.roomAnchors ?? false;
-    if (bucket === "draftWalls") return visibility.draftWalls ?? true;
-    if (bucket === "assemblies") return visibility.assemblies ?? visibility.footprints ?? false;
-    return visibility.footprints ?? false;
-  });
+  return candidatesForSource(candidates, page, sourceVersionId, storeyId).filter((candidate) => overlayBucketVisible(candidate, visibility));
 }
 
 function candidateTypeLabel(candidate: BuildingExtractionCandidate, t: ReturnType<typeof useT>) {
@@ -181,6 +188,40 @@ export function planSourceForView(sources: BuildingPlanSource[], page: number, e
   return explicit || selectedSource || preferred;
 }
 
+type OutlineTarget = { type: "room" | "candidate"; id: string; regionId: string; label: string; sourceArea?: unknown } | { type: "new_room" };
+type OutlineSession = {
+  target: OutlineTarget;
+  targets: OutlineTarget[];
+  draft: OutlineDraft;
+  method: "manual" | "magic_selection";
+  magic?: { point: BuildingPlanPoint; options: MagicOutline[]; index: number; scale?: PageScale | null };
+  name: string;
+  history: OutlineDraft[];
+  future: OutlineDraft[];
+};
+type PlanTool = "select" | "magic" | "pan" | "measure";
+type CandidateEdit = { name?: string; targetEntityId?: string };
+const toolKeys: Record<string, PlanTool | "edit"> = { v: "select", w: "magic", e: "edit", h: "pan", m: "measure" };
+
+const magicPageScale = (session: OutlineSession | null) => session?.magic?.scale ?? null;
+
+function outlineTarget(region: BuildingRegion): OutlineTarget {
+  return region.isCandidate
+    ? { type: "candidate", id: (region as BuildingExtractionCandidate).candidateId || region.id.replace(/^candidate:/, ""), regionId: region.id, label: region.label, sourceArea: region.sourceArea }
+    : { type: "room", id: region.id, regionId: region.id, label: region.label, sourceArea: region.sourceArea };
+}
+
+/** Rooms and room candidates a magic-selection click could belong to: outlines containing the
+ * point, then label-only candidates whose label sits inside the detected outline. Selected first. */
+export function outlineTargetsAt(regions: BuildingRegion[], point: BuildingPlanPoint, detected: BuildingPlanPoint[], selectedId?: string): OutlineTarget[] {
+  const rooms = regions.filter((region) => region.entityType !== "element" && region.kind !== "element");
+  const area = (region: BuildingRegion) => region.box ? region.box.width * region.box.height : Infinity;
+  const containing = rooms.filter((region) => region.polygon && region.polygon.length >= 3 && pointInRing(point, region.polygon));
+  const labelled = rooms.filter((region) => !region.polygon?.length && region.box && pointInRing({ x: region.box.x + region.box.width / 2, y: region.box.y + region.box.height / 2 }, detected));
+  const ordered = [...containing.sort((a, b) => area(a) - area(b)), ...labelled].sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
+  return [...new Map(ordered.map((region) => [region.id, outlineTarget(region)])).values(), { type: "new_room" }];
+}
+
 export function BuildingModelMode({ projectId }: { projectId: string }) {
   const t = useT();
   const [params, setParams] = useSearchParams();
@@ -201,9 +242,23 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [pdfLayers, setPdfLayers] = useState<PdfEvidenceLayer[]>([]);
   const [conflict, setConflict] = useState<string>();
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
-  const [candidateGroupFilter, setCandidateGroupFilter] = useState("all");
   const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: false, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const [planTool, setPlanTool] = useState<PlanTool>("select");
+  const [outlineSession, setOutlineSession] = useState<OutlineSession | null>(null);
+  const [magicNotice, setMagicNotice] = useState<string>();
+  const [measurePoints, setMeasurePoints] = useState<BuildingPlanPoint[]>([]);
+  const [snapToWalls, setSnapToWalls] = useState(true);
+  // Per-object eye toggles in the outliner; unset objects follow their overlay category.
+  const [objectVisibility, setObjectVisibility] = useState<Record<string, boolean>>({});
+  const [candidateEdits, setCandidateEdits] = useState<Record<string, CandidateEdit>>({});
+  const [panels, setPanels] = useState({ outliner: false, properties: false });
+  const workbenchKeys = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => workbenchKeys.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
   const paramsKey = params.toString();
   useBrowserLayoutEffect(() => {
     const nextPage = Math.max(1, Number(params.get("page") || 1));
@@ -255,22 +310,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     .filter((candidate) => candidateRole(candidate) === "draft-wall" && !stateCandidates.includes(candidate)).length;
   const wallReviewParams = new URLSearchParams(params);
   wallReviewParams.set("modelState", "proposed");
-  const candidateGroupOptions = useMemo(() => [...new Set(sourceCandidates.flatMap((candidate) => candidate.groupLabel ? [candidate.groupLabel] : []))].sort(), [sourceCandidates]);
-  const activeCandidateGroupFilter = candidateGroupFilter === "all" || candidateGroupOptions.includes(candidateGroupFilter) ? candidateGroupFilter : "all";
-  const filteredCandidates = useMemo(() => candidatesForGroup(sourceCandidates, activeCandidateGroupFilter), [sourceCandidates, activeCandidateGroupFilter]);
-  const candidateGroups = useMemo(() => {
-    const grouped = new Map<string, BuildingExtractionCandidate[]>();
-    for (const candidate of filteredCandidates) {
-      const group = candidate.groupLabel || "__ungrouped__";
-      const items = grouped.get(group) || [];
-      items.push(candidate);
-      grouped.set(group, items);
-    }
-    return grouped;
-  }, [filteredCandidates]);
   const selectedCandidate = sourceCandidates.find((candidate) => candidate.id === selectedCandidateId);
-  const hasDraftWallCandidates = sourceCandidates.some((candidate) => candidateOverlayBucket(candidate) === "draftWalls");
-  const hasAssemblyCandidates = sourceCandidates.some((candidate) => candidateOverlayBucket(candidate) === "assemblies");
   const currentAutomaticProcessing = automaticPlanProcessing.find((item) => item.sourceVersionId === evidence.sourceVersionId);
   const currentAutomaticActive = automaticProcessingActive(currentAutomaticProcessing?.status);
   const sourceLayers = pdfLayers.length ? pdfLayers : evidence.layers || [];
@@ -282,7 +322,6 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     || activeExtraction?.status === "queued"
     || activeExtraction?.status === "running"
     || activeExtraction?.status === "failed";
-  const [contextOpen, setContextOpen] = useState(() => contextNeedsAttention);
   const pollingExtractionIds = allExtractions.filter((job) => job.status === "queued" || job.status === "running").map((job) => job.id).join(",");
   useEffect(() => {
     if (!pollingExtractionIds && !automaticWorkActive && !hasUploadedPdfAwaitingModel) return;
@@ -294,17 +333,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       void queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
     }
   }, [activeExtraction?.id, activeExtraction?.status, projectId]);
-  useEffect(() => {
-    if (contextNeedsAttention) setContextOpen(true);
-  }, [contextNeedsAttention]);
-  const visibleCandidates = candidateOverlaysForSource(filteredCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, candidateOverlayVisibility);
-  const visibleRegions = regionsForSource(regions, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId);
+  const candidateVisible = (candidate: BuildingExtractionCandidate) => objectVisibility[candidate.id] ?? overlayBucketVisible(candidate, candidateOverlayVisibility);
+  const visibleCandidates = sourceCandidates.filter(candidateVisible);
+  const pageRegions = regionsForSource(regions, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId);
+  const visibleRegions = pageRegions.filter((region) => objectVisibility[region.id] ?? true);
   useEffect(() => {
     if (selectedCandidateId && !visibleCandidates.some((candidate) => candidate.id === selectedCandidateId)) setSelectedCandidateId(undefined);
   }, [selectedCandidateId, page, currentSource?.id, sourceForEvidence?.source?.versionId]);
-  useEffect(() => {
-    if (candidateGroupFilter !== "all" && !candidateGroupOptions.includes(candidateGroupFilter)) setCandidateGroupFilter("all");
-  }, [candidateGroupFilter, candidateGroupOptions]);
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -380,6 +415,56 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     },
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
+  const pageScale = (magicPageScale(outlineSession) ?? activeExtraction?.result?.pageScale ?? null) as PageScale | null;
+  useEffect(() => { setOutlineSession(null); setMagicNotice(undefined); setMeasurePoints([]); }, [page, sourceForEvidence?.source?.versionId]);
+  const updateOutline = (update: (session: OutlineSession) => OutlineSession) => setOutlineSession((current) => current ? update(current) : current);
+  const beginOutlineChange = () => updateOutline((session) => ({ ...session, history: [...session.history.slice(-49), session.draft], future: [] }));
+  const undoOutline = () => updateOutline((session) => session.history.length ? { ...session, draft: session.history[session.history.length - 1]!, history: session.history.slice(0, -1), future: [session.draft, ...session.future] } : session);
+  const redoOutline = () => updateOutline((session) => session.future.length ? { ...session, draft: session.future[0]!, history: [...session.history, session.draft], future: session.future.slice(1) } : session);
+  const startOutlineEdit = (region: BuildingRegion) => {
+    const polygon = region.polygon && region.polygon.length >= 3 ? region.polygon : region.box ? rectangleAround(region.box) : null;
+    if (!polygon) return;
+    const target = outlineTarget(region);
+    setPlanTool("select");
+    setMagicNotice(undefined);
+    setOutlineSession({ target, targets: [target], draft: { polygon, holes: region.polygon?.length ? region.holes ?? [] : [] }, method: "manual", name: "", history: [], future: [] });
+  };
+  const magicSelect = useMutation({
+    mutationFn: (point: BuildingPlanPoint) => api<RecordData>(`/projects/${projectId}/building-model/magic-selection`, { sourceVersionId: evidence.sourceVersionId, page, point }),
+    onMutate: () => setMagicNotice(undefined),
+    onSuccess: (data, point) => {
+      if (data.status !== "found" || !Array.isArray(data.options) || !data.options.length) {
+        setMagicNotice(t(data.status === "on_barrier" ? "buildingModelMagicOnBarrier" : "buildingModelMagicNotEnclosed"));
+        return;
+      }
+      const options = data.options as MagicOutline[];
+      const targets = outlineTargetsAt([...pageRegions, ...sourceCandidates], point, options[0]!.polygon, selectedCandidate?.id || selected?.id);
+      setOutlineSession({ target: targets[0]!, targets, draft: { polygon: options[0]!.polygon, holes: options[0]!.holes }, method: "magic_selection",
+        magic: { point, options, index: 0, scale: data.scale as PageScale | null }, name: "", history: [], future: [] });
+    },
+    onError: (error) => setMagicNotice(error instanceof ApiError && error.status === 404 ? t("buildingModelMagicUnavailable") : error.message),
+  });
+  const saveOutline = useMutation({
+    mutationFn: (session: OutlineSession) => {
+      const target = session.target.type === "new_room"
+        ? { type: "new_room", storeyId: currentSource?.storeyId, sourceVersionId: evidence.sourceVersionId, page, name: session.name.trim() }
+        : session.target.type === "room" ? { type: "room", id: session.target.id, sourceVersionId: evidence.sourceVersionId, page } : { type: "candidate", id: session.target.id };
+      const proposal = session.magic?.options[session.magic.index];
+      return api<RecordData>(`/projects/${projectId}/building-model/outline-edits`, { baseRevision: model.revision, target, polygon: session.draft.polygon, holes: session.draft.holes,
+        method: session.method, ...(session.magic && proposal ? { magic: { point: session.magic.point, polygon: proposal.polygon, holes: proposal.holes } } : {}) });
+    },
+    onMutate: () => setConflict(undefined),
+    onSuccess: async (data) => {
+      setOutlineSession(null);
+      await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
+      if (data.entityType === "candidate") { setSelectedId(undefined); setSelectedCandidateId(`candidate:${data.entityId}`); }
+      else { setSelectedCandidateId(undefined); setSelectedId(String(data.entityId)); }
+    },
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const inspectedRegion = selectedCandidate || selected;
+  const canEditOutline = Boolean(inspectedRegion && inspectedRegion.entityType !== "element" && inspectedRegion.kind !== "element" && inspectedRegion.page === page
+    && (inspectedRegion.polygon?.length || inspectedRegion.box));
   const referenceParams = new URLSearchParams({ view: "building-model", entity: `${selected?.entityType || "room"}:${selected?.id || ""}`, modelState: state, page: String(page), sourceSelection: "manual" });
   if (sourceVersionId) referenceParams.set("sourceVersion", sourceVersionId);
   if (sourceStoreyId) referenceParams.set("storey", sourceStoreyId);
@@ -448,174 +533,256 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     setPage(nextPage);
   };
 
+  const selectCandidate = (candidate: BuildingExtractionCandidate) => {
+    setSelectedId(undefined);
+    setSelectedCandidateId(candidate.id);
+    setSourceSelectionPinned(true);
+    if (!candidateVisible(candidate)) setObjectVisibility((current) => ({ ...current, [candidate.id]: true }));
+    setSourceVersionId(candidate.sourceVersionId || "");
+    setSourceStoreyId(candidate.storeyId || "");
+    setPage(candidate.page);
+  };
+  const setVisible = (items: BuildingRegion[], visible: boolean) => setObjectVisibility((current) => ({ ...current, ...Object.fromEntries(items.map((item) => [item.id, visible])) }));
+  const regionVisible = (region: BuildingRegion) => region.isCandidate ? candidateVisible(region as BuildingExtractionCandidate) : objectVisibility[region.id] ?? true;
+
+  // Outliner: the shown storey's rooms by apartment group, construction by overlay category, other pages, PDF layers.
+  const isRoom = (region: BuildingRegion) => region.entityType !== "element" && region.kind !== "element";
+  const roomGroups = new Map<string, BuildingRegion[]>();
+  for (const region of [...pageRegions.filter(isRoom), ...sourceCandidates.filter(isRoom)]) {
+    const key = region.groupLabel || "";
+    roomGroups.set(key, [...(roomGroups.get(key) || []), region]);
+  }
+  const byLabel = (a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label, undefined, { numeric: true });
+  const outlinerGroups = [...roomGroups.entries()].sort(([a], [b]) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b, undefined, { numeric: true }))
+    .map(([key, items]) => ({ key: `group:${key}`, label: key || t("buildingModelUngroupedCandidates"), items: [...items].sort(byLabel) }));
+  const categoryLabels: Record<ReturnType<typeof candidateOverlayBucket>, string> = { draftWalls: t("buildingModelDraftWalls"), assemblies: t("buildingModelConstructionAssemblies"), footprints: t("buildingModelRawFootprints"), unresolvedAnchors: t("buildingModelUnresolvedAnchors"), roomHypotheses: t("buildingModelRoomHypotheses") };
+  const outlinerCategories = (["draftWalls", "assemblies", "footprints", "unresolvedAnchors", "roomHypotheses"] as const).map((bucket): OutlinerNode => {
+    const items = sourceCandidates.filter((candidate) => !isRoom(candidate) && candidateOverlayBucket(candidate) === bucket);
+    return { key: `category:${bucket}`, label: categoryLabels[bucket], items, visible: overlayBucketVisible({ entityType: bucket === "roomHypotheses" ? "room" : "element", geometryQuality: { draftWalls: "draft_wall", assemblies: "assembly", footprints: "footprint", unresolvedAnchors: "anchor", roomHypotheses: "enclosed_region" }[bucket], semanticType: bucket === "draftWalls" ? "draft_wall" : null } as BuildingExtractionCandidate, candidateOverlayVisibility),
+      onVisible: (visible: boolean) => { setCandidateOverlayVisibility((current) => ({ ...current, [bucket]: visible })); setObjectVisibility((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !items.some((item) => item.id === id)))); } };
+  }).filter((category) => category.items.length);
+  const acceptedElements = pageRegions.filter((region) => !isRoom(region));
+  if (acceptedElements.length) outlinerCategories.unshift({ key: "category:elements", label: t("buildingModelAcceptedElements"), items: acceptedElements, visible: acceptedElements.some(regionVisible), onVisible: (visible) => setVisible(acceptedElements, visible) });
+  const otherPageRegions = regions.filter((region) => !pageRegions.includes(region));
+  const storeyLabel = model.storeys.find((storey) => storey.id === currentSource?.storeyId)?.name || `${t("buildingModelPage")} ${page}`;
+  const areaOf = (region: BuildingRegion) => region.polygon && region.polygon.length >= 3 ? outlineAreaM2({ polygon: region.polygon, holes: region.holes ?? [] }, pageScale) : null;
+
+  // Properties, status bar and keys.
+  const sessionRegionId = outlineSession && outlineSession.target.type !== "new_room" ? outlineSession.target.regionId : undefined;
+  const showInspector = !outlineSession || sessionRegionId === inspectedRegion?.id;
+  const geometryDraft = outlineSession?.draft ?? (inspectedRegion?.polygon && inspectedRegion.polygon.length >= 3 ? { polygon: inspectedRegion.polygon, holes: inspectedRegion.holes ?? [] } : null);
+  const geometryPrinted = outlineSession ? (outlineSession.target.type === "new_room" ? null : outlineSession.target.sourceArea) : inspectedRegion?.sourceArea;
+  const canCreateRoom = Boolean(currentSource?.storeyId && evidence.sourceVersionId);
+  const outlineBlocked = outlineSession ? outlineSelfIntersects(outlineSession.draft.polygon) || (outlineSession.target.type === "new_room" && (!outlineSession.name.trim() || !canCreateRoom)) : true;
+  const canSaveOutline = Boolean(outlineSession) && !outlineBlocked && !saveOutline.isPending;
+  const candidateEdit = selectedCandidate ? candidateEdits[selectedCandidate.id] ?? {} : {};
+  const reviewSelected = (decision: "approved" | "rejected") => {
+    if (!selectedCandidate || reviewCandidate.isPending) return;
+    const name = candidateEdit.name?.trim();
+    const correction = decision === "approved" ? { ...(name && name !== selectedCandidate.label ? { name } : {}), ...(candidateEdit.targetEntityId ? { targetEntityId: candidateEdit.targetEntityId } : {}) } : {};
+    reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } });
+  };
+  const editVertex = (index: number, point: BuildingPlanPoint) => {
+    const move = (draft: OutlineDraft) => ({ ...draft, polygon: draft.polygon.map((current, i) => i === index ? point : current) });
+    if (outlineSession) { beginOutlineChange(); updateOutline((session) => ({ ...session, draft: move(session.draft) })); return; }
+    if (!inspectedRegion?.polygon || inspectedRegion.polygon.length < 3) return;
+    const target = outlineTarget(inspectedRegion), draft = { polygon: inspectedRegion.polygon, holes: inspectedRegion.holes ?? [] };
+    setOutlineSession({ target, targets: [target], draft: move(draft), method: "manual", name: "", history: [draft], future: [] });
+  };
+  const chooseTool = (tool: PlanTool | "edit") => {
+    setMagicNotice(undefined);
+    if (tool === "edit") { if (!outlineSession && canEditOutline && inspectedRegion) { if (planTool !== "pan") setPlanTool("select"); startOutlineEdit(inspectedRegion); } return; }
+    if (outlineSession && tool !== "pan" && tool !== "select") return;
+    setPlanTool(tool);
+    if (tool !== "measure") setMeasurePoints([]);
+  };
+  const zoomBy = (delta: number) => setViewerTransform((current) => {
+    const zoom = Math.min(4, Math.max(1, current.zoom + delta));
+    return { zoom, pan: { x: current.pan.x * zoom / current.zoom, y: current.pan.y * zoom / current.zoom } };
+  });
+  workbenchKeys.current = (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (event.defaultPrevented || target?.closest("[role=dialog], [data-slot=popover-content]")) return;
+    const typing = Boolean(target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)));
+    const modifier = event.metaKey || event.ctrlKey;
+    if (event.key === "Escape") {
+      if (outlineSession) setOutlineSession(null);
+      else if (measurePoints.length) setMeasurePoints([]);
+      else if (planTool !== "select") { setPlanTool("select"); setMagicNotice(undefined); }
+      return;
+    }
+    if (typing) return;
+    if (modifier && outlineSession && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
+      event.preventDefault();
+      if (event.shiftKey || event.key.toLowerCase() === "y") redoOutline(); else undoOutline();
+      return;
+    }
+    if (modifier || event.altKey) return;
+    if (event.key === "Enter") {
+      // Enter keeps its native meaning on links and buttons, except outliner rows, plan regions and outline points.
+      if (target && (target.tagName === "A" || target.tagName === "BUTTON") && !target.closest("[data-workbench-enter], .building-model-region, .building-model-outline-editor")) return;
+      if (outlineSession) { if (canSaveOutline) { event.preventDefault(); saveOutline.mutate(outlineSession); } }
+      else if (selectedCandidate) { event.preventDefault(); reviewSelected("approved"); }
+      return;
+    }
+    const tool = toolKeys[event.key.toLowerCase()];
+    if (tool && !event.repeat) { event.preventDefault(); chooseTool(tool); }
+  };
+
+  const tools = [
+    { value: "select", key: "V", Icon: MousePointer2, label: t("buildingModelToolSelect"), disabled: false },
+    { value: "magic", key: "W", Icon: WandSparkles, label: t("buildingModelToolMagic"), disabled: !evidence.sourceVersionId || Boolean(outlineSession) },
+    { value: "edit", key: "E", Icon: Spline, label: t("buildingModelToolEdit"), disabled: !outlineSession && !canEditOutline },
+    { value: "pan", key: "H", Icon: Hand, label: t("buildingModelToolPan"), disabled: false },
+    { value: "measure", key: "M", Icon: Ruler, label: t("buildingModelToolMeasure"), disabled: Boolean(outlineSession) },
+  ] as const;
+  const activeTool = outlineSession && planTool !== "pan" ? "edit" : planTool;
+  const measureDistance = measurePoints.length === 2 ? planDistanceM(measurePoints[0]!, measurePoints[1]!, pageScale) : null;
+  const measureLabel = measurePoints.length === 2 ? measureDistance == null ? t("buildingModelOutlineNoScale") : `${measureDistance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m` : undefined;
+  const targetName = (target: OutlineTarget) => target.type === "new_room" ? t("buildingModelOutlineNewRoom") : target.label;
+  const kindLabel = (region: BuildingRegion) => region.kind === "unknown-room" ? t("buildingModelUnknownRoom") : region.kind === "element" ? t("buildingModelElement") : t("buildingModelOutlineRoom");
+  const summary = (outlineSession ? [targetName(outlineSession.target), t("buildingModelEditingOutline")]
+    : planTool === "measure" ? [t("buildingModelToolMeasure"), measureLabel ?? t("buildingModelMeasureHint")]
+    : selectedCandidate ? [selectedCandidate.label, t("buildingModelUnreviewedCandidate"), selectedCandidate.groupLabel, `${t("buildingModelPage")} ${selectedCandidate.page}`]
+    : selected ? [selected.label, kindLabel(selected), selected.groupLabel, `${t("buildingModelPage")} ${selected.page}`]
+    : [t("buildingModelSelectObject")]).filter(Boolean);
+  const hints: Array<[string, string]> = outlineSession ? [[t("buildingModelKeyDrag"), t("buildingModelHintMovePoint")], ["Alt", t("buildingModelHintNoSnap")], ["Del", t("buildingModelHintRemovePoint")], ["⌘Z", t("buildingModelUndo")], ["Esc", t("cancel")]]
+    : planTool === "magic" ? [[t("buildingModelKeyClick"), t("buildingModelMagicHint")], ["Esc", t("buildingModelToolSelect")]]
+    : planTool === "measure" ? [[t("buildingModelKeyClick"), t("buildingModelMeasureHint")], ["Esc", t("buildingModelMeasureClear")]]
+    : selectedCandidate ? [["E", t("buildingModelEditOutline")], ["W", t("buildingModelToolMagic")]]
+    : [["V", t("buildingModelToolSelect")], ["W", t("buildingModelToolMagic")], ["H", t("buildingModelToolPan")], ["M", t("buildingModelToolMeasure")]];
+  const pageNumbers = model.planSources.length ? [...new Set(model.planSources.filter((source) => !evidence.sourceVersionId || source.source?.versionId === evidence.sourceVersionId).map((source) => source.page))] : [1];
+  const extractionActive = activeExtraction?.status === "queued" || activeExtraction?.status === "running";
+  const contextStatus = currentAutomaticActive ? automaticPhaseLabel(currentAutomaticProcessing, t) : contextExtractionStatus(activeExtraction?.status, t);
+  const geometry = <GeometrySection draft={geometryDraft} scale={pageScale} printed={geometryPrinted} editing={Boolean(outlineSession)} snap={snapToWalls} onSnap={setSnapToWalls}
+    onEditVertex={editVertex} canEdit={canEditOutline} onEdit={() => chooseTool("edit")} t={t} />;
+
   return (
-    <div className="building-model">
-      {conflict && <Callout tone="warning">{conflict}</Callout>}
-      {modelError && <Callout tone="error">{modelError.message}</Callout>}
-      <div className="building-model-toolbar" aria-label={t("buildingModelControls")}>
-        <div className="building-model-toolbar-group">
-          <span className="building-model-toolbar-label">{t("buildingModelState")}</span>
-          <Segmented
-            value={state}
-            onChange={(value) => setModelState(value as BuildingModelState)}
-            items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))}
-          />
-        </div>
+    <div className="building-model is-workbench">
+      <div className="building-model-toolbar" role="toolbar" aria-label={t("buildingModelControls")}>
+        <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelOutliner")} title={t("buildingModelOutliner")} aria-pressed={panels.outliner} onClick={() => setPanels((current) => ({ ...current, outliner: !current.outliner }))}><PanelLeft className="size-icon-sm" aria-hidden="true" /></Button>
+        <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelProperties")} title={t("buildingModelProperties")} aria-pressed={panels.properties} onClick={() => setPanels((current) => ({ ...current, properties: !current.properties }))}><PanelRight className="size-icon-sm" aria-hidden="true" /></Button>
         <div className="building-model-toolbar-source">
-          <span className="building-model-toolbar-label">{t("buildingModelSourceEvidence")}</span>
-          <strong>{evidence.fileName || t("buildingModelNoSource")}</strong>
-          <small>{t("buildingModelPage")} {page}</small>
+          <FileText className="size-icon-sm" aria-hidden="true" />
+          {sourceDocuments.length > 1 ? <NativeSelect className="building-model-source-select" aria-label={t("buildingModelSourceDocument")} value={evidence.sourceVersionId || ""} onChange={(event) => {
+            const versionSources = model.planSources.filter((source) => source.source?.versionId === event.target.value);
+            const nextSource = preferredPlanSource(versionSources, automaticPlanProcessing) || versionSources[0];
+            if (nextSource) selectSourcePage(nextSource.page, nextSource.source?.versionId || "", nextSource.storeyId || "");
+          }}>{sourceDocuments.map((source) => <option key={source.source!.versionId} value={source.source!.versionId}>{source.source!.fileName}</option>)}</NativeSelect> : <strong title={evidence.fileName}>{evidence.fileName || t("buildingModelNoSource")}</strong>}
         </div>
-        <div className="building-model-status-line">
-          <Badge>{statusLabel(model.reviewStatus, t)}</Badge>
-          <small>{model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}</small>
-          {model.reviewStatus === "needs-review" && <span className="muted text-ui-xs">{t("buildingModelReviewInWorkspace")}</span>}
+        <Segmented value={state} onChange={(value) => setModelState(value as BuildingModelState)}
+          items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))} />
+        <div className="building-model-pages" aria-label={t("buildingModelPages")}>
+          {pageNumbers.map((pageNumber) => {
+            const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
+            const processing = automaticPlanProcessing.find((item) => item.sourceVersionId === source?.source?.versionId);
+            const disposition = automaticPageDisposition(processing, pageNumber);
+            const dispositionLabel = t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved");
+            return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${dispositionLabel}`} title={dispositionLabel} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, source?.source?.versionId || "", source?.storeyId || "")}>{pageNumber}</button>;
+          })}
+        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingModelContext")}: ${contextStatus}`} title={t("buildingModelContext")}>
+              {(currentAutomaticActive || extractionActive) && <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />}
+              {activeExtraction?.status === "failed" && <span className="building-model-attention-dot" aria-hidden="true" />}
+              <span aria-live="polite">{contextStatus}</span>
+              <ChevronDown className="size-icon-sm" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="building-model-context-popover">
+            <h2 className="building-model-panel-title">{t("buildingModelContext")}</h2>
+            <ExtractionPanel
+              job={activeExtraction}
+              coverage={activeExtraction?.result?.coverage ? { note: activeExtraction.result.coverage } : model.extractionCoverage}
+              source={currentSource}
+              storeys={model.storeys}
+              selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
+              onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceSelectionPinned(true); setSourceStoreyId(value); } }}
+              canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
+              pending={startExtraction.isPending}
+              onStart={() => startExtraction.mutate()}
+              t={t}
+            />
+            {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")}
+              superseded={model.supersededSources} pending={supersedePlanSet.isPending}
+              onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
+              onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
+          </PopoverContent>
+        </Popover>
+        <Badge title={model.reviewStatus === "needs-review" ? t("buildingModelReviewInWorkspace") : model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}>{statusLabel(model.reviewStatus, t)}</Badge>
+        <div className="building-model-toolbar-end">
+          <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelUndo")} title={`${t("buildingModelUndo")} (⌘Z)`} disabled={!outlineSession?.history.length} onClick={undoOutline}><Undo2 className="size-icon-sm" aria-hidden="true" /></Button>
+          <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelRedo")} title={`${t("buildingModelRedo")} (⇧⌘Z)`} disabled={!outlineSession?.future.length} onClick={redoOutline}><Redo2 className="size-icon-sm" aria-hidden="true" /></Button>
         </div>
       </div>
-      <details className="building-model-context" open={contextOpen} onToggle={(event) => setContextOpen(event.currentTarget.open)}>
-        <summary>
-          <span className="building-model-context-title">{t("buildingModelContext")}</span>
-          <span className="building-model-context-summary">{evidence.fileName || t("buildingModelNoSource")} · {t("buildingModelPage")} {page}</span>
-          <span className="building-model-context-meta">
-            {contextExtractionStatus(activeExtraction?.status, t)} · {contextClassificationStatus(currentAutomaticProcessing, automaticPlanProcessing.length > 0, t)}
-          </span>
-        </summary>
-        <div className="building-model-context-content">
-          <ExtractionPanel
-            job={activeExtraction}
-            coverage={activeExtraction?.result?.coverage ? { note: activeExtraction.result.coverage } : model.extractionCoverage}
-            source={currentSource}
-            storeys={model.storeys}
-            selectedStoreyId={sourceStoreyId || currentSource?.storeyId || ""}
-            onStorey={(value) => { const source = model.planSources.find((item) => item.storeyId === value); if (source) selectSourcePage(source.page, source.source?.versionId || "", value); else { setSelectedId(undefined); setSelectedCandidateId(undefined); setSourceSelectionPinned(true); setSourceStoreyId(value); } }}
-            canStart={Boolean(evidence.sourceVersionId && currentSource?.storeyId)}
-            pending={startExtraction.isPending}
-            onStart={() => startExtraction.mutate()}
-            t={t}
-          />
-          {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")}
-            superseded={model.supersededSources} pending={supersedePlanSet.isPending}
-            onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
-            onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
-        </div>
-      </details>
-      <div className="building-model-workbench">
-        <aside className="building-model-sidebar" aria-label={t("buildingModelObjects")}>
-          <Tabs defaultValue="objects" className="building-model-sidebar-tabs">
-            <TabsList className="building-model-sidebar-tab-list" aria-label={t("buildingModelControls")}>
-              <TabsTrigger value="objects">{t("buildingModelSidebarObjectsTab")}</TabsTrigger>
-              <TabsTrigger value="display">{t("buildingModelSidebarDisplayTab")}</TabsTrigger>
-            </TabsList>
-            <TabsContent value="objects" forceMount className="building-model-sidebar-tab-content">
-              <div className="building-model-sidebar-section">
-                <h2>{t("buildingModelObjects")}</h2>
-                <div className="building-model-list">
-                  {regions.map((region) => (
-                    <button key={region.id} type="button" aria-pressed={selected?.id === region.id} onClick={() => selectRegion(region.id)}>
-                      <span>{region.label}</span>
-                      <small>{region.kind === "unknown-room" ? t("buildingModelUnknownRoom") : `p. ${region.page}`}</small>
-                    </button>
-                  ))}
-                  {!regions.length && <Empty>{t("buildingModelNoObjects")}</Empty>}
-                </div>
-              </div>
-              <div className="building-model-sidebar-section">
-                <h2>{t("buildingModelExtractionCandidates")}</h2>
-                {candidateGroupOptions.length > 1 && <Field label={t("buildingModelCandidateGroupFilter")}><NativeSelect value={activeCandidateGroupFilter} onChange={(event) => setCandidateGroupFilter(event.target.value)}><option value="all">{t("buildingModelAllCandidateGroups")}</option>{candidateGroupOptions.map((group) => <option key={group} value={group}>{group}</option>)}</NativeSelect></Field>}
-                <div className="building-model-candidate-list">
-                  {[...candidateGroups.entries()].map(([group, groupedCandidates]) => <div className="building-model-candidate-group" key={group}><h3>{group === "__ungrouped__" ? t("buildingModelUngroupedCandidates") : group}</h3>{groupedCandidates.map((candidate) => <button key={candidate.id} type="button" aria-pressed={selectedCandidate?.id === candidate.id} onClick={() => { setSelectedId(undefined); setSelectedCandidateId(candidate.id); setSourceSelectionPinned(true); const bucket = candidateOverlayBucket(candidate); setCandidateOverlayVisibility((current) => ({ ...current, ...(bucket === "footprints" ? { footprints: true } : bucket === "draftWalls" ? { draftWalls: true } : bucket === "assemblies" ? { assemblies: true } : bucket === "unresolvedAnchors" ? { unresolvedAnchors: true } : { roomHypotheses: true }) })); setSourceVersionId(candidate.sourceVersionId || ""); setSourceStoreyId(candidate.storeyId || ""); setPage(candidate.page); }}><span>{candidate.label}</span><small>{candidateTypeLabel(candidate, t)} {candidate.groupLabel ? `· ${candidate.groupLabel}` : ""} · {t("buildingModelPage")} {candidate.page}</small></button>)}</div>)}
-                  {!filteredCandidates.length && <p className="muted text-ui-xs">{t("buildingModelNoExtractionCandidates")}</p>}
-                </div>
-              </div>
-              <details className="building-model-region-create-disclosure">
-                <summary>{t("buildingModelAddRegion")}</summary>
-                <RegionForm
-                  projectId={projectId}
-                  modelRevision={model.revision || 0}
-                  storeyId={currentSource?.storeyId || undefined}
-                  sourcePage={currentSource?.page || page}
-                  sourceVersionId={evidence.sourceVersionId || undefined}
-                  compact
-                  onComplete={() => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] })}
-                  t={t}
-                />
-              </details>
-            </TabsContent>
-            <TabsContent value="display" forceMount className="building-model-sidebar-tab-content">
-              <div className="building-model-sidebar-section" aria-label={t("buildingModelCandidateOverlayControls")}>
-                <h2>{t("buildingModelCandidateOverlayControls")}</h2>
-                {state !== "proposed" && hiddenWallCount > 0 && <Callout><span>{hiddenWallCount} {t("buildingModelHiddenWallHypotheses")}</span>{" "}<Link className="underline underline-offset-2" to={`?${wallReviewParams}`}>{t("buildingModelReviewWallHypotheses")}</Link></Callout>}
-                <label className="building-model-layer">
-                  <input type="checkbox" checked={candidateOverlayVisibility.roomHypotheses ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, roomHypotheses: event.target.checked }))} />
-                  <span>{t("buildingModelRoomHypotheses")}</span>
-                </label>
-                <label className="building-model-layer">
-                  <input type="checkbox" checked={candidateOverlayVisibility.unresolvedAnchors ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, unresolvedAnchors: event.target.checked }))} />
-                  <span>{t("buildingModelUnresolvedAnchors")}</span>
-                </label>
-                {hasDraftWallCandidates && <label className="building-model-layer">
-                  <input type="checkbox" checked={candidateOverlayVisibility.draftWalls ?? true} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, draftWalls: event.target.checked }))} />
-                  <span>{t("buildingModelDraftWalls")}</span>
-                </label>}
-                {hasAssemblyCandidates && <label className="building-model-layer">
-                  <input type="checkbox" checked={candidateOverlayVisibility.assemblies ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, assemblies: event.target.checked }))} />
-                  <span>{t("buildingModelConstructionAssemblies")}</span>
-                </label>}
-                <label className="building-model-layer">
-                  <input type="checkbox" checked={candidateOverlayVisibility.footprints ?? false} onChange={(event) => setCandidateOverlayVisibility((current) => ({ ...current, footprints: event.target.checked }))} />
-                  <span>{t("buildingModelRawFootprints")}</span>
-                </label>
-                <p className="muted text-ui-2xs">{t("buildingModelCandidateOverlayHint")}</p>
-              </div>
-              <div className="building-model-sidebar-section">
-                <h2>{t("buildingModelEvidenceLayers")}</h2>
-                {sourceLayers.length ? sourceLayers.map((layer) => (
-                  <label className="building-model-layer" key={layer.id}>
-                    <input type="checkbox" checked={layers[layer.id] ?? layer.visible !== false} onChange={(event) => setLayers((current) => ({ ...current, [layer.id]: event.target.checked }))} />
-                    <span>{layer.label}</span>
-                  </label>
-                )) : <p className="muted text-ui-xs">{t("buildingModelNoLayers")}</p>}
-                <p className="muted text-ui-2xs">{t("buildingModelLayerHint")}</p>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </aside>
-        <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>
-          <div className="building-model-page-strip" aria-label={t("buildingModelPages")}>
-            {sourceDocuments.length > 1 ? <NativeSelect className="building-model-source-select" aria-label={t("buildingModelSourceDocument")} value={evidence.sourceVersionId || ""} onChange={(event) => {
-              const versionSources = model.planSources.filter((source) => source.source?.versionId === event.target.value);
-              const nextSource = preferredPlanSource(versionSources, automaticPlanProcessing) || versionSources[0];
-              if (nextSource) selectSourcePage(nextSource.page, nextSource.source?.versionId || "", nextSource.storeyId || "");
-            }}>{sourceDocuments.map((source) => <option key={source.source!.versionId} value={source.source!.versionId}>{source.source!.fileName}</option>)}</NativeSelect> : <span className="muted text-ui-2xs">{evidence.fileName}</span>}
-            {currentAutomaticProcessing && <Badge>{automaticPhaseLabel(currentAutomaticProcessing, t)}</Badge>}
-            {(model.planSources.length ? [...new Set(model.planSources.filter((source) => !evidence.sourceVersionId || source.source?.versionId === evidence.sourceVersionId).map((source) => source.page))] : [1]).map((pageNumber) => {
-              const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
-              const processing = automaticPlanProcessing.find((item) => item.sourceVersionId === source?.source?.versionId);
-              const disposition = automaticPageDisposition(processing, pageNumber);
-              return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")}`} title={t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, source?.source?.versionId || "", source?.storeyId || "")}>
-                {pageNumber}
-              </button>;
-            })}
+      <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
+        <Outliner t={t} storeyLabel={storeyLabel} groups={outlinerGroups} categories={outlinerCategories} otherPages={otherPageRegions}
+          layers={sourceLayers} layerVisible={(layer) => layers[layer.id] ?? layer.visible !== false} onLayer={(id, visible) => setLayers((current) => ({ ...current, [id]: visible }))}
+          selectedId={selectedCandidate?.id || selected?.id} isVisible={regionVisible} onVisible={setVisible} areaOf={areaOf}
+          onSelect={(region) => region.isCandidate ? selectCandidate(region as BuildingExtractionCandidate) : selectRegion(region.id)}
+          addRegion={<RegionForm projectId={projectId} modelRevision={model.revision || 0} storeyId={currentSource?.storeyId || undefined} sourcePage={currentSource?.page || page} sourceVersionId={evidence.sourceVersionId || undefined} compact
+            onComplete={() => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] })} t={t} />}
+          footer={state !== "proposed" && hiddenWallCount > 0 && <p className="building-model-outliner-note"><span>{hiddenWallCount} {t("buildingModelHiddenWallHypotheses")}</span>{" "}<Link className="underline underline-offset-2" to={`?${wallReviewParams}`}>{t("buildingModelReviewWallHypotheses")}</Link></p>} />
+        <div className="building-model-tool-rail" role="toolbar" aria-orientation="vertical" aria-label={t("buildingModelTools")}>
+          {tools.map(({ value, key, Icon, label, disabled }) => <button key={value} type="button" className="building-model-tool" aria-pressed={activeTool === value} disabled={disabled} aria-label={label} title={`${label} (${key})`} onClick={() => chooseTool(value)}>
+            <Icon className="size-icon" aria-hidden="true" /><kbd>{key}</kbd>
+          </button>)}
+          <div className="building-model-tool-rail-zoom" aria-label={t("buildingModelZoomControls")}>
+            <button type="button" className="building-model-tool" onClick={() => zoomBy(.25)} disabled={viewerTransform.zoom >= 4} aria-label={t("buildingModelZoomIn")} title={t("buildingModelZoomIn")}><Plus className="size-icon-sm" aria-hidden="true" /></button>
+            <span aria-live="polite">{Math.round(viewerTransform.zoom * 100)}%</span>
+            <button type="button" className="building-model-tool" onClick={() => zoomBy(-.25)} disabled={viewerTransform.zoom <= 1} aria-label={t("buildingModelZoomOut")} title={t("buildingModelZoomOut")}><Minus className="size-icon-sm" aria-hidden="true" /></button>
+            <button type="button" className="building-model-tool" onClick={() => setViewerTransform({ zoom: 1, pan: { x: 0, y: 0 } })} aria-label={t("buildingModelFitView")} title={t("buildingModelFitView")}><Maximize className="size-icon-sm" aria-hidden="true" /></button>
           </div>
-          <div className="building-model-automatic-canvas">
+        </div>
+        <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>
+          <div className={`building-model-automatic-canvas is-tool-${activeTool}`}>
             <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
-              <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => id.startsWith("candidate:") ? setSelectedCandidateId(id) : selectRegion(id)} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView") }} />
+              <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => { const candidate = sourceCandidates.find((item) => item.id === id); if (candidate) selectCandidate(candidate); else selectRegion(id); }} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView"), magicSurface: planTool === "measure" ? t("buildingModelMeasureHint") : t("buildingModelMagicHint"), point: t("buildingModelOutlinePoint"), addPoint: t("buildingModelOutlineAddPoint") }}
+                hideViewControls tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
+                onPlanPick={(point) => { if (planTool === "measure") setMeasurePoints((current) => current.length >= 2 ? [point] : [...current, point]); else if (!magicSelect.isPending) magicSelect.mutate(point); }}
+                outline={outlineSession ? { draft: outlineSession.draft, snap: snapToWalls, onBegin: beginOutlineChange, onChange: (draft) => updateOutline((session) => ({ ...session, draft })) } : null} />
             </Suspense>
             {currentAutomaticActive && <div className="building-model-scan-sweep" aria-hidden="true" />}
+            {(conflict || modelError || magicNotice || magicSelect.isPending) && <div className="building-model-canvas-notices" aria-live="polite">
+              {conflict && <Callout tone="warning">{conflict}</Callout>}
+              {modelError && <Callout tone="error">{modelError.message}</Callout>}
+              {magicNotice && <Callout tone="warning">{magicNotice}</Callout>}
+              {magicSelect.isPending && <Callout>{t("buildingModelMagicDetecting")}</Callout>}
+            </div>}
           </div>
-          {currentAutomaticProcessing && <p className="building-model-stage-status muted text-ui-2xs" aria-live="polite" aria-atomic="true">{automaticPhaseLabel(currentAutomaticProcessing, t)} · {t("buildingModelAutomaticNoFakeProgress")}</p>}
         </section>
-        <aside className="building-model-inspector" aria-label={t("buildingModelInspector")}>
-          <div className="building-model-inspector-header">
-            <div>
-              <h2>{selectedCandidate?.label || selected?.label || t("buildingModelSelectObject")}</h2>
-              {selectedCandidate ? <div className="building-model-status-line"><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></div> : selected && <div className="building-model-status-line"><Badge>{selected.kind === "unknown-room" ? t("buildingModelUnknownRoom") : selected.kind}</Badge></div>}
-            </div>
-            {!selectedCandidate && <Link className="text-ui-xs" to={referenceHref} title={t("buildingModelOpenReference")}><Link2 className="size-icon-sm" aria-hidden="true" /></Link>}
+        <aside className="building-model-inspector building-model-properties" aria-label={t("buildingModelInspector")}>
+          <div className="building-model-panel-header">
+            <h2 className="building-model-panel-title">{t("buildingModelProperties")}</h2>
+            {selected && !selectedCandidate && !outlineSession && <Link className="building-model-panel-action" to={referenceHref} title={t("buildingModelOpenReference")} aria-label={t("buildingModelOpenReference")}><Link2 className="size-icon-sm" aria-hidden="true" /></Link>}
           </div>
-          {selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} onPage={(nextPage) => selectSourcePage(nextPage, selectedCandidate.sourceVersionId || evidence.sourceVersionId || "", selectedCandidate.storeyId || currentSource?.storeyId || "")} onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} /> : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} /> : <Empty>{t("buildingModelSelectObject")}</Empty>}
+          <div className="building-model-properties-scroll">
+            {outlineSession && <OutlineSection session={outlineSession} canCreateRoom={canCreateRoom} pending={saveOutline.isPending} t={t} onUpdate={updateOutline} onBegin={beginOutlineChange} />}
+            {!showInspector ? geometry
+              : selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} geometry={isRoom(selectedCandidate) ? geometry : undefined}
+                edit={candidateEdit} onEdit={(edit) => setCandidateEdits((current) => ({ ...current, [selectedCandidate.id]: { ...current[selectedCandidate.id], ...edit } }))}
+                onPage={(nextPage) => selectSourcePage(nextPage, selectedCandidate.sourceVersionId || evidence.sourceVersionId || "", selectedCandidate.storeyId || currentSource?.storeyId || "")}
+                onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
+              : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
+                onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending} />
+              : <Empty>{t("buildingModelSelectObject")}</Empty>}
+          </div>
         </aside>
       </div>
+      <footer className="building-model-statusbar">
+        <div className="building-model-statusbar-summary">{summary.map((part, index) => index === 0 ? <strong key={index}>{part}</strong> : <span key={index}>{part}</span>)}</div>
+        <div className="building-model-statusbar-hints" aria-hidden="true">{hints.map(([key, label]) => <span key={key}><kbd>{key}</kbd>{label}</span>)}</div>
+        <div className="building-model-statusbar-actions">
+          {outlineSession ? <>
+            <Button size="sm" variant="ghost" type="button" disabled={saveOutline.isPending} onClick={() => setOutlineSession(null)}>{t("cancel")}</Button>
+            <Button size="sm" type="button" disabled={!canSaveOutline} onClick={() => saveOutline.mutate(outlineSession)} title={t("buildingModelOutlineLogged")}>{saveOutline.isPending ? t("loading") : t("buildingModelSaveOutline")}<kbd>↵</kbd></Button>
+          </> : selectedCandidate ? <>
+            <Button size="sm" variant="outline" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("rejected")}>{t("buildingModelRejectCandidate")}</Button>
+            <Button size="sm" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("approved")}>{t("buildingModelAcceptCandidate")}<kbd>↵</kbd></Button>
+          </> : null}
+        </div>
+      </footer>
     </div>
   );
 }
@@ -939,7 +1106,7 @@ function RegionForm({ projectId, modelRevision, storeyId, sourcePage, sourceVers
   </form></div>;
 }
 
-function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onStorey, canStart, pending, onStart, t }: { job?: BuildingExtractionJob; coverage?: { pages?: number | null; regions?: number | null; objects?: number | null; unresolved?: number | null; note?: string | null } | null; source?: BuildingPlanSource; storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>; selectedStoreyId: string; onStorey: (value: string) => void; canStart: boolean; pending: boolean; onStart: () => void; t: ReturnType<typeof useT> }) {
+export function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onStorey, canStart, pending, onStart, t }: { job?: BuildingExtractionJob; coverage?: { pages?: number | null; regions?: number | null; objects?: number | null; unresolved?: number | null; note?: string | null } | null; source?: BuildingPlanSource; storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>; selectedStoreyId: string; onStorey: (value: string) => void; canStart: boolean; pending: boolean; onStart: () => void; t: ReturnType<typeof useT> }) {
   const active = job?.status === "queued" || job?.status === "running";
   const failed = job?.status === "failed";
   const complete = job?.status === "complete" || job?.status === "succeeded";
@@ -981,16 +1148,210 @@ function ExtractionPanel({ job, coverage, source, storeys, selectedStoreyId, onS
   </section>;
 }
 
-export function CandidateInspector({ candidate, regions, t, pending, onPage, onReview }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onPage: (page: number) => void; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void }) {
-  const [name, setName] = useState(candidate.label);
-  const [targetEntityId, setTargetEntityId] = useState(candidate.match?.existingId || "");
-  useEffect(() => { setName(candidate.label); setTargetEntityId(candidate.match?.existingId || ""); }, [candidate.id, candidate.label, candidate.match?.existingId]);
+
+function printedArea(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return `${value} m²`;
+  if (value && typeof value === "object" && (value as RecordData).value != null) return `${(value as RecordData).value} ${(value as RecordData).unit || "m²"}`;
+  return null;
+}
+
+function printedAreaValue(value: unknown) {
+  const number = typeof value === "number" ? value : value && typeof value === "object" ? Number((value as RecordData).value) : NaN;
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+const formatSquareMetres = (value: number) => `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m²`;
+
+/** A collapsible Blender-style panel section; native details so content stays in the document. */
+function PropertySection({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+  return <details className="building-model-property-section" open={defaultOpen}>
+    <summary><ChevronRight className="size-icon-sm building-model-caret" aria-hidden="true" /><span>{title}</span></summary>
+    <div className="building-model-property-body">{children}</div>
+  </details>;
+}
+
+type OutlinerNode = { key: string; label: string; items: BuildingRegion[]; visible?: boolean; onVisible?: (visible: boolean) => void };
+
+function VisibilityToggle({ visible, label, onToggle }: { visible: boolean; label: string; onToggle: () => void }) {
+  const Icon = visible ? Eye : EyeOff;
+  return <button type="button" className={`building-model-eye${visible ? "" : " is-hidden"}`} aria-pressed={visible} aria-label={label} title={label} onClick={onToggle}><Icon className="size-icon-sm" aria-hidden="true" /></button>;
+}
+
+export function Outliner({ t, storeyLabel, groups, categories, otherPages, layers, layerVisible, onLayer, selectedId, isVisible, onVisible, areaOf, onSelect, addRegion, footer }: {
+  t: ReturnType<typeof useT>; storeyLabel: string; groups: OutlinerNode[]; categories: OutlinerNode[]; otherPages: BuildingRegion[];
+  layers: Array<{ id: string; label: string; visible?: boolean }>; layerVisible: (layer: { id: string; visible?: boolean }) => boolean; onLayer: (id: string, visible: boolean) => void;
+  selectedId?: string; isVisible: (region: BuildingRegion) => boolean; onVisible: (regions: BuildingRegion[], visible: boolean) => void;
+  areaOf: (region: BuildingRegion) => number | null; onSelect: (region: BuildingRegion) => void; addRegion: ReactNode; footer?: ReactNode;
+}) {
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const tree = useRef<HTMLDivElement>(null);
+  // Keep the selected object in view when it is picked on the plan.
+  useEffect(() => { tree.current?.querySelector(".building-model-tree-row.is-selected")?.scrollIntoView({ block: "nearest" }); }, [selectedId]);
+  const needle = query.trim().toLowerCase();
+  const matches = (region: BuildingRegion) => !needle || region.label.toLowerCase().includes(needle) || Boolean(region.groupLabel?.toLowerCase().includes(needle));
+  const open = (key: string, fallback: boolean) => Boolean(needle) || (expanded[key] ?? fallback);
+  const toggle = (key: string, fallback: boolean) => setExpanded((current) => ({ ...current, [key]: !(current[key] ?? fallback) }));
+  const show = t("buildingModelShow"), hide = t("buildingModelHide");
+  const branch = (key: string, label: string, level: number, fallback: boolean, count: number, eye?: ReactNode) => <div className="building-model-tree-row is-branch" data-level={level}>
+    <button type="button" className="building-model-tree-main" aria-expanded={open(key, fallback)} onClick={() => toggle(key, fallback)}>
+      <ChevronRight className="size-icon-sm building-model-caret" aria-hidden="true" /><span className="building-model-tree-label">{label}</span><span className="building-model-tree-meta">{count}</span>
+    </button>
+    {eye}
+  </div>;
+  const item = (region: BuildingRegion, level: number, meta: ReactNode) => {
+    const visible = isVisible(region), selected = region.id === selectedId;
+    return <div key={region.id} className={`building-model-tree-row${selected ? " is-selected" : ""}`} data-level={level}>
+      <button type="button" className="building-model-tree-main" data-workbench-enter aria-pressed={selected} onClick={() => onSelect(region)}>
+        <span className={`building-model-status-dot${region.isCandidate ? " is-candidate" : " is-accepted"}${region.kind === "unknown-room" ? " is-unknown" : ""}`} aria-hidden="true" />
+        <span className="building-model-tree-label">{region.label}</span><span className="building-model-tree-meta">{meta}</span>
+      </button>
+      <VisibilityToggle visible={visible} label={`${visible ? hide : show}: ${region.label}`} onToggle={() => onVisible([region], !visible)} />
+    </div>;
+  };
+  const areaMeta = (region: BuildingRegion) => { const area = areaOf(region); return area != null ? formatSquareMetres(area) : printedArea(region.sourceArea) ?? ""; };
+  const node = (group: OutlinerNode, level: number, fallback: boolean, meta: (region: BuildingRegion) => ReactNode) => {
+    const items = group.items.filter(matches);
+    if (!items.length) return null;
+    const visible = group.visible ?? items.some(isVisible), isOpen = open(group.key, fallback || items.some((region) => region.id === selectedId));
+    return <div key={group.key} role="group" aria-label={group.label}>
+      {branch(group.key, group.label, level, fallback || items.some((region) => region.id === selectedId), items.length,
+        <VisibilityToggle visible={visible} label={`${visible ? hide : show}: ${group.label}`} onToggle={() => group.onVisible ? group.onVisible(!visible) : onVisible(items, !visible)} />)}
+      <div hidden={!isOpen}>{items.map((region) => item(region, level + 1, meta(region)))}</div>
+    </div>;
+  };
+  const storeyCount = [...groups, ...categories].reduce((sum, group) => sum + group.items.filter(matches).length, 0);
+  const visibleLayers = layers.filter((layer) => !needle || layer.label.toLowerCase().includes(needle));
+  return <aside className="building-model-outliner" aria-label={t("buildingModelOutliner")}>
+    <div className="building-model-panel-header">
+      <h2 className="building-model-panel-title">{t("buildingModelOutliner")}</h2>
+      <Popover>
+        <PopoverTrigger asChild><Button variant="ghost" size="icon-xs" type="button" className="building-model-panel-action" aria-label={t("buildingModelAddRegion")} title={t("buildingModelAddRegion")}><Plus className="size-icon-sm" aria-hidden="true" /></Button></PopoverTrigger>
+        <PopoverContent align="start" side="right" className="building-model-add-popover"><h2 className="building-model-panel-title">{t("buildingModelAddRegion")}</h2>{addRegion}</PopoverContent>
+      </Popover>
+    </div>
+    <label className="building-model-outliner-search"><Search className="size-icon-sm" aria-hidden="true" /><Input className="h-control-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("buildingModelSearchObjects")} aria-label={t("buildingModelSearchObjects")} /></label>
+    <div ref={tree} className="building-model-tree">
+      {branch("storey", storeyLabel, 0, true, storeyCount)}
+      <div hidden={!open("storey", true)}>
+        {groups.map((group) => node(group, 1, true, areaMeta))}
+        {categories.map((category) => node(category, 1, false, () => ""))}
+        {!storeyCount && <p className="building-model-tree-empty">{needle ? t("buildingModelNoMatches") : t("buildingModelNoObjects")}</p>}
+      </div>
+      {otherPages.some(matches) && <div role="group" aria-label={t("buildingModelOtherPages")}>
+        {branch("other", t("buildingModelOtherPages"), 0, false, otherPages.filter(matches).length)}
+        <div hidden={!open("other", false)}>{otherPages.filter(matches).map((region) => item(region, 1, `${t("buildingModelPageShort")} ${region.page}`))}</div>
+      </div>}
+      {visibleLayers.length > 0 && <div role="group" aria-label={t("buildingModelEvidenceLayers")}>
+        {branch("layers", t("buildingModelEvidenceLayers"), 0, false, visibleLayers.length)}
+        <div hidden={!open("layers", false)}>{visibleLayers.map((layer) => {
+          const visible = layerVisible(layer);
+          return <div key={layer.id} className="building-model-tree-row" data-level={1}>
+            <span className="building-model-tree-main"><span className="building-model-tree-label">{layer.label}</span></span>
+            <VisibilityToggle visible={visible} label={`${visible ? hide : show}: ${layer.label}`} onToggle={() => onLayer(layer.id, !visible)} />
+          </div>;
+        })}</div>
+      </div>}
+    </div>
+    {footer}
+  </aside>;
+}
+
+function OutlineThumbnail({ draft, aspect }: { draft: OutlineDraft; aspect: number }) {
+  const xs = draft.polygon.map((point) => point.x * aspect), ys = draft.polygon.map((point) => point.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys), width = Math.max(...xs) - minX || 1e-6, height = Math.max(...ys) - minY || 1e-6, pad = Math.max(width, height) * .08;
+  const ring = (points: BuildingPlanPoint[]) => `M${points.map((point) => `${(point.x * aspect).toFixed(6)} ${point.y.toFixed(6)}`).join("L")}Z`;
+  return <svg className="building-model-outline-thumb" viewBox={`${minX - pad} ${minY - pad} ${width + pad * 2} ${height + pad * 2}`} aria-hidden="true">
+    <path d={[draft.polygon, ...draft.holes].map(ring).join("")} fillRule="evenodd" vectorEffect="non-scaling-stroke" />
+  </svg>;
+}
+
+function VertexInput({ value, label, disabled, onCommit }: { value: string; label: string; disabled?: boolean; onCommit: (value: number) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  const commit = () => { const number = Number(text.replace(",", ".")); if (text !== value && Number.isFinite(number)) onCommit(number); else setText(value); };
+  return <Input className="building-model-vertex-input" inputMode="decimal" value={text} aria-label={label} disabled={disabled} onChange={(event) => setText(event.target.value)} onBlur={commit}
+    onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } if (event.key === "Escape") { setText(value); event.currentTarget.blur(); } }} />;
+}
+
+function GeometrySection({ draft, scale, printed, editing, snap, onSnap, onEditVertex, canEdit, onEdit, t }: {
+  draft: OutlineDraft | null; scale: PageScale | null; printed: unknown; editing: boolean; snap: boolean; onSnap: (snap: boolean) => void;
+  onEditVertex: (index: number, point: BuildingPlanPoint) => void; canEdit: boolean; onEdit: () => void; t: ReturnType<typeof useT>;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const area = draft ? outlineAreaM2(draft, scale) : null;
+  const printedValue = printedAreaValue(printed);
+  const delta = area != null && printedValue ? (area - printedValue) / printedValue * 100 : null;
+  const metric = Boolean(scale?.metresPerPageHeight);
+  const points = draft?.polygon ?? [];
+  const shown = showAll ? points : points.slice(0, 6);
+  // Without a printed scale, points are edited as a percentage of the page.
+  const display = (point: BuildingPlanPoint) => metric ? pointToMetres(point, scale!) : { x: point.x * 100, y: point.y * 100 };
+  const fromDisplay = (value: { x: number; y: number }) => metric ? metresToPoint(value, scale!) : { x: Math.min(1, Math.max(0, value.x / 100)), y: Math.min(1, Math.max(0, value.y / 100)) };
+  const unit = metric ? "m" : "%", digits = metric ? 3 : 2;
+  return <PropertySection title={t("buildingModelSectionGeometry")}>
+    {draft ? <>
+      <div className="building-model-geometry-summary">
+        <OutlineThumbnail draft={draft} aspect={scale?.pageAspectRatio ?? 1} />
+        <dl className="building-model-readouts">
+          <div><dt>{t("buildingModelOutlineArea")}</dt><dd>{area == null ? "—" : formatSquareMetres(area)}</dd></div>
+          <div><dt>{t("buildingModelPrintedArea")}</dt><dd>{printedArea(printed) ?? "—"}</dd></div>
+          <div><dt>{t("buildingModelAreaDifference")}</dt><dd>{delta == null ? "—" : `${delta > 0 ? "+" : ""}${delta.toFixed(1)} %`}</dd></div>
+          <div><dt>{t("buildingModelOutlinePoints")}</dt><dd>{points.length}</dd></div>
+        </dl>
+      </div>
+      <Table className="building-model-vertex-table">
+        <TableHeader><TableRow><TableHead>#</TableHead><TableHead>X ({unit})</TableHead><TableHead>Y ({unit})</TableHead></TableRow></TableHeader>
+        <TableBody>{shown.map((point, index) => {
+          const value = display(point);
+          return <TableRow key={index}>
+            <TableCell>{index + 1}</TableCell>
+            <TableCell><VertexInput value={value.x.toFixed(digits)} label={`${t("buildingModelOutlinePoint")} ${index + 1} X`} disabled={!canEdit && !editing} onCommit={(x) => onEditVertex(index, fromDisplay({ x, y: value.y }))} /></TableCell>
+            <TableCell><VertexInput value={value.y.toFixed(digits)} label={`${t("buildingModelOutlinePoint")} ${index + 1} Y`} disabled={!canEdit && !editing} onCommit={(y) => onEditVertex(index, fromDisplay({ x: value.x, y }))} /></TableCell>
+          </TableRow>;
+        })}</TableBody>
+      </Table>
+      {points.length > 6 && <button type="button" className="building-model-link-button" onClick={() => setShowAll(!showAll)}>{showAll ? t("buildingModelShowFewer") : `${t("buildingModelShowAll")} ${points.length}`}</button>}
+    </> : <span className="building-model-unknown text-ui-xs">{t("buildingModelNoOutline")}</span>}
+    {editing ? <label className="building-model-switch-row" title={t("buildingModelSnapHint")}><span>{t("buildingModelSnapToWalls")}</span><Switch size="sm" checked={snap} onCheckedChange={onSnap} /></label>
+      : canEdit && <Button size="xs" variant="outline" type="button" className="building-model-geometry-edit" onClick={onEdit}><Spline className="size-icon-sm" aria-hidden="true" />{draft ? t("buildingModelEditOutline") : t("buildingModelDrawOutline")}<kbd>E</kbd></Button>}
+  </PropertySection>;
+}
+
+export function OutlineSection({ session, canCreateRoom, pending, t, onUpdate, onBegin }: {
+  session: OutlineSession; canCreateRoom: boolean; pending: boolean; t: ReturnType<typeof useT>;
+  onUpdate: (update: (session: OutlineSession) => OutlineSession) => void; onBegin: () => void;
+}) {
+  const target = session.target;
+  const scopeLabel = (scope: MagicOutline["scope"]) => t(scope === "room" ? "buildingModelOutlineScopeRoom" : scope === "space" ? "buildingModelOutlineScopeSpace" : "buildingModelOutlineScopeConstruction");
+  const targetLabel = (item: OutlineTarget) => item.type === "new_room" ? t("buildingModelOutlineNewRoom") : `${item.label} · ${item.type === "candidate" ? t("buildingModelUnreviewedCandidate") : t("buildingModelOutlineRoom")}`;
+  return <PropertySection title={t("buildingModelOutline")}>
+    <dl>
+      <dt>{t("buildingModelOutlineMethod")}</dt><dd><Badge>{session.method === "magic_selection" ? t("buildingModelToolMagic") : t("buildingModelEditOutline")}</Badge></dd>
+      {session.magic && session.magic.options.length > 1 && <><dt>{t("buildingModelOutlineScope")}</dt><dd>
+        <Segmented value={String(session.magic.index)} onChange={(value) => { onBegin(); onUpdate((current) => { const option = current.magic!.options[Number(value)]!; return { ...current, magic: { ...current.magic!, index: Number(value) }, draft: { polygon: option.polygon, holes: option.holes } }; }); }}
+          items={session.magic.options.map((option, index) => ({ value: String(index), label: scopeLabel(option.scope) }))} />
+      </dd></>}
+      {session.targets.length > 1 && <><dt>{t("buildingModelOutlineTarget")}</dt><dd>
+        <NativeSelect aria-label={t("buildingModelOutlineTarget")} value={String(session.targets.indexOf(target))} onChange={(event) => onUpdate((current) => ({ ...current, target: current.targets[Number(event.target.value)]! }))} disabled={pending}>
+          {session.targets.map((item, index) => <option key={index} value={index} disabled={item.type === "new_room" && !canCreateRoom}>{targetLabel(item)}</option>)}
+        </NativeSelect>
+      </dd></>}
+      {target.type === "new_room" && <><dt>{t("buildingModelOutlineRoomName")}</dt><dd><Input autoFocus aria-label={t("buildingModelOutlineRoomName")} value={session.name} onChange={(event) => onUpdate((current) => ({ ...current, name: event.target.value }))} disabled={pending} /></dd></>}
+    </dl>
+    {outlineSelfIntersects(session.draft.polygon) && <Callout tone="warning">{t("buildingModelOutlineCrossing")}</Callout>}
+  </PropertySection>;
+}
+
+export function CandidateInspector({ candidate, regions, t, pending, onPage, onReview, edit = {}, onEdit, geometry }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onPage: (page: number) => void; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void; edit?: CandidateEdit; onEdit?: (edit: CandidateEdit) => void; geometry?: ReactNode }) {
+  const name = edit.name ?? candidate.label;
+  const targetEntityId = edit.targetEntityId ?? candidate.match?.existingId ?? "";
   const propertyEntries = Object.entries(candidate.properties || {});
   const role = candidate.candidateRole || candidateRole(candidate);
   const isConstructionHypothesis = role === "draft-wall" || role === "construction-assembly";
   const sourceMinorDimension = Number(candidate.classification?.pageRelativeMinorDimension);
   const sourceMinorDimensionLabel = Number.isFinite(sourceMinorDimension) ? `${(sourceMinorDimension * 100).toFixed(3)}%` : null;
-  const geometryLabel = role === "draft-wall" ? t("buildingModelGeometryDraftWall") : role === "construction-assembly" ? t("buildingModelConstructionFragmentGeometry") : candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "footprint" ? t("buildingModelGeometryFootprint") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : candidate.geometryQuality || t("buildingModelGeometryQualityUnknown");
+  const geometryLabel = role === "draft-wall" ? t("buildingModelGeometryDraftWall") : role === "construction-assembly" ? t("buildingModelConstructionFragmentGeometry") : candidate.geometryQuality === "anchor" ? t("buildingModelGeometryAnchor") : candidate.geometryQuality === "footprint" ? t("buildingModelGeometryFootprint") : candidate.geometryQuality === "approximate_partition" || candidate.geometryQuality === "approximate_region" ? t("buildingModelGeometryApproximateRegion") : candidate.geometryQuality === "enclosed_region" ? t("buildingModelGeometryEnclosedRegion") : candidate.geometryQuality === "manual_outline" ? t("buildingModelGeometryManualOutline") : candidate.geometryQuality || t("buildingModelGeometryQualityUnknown");
   const sourceLayer = candidate.layerName && candidate.layerId ? `${candidate.layerName} · ${candidate.layerId}` : candidate.layerName || candidate.layerId || t("buildingModelNoSourceLayer");
   const sourceCoordinates = candidate.box ? `x ${candidate.box.x.toFixed(5)} · y ${candidate.box.y.toFixed(5)} · w ${candidate.box.width.toFixed(5)} · h ${candidate.box.height.toFixed(5)}` : "—";
   const polygonCoordinates = candidate.polygon?.map((point) => `${point.x.toFixed(5)}, ${point.y.toFixed(5)}`).join(" · ");
@@ -999,28 +1360,43 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
   const sourceArea = typeof candidate.sourceArea === "number" && Number.isFinite(candidate.sourceArea) ? `${candidate.sourceArea} m²` : candidate.sourceArea && typeof candidate.sourceArea === "object" ? (() => { const area = candidate.sourceArea as RecordData; return area.value == null ? JSON.stringify(area) : `${area.value}${area.unit ? ` ${area.unit}` : ""}`; })() : typeof candidate.sourceArea === "string" ? candidate.sourceArea : undefined;
   const roomUseProposal = candidate.roomUseProposal?.roomUse;
   const proposalConfidence = typeof candidate.roomUseProposal?.confidence === "number" ? `${Math.round(candidate.roomUseProposal.confidence * 100)}%` : undefined;
-  const hasCandidateProperties = propertyEntries.length > 0 || Boolean(sourceArea) || Boolean(roomUseProposal);
-  const correction = { ...(name.trim() && name.trim() !== candidate.label ? { name: name.trim() } : {}), ...(targetEntityId ? { targetEntityId } : {}) };
   const formatUnknown = (value: unknown) => value == null || value === "" ? t("buildingModelUnknownValue") : typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value);
   const candidateWarning = role === "draft-wall" ? t("buildingModelDraftWallWarning") : role === "unresolved-anchor" ? t("buildingModelAnchorWarning") : role === "room-region" ? t("buildingModelRoomRegionWarning") : t("buildingModelCandidateWarning");
-  return <div className="building-model-candidate-inspector">
-    <div className="building-model-candidate-inspector-scroll">
-    <Callout tone="warning">{candidateWarning}</Callout>
-    <dl>
-      <dt>{t("buildingModelCandidateType")}</dt><dd>{candidateTypeLabel(candidate, t)}</dd>
-      <dt>{t("buildingModelCandidateStatus")}</dt><dd><Badge>{t("buildingModelUnreviewedCandidate")}</Badge></dd>
-      {candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}
-      {sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}
-      {candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse ? "building-model-unknown" : undefined}>{candidate.roomUse || t("buildingModelUnknownValue")}</dd>{roomUseProposal && <><dt>{t("buildingModelRoomUseProposal")}</dt><dd>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} <Badge>{t("buildingModelUnreviewedProposal")}</Badge></dd></>}</> : <>
-        <dt>{t("buildingModelWallThickness")}</dt><dd className={isConstructionHypothesis || candidate.wallThickness == null ? "building-model-unknown" : undefined}>{formatUnknown(isConstructionHypothesis ? null : candidate.wallThickness)}</dd>
-        <dt>{t("buildingModelMaterial")}</dt><dd className={isConstructionHypothesis || candidate.material == null ? "building-model-unknown" : undefined}>{formatUnknown(isConstructionHypothesis ? null : candidate.material)}</dd>
-        <dt>{t("buildingModelConstructionState")}</dt><dd className={!candidate.constructionState ? "building-model-unknown" : undefined}>{candidate.constructionState || t("buildingModelUnknownValue")}{isConstructionHypothesis && candidate.constructionState && candidate.constructionState !== "unknown" && <small className="block muted text-ui-xs">{t("buildingModelInferredSourcePhase")}</small>}</dd>
-        <dt>{t("buildingModelSourceScale")}</dt><dd className={candidate.sourceScale == null ? "building-model-unknown" : undefined}>{formatUnknown(candidate.sourceScale)}</dd>
-      </>}
-      <dt>{t("buildingModelSourcePage")}</dt><dd><button type="button" className="text-primary underline underline-offset-2" onClick={() => onPage(candidate.page)}>{t("buildingModelLocateOnPage")} {candidate.page}</button></dd>
-    </dl>
-    <details className="building-model-technical-details">
-      <summary>{t("buildingModelTechnicalSourceDetails")}</summary>
+  const matchOptions = regions.filter((region) => region.entityType === candidate.entityType);
+  return <>
+    <PropertySection title={candidate.entityType === "room" ? t("buildingModelSectionRoom") : t("buildingModelSectionElement")}>
+      <dl>
+        <dt>{t("buildingModelLabel")}</dt><dd><Input aria-label={t("buildingModelLabel")} title={t("buildingModelCandidateCorrectionHint")} value={name} onChange={(event) => onEdit?.({ name: event.target.value })} disabled={pending} /></dd>
+        <dt>{t("buildingModelCandidateType")}</dt><dd>{candidateTypeLabel(candidate, t)}</dd>
+        <dt>{t("status")}</dt><dd><Badge title={candidateWarning}>{t("buildingModelUnreviewedCandidate")}</Badge></dd>
+        {candidate.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{candidate.groupLabel}</dd></>}
+        {candidate.entityType === "room" ? <><dt>{t("buildingModelRoomUse")}</dt><dd className={!candidate.roomUse && !roomUseProposal ? "building-model-unknown" : undefined}>{candidate.roomUse || (roomUseProposal ? <>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} <Badge title={`${candidate.roomUseProposal?.provider || "TypeSafe"}${candidate.roomUseProposal?.model ? ` / ${candidate.roomUseProposal.model}` : ""}`}>{t("buildingModelUnreviewedProposal")}</Badge></> : t("buildingModelUnknownValue"))}</dd></> : <>
+          <dt>{t("buildingModelWallThickness")}</dt><dd className={isConstructionHypothesis || candidate.wallThickness == null ? "building-model-unknown" : undefined}>{formatUnknown(isConstructionHypothesis ? null : candidate.wallThickness)}</dd>
+          <dt>{t("buildingModelMaterial")}</dt><dd className={isConstructionHypothesis || candidate.material == null ? "building-model-unknown" : undefined}>{formatUnknown(isConstructionHypothesis ? null : candidate.material)}</dd>
+          <dt>{t("buildingModelConstructionState")}</dt><dd className={!candidate.constructionState ? "building-model-unknown" : undefined}>{candidate.constructionState || t("buildingModelUnknownValue")}{isConstructionHypothesis && candidate.constructionState && candidate.constructionState !== "unknown" && <small className="block muted text-ui-xs">{t("buildingModelInferredSourcePhase")}</small>}</dd>
+          <dt>{t("buildingModelSourceScale")}</dt><dd className={candidate.sourceScale == null ? "building-model-unknown" : undefined}>{formatUnknown(candidate.sourceScale)}</dd>
+        </>}
+      </dl>
+    </PropertySection>
+    {geometry}
+    <PropertySection title={t("buildingModelMatchExisting")} defaultOpen={Boolean(targetEntityId)}>
+      <dl>
+        <dt>{candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")}</dt>
+        <dd><NativeSelect aria-label={t("buildingModelMatchExisting")} title={t("buildingModelMatchHint")} value={targetEntityId} onChange={(event) => onEdit?.({ targetEntityId: event.target.value })} disabled={pending}><option value="">{t("buildingModelNoMatch")}</option>{matchOptions.map((region) => <option key={region.id} value={region.id}>{region.label} · {region.id}</option>)}</NativeSelect></dd>
+      </dl>
+      <Button size="xs" variant="outline" type="button" disabled={pending || !targetEntityId} onClick={() => onReview("approved", { targetEntityId })}>{t("buildingModelReconcile")}</Button>
+    </PropertySection>
+    <PropertySection title={t("buildingModelSectionSource")}>
+      <dl>
+        <dt>{t("buildingModelSourcePage")}</dt><dd><button type="button" className="building-model-link-button" onClick={() => onPage(candidate.page)}>{t("buildingModelPage")} {candidate.page}</button></dd>
+        <dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd>
+        {sourceArea && <><dt>{t("buildingModelSourceArea")}</dt><dd>{sourceArea}</dd></>}
+        {propertyEntries.map(([key, value]) => <Fragment key={key}><dt>{key}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></Fragment>)}
+        {candidate.evidence?.map((item, index) => <Fragment key={index}><dt>{item.label || t("buildingModelSourcePage")}</dt><dd>{item.value || "—"} {item.page ? `· ${t("buildingModelPage")} ${item.page}` : ""}</dd></Fragment>)}
+        {candidate.uncertainty != null && <><dt>{t("buildingModelUncertainty")}</dt><dd>{typeof candidate.uncertainty === "string" ? candidate.uncertainty : JSON.stringify(candidate.uncertainty)}</dd></>}
+      </dl>
+    </PropertySection>
+    <PropertySection title={t("buildingModelTechnicalSourceDetails")} defaultOpen={false}>
       <dl>
         <dt>{t("buildingModelSourceVersion")}</dt><dd className="mono">{candidate.sourceVersionId || t("buildingModelUnknownValue")}</dd>
         <dt>{t("buildingModelStorey")}</dt><dd className={!candidate.storeyId ? "building-model-unknown" : undefined}>{candidate.storeyId || t("buildingModelUnknownValue")}</dd>
@@ -1033,20 +1409,14 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
         {(candidate.competingLabels?.length ?? 0) > 0 && <><dt>{t("buildingModelCompetingLabels")}</dt><dd><details className="building-model-competing-labels"><summary>{candidate.competingLabels!.length} {t("buildingModelCompetingLabelCount")}</summary><code>{candidate.competingLabels!.join("\n")}</code></details></dd></>}
         {(candidate.sourceFootprintKeys?.length ?? 0) > 0 && <><dt>{t("buildingModelSourceFootprints")}</dt><dd><code className="building-model-source-coordinates">{candidate.sourceFootprintKeys!.join(" · ")}</code></dd></>}
         {(candidate.parts?.length ?? 0) > 0 && <><dt>{t("buildingModelGeometryParts")}</dt><dd>{candidate.parts!.length}</dd></>}
-        <dt>{t("buildingModelSourceLayer")}</dt><dd>{sourceLayer}</dd>
         <dt>{t("buildingModelSourceCoordinates")}</dt><dd><code className="building-model-source-coordinates">{sourceCoordinates}</code>{polygonCoordinates && <details className="building-model-source-polygons"><summary>{t("buildingModelExactSourcePolygon")}</summary><code>{polygonCoordinates}</code></details>}{partPolygonCoordinates && <details className="building-model-source-polygons"><summary>{t("buildingModelExactSourcePolygons")}</summary><code>{partPolygonCoordinates}</code></details>}</dd>
         <dt>{t("buildingModelGeometryLimitations")}</dt><dd>{geometryLimitations}</dd>
       </dl>
-    </details>
-    <div className="building-model-inspector-section"><h3>{t("buildingModelProperties")}</h3><Field label={t("buildingModelLabel")} hint={t("buildingModelCandidateCorrectionHint")}><Input value={name} onChange={(event) => setName(event.target.value)} disabled={pending} /></Field>{roomUseProposal && <div className="building-model-evidence-row"><span>{t("buildingModelRoomUseProposal")}</span><small>{roomUseProposal.replaceAll("_", " ")} {proposalConfidence ? `· ${proposalConfidence}` : ""} · {candidate.roomUseProposal?.provider || "TypeSafe"} {candidate.roomUseProposal?.model ? `/ ${candidate.roomUseProposal.model}` : ""}</small></div>}{sourceArea && <div className="building-model-evidence-row"><span>{t("buildingModelSourceArea")}</span><small>{sourceArea} · {t("buildingModelUnreviewedProposal")}</small></div>}{propertyEntries.map(([key, value]) => <div className="building-model-evidence-row" key={key}><span>{key}</span><small>{typeof value === "string" ? value : JSON.stringify(value)}</small></div>)}{!hasCandidateProperties && <p className="muted text-ui-xs">{t("buildingModelNoCandidateProperties")}</p>}</div>
-    <div className="building-model-inspector-section"><h3>{t("buildingModelMatchExisting")}</h3><Field label={candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")} hint={t("buildingModelMatchHint")}><NativeSelect value={targetEntityId} onChange={(event) => setTargetEntityId(event.target.value)} disabled={pending}><option value="">{t("buildingModelNoMatch")}</option>{regions.filter((region) => region.entityType === candidate.entityType).map((region) => <option key={region.id} value={region.id}>{region.label} · {region.id}</option>)}</NativeSelect></Field><Button size="sm" variant="outline" disabled={pending || !targetEntityId} onClick={() => onReview("approved", { targetEntityId })}>{t("buildingModelReconcile")}</Button></div>
-    <div className="building-model-inspector-section"><h3>{t("buildingModelEvidence")}</h3>{candidate.evidence?.length ? candidate.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label || t("buildingModelSourcePage")}</span><small>{item.value || "—"} {item.page ? `· ${t("buildingModelPage")} ${item.page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoEvidence")}</p>}{candidate.uncertainty != null && <p className="muted text-ui-2xs">{t("buildingModelUncertainty")}: {typeof candidate.uncertainty === "string" ? candidate.uncertainty : JSON.stringify(candidate.uncertainty)}</p>}</div>
-    </div>
-    <div className="building-model-candidate-actions"><Button size="sm" disabled={pending} onClick={() => onReview("approved", correction)}>{t("buildingModelAcceptCandidate")}</Button><Button size="sm" variant="outline" disabled={pending} onClick={() => onReview("rejected")}>{t("buildingModelRejectCandidate")}</Button></div>
-  </div>;
+    </PropertySection>
+  </>;
 }
 
-function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending }: { region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean }) {
+function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry }: { region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
   const [label, setLabel] = useState(region.label);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -1058,35 +1428,33 @@ function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, pr
       else { setCopied(false); setCopyFailed(true); }
     });
   };
+  const commitLabel = () => { if (label.trim() && label.trim() !== region.label) onSave({ name: label.trim() }); else setLabel(region.label); };
   return (
     <>
-      <dl>
-        <dt>{t("buildingModelObjectId")}</dt><dd><button type="button" className="building-model-id-copy mono" onClick={copyId} title={t("buildingModelCopyObjectId")} aria-label={`${t("buildingModelCopyObjectId")}: ${region.id}`}><span>{region.id}</span><Copy className="size-icon-sm" aria-hidden="true" />{copied && <small>{t("buildingModelCopiedObjectId")}</small>}{copyFailed && <small>{t("buildingModelCopyUnavailable")}</small>}</button></dd>
-        <dt>{t("buildingModelSourcePage")}</dt><dd><button type="button" className="text-primary underline underline-offset-2" onClick={() => onPage(sourcePage)}>{t("buildingModelPage")} {sourcePage}</button></dd>
-      </dl>
-      <div className="building-model-inspector-section">
-        <h3>{t("buildingModelProperties")}</h3>
-        <Field label={t("buildingModelLabel")} hint={t("buildingModelCorrectionHint")}>
-          <Input value={label} onChange={(event) => setLabel(event.target.value)} />
-        </Field>
-        <Button size="sm" variant="outline" disabled={pending || !label.trim() || label === region.label} onClick={() => onSave({ name: label.trim() })}>{t("buildingModelSaveCorrection")}</Button>
-        {region.entityType === "room" && <Field label={t("buildingModelRoomUse")} hint={t("buildingModelRoomUseHint")}><Input defaultValue={region.roomUse || ""} onBlur={(event) => { if (sourceVersionId && event.target.value !== (region.roomUse || "")) onSave({ roomUse: event.target.value.trim() || null, evidence: [{ kind: "page", sourceVersionId, page: sourcePage, ...(region.box ? { region: region.box } : {}) }] }); }} /></Field>}
-      </div>
-      <div className="building-model-inspector-section">
-        <h3>{t("buildingModelMeasurements")}</h3>
+      <PropertySection title={region.entityType === "element" || region.kind === "element" ? t("buildingModelSectionElement") : t("buildingModelSectionRoom")}>
+        <dl>
+          <dt>{t("buildingModelLabel")}</dt><dd><Input aria-label={t("buildingModelLabel")} title={t("buildingModelCorrectionHint")} value={label} disabled={pending} onChange={(event) => setLabel(event.target.value)} onBlur={commitLabel} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } if (event.key === "Escape") { setLabel(region.label); } }} /></dd>
+          {region.entityType === "room" && <><dt>{t("buildingModelRoomUse")}</dt><dd><Input aria-label={t("buildingModelRoomUse")} title={t("buildingModelRoomUseHint")} defaultValue={region.roomUse || ""} onBlur={(event) => { if (sourceVersionId && event.target.value !== (region.roomUse || "")) onSave({ roomUse: event.target.value.trim() || null, evidence: [{ kind: "page", sourceVersionId, page: sourcePage, ...(region.box ? { region: region.box } : {}) }] }); }} /></dd></>}
+          <dt>{t("status")}</dt><dd><Badge>{region.kind === "unknown-room" ? t("buildingModelUnknownRoom") : t("buildingModelAccepted")}</Badge></dd>
+          {region.groupLabel && <><dt>{t("buildingModelCandidateGroup")}</dt><dd>{region.groupLabel}</dd></>}
+          <dt>{t("buildingModelObjectId")}</dt><dd><button type="button" className="building-model-id-copy mono" onClick={copyId} title={t("buildingModelCopyObjectId")} aria-label={`${t("buildingModelCopyObjectId")}: ${region.id}`}><span>{region.id}</span><Copy className="size-icon-sm" aria-hidden="true" />{copied && <small>{t("buildingModelCopiedObjectId")}</small>}{copyFailed && <small>{t("buildingModelCopyUnavailable")}</small>}</button></dd>
+        </dl>
+      </PropertySection>
+      {geometry}
+      <PropertySection title={t("buildingModelMeasurements")} defaultOpen={Boolean(region.measurements?.length)}>
         {region.measurements?.length ? region.measurements.map((measurement) => (
           <Measurement key={measurement.key} measurement={measurement} t={t} onSave={(value) => onMeasurementSave(measurement, value)} pending={pending} />
         )) : <NewMeasurementForm t={t} pending={pending} onSave={(measurement, value) => onMeasurementSave({ ...measurement, evidence: sourceVersionId ? [{ kind: "page", sourceVersionId, page: sourcePage, ...(sourceRegion ? { region: sourceRegion } : {}) }] : [] }, value)} />}
-      </div>
-      <div className="building-model-inspector-section">
-        <h3>{t("buildingModelPendingProposals")}</h3>
-        {proposals.length ? proposals.map((proposal) => <div className="building-model-evidence-row" key={proposal.id}><span><Badge>{t("buildingModelPending")}</Badge> {String(proposal.payload?.value ?? proposal.payload?.proposedValue ?? "—")}</span><small>{String(proposal.payload?.reason || t("buildingModelNoReason"))} {proposal.payload?.evidence?.[0]?.page ? `· ${t("buildingModelPage")} ${proposal.payload.evidence[0].page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoPendingProposals")}</p>}
-      </div>
-      <div className="building-model-inspector-section">
-        <h3>{t("buildingModelEvidence")}</h3>
-        {region.evidence?.length ? region.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label}</span><small>{item.value} · {item.source === "source-stated" ? t("buildingModelSourceStated") : item.source === "calibrated" ? t("buildingModelCalibrated") : t("buildingModelInferred")} {item.page ? `· p. ${item.page}` : ""}</small></div>) : <p className="muted text-ui-xs">{t("buildingModelNoEvidence")}</p>}
-        <button type="button" className="building-model-reference" onClick={() => onPage(sourcePage)}><span>{t("buildingModelOpenSourcePage")} {sourcePage}</span><ExternalLink className="size-icon-sm" aria-hidden="true" /></button>
-      </div>
+      </PropertySection>
+      <PropertySection title={t("buildingModelPendingProposals")} defaultOpen={proposals.length > 0}>
+        {proposals.length ? proposals.map((proposal) => <div className="building-model-evidence-row" key={proposal.id}><span><Badge>{t("buildingModelPending")}</Badge> {String(proposal.payload?.value ?? proposal.payload?.proposedValue ?? "—")}</span><small>{String(proposal.payload?.reason || t("buildingModelNoReason"))} {proposal.payload?.evidence?.[0]?.page ? `· ${t("buildingModelPage")} ${proposal.payload.evidence[0].page}` : ""}</small></div>) : <span className="building-model-unknown text-ui-xs">{t("buildingModelNoPendingProposals")}</span>}
+      </PropertySection>
+      <PropertySection title={t("buildingModelSectionSource")}>
+        <dl>
+          <dt>{t("buildingModelSourcePage")}</dt><dd><button type="button" className="building-model-link-button" onClick={() => onPage(sourcePage)}>{t("buildingModelPage")} {sourcePage}</button></dd>
+        </dl>
+        {region.evidence?.length ? region.evidence.map((item, index) => <div className="building-model-evidence-row" key={`${item.label}-${index}`}><span>{item.label}</span><small>{item.value} · {item.source === "source-stated" ? t("buildingModelSourceStated") : item.source === "calibrated" ? t("buildingModelCalibrated") : t("buildingModelInferred")} {item.page ? `· p. ${item.page}` : ""}</small></div>) : <span className="building-model-unknown text-ui-xs">{t("buildingModelNoEvidence")}</span>}
+      </PropertySection>
     </>
   );
 }
@@ -1142,8 +1510,7 @@ function NewMeasurementForm({ t, pending, onSave }: { t: ReturnType<typeof useT>
         </Field>
         <Field label={t("buildingModelUncertainty")}><Input type="number" inputMode="decimal" step="any" min="0" value={uncertainty} onChange={(event) => setUncertainty(event.target.value)} disabled={pending} placeholder="—" /></Field>
       </div>
-      <Button size="sm" variant="outline" type="submit" disabled={pending || !value}>{t("buildingModelAddMeasurement")}</Button>
-      <p className="muted text-ui-2xs">{t("buildingModelMeasurementMaterialHint")}</p>
+      <Button size="xs" variant="outline" type="submit" disabled={pending || !value} title={t("buildingModelMeasurementMaterialHint")}>{t("buildingModelAddMeasurement")}</Button>
     </form>
   );
 }

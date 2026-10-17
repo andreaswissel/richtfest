@@ -430,6 +430,44 @@ export const buildingExtractionCandidates = pgTable("projects_building_extractio
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
 }, t => ({ identity: uniqueIndex("projects_building_extraction_candidates_identity").on(t.jobId, t.sourceKey) }));
 
+/** Per-page segmentation barriers kept from plan extraction so magic selection can
+ * flood-fill a clicked room without re-reading the PDF. One row per extraction job. */
+export const buildingSelectionMasks = pgTable("projects_building_selection_masks", {
+  jobId: uuid("job_id").primaryKey().references(() => buildingExtractionJobs.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull(),
+  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
+  extractorVersion: text("extractor_version").notNull(),
+  gridSize: integer("grid_size").notNull(),
+  encoding: text("encoding").notNull(),
+  data: text("data").notNull(),
+  pageAspectRatio: numeric("page_aspect_ratio").notNull(),
+  metresPerPageHeight: numeric("metres_per_page_height"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Every planner change to a room outline, kept as training data for plan extraction:
+ * what the extractor (or magic selection) proposed and what the planner made of it. */
+export const buildingOutlineEdits = pgTable("projects_building_outline_edits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
+  targetType: text("target_type").notNull(),
+  targetId: uuid("target_id").notNull(),
+  action: text("action").notNull(),
+  method: text("method").notNull(),
+  sourceVersionId: uuid("source_version_id").notNull(),
+  page: integer("page").notNull(),
+  jobId: uuid("job_id"),
+  extractorVersion: text("extractor_version"),
+  before: jsonb("before"),
+  after: jsonb("after").notNull(),
+  magic: jsonb("magic"),
+  metrics: jsonb("metrics").notNull(),
+  modelRevision: integer("model_revision").notNull(),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => ({ target: index("projects_building_outline_edits_target").on(t.modelId, t.targetId) }));
+
 export const buildingProposals = pgTable("projects_building_proposals", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

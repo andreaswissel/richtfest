@@ -11,7 +11,7 @@ import { formatProjectAddress } from "@richtfest/shared";
 import { api, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
-import { Page, PageHeader } from "../components/layout";
+import { Page } from "../components/layout";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
@@ -170,6 +170,8 @@ export function ProjectWorkspace() {
       setEditingDetails(false);
     },
   });
+  const me = useApi("/auth/me");
+  const meUser = me.isError ? undefined : me.data?.user || me.data;
   const [width, setWidth] = useState(38);
   const details = project.data?.project || project.data || {};
   const title = details.name || t("project");
@@ -210,13 +212,19 @@ export function ProjectWorkspace() {
   }
   return (
     <Page>
-      <PageHeader
-        title={title}
-        titleAside={<Badge>{projectStatusLabel(details.status, t)}</Badge>}
-        eyebrow={project.data?.customerName}
-        actions={
-          view === "details" && (
+      <header className="project-bar">
+        <Link to="/" className="project-bar-brand" aria-label="Richtfest">R</Link>
+        <Link className="project-bar-back" to="/projects">← {t("projects")}</Link>
+        <div className="project-bar-title">
+          {project.data?.customerName && <span className="project-bar-customer">{project.data.customerName}</span>}
+          <h1>{title}</h1>
+          <Badge>{projectStatusLabel(details.status, t)}</Badge>
+        </div>
+        {projectNavigation}
+        <div className="project-bar-actions">
+          {view === "details" && (
             <Button
+              size="sm"
               variant="outline"
               onClick={() => {
                 updateProject.reset();
@@ -225,10 +233,14 @@ export function ProjectWorkspace() {
             >
               {t("editProject")}
             </Button>
-          )
-        }
-      />
-      {projectNavigation}
+          )}
+          {meUser?.id && (
+            <Link to="/settings/security" className="avatar" title={meUser.name} aria-label={meUser.name}>
+              {meUser.name?.slice(0, 1) || "R"}
+            </Link>
+          )}
+        </div>
+      </header>
       <LoadState query={project} />
       {view === "location" && project.isSuccess && (
         <LocationMode projectId={id!} address={details} />

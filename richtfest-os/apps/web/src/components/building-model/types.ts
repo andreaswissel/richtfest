@@ -40,6 +40,8 @@ export type BuildingRegion = {
   /** Holes cut out of `polygon` (courtyards, shafts); drawn with the even-odd rule. */
   holes?: BuildingPlanPoint[][];
   parts?: BuildingGeometryPart[];
+  /** Set when a planner drew or reshaped this outline on the plan. */
+  outlineEdit?: { method?: string; areaM2?: number | null; editCount?: number; editedAt?: string } | null;
   groupLabel?: string | null;
   sourceArea?: unknown;
   roomUseProposal?: {
@@ -127,6 +129,8 @@ export type BuildingExtractionJob = {
     coverage?: string;
     geometryQuality?: string;
     candidateCount?: number;
+    /** Page proportions and the unreviewed printed scale, used to show outline areas. */
+    pageScale?: { pageAspectRatio: number; metresPerPageHeight: number | null } | null;
     roomAnchorCount?: number;
     roomHypothesisCount?: number;
     unresolvedAnchorCount?: number;
@@ -226,6 +230,12 @@ function planBox(value: unknown): BuildingRegion["box"] {
   if ([item.left, item.top, item.right, item.bottom].every((part) => typeof part === "number" && Number.isFinite(part))) return { x: item.left, y: item.top, width: item.right - item.left, height: item.bottom - item.top };
   return undefined;
 }
+function outlineEdit(value: unknown): BuildingRegion["outlineEdit"] {
+  if (!value || typeof value !== "object") return null;
+  const edit = value as RecordData;
+  return { method: typeof edit.method === "string" ? edit.method : undefined, areaM2: typeof edit.areaM2 === "number" ? edit.areaM2 : null,
+    editCount: typeof edit.editCount === "number" ? edit.editCount : undefined, editedAt: typeof edit.editedAt === "string" ? edit.editedAt : undefined };
+}
 function planHoles(value: unknown): BuildingRegion["holes"] {
   if (!Array.isArray(value)) return undefined;
   const holes = value.map(planPolygon).filter((hole): hole is BuildingPlanPoint[] => Boolean(hole));
@@ -318,7 +328,10 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
       page: Math.max(1, asNumber(geometrySource?.page, asNumber(row.page, 1))),
       box: planBox(row.planRegion || geometry?.planRegion),
       polygon: planPolygon(geometry?.polygon),
+      holes: planHoles(geometry?.holes),
       parts: planParts(geometry?.parts ?? geometry?.polygons),
+      geometryQuality: typeof geometry?.quality === "string" ? geometry.quality : null,
+      outlineEdit: outlineEdit(geometry?.outlineEdit),
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       evidence: Array.isArray(row.evidence) ? row.evidence : fieldEvidence.concat(geometryEvidence),
       measurements: Array.isArray(row.measurements) ? row.measurements : entityMeasurements.map((item) => ({ key: item.id, label: item.label || item.quantity || "Measurement", semanticQuantity: item.quantity, value: item.value == null ? null : Number(item.value), sourceValue: item.method === "manual" ? null : item.value ?? item.quantity, calibratedValue: item.method === "manual" ? item.value : item.calibratedValue, unit: item.unit, sourcePage: item.evidence?.[0]?.page, method: item.method, uncertainty: item.uncertainty, evidence: item.evidence })),
@@ -368,6 +381,7 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       polygon,
       holes: planHoles(geometry?.holes),
       parts,
+      outlineEdit: outlineEdit(geometry?.outlineEdit),
       groupLabel: typeof row.groupLabel === "string" ? row.groupLabel : (typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null),
       sourceArea: row.sourceArea ?? geometry?.sourceArea ?? geometry?.printedArea ?? null,
       roomUseProposal,
