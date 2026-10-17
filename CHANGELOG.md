@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- Building model: **Read noise requirements** reads a Bebauungsplan's text into the regulatory basis: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation, prescribed measures and the cited DIN 4109 edition, each quoted for review.
-- Inquiries: **Import email (.eml)** fills an entry from an exported email and keeps the email and its attachments in Sources.
-- Inquiries: each project gets a **forwarding address**, and each inquiry its own reply address. CC it on a request and replies are filed into the inquiry automatically; other mail waits in the project inbox to be filed or dismissed. Emails and attachments are kept in Sources. Requires the Resend receiving domain and webhook to be configured.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -28,6 +24,9 @@
 
 ## 2026-10-17
 
+- Building model: **Read noise requirements** reads a Bebauungsplan's text into the regulatory basis: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation, prescribed measures and the cited DIN 4109 edition, each quoted for review.
+- Inquiries: **Import email (.eml)** fills an entry from an exported email and keeps the email and its attachments in Sources.
+- Inquiries: each project gets a **forwarding address**, and each inquiry its own reply address. CC it on a request and replies are filed into the inquiry automatically; other mail waits in the project inbox to be filed or dismissed. Emails and attachments are kept in Sources. Requires the Resend receiving domain and webhook to be configured.
 - Building model: **Read component data** proposes wall and ceiling construction, material, thickness and bulk density from the Baubeschreibung, quoting the source sentence.
 - New **Inquiries** project view: each question to the architect, client or authority is a ticket that bundles the sent request with emails, call notes, documents and internal notes. The sound-insulation data request opens one directly, shows how many items are answered, and can read stated component values from a received reply as proposals for review.
 - Sources show a **Document type** (plans, Baubeschreibung, Bebauungsplan, acoustic report, noise data, correspondence …), suggested from the file name and title page and confirmed with one click.
