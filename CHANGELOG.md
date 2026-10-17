@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- **Exterior noise**: a new project view lists the roads and railways around the site from official map data (now also for Hessen addresses, e.g. Frankfurt and Hanau) with class, route number and distance. Added sources collect traffic volume, speed, surface, train volumes and facade distance with their basis, and missing traffic data can be requested from the authority as an inquiry that tracks its answers.
-
-- Inquiries: emails from classic Outlook (`.msg`) can be imported, and component data inquiries offer a **Follow-up** with only the items still open. Values the architect already sent are reviewed in Richtfest rather than asked again.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -25,6 +21,11 @@
 - Acoustic input review shows visual room candidates as partial, unreviewed observations linked to their exact source page and image-inspection receipt, with an on-demand source preview returned only when its rendered image hash still matches that receipt; candidates remain outside the calculation inventory.
 
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
+
+## 2026-10-18
+
+- **Exterior noise**: a new project view lists the roads and railways around the site from official map data (now also for Hessen addresses, e.g. Frankfurt and Hanau) with class, route number and distance. Added sources collect traffic volume, speed, surface, train volumes and facade distance with their basis, and missing traffic data can be requested from the authority as an inquiry that tracks its answers.
+- Inquiries: emails from classic Outlook (`.msg`) can be imported, and component data inquiries offer a **Follow-up** with only the items still open. Values the architect already sent are reviewed in Richtfest rather than asked again.
 
 ## 2026-10-17
 
