@@ -14,6 +14,8 @@ import { searchAddresses } from "./address-search";
 import { createSourceModelRouter } from "./source-model-router";
 import { readPdfRepresentations } from "./source-representations";
 import { createBuildingModelRouter } from "./building-model-router";
+import { createDocumentTypesRouter, documentTypesFor } from "./document-types";
+import { createInquiriesRouter } from "./inquiries";
 import { bootstrapAutomaticBuildingModel } from "./automatic-building-model";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -78,6 +80,8 @@ export function createRouter(getDeps: GetDeps) {
   router.use(createEnvironmentRouter(getDeps));
   router.use(createSourceModelRouter(getDeps));
   router.use(createBuildingModelRouter(getDeps));
+  router.use(createDocumentTypesRouter(getDeps));
+  router.use(createInquiriesRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -267,8 +271,10 @@ export function createRouter(getDeps: GetDeps) {
     for (const row of rows as any[])
       if (!latest.has(row.file.id)) latest.set(row.file.id, row);
     const representations = await readPdfRepresentations(d.db, d.tenantId, projectId, [...latest.values()].map(row => row.version.id));
+    const documentTypes = await documentTypesFor(d, [...latest.values()].map((row: any) => ({ fileId: row.file.id, name: row.file.name, documentType: row.file.documentType, versionId: row.version.id })));
     return [...latest.values()].map((row: any) => ({
       ...row.file,
+      documentType: documentTypes.get(row.file.id) ?? null,
       versionId: row.version.id,
       pdfRepresentation: representations[row.version.id] ?? null,
       version: row.version.version,

@@ -22,3 +22,4 @@ export * from "./company-knowledge";
 export * from "./building-model";
 export * from "./building-components";
 export * from "./environment";
+export * from "./project-documents";

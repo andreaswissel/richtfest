@@ -15,6 +15,7 @@
     "./source-document": "./src/source-document.ts",
     "./source-image-query": "./src/source-image-query.ts",
     "./building-model": "./src/building-model-router.ts",
+    "./inquiries": "./src/inquiries.ts",
     "./building-extraction": "./src/building-extraction-worker.ts",
     "./automatic-building-model": "./src/automatic-building-model.ts",
     "./environment": "./src/environment.ts"

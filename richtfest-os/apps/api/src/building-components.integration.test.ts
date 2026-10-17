@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import express from "express";
 import { Readable } from "node:stream";
 import { createBuildingModelRouter } from "@richtfest/projects/building-model";
+import { createInquiriesRouter } from "@richtfest/projects/inquiries";
 import { runBuildingExtraction } from "@richtfest/projects/building-extraction";
 import { buildingExtractionJobs } from "@richtfest/projects/schema";
 import { syntheticPlanPdf } from "../../../../richtfest-apps/projects/src/test-fixtures/synthetic-plan";
@@ -18,14 +19,16 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
   const tenant = crypto.randomUUID(), project = crypto.randomUUID(), actor = crypto.randomUUID(), model = crypto.randomUUID(), building = crypto.randomUUID(), storey = crypto.randomUUID(), file = crypto.randomUUID(), version = crypto.randomUUID();
   const audits: string[] = [];
   const app = express(); app.use(express.json());
-  app.use(createBuildingModelRouter(() => ({ db, tenantId: tenant, actorId: actor, requirePermission() {},
-    audit: async (_tx: unknown, action: string) => { audits.push(action); }, validateCustomer: async () => false, customerNames: async () => ({}), fileStorage: {} as any }) as any));
+  const deps = () => ({ db, tenantId: tenant, actorId: actor, requirePermission() {},
+    audit: async (_tx: unknown, action: string) => { audits.push(action); }, validateCustomer: async () => false, customerNames: async () => ({}), fileStorage: {} as any }) as any;
+  app.use(createBuildingModelRouter(deps)); app.use(createInquiriesRouter(deps));
   app.use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ message: e.message }));
   const server = app.listen(0); const base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
-  const post = async (path: string, body: unknown) => { const r = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
+  const post = async (path: string, body: unknown, method = "POST", root = base) => { const r = await fetch(root + path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
+  const inquiriesBase = base.replace(/\/building-model$/, "/inquiries");
   const revision = async () => Number((await pool.query("select revision from projects_building_models")).rows[0].revision);
   try {
-    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", "projects_inquiries", "projects_inquiry_entries", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
       if (!/^projects_[a-z_]+$/.test(table)) throw new Error("Unexpected test table");
       await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
     }
@@ -214,23 +217,44 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(exterior.map(id => [stated.get(id)?.value, stated.get(id)?.provenance])).toEqual(exterior.map(() => [36.5, "inferred"]));
     expect(audits).toContain("projects.building.component.description_read");
 
-    // A sent request keeps its items; what is answered since is computed from the model, however the answer arrives.
-    expect((await post("/data-requests", { recipient: "" })).status).toBeGreaterThanOrEqual(400);
-    const sent = await post("/data-requests", { recipient: "Architekturbüro Muster" });
+    // An inquiry keeps the items as sent; what is answered since is computed from the model, however the answer arrives.
+    const inquiry = (path: string, body: unknown, method = "POST") => post(path, body, method, inquiriesBase);
+    expect((await inquiry("", { kind: "component_data", title: "Bauteildaten", counterpart: "" })).status).toBeGreaterThanOrEqual(400);
+    const sent = await inquiry("", { kind: "component_data", title: "Bauteildaten", counterpart: "Architekturbüro Muster", request: { subject: "Bauteildaten", body: "Bitte ergänzen: Decken …" } });
     expect(sent.status).toBe(201);
+    expect(sent.body.data.status).toBe("waiting");
     const ceilingItem = sent.body.data.items.find((group: any) => group.componentType === "ceiling");
     expect(ceilingItem.fields.map((field: any) => field.field)).toEqual(["construction", "thickness", "bulkDensity"]);
-    const progress = async () => (await (await fetch(base)).json()).data.dataRequests.find((request: any) => request.id === sent.body.data.id).progress;
-    const initial = await progress();
+    const detail = async () => (await (await fetch(`${inquiriesBase}/${sent.body.data.id}`)).json()).data;
+    const initial = (await detail()).progress;
     expect(initial.answered).toBe(0);
+
+    // The architect's reply is filed as an email; quoted earlier text is not read as an answer.
+    expect((await inquiry(`/${sent.body.data.id}/entries`, { kind: "note", direction: "incoming", body: "x" })).status).toBe(400);
+    const reply = await inquiry(`/${sent.body.data.id}/entries`, { kind: "email", direction: "incoming", subject: "AW: Bauteildaten",
+      body: "Hallo,\nWohnungstrenndecken: Stahlbeton, Rohdichte 2,4.\n\nAm 3. März schrieb Richtfest:\n> Außenwände Kalksandstein 30 cm" });
+    expect(reply.body.data.status).toBe("answered");
+    const readReply = await inquiry(`/${sent.body.data.id}/entries/${reply.body.data.entry.id}/read-components`, { baseRevision: await revision() });
+    expect(readReply.status).toBe(200);
+    expect(readReply.body.data.summary.groups).toEqual([{ componentType: "ceiling", wallRole: null, values: { material: "Stahlbeton", construction: "concrete", bulkDensity: 2400 }, conflicts: [], components: 1, proposed: 1 }]);
+    expect((await latestVersion(ceiling[0].id, "bulkDensity"))).toBeDefined();
+    const density = (await pool.query(`select v.evidence from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.entity_id=$1 and p.property_key='bulkDensity'`, [ceiling[0].id])).rows;
+    expect(density).toEqual([{ evidence: [{ kind: "correspondence", inquiryId: sent.body.data.id, entryId: reply.body.data.entry.id, quote: "Wohnungstrenndecken: Stahlbeton, Rohdichte 2,4." }] }]);
+    // Correspondence evidence is Richtfest's own record; clients cannot attach it.
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "element", entityId: ceiling[0].id, propertyKey: "thickness", value: 20, unit: "cm", provenance: "manual",
+      evidence: density[0].evidence })).status).toBe(422);
+    const outstandingBeforeReview = (await detail()).progress;
+
     const ceilingState = await latestVersion(ceiling[0].id, "thickness");
     expect((await post("/properties/review", { baseRevision: await revision(), decision: "approved", items: [ceilingState] })).status).toBe(200);
-    const afterReview = await progress();
-    expect(afterReview).toMatchObject({ total: initial.total, answered: 1 });
+    const afterReview = (await detail()).progress;
+    expect(afterReview).toMatchObject({ total: initial.total, answered: outstandingBeforeReview.answered + 1 });
     expect(afterReview.outstanding.find((group: any) => group.componentType === "ceiling").fields.map((field: any) => field.field)).toEqual(["construction", "bulkDensity"]);
-    expect((await (await fetch(base + "/agent-context")).json()).data.soundInsulation.sentRequests[0]).toMatchObject({ recipient: "Architekturbüro Muster", progress: { answered: 1 } });
-    expect((await post(`/data-requests/${sent.body.data.id}/close`, {})).status).toBe(200);
-    expect((await post(`/data-requests/${sent.body.data.id}/close`, {})).status).toBe(404);
-    expect(audits).toEqual(expect.arrayContaining(["projects.building.data_request.sent", "projects.building.data_request.closed"]));
+    expect((await (await fetch(base + "/agent-context")).json()).data.soundInsulation.inquiries[0]).toMatchObject({ counterpart: "Architekturbüro Muster", status: "answered", progress: { answered: afterReview.answered } });
+    expect((await detail()).entries.map((entry: any) => `${entry.kind}:${entry.direction}`)).toEqual(["request:outgoing", "email:incoming"]);
+    const closed = await inquiry(`/${sent.body.data.id}`, { status: "closed" }, "PATCH");
+    expect(closed.body.data.closedAt).toBeTruthy();
+    expect((await (await fetch(base + "/agent-context")).json()).data.soundInsulation.inquiries).toEqual([]);
+    expect(audits).toEqual(expect.arrayContaining(["projects.inquiry.created", "projects.inquiry.entry_added", "projects.inquiry.reply_read", "projects.inquiry.updated"]));
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);

@@ -1,0 +1,16 @@
+.inquiries { display: grid; gap: var(--section); }
+.inquiry-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: calc(var(--stack) / 2) var(--stack); margin: 0 0 var(--stack); font-size: var(--ui-sm); }
+.inquiry-facts dt { color: var(--muted-foreground); }
+.inquiry-facts dd { margin: 0; }
+.inquiry-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.inquiry-subtitle { margin: var(--stack) 0 calc(var(--stack) / 2); color: var(--muted-foreground); font-size: var(--ui-xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.inquiry-timeline { display: grid; gap: calc(var(--stack) / 2); margin: 0; padding: 0; list-style: none; max-width: 880px; }
+.inquiry-entry { display: grid; gap: 4px; padding: 8px 10px; border-left: 2px solid var(--border); font-size: var(--ui-sm); }
+.inquiry-entry-incoming { border-left-color: var(--muted-foreground); }
+.inquiry-entry-internal { border-left-style: dashed; }
+.inquiry-entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--ui-xs); }
+.inquiry-entry-subject { font-weight: 600; }
+.inquiry-entry-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inquiry-form { display: grid; gap: var(--stack); max-width: 880px; }
+.inquiry-form-row { display: flex; flex-wrap: wrap; gap: var(--stack); align-items: flex-start; }
+.inquiry-form-row > .field { min-width: 200px; }

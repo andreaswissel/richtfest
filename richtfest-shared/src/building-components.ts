@@ -113,11 +113,12 @@ export function componentInputGaps(componentType: ComponentType | null, properti
   });
 }
 
-export type ComponentValueState = { value: unknown; unit?: string | null; reviewStatus: string; provenance?: string | null; evidenceQuote?: string | null };
+export type ComponentValueState = { value: unknown; unit?: string | null; reviewStatus: string; provenance?: string | null; evidenceQuote?: string | null; evidenceKind?: string | null };
 
-/** Where an unreviewed value came from: measured or derived from the plan, stated in a document, or entered by a person. */
-export type ValueOrigin = "plan" | "document" | "entered";
+/** Where an unreviewed value came from: measured or derived from the plan, stated in a document or an inquiry reply, or entered by a person. */
+export type ValueOrigin = "plan" | "document" | "correspondence" | "entered";
 export const valueOrigin = (state: ComponentValueState): ValueOrigin => state.provenance !== "inferred" ? "entered"
+  : state.evidenceKind === "correspondence" ? "correspondence"
   : state.evidenceQuote && !state.evidenceQuote.startsWith("Printed scale") ? "document" : "plan";
 export type BuildingComponentRecord = { id: string; componentType: ComponentType | null; properties: Record<string, ComponentValueState | null | undefined> };
 

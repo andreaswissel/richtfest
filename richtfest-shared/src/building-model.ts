@@ -31,6 +31,13 @@ export const buildingEvidenceSchema = z.discriminatedUnion("kind", [
     expressId: z.number().int().positive(),
     attribute: z.string().min(1).max(200),
   }).strict(),
+  // A reply in a project inquiry: an email, call note or other correspondence entry.
+  z.object({
+    kind: z.literal("correspondence"),
+    inquiryId: z.string().uuid(),
+    entryId: z.string().uuid(),
+    quote: z.string().max(4000).optional(),
+  }).strict(),
 ]);
 export type BuildingEvidence = z.infer<typeof buildingEvidenceSchema>;
 

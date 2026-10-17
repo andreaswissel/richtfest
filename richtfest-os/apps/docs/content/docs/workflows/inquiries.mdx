@@ -1,0 +1,27 @@
+---
+title: Inquiries
+description: Questions to the architect, client or authorities, bundled with every email, call and document exchanged about them.
+---
+
+An inquiry is a ticket for one question to a stakeholder. It collects the request as sent and everything that comes back: emails, call notes or transcripts, documents and internal notes. Open **Inquiries** in the project bar.
+
+## Create an inquiry
+
+- **Component data**: in the building model, open **Sound insulation**, enter who you ask under **Data request** and choose **Create inquiry**. Richtfest stores the request text and the items it asks for (per wall role and ceilings) and sets the inquiry to **Waiting for reply**. Send the text yourself, for example with **Copy request**; Richtfest does not send email.
+- **General**: in **Inquiries**, choose **New inquiry** with a subject, the counterpart and optionally the request text you sent.
+
+## Add the exchange
+
+Under **Add entry**, choose **Email**, **Call**, **Document** or **Note**, whether it was **Received** or **Sent**, and paste the text: an email body, call notes or a transcript. Optionally attach a project file (upload it in Sources first). The date defaults to now. Entries appear in the timeline in the order they happened.
+
+Status follows the exchange: something sent sets **Waiting for reply**, something received sets **Answered**, notes change nothing. Close an inquiry when it is done; a closed inquiry stays closed until reopened.
+
+## Read component data from a reply
+
+For component data inquiries, **Read component data** on a received entry reads the reply the same way as a construction description, for example "Außenwände: Kalksandstein 36,5 cm, RDK 1,8". Quoted earlier messages ("> …", "Am … schrieb …", "-----Original Message-----") are skipped, so Richtfest's own question is never read back as an answer. An attached document's pages are read as well.
+
+Values become unreviewed proposals for every wall of that role or the ceilings, citing the inquiry entry. They never replace entered or reviewed values. In the data request they are labelled "per reply" until confirmed.
+
+## Progress
+
+A component data inquiry shows how many of its items are answered and which are still open. An item counts as answered once every requested wall or ceiling has a reviewed value for it, however the value was entered. The building model's **Sound insulation** popover lists open inquiries with their progress, and agents receive them in the building-model context with a link to the inquiry.

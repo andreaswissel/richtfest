@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Building model: **Read component data** proposes wall and ceiling construction, material, thickness and bulk density from the Baubeschreibung, quoting the source sentence. Sent data requests can be marked as sent and show how many items have been answered since.
+- Building model: **Read component data** proposes wall and ceiling construction, material, thickness and bulk density from the Baubeschreibung, quoting the source sentence.
+- New **Inquiries** project view: each question to the architect, client or authority is a ticket that bundles the sent request with emails, call notes, documents and internal notes. The sound-insulation data request opens one directly, shows how many items are answered, and can read stated component values from a received reply as proposals for review.
+- Sources show a **Document type** (plans, Baubeschreibung, Bebauungsplan, acoustic report, noise data, correspondence …), suggested from the file name and title page and confirmed with one click.
 
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 

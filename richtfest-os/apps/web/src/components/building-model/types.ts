@@ -220,6 +220,7 @@ export type BuildingComponentPropertyState = {
   reviewedValue: unknown;
   /** Quote of the first evidence item, such as "Printed scale 1:100" or a Baubeschreibung sentence. */
   evidenceQuote?: string | null;
+  evidenceKind?: string | null;
 };
 
 export type BuildingModel = {
@@ -238,7 +239,6 @@ export type BuildingModel = {
   supersededSources: BuildingSupersededSource[];
   storeys: Array<{ id: string; name?: string; levelIndex?: number | null; componentProperties?: Record<string, BuildingComponentPropertyState> }>;
   /** Sent component data requests and what has been answered since. */
-  dataRequests: Array<{ id: string; recipient: string; note?: string | null; sentAt: string; closedAt?: string | null; progress: DataRequestProgress }>;
   /** Buildings with their shared properties, such as the agreed sound insulation level. */
   buildings: Array<{ id: string; name: string; componentProperties: Record<string, BuildingComponentPropertyState> }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
@@ -446,6 +446,7 @@ function componentStates(entityProperties: RecordData[]): Record<string, Buildin
     provenance: asString(property.current.provenance), reviewStatus: asString(property.current.reviewStatus, "unreviewed"), reviewRevision: asNumber(property.current.reviewRevision, 0),
     reviewedValue: property.reviewed ? property.reviewed.value : null,
     evidenceQuote: typeof property.current.evidence?.[0]?.quote === "string" ? property.current.evidence[0].quote : null,
+    evidenceKind: typeof property.current.evidence?.[0]?.kind === "string" ? property.current.evidence[0].kind : null,
   }]));
 }
 
@@ -565,7 +566,6 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
       return typeof row.id === "string" ? [{ id: row.id, name: typeof row.name === "string" ? row.name : undefined, levelIndex: typeof row.levelIndex === "number" ? row.levelIndex : null,
         componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "storey" && property.entityId === row.id)) }] : [];
     }) : [],
-    dataRequests: Array.isArray(raw.dataRequests) ? raw.dataRequests.filter((item: RecordData) => item && typeof item.id === "string" && item.progress) as BuildingModel["dataRequests"] : [],
     buildings: Array.isArray(raw.buildings) ? raw.buildings.flatMap((item: unknown) => {
       const row = item && typeof item === "object" ? item as RecordData : null;
       return row && typeof row.id === "string" ? [{ id: row.id, name: asString(row.name), componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "building" && property.entityId === row.id)) }] : [];

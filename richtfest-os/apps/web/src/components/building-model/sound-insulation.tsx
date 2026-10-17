@@ -1,11 +1,14 @@
 import { Fragment, useState } from "react";
+import { Link } from "react-router-dom";
 import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
 import { Input } from "../ui/input";
 import { fieldLabel, optionLabel, PropertyRow, regionComponentType, StatusLine, type ComponentPropertySave } from "./component-properties";
-import type { BuildingComponentPropertyState, BuildingModel, BuildingRegion } from "./types";
+import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
+import { inquiryLink, type InquirySummary } from "../inquiries/types";
+import { inquiryStatusLabel } from "../inquiries/labels";
 
 const formatDate = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(); };
 
@@ -13,7 +16,7 @@ type T = ReturnType<typeof useT>;
 
 export const componentRecord = (region: BuildingRegion): BuildingComponentRecord => ({
   id: region.id, componentType: regionComponentType(region),
-  properties: Object.fromEntries(Object.entries(region.componentProperties ?? {}).map(([key, state]) => [key, { value: state.value, unit: state.unit, reviewStatus: state.reviewStatus, provenance: state.provenance, evidenceQuote: state.evidenceQuote }])),
+  properties: Object.fromEntries(Object.entries(region.componentProperties ?? {}).map(([key, state]) => [key, { value: state.value, unit: state.unit, reviewStatus: state.reviewStatus, provenance: state.provenance, evidenceQuote: state.evidenceQuote, evidenceKind: state.evidenceKind }])),
 });
 
 const groupLabel = (group: ComponentRequestGroup, t: T) => group.componentType === "ceiling" ? t("buildingSoundCeilings")
@@ -27,7 +30,7 @@ const valueText = (field: string, value: unknown, unit: string | null, t: T) => 
 export function requestLines(group: ComponentRequestGroup, t: T) {
   const missing = group.fields.filter((field) => field.missing > 0);
   const confirm = group.fields.flatMap((field) => field.unconfirmed.map((entry) => `${fieldLabel(field.field, t)} ${valueText(field.field, entry.value, entry.unit, t)}`
-    + ` (${entry.origin === "plan" ? `${t("buildingSoundFromPlan")}, ` : entry.origin === "document" ? `${t("buildingSoundFromDocument")}, ` : ""}${countLabel(group.componentType, entry.count, t)})`));
+    + ` (${entry.origin === "plan" ? `${t("buildingSoundFromPlan")}, ` : entry.origin === "document" ? `${t("buildingSoundFromDocument")}, ` : entry.origin === "correspondence" ? `${t("buildingSoundFromReply")}, ` : ""}${countLabel(group.componentType, entry.count, t)})`));
   return [
     ...(missing.length ? [`${t("buildingSoundProvide")}: ${missing.map((field) => `${fieldLabel(field.field, t)}${field.missing < group.count ? ` (${field.missing}/${group.count})` : ""}`).join(", ")}`] : []),
     ...(confirm.length ? [`${t("buildingSoundConfirm")}: ${confirm.join("; ")}`] : []),
@@ -73,14 +76,14 @@ export function SoundInsulationOverview({ components, level, t, pending, onLevel
 }
 
 /** What still has to be asked of the architect or client, per wall type and for ceilings, ready to paste into an email. */
-export type SentDataRequest = BuildingModel["dataRequests"][number];
-
-export function DataRequest({ components, sent, t, pending, onSent, onClose }: { components: BuildingRegion[]; sent: SentDataRequest[]; t: T; pending: boolean;
-  onSent: (recipient: string) => void; onClose: (requestId: string) => void }) {
-  const [recipient, setRecipient] = useState("");
+/** What to ask the architect, copied as text or opened as an inquiry that tracks replies until every item is answered. */
+export function DataRequest({ projectId, components, inquiries, t, pending, onCreate }: { projectId: string; components: BuildingRegion[]; inquiries: InquirySummary[]; t: T; pending: boolean;
+  onCreate: (counterpart: string, body: string) => void }) {
+  const [counterpart, setCounterpart] = useState("");
   const groups = componentDataRequest(components.map(componentRecord));
   const [copied, setCopied] = useState(false);
   const copy = async () => { await navigator.clipboard.writeText(dataRequestText(groups, t)); setCopied(true); };
+  const open = inquiries.filter((inquiry) => inquiry.kind === "component_data" && inquiry.status !== "closed");
   return <>
     {groups.length ? <>
       <dl className="building-model-component-rows">
@@ -93,18 +96,17 @@ export function DataRequest({ components, sent, t, pending, onSent, onClose }: {
         <Button size="xs" variant="outline" onClick={() => void copy()}>{t("buildingSoundCopyRequest")}</Button>
         <p className="muted text-ui-2xs" role="status">{copied ? t("buildingSoundCopied") : t("buildingSoundRequestHint")}</p>
       </div>
-      <form className="building-model-description-row" onSubmit={(event) => { event.preventDefault(); if (recipient.trim()) { onSent(recipient.trim()); setRecipient(""); } }}>
-        <Input aria-label={t("buildingRequestRecipient")} placeholder={t("buildingRequestRecipient")} value={recipient} disabled={pending} onChange={(event) => setRecipient(event.target.value)} />
-        <Button size="xs" variant="outline" type="submit" disabled={pending || !recipient.trim()}>{t("buildingRequestMarkSent")}</Button>
+      <form className="building-model-description-row" onSubmit={(event) => { event.preventDefault(); if (counterpart.trim()) { onCreate(counterpart.trim(), dataRequestText(groups, t)); setCounterpart(""); } }}>
+        <Input aria-label={t("buildingRequestRecipient")} placeholder={t("buildingRequestRecipient")} value={counterpart} disabled={pending} onChange={(event) => setCounterpart(event.target.value)} />
+        <Button size="xs" variant="outline" type="submit" disabled={pending || !counterpart.trim()}>{t("buildingRequestCreate")}</Button>
       </form>
     </> : <p className="muted text-ui-2xs">{t("buildingSoundNothingToRequest")}</p>}
-    {sent.filter((request) => !request.closedAt).length > 0 && <dl className="building-model-component-rows">
-      {sent.filter((request) => !request.closedAt).map((request) => <Fragment key={request.id}>
-        <dt className="building-model-request-group">{request.recipient}<span className="muted text-ui-2xs">{t("buildingRequestSentOn").replace("{date}", formatDate(request.sentAt))}</span></dt>
+    {open.length > 0 && <dl className="building-model-component-rows">
+      {open.map((inquiry) => <Fragment key={inquiry.id}>
+        <dt className="building-model-request-group"><Link to={inquiryLink(projectId, inquiry.id)}>{inquiry.counterpart}</Link><span className="muted text-ui-2xs">{inquiryStatusLabel(inquiry.status, t)} · {formatDate(inquiry.updatedAt)}</span></dt>
         <dd className="building-model-stack">
-          <span>{t("buildingRequestProgress").replace("{answered}", String(request.progress.answered)).replace("{total}", String(request.progress.total))}</span>
-          {request.progress.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-2xs">{groupLabel(group, t)}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}</span>)}
-          <Button size="xs" variant="ghost" disabled={pending} onClick={() => onClose(request.id)}>{request.progress.outstanding.length ? t("buildingRequestClose") : t("buildingRequestDone")}</Button>
+          {inquiry.progress && <span>{t("buildingRequestProgress").replace("{answered}", String(inquiry.progress.answered)).replace("{total}", String(inquiry.progress.total))}</span>}
+          {inquiry.progress?.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-2xs">{groupLabel(group, t)}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}</span>)}
         </dd>
       </Fragment>)}
     </dl>}

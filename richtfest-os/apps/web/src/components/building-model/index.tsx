@@ -21,6 +21,7 @@ import { componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type 
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
+import type { InquirySummary } from "../inquiries/types";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -439,15 +440,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const [colorWallRoles, setColorWallRoles] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
   const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen);
-  const sendDataRequest = useMutation({
-    mutationFn: (recipient: string) => api(`/projects/${projectId}/building-model/data-requests`, { recipient }),
+  const inquiries = useApi(`/projects/${projectId}/inquiries`, soundOpen);
+  const createInquiry = useMutation({
+    mutationFn: (input: { counterpart: string; body: string }) => api(`/projects/${projectId}/inquiries`, { kind: "component_data", title: t("buildingRequestTitle"), counterpart: input.counterpart,
+      request: { subject: t("buildingRequestTitle"), body: input.body } }),
     onMutate: () => setConflict(undefined),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
-    onError: (error) => setConflict(error.message),
-  });
-  const closeDataRequest = useMutation({
-    mutationFn: (requestId: string) => api(`/projects/${projectId}/building-model/data-requests/${requestId}/close`, {}),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/inquiries`] }),
     onError: (error) => setConflict(error.message),
   });
   const readDescription = useMutation({
@@ -825,8 +823,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             <h2 className="building-model-panel-title">{t("buildingSoundRequest")}</h2>
             <DescriptionReader documents={((componentSources.data as { documents?: ComponentSourceDocument[] } | undefined)?.documents) ?? []} t={t} pending={readDescription.isPending}
               result={readDescription.data?.summary} onRead={(sourceVersionId) => readDescription.mutate(sourceVersionId)} />
-            <DataRequest components={modelComponents} sent={model.dataRequests} t={t} pending={sendDataRequest.isPending || closeDataRequest.isPending}
-              onSent={(recipient) => sendDataRequest.mutate(recipient)} onClose={(requestId) => closeDataRequest.mutate(requestId)} />
+            <DataRequest projectId={projectId} components={modelComponents} inquiries={(inquiries.data as InquirySummary[] | undefined) ?? []} t={t} pending={createInquiry.isPending}
+              onCreate={(counterpart, body) => createInquiry.mutate({ counterpart, body })} />
           </PopoverContent>
         </Popover>
         <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles} onClick={() => setColorWallRoles((value) => !value)}><Palette className="size-icon-sm" aria-hidden="true" /></Button>

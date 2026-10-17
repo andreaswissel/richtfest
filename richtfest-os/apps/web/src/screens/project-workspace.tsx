@@ -25,6 +25,7 @@ import { SubagentThread } from "../components/project-workspace/subagent-thread"
 import { ProjectAnalytics } from "../components/project-workspace/analytics";
 import { LocationMode } from "../components/location/mode";
 import { BuildingModelMode } from "../components/building-model";
+import { Inquiries } from "../components/inquiries";
 import { AddressSelect } from "../components/address-select";
 import { ArrowUp } from "lucide-react";
 
@@ -122,7 +123,7 @@ export function ProjectWorkspace() {
   const project = useApi(`/projects/${id}`),
     workspace = useApi(
       `/knowledge/workspaces/${id}`,
-      view !== "location" && view !== "analytics" && view !== "building-model",
+      view !== "location" && view !== "analytics" && view !== "building-model" && view !== "inquiries",
     ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
@@ -183,6 +184,7 @@ export function ProjectWorkspace() {
         "building-model",
         "details",
         "sources",
+        "inquiries",
         "knowledge",
         "analytics",
       ].map((key) => (
@@ -199,7 +201,7 @@ export function ProjectWorkspace() {
                 ? t("buildingModel")
               : key === "details"
                 ? t("projectDetails")
-                : t(key as "sources")}
+                : t(key as "sources" | "inquiries")}
         </Link>
       ))}
     </nav>
@@ -583,6 +585,7 @@ export function ProjectWorkspace() {
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />
       )}
+      {view === "inquiries" && <Inquiries projectId={id!} selectedId={params.get("inquiry")} />}
       {view === "knowledge" && <Knowledge projectId={id!} />}
     </Page>
   );

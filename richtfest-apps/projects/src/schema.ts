@@ -64,6 +64,10 @@ export const files = pgTable("projects_files", {
   sourceType: text("source_type").notNull(),
   purpose: text("purpose").$type<"project_evidence" | "reference_report" | "comparison_only">().notNull().default("project_evidence"),
   sourceRef: text("source_ref"),
+  /** Document type confirmed by a person; without it the type is inferred on read. */
+  documentType: text("document_type"),
+  documentTypeReviewedBy: uuid("document_type_reviewed_by"),
+  documentTypeReviewedAt: timestamp("document_type_reviewed_at", { withTimezone: true }),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -494,19 +498,45 @@ export const buildingReviews = pgTable("projects_building_reviews", {
 });
 
 /**
- * A component data request sent to the architect or client. Items are the
- * request as sent (per wall type and for ceilings); what is still outstanding
- * is computed against the current model, so answers count however they arrive.
+ * An inquiry to a stakeholder (architect, client, authority): a ticket that
+ * bundles the request, emails, call notes and documents exchanged about it.
+ * Component data inquiries keep the requested items as sent; what is still
+ * outstanding is computed against the current model.
  */
-export const buildingDataRequests = pgTable("projects_building_data_requests", {
+export const inquiries = pgTable("projects_inquiries", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
-  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
-  recipient: text("recipient").notNull(),
-  note: text("note"),
-  items: jsonb("items").$type<unknown[]>().notNull(),
-  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
-  closedAt: timestamp("closed_at", { withTimezone: true }),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<"component_data" | "general">().notNull(),
+  title: text("title").notNull(),
+  counterpart: text("counterpart").notNull(),
+  status: text("status").$type<"open" | "waiting" | "answered" | "closed">().notNull().default("open"),
+  items: jsonb("items").$type<unknown[]>().notNull().default([]),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, table => ({ model: index("projects_building_data_requests_model").on(table.modelId, table.sentAt) }));
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+}, table => ({
+  project: index("projects_inquiries_project").on(table.tenantId, table.projectId, table.updatedAt),
+  kindCheck: check("projects_inquiries_kind_check", sql`${table.kind} in ('component_data','general')`),
+  statusCheck: check("projects_inquiries_status_check", sql`${table.status} in ('open','waiting','answered','closed')`),
+}));
+
+/** One exchange in an inquiry: the sent request, an email, a call, a note or a document. */
+export const inquiryEntries = pgTable("projects_inquiry_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  inquiryId: uuid("inquiry_id").notNull().references(() => inquiries.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<"request" | "email" | "call" | "note" | "document">().notNull(),
+  direction: text("direction").$type<"outgoing" | "incoming" | "internal">().notNull(),
+  subject: text("subject"),
+  body: text("body"),
+  fileId: uuid("file_id").references(() => files.id, { onDelete: "set null" }),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  inquiry: index("projects_inquiry_entries_inquiry").on(table.inquiryId, table.occurredAt),
+  kindCheck: check("projects_inquiry_entries_kind_check", sql`${table.kind} in ('request','email','call','note','document')`),
+  directionCheck: check("projects_inquiry_entries_direction_check", sql`${table.direction} in ('outgoing','incoming','internal')`),
+}));

@@ -1,3 +1,4 @@
+import { DocumentTypeCell } from "../components/document-type";
 import { EnvironmentSurveyButton } from "../components/location/environment-survey";
 import { SourceDocumentInspector } from "../components/project-workspace/source-document-inspector";
 import { AgentRuns } from "../components/agent-runs";
@@ -418,6 +419,7 @@ export function Sources({
         <Table
           headers={[
             t("sourceName"),
+            t("documentType"),
             t("sourcePurpose"),
             t("fileSize"),
             t("version"),
@@ -428,6 +430,7 @@ export function Sources({
             id: file.id,
             sort: [
               file.name,
+              file.documentType?.documentType || "",
               purposeLabel(file.purpose),
               String(file.sizeBytes || 0),
               String(file.version || 1),
@@ -435,6 +438,7 @@ export function Sources({
             ],
             cells: [
               <strong>{file.name}</strong>,
+              <DocumentTypeCell projectId={projectId} fileId={file.id} fileName={file.name} state={file.documentType} />,
               <Badge>{purposeLabel(file.purpose)}</Badge>,
               file.sizeBytes ? `${(file.sizeBytes / 1024).toFixed(1)} KB` : "—",
               <span className="mono">
