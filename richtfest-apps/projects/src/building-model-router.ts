@@ -14,6 +14,7 @@ import {
   ok,
   buildingComponentProperties,
   componentDataRequest,
+  dataRequestProgress,
   componentInputGaps,
   elementComponentType,
   soundInsulationChecks,
@@ -50,11 +51,12 @@ import {
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
-import { effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
-import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks } from "./schema";
+import { derivedWritable, effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
+import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks, buildingDataRequests } from "./schema";
 import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
 import { planStoreyLevels, storeyLevelFromText, type StoreyLevelReading } from "./storey-levels";
 import { sourcePages } from "./schema";
+import { constructionDescriptionMethod, mergeComponentStatements, readConstructionDescription } from "./construction-description";
 
 type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
@@ -214,6 +216,8 @@ const readModel = async (d: AppDeps, model: any) => {
     d.db.select().from(buildingRevisions).where(eq(buildingRevisions.modelId, model.id)).orderBy(desc(buildingRevisions.revision)),
     d.db.select().from(buildingAlternatives).where(eq(buildingAlternatives.modelId, model.id)).orderBy(asc(buildingAlternatives.createdAt)),
   ]);
+  const requestRows = await d.db.select().from(buildingDataRequests).where(and(eq(buildingDataRequests.modelId, model.id), eq(buildingDataRequests.tenantId, d.tenantId)))
+    .orderBy(desc(buildingDataRequests.sentAt)).limit(20);
   const planSources = (allPlanSources as any[]).filter(row => !supersededVersionIds.has(row.plan.sourceVersionId));
   const activeStoreyIds = new Set(planSources.map(row => row.plan.storeyId).filter(Boolean));
   const supersededStoreyIds = new Set((allPlanSources as any[]).filter(row => supersededVersionIds.has(row.plan.sourceVersionId) && row.plan.storeyId && !activeStoreyIds.has(row.plan.storeyId)).map(row => row.plan.storeyId));
@@ -290,6 +294,7 @@ const readModel = async (d: AppDeps, model: any) => {
     alternatives,
     automaticPlanProcessing,
     supersededSources,
+    dataRequests: requestRows as any[],
     summary: {
       projectId: model.projectId, modelId: model.id, revision: model.revision,
       buildings: buildings.length, storeys: storeys.length, rooms: rooms.length, elements: elements.length,
@@ -304,10 +309,17 @@ const componentRecords = (data: any): BuildingComponentRecord[] => {
   for (const property of data.properties as any[]) if (property.entityType === "element") latest.set(`${property.entityId}:${property.propertyKey}`, property);
   return (data.elements as any[]).map(element => {
     const state = (key: string) => { const current = latest.get(`${element.id}:${key}`)?.current;
-      return current ? { value: current.value, unit: current.unit ?? null, reviewStatus: current.reviewStatus, provenance: current.provenance } : null; };
+      return current ? { value: current.value, unit: current.unit ?? null, reviewStatus: current.reviewStatus, provenance: current.provenance, evidenceQuote: current.evidence?.[0]?.quote ?? null } : null; };
     return { id: element.id, componentType: elementComponentType(element.kind, effectiveValue(latest.get(`${element.id}:componentType`))),
       properties: Object.fromEntries(["construction", "material", "thickness", "bulkDensity", "wallRole"].map(key => [key, state(key)])) };
   });
+};
+
+/** Sent data requests with what has been answered since, computed against the current model. */
+const dataRequestsWithProgress = (data: any) => {
+  const records = componentRecords(data);
+  return (data.dataRequests as any[]).map(request => ({ id: request.id, recipient: request.recipient, note: request.note, sentAt: request.sentAt, closedAt: request.closedAt,
+    items: request.items, progress: dataRequestProgress(request.items as any, records) }));
 };
 
 /** Missing or unreviewed component inputs per wall/ceiling, for agents and the model view. */
@@ -337,6 +349,7 @@ const soundInsulationContext = (projectId: string, data: any) => {
       items: checks.slice(0, 500).map(check => ({ ...check, deepLink: buildingDeepLink(projectId, "element", check.componentId) })) },
     calculation: { available: false, reason: "No validated DIN 4109-2 airborne or impact sound calculation tool exists yet." },
     dataRequest: componentDataRequest(records).map(group => ({ ...group, componentIds: group.componentIds.slice(0, 200) })),
+    sentRequests: dataRequestsWithProgress(data).filter(request => !request.closedAt).map(({ items: _items, ...request }) => request),
   };
 };
 
@@ -457,7 +470,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const projectId = uuid.parse(id(req.params.projectId));
       const row = await modelForProject(d, projectId);
       if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
-      return res.json(ok(await readModel(d, row.model)));
+      const data = await readModel(d, row.model);
+      return res.json(ok({ ...data, dataRequests: dataRequestsWithProgress(data) }));
     } catch (e) { return next(e); }
   });
 
@@ -769,6 +783,109 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
       return res.json(ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Documents that can state component data: the project's text-bearing files without floor-plan pages,
+  // a likely Baubeschreibung first.
+  router.get("/projects/:projectId/building-model/component-sources", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); const projectId = uuid.parse(id(req.params.projectId));
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const rows = await d.db.select({ fileId: files.id, name: files.name, versionId: fileVersions.id, version: fileVersions.version,
+        mentions: sql<boolean>`exists (select 1 from ${sourcePages} where ${sourcePages.versionId} = ${fileVersions.id} and ${sourcePages.content}->>'text' ~* 'bau-?[[:space:]]*beschreibung')` })
+        .from(files).innerJoin(fileVersions, and(eq(fileVersions.fileId, files.id), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready")))
+        .where(and(eq(files.projectId, projectId), eq(files.tenantId, d.tenantId), eq(files.purpose, "project_evidence"),
+          sql`exists (select 1 from ${sourcePages} where ${sourcePages.versionId} = ${fileVersions.id} and length(coalesce(${sourcePages.content}->>'text','')) > 0)`,
+          // Every uploaded PDF is page-classified; only documents with floor-plan pages are plans.
+          sql`not exists (select 1 from ${buildingPlanSources} where ${buildingPlanSources.sourceVersionId} = ${fileVersions.id} and ${buildingPlanSources.storeyId} is not null)`))
+        .orderBy(desc(fileVersions.version));
+      const latest = [...new Map((rows as any[]).map(row => [row.fileId, row])).values()];
+      const documents = latest.map(row => ({ fileId: row.fileId, name: row.name, sourceVersionId: row.versionId, version: row.version,
+        likelyConstructionDescription: /bau-?\s*beschreibung/i.test(row.name) || Boolean(row.mentions) })).sort((a, b) => Number(b.likelyConstructionDescription) - Number(a.likelyConstructionDescription));
+      return res.json(ok({ documents }));
+    } catch (e) { return next(e); }
+  });
+
+  // Reads a construction description and proposes its stated component data for every wall of the stated role
+  // and for the ceilings. Proposals stay unreviewed; entered or reviewed values are never replaced.
+  router.post("/projects/:projectId/building-model/component-sources", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), sourceVersionId: uuid }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (modelRow.model.revision !== input.baseRevision) return revisionConflict(res, modelRow.model.revision);
+      if (!(await evidenceVersionsForProject(d.db, d, projectId, [{ kind: "page", sourceVersionId: input.sourceVersionId, page: 1 } as any])))
+        return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "The document must be a ready file revision in this project" });
+      const pages = await d.db.select({ page: sourcePages.page, text: sql<string>`left(coalesce(${sourcePages.content}->>'text',''), 60000)` }).from(sourcePages)
+        .where(and(eq(sourcePages.versionId, input.sourceVersionId), eq(sourcePages.tenantId, d.tenantId))).orderBy(asc(sourcePages.page)).limit(300);
+      if (!pages.length) return send(res, 422, { data: null, error: { code: "no_source_text" }, message: "No text has been read from this document yet" });
+      const statements = readConstructionDescription((pages as any[]).map(row => ({ page: Number(row.page), text: String(row.text) })));
+      const groups = mergeComponentStatements(statements);
+      const data = await readModel(d, modelRow.model);
+      const records = componentRecords(data);
+      const props = new Map((data.properties as any[]).filter(property => property.entityType === "element").map(property => [`${property.entityId}:${property.propertyKey}`, property]));
+      const roleOf = (elementId: string) => effectiveValue(props.get(`${elementId}:wallRole`));
+      const units: Record<string, string | null> = { construction: null, material: null, thickness: "cm", bulkDensity: "kg/m³" };
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        let proposals = 0;
+        const summary = [];
+        for (const group of groups) {
+          const targets = records.filter(record => record.componentType === group.target.componentType && (group.target.componentType === "ceiling" || roleOf(record.id) === group.target.wallRole));
+          let proposed = 0;
+          for (const [field, stated] of Object.entries(group.values)) for (const target of targets) {
+            if (!derivedWritable(props.get(`${target.id}:${field}`), stated.value)) continue;
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: target.id, propertyKey: field, value: stated.value, unit: units[field], provenance: "inferred",
+              evidence: [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: stated.page, quote: stated.quote })] });
+            proposed++;
+          }
+          proposals += proposed;
+          summary.push({ ...group.target, values: Object.fromEntries(Object.entries(group.values).map(([field, stated]) => [field, stated.value])), conflicts: group.conflicts, components: targets.length, proposed });
+        }
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.component.description_read", "building_model", modelRow.model.id, { projectId, modelRevision: revision, sourceVersionId: input.sourceVersionId,
+          method: constructionDescriptionMethod, statements: statements.length, proposals, groups: summary.map(group => ({ componentType: group.componentType, wallRole: group.wallRole, proposed: group.proposed, conflicts: group.conflicts })) });
+        return { revision, summary: { statements: statements.length, proposals, groups: summary, method: constructionDescriptionMethod } };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
+      return res.json(ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Records that the current data request went out. The items are computed here, not taken from the client.
+  router.post("/projects/:projectId/building-model/data-requests", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ recipient: z.string().trim().min(1).max(200), note: z.string().trim().max(2000).nullable().optional() }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const items = componentDataRequest(componentRecords(await readModel(d, modelRow.model)));
+      if (!items.length) return send(res, 422, { data: null, error: { code: "nothing_to_request" }, message: "Every wall and ceiling already has its inputs" });
+      const request = await d.db.transaction(async (tx: any) => {
+        const [row] = await tx.insert(buildingDataRequests).values({ tenantId: d.tenantId, modelId: modelRow.model.id, recipient: input.recipient, note: input.note ?? null, items, createdBy: d.actorId }).returning();
+        await d.audit(tx, "projects.building.data_request.sent", "building_data_request", row.id, { projectId, recipient: input.recipient, groups: items.length, fields: items.reduce((sum, group) => sum + group.fields.length, 0) });
+        return row;
+      });
+      return send(res, 201, ok(request));
+    } catch (e) { return next(e); }
+  });
+
+  router.post("/projects/:projectId/building-model/data-requests/:requestId/close", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId)); const requestId = uuid.parse(id(req.params.requestId));
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const closed = await d.db.transaction(async (tx: any) => {
+        const [row] = await tx.update(buildingDataRequests).set({ closedAt: new Date() }).where(and(eq(buildingDataRequests.id, requestId), eq(buildingDataRequests.modelId, modelRow.model.id),
+          eq(buildingDataRequests.tenantId, d.tenantId), sql`${buildingDataRequests.closedAt} is null`)).returning();
+        if (row) await d.audit(tx, "projects.building.data_request.closed", "building_data_request", row.id, { projectId });
+        return row;
+      });
+      if (!closed) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Open data request not found" });
+      return res.json(ok(closed));
     } catch (e) { return next(e); }
   });
 

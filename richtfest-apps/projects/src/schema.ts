@@ -492,3 +492,21 @@ export const buildingReviews = pgTable("projects_building_reviews", {
   reviewedBy: uuid("reviewed_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * A component data request sent to the architect or client. Items are the
+ * request as sent (per wall type and for ceilings); what is still outstanding
+ * is computed against the current model, so answers count however they arrive.
+ */
+export const buildingDataRequests = pgTable("projects_building_data_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
+  recipient: text("recipient").notNull(),
+  note: text("note"),
+  items: jsonb("items").$type<unknown[]>().notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ model: index("projects_building_data_requests_model").on(table.modelId, table.sentAt) }));

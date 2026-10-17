@@ -3,14 +3,17 @@ import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundIn
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
+import { Input } from "../ui/input";
 import { fieldLabel, optionLabel, PropertyRow, regionComponentType, StatusLine, type ComponentPropertySave } from "./component-properties";
-import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
+import type { BuildingComponentPropertyState, BuildingModel, BuildingRegion } from "./types";
+
+const formatDate = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(); };
 
 type T = ReturnType<typeof useT>;
 
 export const componentRecord = (region: BuildingRegion): BuildingComponentRecord => ({
   id: region.id, componentType: regionComponentType(region),
-  properties: Object.fromEntries(Object.entries(region.componentProperties ?? {}).map(([key, state]) => [key, { value: state.value, unit: state.unit, reviewStatus: state.reviewStatus, provenance: state.provenance }])),
+  properties: Object.fromEntries(Object.entries(region.componentProperties ?? {}).map(([key, state]) => [key, { value: state.value, unit: state.unit, reviewStatus: state.reviewStatus, provenance: state.provenance, evidenceQuote: state.evidenceQuote }])),
 });
 
 const groupLabel = (group: ComponentRequestGroup, t: T) => group.componentType === "ceiling" ? t("buildingSoundCeilings")
@@ -24,7 +27,7 @@ const valueText = (field: string, value: unknown, unit: string | null, t: T) => 
 export function requestLines(group: ComponentRequestGroup, t: T) {
   const missing = group.fields.filter((field) => field.missing > 0);
   const confirm = group.fields.flatMap((field) => field.unconfirmed.map((entry) => `${fieldLabel(field.field, t)} ${valueText(field.field, entry.value, entry.unit, t)}`
-    + ` (${entry.inferred ? `${t("buildingSoundFromPlan")}, ` : ""}${countLabel(group.componentType, entry.count, t)})`));
+    + ` (${entry.origin === "plan" ? `${t("buildingSoundFromPlan")}, ` : entry.origin === "document" ? `${t("buildingSoundFromDocument")}, ` : ""}${countLabel(group.componentType, entry.count, t)})`));
   return [
     ...(missing.length ? [`${t("buildingSoundProvide")}: ${missing.map((field) => `${fieldLabel(field.field, t)}${field.missing < group.count ? ` (${field.missing}/${group.count})` : ""}`).join(", ")}`] : []),
     ...(confirm.length ? [`${t("buildingSoundConfirm")}: ${confirm.join("; ")}`] : []),
@@ -70,7 +73,11 @@ export function SoundInsulationOverview({ components, level, t, pending, onLevel
 }
 
 /** What still has to be asked of the architect or client, per wall type and for ceilings, ready to paste into an email. */
-export function DataRequest({ components, t }: { components: BuildingRegion[]; t: T }) {
+export type SentDataRequest = BuildingModel["dataRequests"][number];
+
+export function DataRequest({ components, sent, t, pending, onSent, onClose }: { components: BuildingRegion[]; sent: SentDataRequest[]; t: T; pending: boolean;
+  onSent: (recipient: string) => void; onClose: (requestId: string) => void }) {
+  const [recipient, setRecipient] = useState("");
   const groups = componentDataRequest(components.map(componentRecord));
   const [copied, setCopied] = useState(false);
   const copy = async () => { await navigator.clipboard.writeText(dataRequestText(groups, t)); setCopied(true); };
@@ -86,7 +93,21 @@ export function DataRequest({ components, t }: { components: BuildingRegion[]; t
         <Button size="xs" variant="outline" onClick={() => void copy()}>{t("buildingSoundCopyRequest")}</Button>
         <p className="muted text-ui-2xs" role="status">{copied ? t("buildingSoundCopied") : t("buildingSoundRequestHint")}</p>
       </div>
+      <form className="building-model-description-row" onSubmit={(event) => { event.preventDefault(); if (recipient.trim()) { onSent(recipient.trim()); setRecipient(""); } }}>
+        <Input aria-label={t("buildingRequestRecipient")} placeholder={t("buildingRequestRecipient")} value={recipient} disabled={pending} onChange={(event) => setRecipient(event.target.value)} />
+        <Button size="xs" variant="outline" type="submit" disabled={pending || !recipient.trim()}>{t("buildingRequestMarkSent")}</Button>
+      </form>
     </> : <p className="muted text-ui-2xs">{t("buildingSoundNothingToRequest")}</p>}
+    {sent.filter((request) => !request.closedAt).length > 0 && <dl className="building-model-component-rows">
+      {sent.filter((request) => !request.closedAt).map((request) => <Fragment key={request.id}>
+        <dt className="building-model-request-group">{request.recipient}<span className="muted text-ui-2xs">{t("buildingRequestSentOn").replace("{date}", formatDate(request.sentAt))}</span></dt>
+        <dd className="building-model-stack">
+          <span>{t("buildingRequestProgress").replace("{answered}", String(request.progress.answered)).replace("{total}", String(request.progress.total))}</span>
+          {request.progress.outstanding.map((group) => <span key={`${group.componentType}:${group.wallRole}`} className="muted text-ui-2xs">{groupLabel(group, t)}: {group.fields.map((field) => fieldLabel(field.field, t)).join(", ")}</span>)}
+          <Button size="xs" variant="ghost" disabled={pending} onClick={() => onClose(request.id)}>{request.progress.outstanding.length ? t("buildingRequestClose") : t("buildingRequestDone")}</Button>
+        </dd>
+      </Fragment>)}
+    </dl>}
   </>;
 }
 
@@ -135,4 +156,30 @@ export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { 
     </dl>
     <p className="muted text-ui-2xs">{gaps.length ? `${t("buildingRegulatoryOpen")}: ${gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingRegulatoryUnconfirmed")})`).join(", ")}` : t("buildingRegulatoryConfirmed")}</p>
   </>;
+}
+
+export type ComponentSourceDocument = { fileId: string; name: string; sourceVersionId: string; version: number; likelyConstructionDescription: boolean };
+export type DescriptionReadResult = { statements: number; proposals: number; groups: Array<{ componentType: "wall" | "ceiling"; wallRole: string | null; conflicts: string[]; components: number; proposed: number }> };
+
+/** Reads stated component data from a construction description into unreviewed proposals per wall type. */
+export function DescriptionReader({ documents, t, pending, result, onRead }: { documents: ComponentSourceDocument[]; t: T; pending: boolean; result?: DescriptionReadResult; onRead: (sourceVersionId: string) => void }) {
+  const [chosen, setChosen] = useState("");
+  const selected = documents.find((document) => document.sourceVersionId === chosen) ?? documents[0];
+  if (!documents.length) return <p className="muted text-ui-2xs">{t("buildingDescriptionNone")}</p>;
+  const groupName = (group: DescriptionReadResult["groups"][number]) => group.componentType === "ceiling" ? t("buildingSoundCeilings") : group.wallRole ? optionLabel("wallRole", group.wallRole, t) : t("buildingSoundWallsWithoutRole");
+  const conflicts = result?.groups.filter((group) => group.conflicts.length) ?? [];
+  const unmatched = result?.groups.filter((group) => group.components === 0) ?? [];
+  return <div className="building-model-component-derive">
+    <div className="building-model-description-row">
+      <NativeSelect aria-label={t("buildingDescriptionDocument")} value={selected?.sourceVersionId ?? ""} disabled={pending} onChange={(event) => setChosen(event.target.value)}>
+        {documents.map((document) => <option key={document.sourceVersionId} value={document.sourceVersionId}>{document.name}{document.likelyConstructionDescription ? ` · ${t("buildingDescriptionLikely")}` : ""}</option>)}
+      </NativeSelect>
+      <Button size="xs" variant="outline" disabled={pending || !selected} onClick={() => selected && onRead(selected.sourceVersionId)}>{t("buildingDescriptionRead")}</Button>
+    </div>
+    <p className="muted text-ui-2xs" role="status">{result ? [
+      t("buildingDescriptionResult").replace("{statements}", String(result.statements)).replace("{proposals}", String(result.proposals)),
+      ...conflicts.map((group) => t("buildingDescriptionConflict").replace("{group}", groupName(group)).replace("{fields}", group.conflicts.map((field) => fieldLabel(field, t)).join(", "))),
+      ...unmatched.map((group) => t("buildingDescriptionUnmatched").replace("{group}", groupName(group))),
+    ].join(" · ") : t("buildingDescriptionHint")}</p>
+  </div>;
 }

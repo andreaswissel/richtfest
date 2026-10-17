@@ -110,7 +110,7 @@ test("the data request asks per wall type for what is missing or unconfirmed", (
   expect(request.map(group => [group.componentType, group.wallRole, group.count])).toEqual([["wall", "apartment_partition", 2], ["wall", null, 1], ["ceiling", null, 1]]);
   expect(request[0].fields).toEqual([
     { field: "construction", missing: 1, unconfirmed: [] },
-    { field: "thickness", missing: 0, unconfirmed: [{ value: 24, unit: "cm", inferred: true, count: 2 }] },
+    { field: "thickness", missing: 0, unconfirmed: [{ value: 24, unit: "cm", origin: "plan", count: 2 }] },
     { field: "bulkDensity", missing: 2, unconfirmed: [] },
   ]);
   // The role is Richtfest's to settle, so it is never asked of the architect.

@@ -316,6 +316,13 @@
       "when": 1792400000000,
       "tag": "0044_building_outline_edits",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1792500000000,
+      "tag": "0045_building_data_requests",
+      "breakpoints": true
     }
   ]
 }

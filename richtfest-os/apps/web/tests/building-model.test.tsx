@@ -770,7 +770,7 @@ test("the data request reads like an email to the architect, grouped by wall typ
   const text = dataRequestText([
     { componentType: "wall", wallRole: "apartment_partition", count: 3, componentIds: [], fields: [
       { field: "construction", missing: 3, unconfirmed: [] },
-      { field: "thickness", missing: 1, unconfirmed: [{ value: 24, unit: "cm", inferred: true, count: 2 }] },
+      { field: "thickness", missing: 1, unconfirmed: [{ value: 24, unit: "cm", origin: "plan", count: 2 }] },
     ] },
     { componentType: "ceiling", wallRole: null, count: 1, componentIds: [], fields: [{ field: "bulkDensity", missing: 1, unconfirmed: [] }] },
   ], t);

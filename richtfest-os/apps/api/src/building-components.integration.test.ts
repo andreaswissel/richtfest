@@ -175,11 +175,62 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(ceilingRequest.fields).toEqual(["construction", "thickness", "bulkDensity"].map(field => ({ field, missing: 1, unconfirmed: [] })));
     const partitionRequest = sound.dataRequest.find((group: any) => group.wallRole === "apartment_partition");
     // Bathroom and kitchen thickness are approved; only the corridor wall's entered 25 cm still needs confirming.
-    expect(partitionRequest.fields.find((field: any) => field.field === "thickness")).toEqual({ field: "thickness", missing: 0, unconfirmed: [{ value: 25, unit: "cm", inferred: false, count: 1 }] });
+    expect(partitionRequest.fields.find((field: any) => field.field === "thickness")).toEqual({ field: "thickness", missing: 0, unconfirmed: [{ value: 25, unit: "cm", origin: "entered", count: 1 }] });
     expect(context.data.ceilings).toEqual([{ ceilingId: ceiling[0].id, roomIds: expect.any(Array), upperStoreyId: null }]);
     expect(context.data.entities.find((entity: any) => entity.id === ceiling[0].id)).toMatchObject({ provenance: "inferred", reviewStatus: "unreviewed" });
     const wallGaps = context.data.missingInputs.filter((gap: any) => gap.entityId === kitchenWall).map((gap: any) => `${gap.field}:${gap.status}`);
     expect(wallGaps).toEqual(["construction:unreviewed", "bulkDensity:unreviewed", "wallRole:unreviewed"]);
     expect(context.data.wallAdjacency.some((item: any) => item.exterior && item.roomId === null)).toBe(true);
+
+    // A construction description fills what it states, as unreviewed proposals that never replace entries.
+    const description = crypto.randomUUID(), descriptionVersion = crypto.randomUUID();
+    await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'Baubeschreibung.pdf','upload',$4)", [description, tenant, project, actor]);
+    await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [descriptionVersion, tenant, description, actor]);
+    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,4,$3)", [descriptionVersion, tenant,
+      JSON.stringify({ status: "available", text: "3.2 Außenwände\nAußenwände Kalksandstein 36,5 cm.\n\n3.3 Wohnungstrennwände\nWohnungstrennwände KS 24 cm, RDK 2,0.\n\n4. Decken\nGeschossdecken aus Stahlbeton, d = 22 cm." })]);
+    // Automatic processing registers every PDF's pages; a description has no floor-plan page, so it stays a document.
+    await pool.query("insert into projects_building_plan_sources (tenant_id,model_id,storey_id,source_version_id,page,created_by) values ($1,$2,null,$3,4,$4)", [tenant, model, descriptionVersion, actor]);
+    const documents = (await (await fetch(base + "/component-sources")).json()).data.documents;
+    // The plan itself is a plan source, not a description.
+    expect(documents.map((doc: any) => [doc.name, doc.likelyConstructionDescription])).toEqual([["Baubeschreibung.pdf", true]]);
+    const partitions = [...(await roles()).entries()].filter(([, r]) => r.value === "apartment_partition").map(([id]) => id);
+    const read = await post("/component-sources", { baseRevision: await revision(), sourceVersionId: descriptionVersion });
+    expect(read.status).toBe(200);
+    // Partition walls already carry entered construction, thickness and density; only the material is new. The ceiling gets all three.
+    const exterior = [...(await roles()).entries()].filter(([, r]) => r.value === "exterior").map(([id]) => id);
+    expect(read.body.data.summary.groups).toEqual([
+      // Exterior walls only had plan-measured thickness proposals; the stated thickness replaces them.
+      { componentType: "wall", wallRole: "exterior", values: { material: "Kalksandstein", construction: "masonry", thickness: 36.5 }, conflicts: [], components: exterior.length, proposed: exterior.length * 3 },
+      { componentType: "wall", wallRole: "apartment_partition", values: { material: "Kalksandstein", construction: "masonry", thickness: 24, bulkDensity: 2000 }, conflicts: [], components: partitions.length, proposed: partitions.length },
+      { componentType: "ceiling", wallRole: null, values: { material: "Stahlbeton", construction: "concrete", thickness: 22 }, conflicts: [], components: 1, proposed: 3 },
+    ]);
+    const ceilingThickness = (await pool.query(`select v.value, v.provenance, v.evidence from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.entity_id=$1 and p.property_key='thickness'`, [ceiling[0].id])).rows;
+    expect(ceilingThickness).toEqual([{ value: 22, provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: descriptionVersion, page: 4, quote: "Geschossdecken aus Stahlbeton, d = 22 cm." }] }]);
+    expect((await thickness()).get(corridorWall)).toMatchObject({ value: 25, provenance: "manual" });
+    expect((await post("/component-sources", { baseRevision: await revision(), sourceVersionId: descriptionVersion })).body.data.summary.proposals).toBe(0);
+    // A stated thickness is not replaced by the plan measurement on the next derivation.
+    expect((await post("/wall-adjacency", { baseRevision: await revision() })).body.data.summary.thicknessProposals).toBe(0);
+    const stated = await thickness();
+    expect(exterior.map(id => [stated.get(id)?.value, stated.get(id)?.provenance])).toEqual(exterior.map(() => [36.5, "inferred"]));
+    expect(audits).toContain("projects.building.component.description_read");
+
+    // A sent request keeps its items; what is answered since is computed from the model, however the answer arrives.
+    expect((await post("/data-requests", { recipient: "" })).status).toBeGreaterThanOrEqual(400);
+    const sent = await post("/data-requests", { recipient: "Architekturbüro Muster" });
+    expect(sent.status).toBe(201);
+    const ceilingItem = sent.body.data.items.find((group: any) => group.componentType === "ceiling");
+    expect(ceilingItem.fields.map((field: any) => field.field)).toEqual(["construction", "thickness", "bulkDensity"]);
+    const progress = async () => (await (await fetch(base)).json()).data.dataRequests.find((request: any) => request.id === sent.body.data.id).progress;
+    const initial = await progress();
+    expect(initial.answered).toBe(0);
+    const ceilingState = await latestVersion(ceiling[0].id, "thickness");
+    expect((await post("/properties/review", { baseRevision: await revision(), decision: "approved", items: [ceilingState] })).status).toBe(200);
+    const afterReview = await progress();
+    expect(afterReview).toMatchObject({ total: initial.total, answered: 1 });
+    expect(afterReview.outstanding.find((group: any) => group.componentType === "ceiling").fields.map((field: any) => field.field)).toEqual(["construction", "bulkDensity"]);
+    expect((await (await fetch(base + "/agent-context")).json()).data.soundInsulation.sentRequests[0]).toMatchObject({ recipient: "Architekturbüro Muster", progress: { answered: 1 } });
+    expect((await post(`/data-requests/${sent.body.data.id}/close`, {})).status).toBe(200);
+    expect((await post(`/data-requests/${sent.body.data.id}/close`, {})).status).toBe(404);
+    expect(audits).toEqual(expect.arrayContaining(["projects.building.data_request.sent", "projects.building.data_request.closed"]));
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);

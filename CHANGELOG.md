@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Building model: **Read component data** proposes wall and ceiling construction, material, thickness and bulk density from the Baubeschreibung, quoting the source sentence. Sent data requests can be marked as sent and show how many items have been answered since.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

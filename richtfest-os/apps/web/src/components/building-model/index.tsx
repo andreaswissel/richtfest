@@ -17,7 +17,7 @@ import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
-import { componentRecord, DataRequest, RegulatoryBasis, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
+import { componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
@@ -437,6 +437,25 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const [colorWallRoles, setColorWallRoles] = useState(false);
+  const [soundOpen, setSoundOpen] = useState(false);
+  const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen);
+  const sendDataRequest = useMutation({
+    mutationFn: (recipient: string) => api(`/projects/${projectId}/building-model/data-requests`, { recipient }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error.message),
+  });
+  const closeDataRequest = useMutation({
+    mutationFn: (requestId: string) => api(`/projects/${projectId}/building-model/data-requests/${requestId}/close`, {}),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error.message),
+  });
+  const readDescription = useMutation({
+    mutationFn: (sourceVersionId: string) => api<{ summary: DescriptionReadResult }>(`/projects/${projectId}/building-model/component-sources`, { baseRevision: model.revision, sourceVersionId }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
   const saveStoreyLevel = useMutation({
     mutationFn: ({ storeyId, level }: { storeyId: string; level: number | null }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       entityType: "storey", entityId: storeyId, propertyKey: "level", value: level, unit: null, provenance: "manual", evidence: [] }),
@@ -780,7 +799,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
           </PopoverContent>
         </Popover>
-        <Popover>
+        <Popover open={soundOpen} onOpenChange={setSoundOpen}>
           <PopoverTrigger asChild>
             <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingSoundInsulation")}: ${t("buildingSoundChecksShort").replace("{ready}", String(soundChecks.ready)).replace("{total}", String(soundChecks.total))}`} title={t("buildingSoundInsulation")}>
               <AudioLines className="size-icon-sm" aria-hidden="true" />
@@ -804,7 +823,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             <StoreyLevels storeys={model.storeys} t={t} pending={saveStoreyLevel.isPending || reviewComponentProperty.isPending}
               onSave={(storeyId, level) => saveStoreyLevel.mutate({ storeyId, level })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
             <h2 className="building-model-panel-title">{t("buildingSoundRequest")}</h2>
-            <DataRequest components={modelComponents} t={t} />
+            <DescriptionReader documents={((componentSources.data as { documents?: ComponentSourceDocument[] } | undefined)?.documents) ?? []} t={t} pending={readDescription.isPending}
+              result={readDescription.data?.summary} onRead={(sourceVersionId) => readDescription.mutate(sourceVersionId)} />
+            <DataRequest components={modelComponents} sent={model.dataRequests} t={t} pending={sendDataRequest.isPending || closeDataRequest.isPending}
+              onSent={(recipient) => sendDataRequest.mutate(recipient)} onClose={(requestId) => closeDataRequest.mutate(requestId)} />
           </PopoverContent>
         </Popover>
         <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles} onClick={() => setColorWallRoles((value) => !value)}><Palette className="size-icon-sm" aria-hidden="true" /></Button>

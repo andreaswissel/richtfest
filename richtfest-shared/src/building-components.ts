@@ -113,7 +113,12 @@ export function componentInputGaps(componentType: ComponentType | null, properti
   });
 }
 
-export type ComponentValueState = { value: unknown; unit?: string | null; reviewStatus: string; provenance?: string | null };
+export type ComponentValueState = { value: unknown; unit?: string | null; reviewStatus: string; provenance?: string | null; evidenceQuote?: string | null };
+
+/** Where an unreviewed value came from: measured or derived from the plan, stated in a document, or entered by a person. */
+export type ValueOrigin = "plan" | "document" | "entered";
+export const valueOrigin = (state: ComponentValueState): ValueOrigin => state.provenance !== "inferred" ? "entered"
+  : state.evidenceQuote && !state.evidenceQuote.startsWith("Printed scale") ? "document" : "plan";
 export type BuildingComponentRecord = { id: string; componentType: ComponentType | null; properties: Record<string, ComponentValueState | null | undefined> };
 
 /** Latest non-rejected value of a component property; rejected values count as absent. */
@@ -128,7 +133,7 @@ export type ComponentRequestField = {
   /** Components without a usable value: ask for it. */
   missing: number;
   /** Unreviewed values grouped by value: ask to confirm them. */
-  unconfirmed: Array<{ value: unknown; unit: string | null; inferred: boolean; count: number }>;
+  unconfirmed: Array<{ value: unknown; unit: string | null; origin: ValueOrigin; count: number }>;
 };
 export type ComponentRequestGroup = { componentType: "wall" | "ceiling"; wallRole: WallRole | null; count: number; componentIds: string[]; fields: ComponentRequestField[] };
 
@@ -160,9 +165,9 @@ export function componentDataRequest(components: BuildingComponentRecord[]): Com
         if (gap.status === "missing") field.missing++;
         else {
           const state = item.properties[gap.field]!;
-          const unit = state.unit ?? null, inferred = state.provenance === "inferred";
-          const existing = field.unconfirmed.find(entry => JSON.stringify([entry.value, entry.unit, entry.inferred]) === JSON.stringify([state.value, unit, inferred]));
-          if (existing) existing.count++; else field.unconfirmed.push({ value: state.value, unit, inferred, count: 1 });
+          const unit = state.unit ?? null, origin = valueOrigin(state);
+          const existing = field.unconfirmed.find(entry => JSON.stringify([entry.value, entry.unit, entry.origin]) === JSON.stringify([state.value, unit, origin]));
+          if (existing) existing.count++; else field.unconfirmed.push({ value: state.value, unit, origin, count: 1 });
         }
         fields.set(gap.field, field);
       }
@@ -202,4 +207,31 @@ export function regulatoryBasisGaps(properties: Record<string, ComponentProperty
     if (!state || state.value === null || state.value === undefined || state.reviewStatus === "rejected") return [{ field, status: "missing" }];
     return state.reviewStatus === "approved" ? [] : [{ field, status: "unreviewed" }];
   });
+}
+
+export type DataRequestProgress = { total: number; answered: number; outstanding: ComponentRequestGroup[] };
+
+/**
+ * How much of a sent request has been answered. An item (one field of one
+ * group) counts as answered once none of the requested components still has it
+ * missing or unreviewed, whether it was entered, copied, read or approved.
+ * Components deleted since are ignored.
+ */
+export function dataRequestProgress(items: ComponentRequestGroup[], components: BuildingComponentRecord[]): DataRequestProgress {
+  const byId = new Map(components.map(component => [component.id, component]));
+  const gapsOf = (component: BuildingComponentRecord) => new Set(componentInputGaps(component.componentType, Object.fromEntries(Object.entries(component.properties)
+    .map(([key, state]) => [key, state ? { value: state.value, reviewStatus: state.reviewStatus } : null]))).map(gap => gap.field));
+  let total = 0, answered = 0;
+  const outstanding: ComponentRequestGroup[] = [];
+  for (const group of items) {
+    const current = group.componentIds.flatMap(id => byId.has(id) ? [byId.get(id)!] : []);
+    const fields = group.fields.filter(field => {
+      total++;
+      const open = current.some(component => gapsOf(component).has(field.field));
+      if (!open) answered++;
+      return open;
+    });
+    if (fields.length) outstanding.push({ ...group, fields });
+  }
+  return { total, answered, outstanding };
 }

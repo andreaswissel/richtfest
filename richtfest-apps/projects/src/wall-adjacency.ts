@@ -125,6 +125,10 @@ export const effectiveValue = (property: ModelProperty | undefined) =>
 export type PlannedWall = { wallId: string; sourceVersionId: string; page: number; planRegion: PlanGeometry["planRegion"] | null;
   sides: [WallSide, WallSide]; role: WallRole | null; writeRole: boolean; thicknessCm: number | null; writeThickness: boolean; scaleDenominator: number | null };
 
+/** An inferred value from another source, such as a construction description, outranks a plan measurement. */
+const statedElsewhere = (existing: ModelProperty | undefined) => existing?.current?.provenance === "inferred"
+  && ((quote) => Boolean(quote) && !quote.startsWith("Printed scale"))(String((existing.current as { evidence?: Array<{ quote?: string }> }).evidence?.[0]?.quote ?? ""));
+
 /** Derived values never replace a person's entry or any reviewed value, and are not repeated or re-proposed after rejection. */
 export const derivedWritable = (existing: ModelProperty | undefined, value: unknown) => value !== null && !existing?.reviewed
   && (!existing?.current || (existing.current.provenance === "inferred" && existing.current.reviewStatus !== "approved" && existing.current.value !== value));
@@ -171,7 +175,7 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
     const thicknessCm = scale ? wallThicknessCm(g.polygon, scale) : null;
     walls.push({ wallId: element.id, sourceVersionId: g.source!.sourceVersionId!, page: g.source!.page!, planRegion: g.planRegion ?? null, sides, role,
       writeRole: derivedWritable(prop("element", element.id, "wallRole"), role), thicknessCm,
-      writeThickness: derivedWritable(prop("element", element.id, "thickness"), thicknessCm), scaleDenominator: scale?.denominator ?? null });
+      writeThickness: derivedWritable(prop("element", element.id, "thickness"), thicknessCm) && !statedElsewhere(prop("element", element.id, "thickness")), scaleDenominator: scale?.denominator ?? null });
   }
   return walls;
 }
