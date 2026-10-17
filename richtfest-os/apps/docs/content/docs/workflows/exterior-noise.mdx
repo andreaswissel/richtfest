@@ -29,6 +29,18 @@ Select a source to enter its inputs. Each value has a **Basis**, for example "He
 | Distance to facade (m) | Data basis (count year or forecast) |
 | Data basis (count year or forecast) | |
 
+## Measure facade distances on the site
+
+In **3D location** the scene layers include:
+
+- **Roads & railways**: the mapped axes from the survey; sources already added are highlighted. Surveys run before axes were kept need **Look up again**.
+- **Rail noise (EBA, Lden)**: the federal rail noise map (Eisenbahn-Bundesamt, Lärmkartierung Schiene, dl-de/by-2-0) for 2 × 2 km around the site, with its level bands. Only mapped main lines appear; no contour does not mean quiet. **Surroundings** shows the whole window from above.
+- **Plan on site**: the first plan page with walls and a printed scale (ground floor first), drawn at its printed scale. Exterior walls are darker.
+
+To place the plan, choose **Align plan** and click four points: a plan corner, the same corner on the site, a second plan corner far from the first, and that corner on the site. Clicks snap to wall corners and to official building corners. The plan is turned and moved, never rescaled; the **scale check** (site length ÷ plan length) shows how well printed scale and picks agree, with a note above 2 %. **Save placement** stores it as approximate; **Mark reviewed** records that someone checked it.
+
+**Facade distances** then lists, per added road or railway, the shortest horizontal distance from an exterior wall to its mapped axis and which facade it faces (all walls are measured while none is marked exterior). **Use as distance** writes it to the source's **Distance to facade** with a basis naming plan, page, facade and placement state; the same value is offered under that input in Exterior noise. Mapped axes are not lane or track centrelines, so check the value against the planning requirement before relying on it.
+
 ## Request traffic data
 
 **Request traffic data** creates an [inquiry](/docs/workflows/inquiries) for the chosen sources with the inputs still missing that an authority or operator supplies (not the facade distance). Ask the road traffic authority or Hessen Mobil for roads and DB InfraGO for railways; send the text yourself. The inquiry counts an item as answered once the value is entered on the source.

@@ -1,4 +1,4 @@
-import { projectAddressInput, type ProjectAddress, type LocationContext, type LocationBuilding, type LocationTree, type PublicDataSnapshot } from "@richtfest/shared";
+import { projectAddressInput, toUtm, type ProjectAddress, type LocationContext, type LocationBuilding, type LocationTree, type PublicDataSnapshot } from "@richtfest/shared";
 import type { LocationWorkerDeps } from "./deps";
 
 export function validateLocationAddress(input: ProjectAddress) {
@@ -45,20 +45,7 @@ export async function resolveLocationAddress(input: ProjectAddress, signal: Abor
     radius: 100, origin: toUtm(longitude, latitude, 33),
     sources: [{ label: "Official Berlin address register (CC BY 3.0 DE); Amt für Statistik Berlin-Brandenburg; not a surveyed setting-out point", url: url.href, surveyedAt: null }] };
 }
-/** WGS84 -> ETRS89 / UTM zone 32N or 33N. WGS84/ETRS89 difference is immaterial
- * for this unsurveyed display; this must not be used for engineering clearance. */
-export function toUtm(longitude: number, latitude: number, zone: 32 | 33): [number, number] {
-  const a = 6378137, e2 = 0.00669438002290, k = 0.9996;
-  const p = latitude * Math.PI / 180, l = (longitude - (zone * 6 - 183)) * Math.PI / 180;
-  const ep = e2 / (1 - e2), n = a / Math.sqrt(1 - e2 * Math.sin(p) ** 2);
-  const t = Math.tan(p) ** 2, c = ep * Math.cos(p) ** 2, A = Math.cos(p) * l;
-  const m = a * ((1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256) * p
-    - (3 * e2 / 8 + 3 * e2 ** 2 / 32 + 45 * e2 ** 3 / 1024) * Math.sin(2 * p)
-    + (15 * e2 ** 2 / 256 + 45 * e2 ** 3 / 1024) * Math.sin(4 * p)
-    - 35 * e2 ** 3 / 3072 * Math.sin(6 * p));
-  return [500000 + k * n * (A + (1 - t + c) * A ** 3 / 6 + (5 - 18 * t + t ** 2 + 72 * c - 58 * ep) * A ** 5 / 120),
-    k * (m + n * Math.tan(p) * (A ** 2 / 2 + (5 - t + 9 * c + 4 * c ** 2) * A ** 4 / 24 + (61 - 58 * t + t ** 2 + 600 * c - 330 * ep) * A ** 6 / 720))];
-}
+export { toUtm };
 export const localXZ = (point: number[], origin: [number, number]): [number, number] => [point[0]! - origin[0], origin[1] - point[1]!];
 export const measuredHeight = (value: unknown): number | null => {
   if (value === null || value === undefined || value === "") return null;

@@ -1,10 +1,13 @@
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import { ok, projectAddressInput, locationMatchesAddress, type LocationState } from "@richtfest/shared";
+import { ok, projectAddressInput, locationMatchesAddress, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
-import { validateLocationAddress } from "./location-context";
+import { boundedBody, validateLocationAddress } from "./location-context";
+
+/** Federal rail noise map (EBA), nationwide incl. the extended mapping; open WMS under dl-de/by-2-0. */
+const EBA_RAIL_NOISE = "https://geoinformation.eisenbahn-bundesamt.de/wms/isophonen";
 
 const vector = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const sceneInput = z.object({
@@ -44,6 +47,26 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       const state = locationState(row);
       if (d.publicDataUpdates) state.availableContextUpdates = await d.publicDataUpdates(state.context?.publicReleases?.map(r => r.releaseId) ?? []);
       res.json(ok(state));
+    } catch (error) { next(error); }
+  });
+  // A fixed window around the imported site, never a caller-chosen URL or extent.
+  router.get("/projects/:projectId/location/rail-noise", async (req, res, next) => {
+    try {
+      const { d, where } = await scope(req, false);
+      const [row] = await d.db.select({ context: locations.context }).from(locations).where(where).limit(1);
+      const context = row?.context;
+      if (!context) throw failure("Import the location first", 409, "location_missing");
+      const crs = context.crs ?? "EPSG:25833", [e, n] = context.origin, w = RAIL_NOISE_HALF_WIDTH_M;
+      const url = new URL(EBA_RAIL_NOISE);
+      for (const [key, value] of Object.entries({ SERVICE: "WMS", VERSION: "1.3.0", REQUEST: "GetMap", LAYERS: "isophonen_ek_lden", STYLES: "", CRS: crs,
+        BBOX: [e - w, n - w, e + w, n + w].map(v => v.toFixed(1)).join(","), WIDTH: "1024", HEIGHT: "1024", FORMAT: "image/png", TRANSPARENT: "TRUE" })) url.searchParams.set(key, value);
+      const unavailable = () => failure("The rail noise map service did not return an image", 502, "rail_noise_unavailable");
+      const response = await fetch(url, { signal: AbortSignal.timeout(30000), redirect: "error" }).catch(() => { throw unavailable(); });
+      if (!response.ok || !response.headers.get("content-type")?.startsWith("image/png")) throw unavailable();
+      const body = await boundedBody(response, 8 * 1024 * 1024);
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "private, max-age=86400");
+      res.end(body);
     } catch (error) { next(error); }
   });
   router.put("/projects/:projectId/location", async (req, res, next) => {

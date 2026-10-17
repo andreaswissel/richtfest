@@ -51,6 +51,9 @@ export function validateNoiseInput(kind: NoiseSourceKind, key: string, value: un
 }
 export const noiseInputUnit = (kind: NoiseSourceKind, key: string) => (noiseSourceInputs[kind] as Record<string, InputSpec>)[key]?.unit ?? null;
 
+/** Simplified mapped axis as [longitude, latitude] parts, for drawing and facade distances; absent on surveys before axes were kept. */
+const mappedAxesSchema = z.array(z.array(z.tuple([z.number().finite(), z.number().finite()])).min(2).max(400)).max(80).optional();
+
 /** Roads and railways as mapped in the official topographic model (ATKIS Basis-DLM); codes are AdV code list values. */
 export const mappedRoadSchema = z.object({
   kind: z.literal("road"),
@@ -63,6 +66,7 @@ export const mappedRoadSchema = z.object({
   carriagewayWidthM: z.number().nullable(),
   distanceMeters: z.number().nullable(),
   segments: z.number().int(),
+  axes: mappedAxesSchema,
 }).strict();
 export const mappedRailSchema = z.object({
   kind: z.literal("rail"),
@@ -78,6 +82,7 @@ export const mappedRailSchema = z.object({
   electrified: z.boolean().nullable(),
   distanceMeters: z.number().nullable(),
   segments: z.number().int(),
+  axes: mappedAxesSchema,
 }).strict();
 export const mappedNoiseSourceSchema = z.discriminatedUnion("kind", [mappedRoadSchema, mappedRailSchema]);
 export type MappedRoad = z.infer<typeof mappedRoadSchema>;

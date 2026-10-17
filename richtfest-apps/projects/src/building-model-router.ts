@@ -964,10 +964,59 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     } catch (e) { return next(e); }
   });
 
+  // Plan pages with their wall outlines in plan metres (printed scale), so a page can be placed on the site.
+  router.get("/projects/:projectId/building-model/site-plan", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); const projectId = uuid.parse(id(req.params.projectId));
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return res.json(ok({ modelRevision: null, pages: [], placement: null }));
+      const modelId = modelRow.model.id, scoped = <T extends { modelId: any; tenantId: any }>(table: T) => and(eq(table.modelId, modelId), eq(table.tenantId, d.tenantId));
+      const [elements, storeys, exterior, placementRows, maskRows] = await Promise.all([
+        d.db.select({ id: buildingElements.id, kind: buildingElements.kind, name: buildingElements.name, storeyId: buildingElements.storeyId, geometry: buildingElements.geometry }).from(buildingElements).where(scoped(buildingElements)),
+        d.db.select({ id: buildingStoreys.id, name: buildingStoreys.name, levelIndex: buildingStoreys.levelIndex }).from(buildingStoreys).where(scoped(buildingStoreys)),
+        d.db.select({ id: buildingRelationships.fromEntityId }).from(buildingRelationships).where(and(scoped(buildingRelationships), eq(buildingRelationships.relationshipType, "faces_exterior"))),
+        d.db.select().from(buildingPlacements).where(scoped(buildingPlacements)).limit(1),
+        d.db.select({ mask: buildingSelectionMasks, job: buildingExtractionJobs }).from(buildingSelectionMasks).innerJoin(buildingExtractionJobs, eq(buildingExtractionJobs.id, buildingSelectionMasks.jobId))
+          .where(scoped(buildingSelectionMasks)).orderBy(desc(buildingSelectionMasks.updatedAt)),
+      ]);
+      const scales = new Map<string, { pageAspectRatio: number; metresPerPageHeight: number; denominator: number | null }>();
+      for (const row of maskRows as any[]) {
+        const key = `${row.job.sourceVersionId}:${row.job.page}`;
+        if (!scales.has(key) && row.mask.metresPerPageHeight != null) scales.set(key, { pageAspectRatio: Number(row.mask.pageAspectRatio), metresPerPageHeight: Number(row.mask.metresPerPageHeight), denominator: row.job.result?.scaleObservation?.denominator ?? null });
+      }
+      const exteriorIds = new Set((exterior as any[]).map(row => row.id)), storeyById = new Map((storeys as any[]).map(storey => [storey.id, storey]));
+      const pages = new Map<string, any>();
+      for (const element of elements as any[]) {
+        const source = element.geometry?.source, polygon = element.geometry?.polygon;
+        if (!source?.sourceVersionId || !Array.isArray(polygon) || polygon.length < 3) continue;
+        if (!/wall/.test(element.kind) && !exteriorIds.has(element.id)) continue;
+        const key = `${source.sourceVersionId}:${source.page}`, scale = scales.get(key);
+        if (!scale) continue;
+        const page = pages.get(key) ?? { sourceVersionId: source.sourceVersionId, page: source.page, scale, storeyIds: new Set<string>(), walls: [] };
+        if (element.storeyId) page.storeyIds.add(element.storeyId);
+        // Same conversion as wall thickness: x scales by the page aspect ratio, both by metres per page height.
+        page.walls.push({ id: element.id, name: element.name, exterior: exteriorIds.has(element.id),
+          ring: polygon.map((p: any) => [Number(p.x) * scale.pageAspectRatio * scale.metresPerPageHeight, Number(p.y) * scale.metresPerPageHeight]) });
+        pages.set(key, page);
+      }
+      const versionIds = [...new Set([...pages.values()].map(page => page.sourceVersionId))];
+      const names = versionIds.length ? await d.db.select({ id: fileVersions.id, name: files.name }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId))
+        .where(and(inArray(fileVersions.id, versionIds), eq(fileVersions.tenantId, d.tenantId))) : [];
+      const nameOf = new Map((names as any[]).map(row => [row.id, row.name]));
+      const list = [...pages.values()].map(page => {
+        const storey = [...page.storeyIds].map(storeyId => storeyById.get(storeyId)).find(Boolean) ?? null;
+        return { sourceVersionId: page.sourceVersionId, page: page.page, fileName: nameOf.get(page.sourceVersionId) ?? null, storey: storey ? { id: storey.id, name: storey.name, levelIndex: storey.levelIndex } : null, scale: page.scale, walls: page.walls };
+      });
+      // Ground floor first: level 0, then the lowest level, then pages without a storey level.
+      const rank = (page: any) => page.storey?.levelIndex === 0 ? -1e6 : page.storey?.levelIndex ?? 1e6;
+      list.sort((a, b) => rank(a) - rank(b) || b.walls.length - a.walls.length);
+      return res.json(ok({ modelRevision: modelRow.model.revision, pages: list, placement: (placementRows as any[])[0] ?? null }));
+    } catch (e) { return next(e); }
+  });
+
   router.put("/projects/:projectId/building-model/placement", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
-      const input = z.object({ baseRevision: z.number().int().nonnegative(), origin: z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite().optional() }).strict(), orientation: z.object({ degrees: z.number().finite() }).strict().nullable().optional(), alignmentStatus: z.enum(["unknown", "approximate", "reviewed"]).default("unknown"), evidence: z.array(buildingEvidenceSchema).max(20).default([]) }).strict().parse(req.body);
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), origin: z.object({ x: z.number().finite(), y: z.number().finite(), z: z.number().finite().optional(), crs: z.enum(["EPSG:25832", "EPSG:25833"]).optional() }).strict(), orientation: z.object({ degrees: z.number().finite() }).strict().nullable().optional(), alignmentStatus: z.enum(["unknown", "approximate", "reviewed"]).default("unknown"), evidence: z.array(buildingEvidenceSchema).max(20).default([]) }).strict().parse(req.body);
       const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       if (!(await evidenceVersionsForProject(d.db, d, projectId, input.evidence))) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "Every evidence item must reference a ready source revision in this project" });
       const result = await modelTransaction(d.db, async (tx: any) => { const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; const current = (await tx.select({ id: buildingPlacements.id }).from(buildingPlacements).where(eq(buildingPlacements.modelId, modelRow.model.id)).limit(1))[0]; const placement = current ? (await tx.update(buildingPlacements).set({ origin: input.origin, orientation: input.orientation ?? null, alignmentStatus: input.alignmentStatus, evidence: input.evidence }).where(eq(buildingPlacements.id, current.id)).returning())[0] : (await tx.insert(buildingPlacements).values({ tenantId: d.tenantId, modelId: modelRow.model.id, origin: input.origin, orientation: input.orientation ?? null, alignmentStatus: input.alignmentStatus, evidence: input.evidence, createdBy: d.actorId }).returning())[0]; await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.placement.updated", "building_placement", placement.id, { projectId, alignmentStatus: input.alignmentStatus, modelRevision: revision }); return { placement, revision }; });

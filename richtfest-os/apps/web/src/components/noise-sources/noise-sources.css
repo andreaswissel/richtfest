@@ -12,3 +12,6 @@
 @media (max-width: 720px) { .noise-input-row { grid-template-columns: 1fr; } }
 .noise-mapped-note { margin-bottom: var(--stack); }
 .noise-request-form { display: grid; gap: var(--stack); }
+.noise-input-group { display: grid; gap: 4px; }
+.noise-measured-distance { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; max-width: 640px; }
+.noise-measured-distance .site-distance-row { justify-content: flex-start; padding-block: 0; }

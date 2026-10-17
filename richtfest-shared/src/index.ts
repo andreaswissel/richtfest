@@ -24,3 +24,4 @@ export * from "./building-components";
 export * from "./environment";
 export * from "./project-documents";
 export * from "./noise-sources";
+export * from "./site-plan";

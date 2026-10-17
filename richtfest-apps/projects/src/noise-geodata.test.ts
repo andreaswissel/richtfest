@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { distanceToPolylineMeters, fromUtm32, groupMappedSources, hessenMappedAxis, readGmlFeatures, rlpMappedAxis, type MappedAxis } from "./noise-geodata";
+import { distanceToPolylineMeters, fromUtm32, groupMappedSources, keptAxes, hessenMappedAxis, readGmlFeatures, rlpMappedAxis, type MappedAxis } from "./noise-geodata";
 import { toUtm } from "./location-context";
 
 // Trimmed from a real HVBG ATKIS response (EPSG:4326, latitude first).
@@ -71,4 +71,13 @@ test("Rheinland-Pfalz flattened attributes map to the same source shape", () => 
   expect(rlpMappedAxis({ properties: { objart_txt: "AX_Strassenachse", objid: "A2", brf: -9998 }, geometry: null })!.widthM).toBeNull();
   const rail = rlpMappedAxis({ properties: { objart_txt: "AX_Bahnstrecke", objid: "R1", bkt: "1100#1102#1104", elk: 1000, gls: 2000, nrb: "3510#3522" }, geometry: { type: "LineString", coordinates: [] } });
   expect(rail).toMatchObject({ categories: ["1100", "1102", "1104"], routeNumbers: ["3510", "3522"], group: "route:3510+3522", tracks: "2000", electrified: true });
+});
+
+test("keeps simplified [longitude, latitude] axes near the site and drops distant parts", () => {
+  const site = { longitude: 8, latitude: 50 };
+  const kept = keptAxes(site, [
+    [[8.0021, 50.0300], [8.0031, 50.0300]],
+    [[8, 50.0005], [8.001, 50.0005], [8.002, 50.0005]],
+  ]);
+  expect(kept).toEqual([[[8, 50.0005], [8.002, 50.0005]]]);
 });

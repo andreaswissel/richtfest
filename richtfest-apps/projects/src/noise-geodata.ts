@@ -1,5 +1,5 @@
 import { SaxesParser } from "saxes";
-import type { MappedRail, MappedRoad, ProjectAddress } from "@richtfest/shared";
+import { simplifyPolyline, type MappedRail, type MappedRoad, type Point2, type ProjectAddress } from "@richtfest/shared";
 import { boundedBody, validateLocationAddress } from "./location-context";
 
 /**
@@ -47,6 +47,22 @@ export function distanceToPolylineMeters(site: { longitude: number; latitude: nu
   return best === null ? null : Math.round(best);
 }
 
+const AXIS_RANGE_M = 1500, MAX_AXIS_PARTS = 80, MAX_AXIS_POINTS = 400;
+/** Axis parts near the site, simplified to 1 m and rounded to ~0.1 m, nearest part first. */
+export function keptAxes(site: { longitude: number; latitude: number }, parts: Array<Array<[number, number]>>): Array<Array<[number, number]>> {
+  const kx = 111320 * Math.cos(site.latitude * Math.PI / 180), ky = 110574;
+  const round = (value: number) => Math.round(value * 1e6) / 1e6;
+  return parts
+    .map(part => ({ part, distance: distanceToPolylineMeters(site, [part]) ?? Infinity }))
+    .filter(item => item.part.length >= 2 && item.distance <= AXIS_RANGE_M)
+    .sort((a, b) => a.distance - b.distance).slice(0, MAX_AXIS_PARTS)
+    .map(({ part }) => {
+      const local = part.map(([lon, lat]) => [(lon - site.longitude) * kx, (lat - site.latitude) * ky] as Point2);
+      return simplifyPolyline(local, 1).slice(0, MAX_AXIS_POINTS).map(([x, y]) => [round(site.longitude + x / kx), round(site.latitude + y / ky)] as [number, number]);
+    })
+    .filter(part => part.length >= 2);
+}
+
 /** One entry per road (all its mapped axes) and per rail route, nearest first. */
 export function groupMappedSources(axes: MappedAxis[], site: { longitude: number; latitude: number }): { roads: MappedRoad[]; rail: MappedRail[] } {
   const groups = new Map<string, MappedAxis[]>();
@@ -63,13 +79,14 @@ export function groupMappedSources(axes: MappedAxis[], site: { longitude: number
     const distanceMeters = distances.length ? Math.min(...distances) : null;
     const max = (values: Array<number | null>) => { const present = values.filter((value): value is number => value !== null); return present.length ? Math.max(...present) : null; };
     const pick = (values: Array<string | null>) => values.find(Boolean) ?? null;
+    const axes = keptAxes(site, items.flatMap(item => item.parts));
     if (first.kind === "road") roads.push({ kind: "road", ref: key, name: pick(items.map(item => item.name)), dedication: pick(items.map(item => item.dedication)),
-      designation: pick(items.map(item => item.designation)), lanes: max(items.map(item => item.lanes)), carriagewayWidthM: max(items.map(item => item.widthM)), distanceMeters, segments: items.length });
+      designation: pick(items.map(item => item.designation)), lanes: max(items.map(item => item.lanes)), carriagewayWidthM: max(items.map(item => item.widthM)), distanceMeters, segments: items.length, axes });
     else {
       const electrified = items.map(item => item.electrified).filter((value): value is boolean => value !== null);
       rail.push({ kind: "rail", ref: key, name: pick(items.map(item => item.name)), categories: unique(items.flatMap(item => item.categories)), routeNumbers: unique(items.flatMap(item => item.routeNumbers)),
         lines: unique(items.flatMap(item => item.lines)), tracks: items.some(item => item.tracks === "2000") ? "2000" : pick(items.map(item => item.tracks)),
-        electrified: electrified.length ? electrified.some(Boolean) : null, distanceMeters, segments: items.length });
+        electrified: electrified.length ? electrified.some(Boolean) : null, distanceMeters, segments: items.length, axes });
     }
   }
   const nearest = (a: { distanceMeters: number | null }, b: { distanceMeters: number | null }) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity);

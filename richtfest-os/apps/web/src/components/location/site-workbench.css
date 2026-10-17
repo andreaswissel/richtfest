@@ -1,0 +1,57 @@
+.site-noise-legend {
+  display: grid;
+  gap: 2px;
+  margin: 0.35rem 0;
+  font-size: var(--ui-2xs);
+}
+.site-noise-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.site-noise-legend span {
+  width: 0.8rem;
+  height: 0.6rem;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+}
+.site-plan-status,
+.site-align-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-block: 0.35rem;
+}
+.location-layer-section .inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-block: 0.35rem;
+}
+.site-section-title {
+  font-size: var(--ui-xs);
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.site-distance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 0.5rem;
+  padding-block: 0.3rem;
+  font-size: var(--ui-xs);
+}
+.site-distance-row > span {
+  display: grid;
+  min-width: 0;
+}
+.site-distance-row > span > span {
+  color: var(--muted-foreground);
+}
+.site-distance-row .noise-input-error {
+  flex-basis: 100%;
+  color: var(--destructive);
+}

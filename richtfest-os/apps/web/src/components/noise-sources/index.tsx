@@ -11,6 +11,8 @@ import { Checkbox } from "../ui/checkbox";
 import { Input, Textarea } from "../ui/input";
 import { Badge, Callout, Empty, Field, RowLink, Segmented, Table } from "../ui/primitives";
 import { inquiryLink } from "../inquiries/types";
+import { useSiteGeometry } from "../location/site-geometry";
+import { FacadeDistanceRow } from "../location/site-workbench";
 import "./noise-sources.css";
 
 type T = ReturnType<typeof useT>;
@@ -161,9 +163,23 @@ function SourceInputs({ projectId, source, canWrite, t }: { projectId: string; s
       {source.mapped.distanceMeters !== null ? ` · ${t("noiseMappedDistance").replace("{distance}", String(source.mapped.distanceMeters))}` : ""}</p>}
     {remove.isError && <Callout tone="error">{errorText(remove.error)}</Callout>}
     <div className="noise-inputs">
-      {noiseInputKeys(source.kind).map((key) => <InputRow key={key} projectId={projectId} source={source} inputKey={key} canWrite={canWrite} t={t} />)}
+      {noiseInputKeys(source.kind).map((key) => <div key={key} className="noise-input-group">
+        <InputRow projectId={projectId} source={source} inputKey={key} canWrite={canWrite} t={t} />
+        {key === "distanceToFacade" && <MeasuredDistance projectId={projectId} source={source} canWrite={canWrite} t={t} />}
+      </div>)}
     </div>
   </Section>;
+}
+
+/** The facade distance measured from the placed plan, offered for adoption next to the input. */
+function MeasuredDistance({ projectId, source, canWrite, t }: { projectId: string; source: NoiseSource; canWrite: boolean; t: T }) {
+  const { geometry } = useSiteGeometry(projectId);
+  const item = geometry?.stored ? geometry.distances.find((distance) => distance.sourceId === source.id) : undefined;
+  if (!geometry || !item) return null;
+  return <div className="noise-measured-distance">
+    <span className="muted text-ui-xs">{t("siteMeasuredFromPlan")}</span>
+    <FacadeDistanceRow projectId={projectId} geometry={geometry} item={item} canWrite={canWrite} compact />
+  </div>;
 }
 
 const numericInputs = new Set(["dailyTraffic", "heavyVehicleShare", "speedLimit", "distanceToFacade", "speed"]);

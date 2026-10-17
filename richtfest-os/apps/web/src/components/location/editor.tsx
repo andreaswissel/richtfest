@@ -44,6 +44,7 @@ import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
 import { EnvironmentSurveyButton } from "./environment-survey";
 import { PublicDataStatus } from "./public-data";
+import { useSiteWorkbench } from "./site-workbench";
 import "./location.css";
 
 const busy = (status?: string) => status === "queued" || status === "running";
@@ -126,6 +127,9 @@ export function LocationEditor({
     trees: true,
     objects: true,
     lidar: false,
+    roads: true,
+    railNoise: false,
+    plan: true,
   });
   const [measurement, setMeasurement] = useState<SceneVector[]>([]);
   const [clipHeight, setClipHeight] = useState(50);
@@ -294,7 +298,15 @@ export function LocationEditor({
     }
     return () => controller.abort();
   }, [ifcKey, projectId, retryModels]);
+  const site = useSiteWorkbench({
+    projectId,
+    context: state.data?.context ?? null,
+    layers,
+    tool,
+    setTool,
+  });
   const callbacks = useRef({
+    align: (_p: [number, number]) => {},
     select: setSelected,
     place: (_p: SceneVector) => {},
     measure: (_p: SceneVector) => {},
@@ -316,6 +328,7 @@ export function LocationEditor({
     },
     measure: (point) =>
       setMeasurement((m) => (m.length === 1 ? [...m, point] : [point])),
+    align: site.onAlign,
   };
   const hasContext = !!state.data?.context;
   const addressMismatch =
@@ -335,6 +348,7 @@ export function LocationEditor({
             select: (id) => callbacks.current.select(id),
             place: (p) => callbacks.current.place(p),
             measure: (p) => callbacks.current.measure(p),
+            align: (p) => callbacks.current.align(p),
           });
           setViewportReady(true);
         } catch {
@@ -357,6 +371,7 @@ export function LocationEditor({
         models,
         cloud: cloud.data,
         layers,
+        site: site.overlay,
         selected,
         tool,
         treeStyle,
@@ -365,6 +380,7 @@ export function LocationEditor({
         dark: theme === "dark",
       });
   }, [
+    site.overlay,
     viewportReady,
     state.data?.context,
     scene.objects,
@@ -690,6 +706,7 @@ export function LocationEditor({
                   )}
                 </details>
               </div>
+              {site.panel(layer)}
               {rlpContext ? (
                 <Callout>{t("locationRlpCoverage")}</Callout>
               ) : (
@@ -849,6 +866,12 @@ export function LocationEditor({
                     onClick={() => viewport.current?.view("street")}
                   >
                     {t("locationStreet")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => viewport.current?.view("area")}
+                  >
+                    {t("locationArea")}
                   </Button>
                   <Button
                     variant="ghost"
