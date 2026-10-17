@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Building model: **Sound insulation** starts with the project's regulatory basis: federal state, Bebauungsplan and its noise requirements, and the confirmed Landesbauordnung, VVTB and DIN 4109 editions.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -25,6 +23,8 @@
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
 ## 2026-10-17
+
+- Building model: **Sound insulation** starts with the project's regulatory basis: federal state, Bebauungsplan and its noise requirements, and the confirmed Landesbauordnung, VVTB and DIN 4109 editions.
 
 - Building model: **Derive from plan** reads each storey's level from the plan title (for example "Grundriss 1. OG"), so ceilings know the storey above; levels can be corrected under **Sound insulation → Storeys**. **Color walls by role** fills the plan's walls by wall role with a legend.
 
