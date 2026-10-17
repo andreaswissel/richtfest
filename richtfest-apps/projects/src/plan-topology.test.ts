@@ -64,6 +64,22 @@ test("printed areas guide partition capacities before page-local QC",()=>{
   for(const r of result.rooms.filter(r=>r.geometry.polygon))expect(r.geometry).toMatchObject({capacityQc:{status:"unreviewed"}});
 });
 
+test("open-plan rooms are split by a straight wall-to-wall cut, not a staircase seam",()=>{
+  // A 100 m² living room opening into a 30 m² corridor at x=.3 (1 page-height unit = 50 m).
+  const sourceFill={...fill,rings:[[{x:.1,y:.1},{x:.5,y:.1},{x:.5,y:.16},{x:.3,y:.16},{x:.3,y:.3},{x:.1,y:.3}]]};
+  const labels=[word("Wohnen",.17,.2),word("Flur",.42,.12)];
+  const areas=[word("100,00",.17,.212),word("m²",.201,.212),word("30,00",.42,.132),word("m²",.451,.132)];
+  const result=inferPlanTopology(planLabels(labels),[],[...labels,...areas],200,[],0,[sourceFill],1,undefined,{metresPerPageHeight:50});
+  expect(result.coverage).toMatchObject({straightSeamCount:1});
+  const flur=result.rooms.find(r=>r.name==="Flur")!.geometry,wohnen=result.rooms.find(r=>r.name==="Wohnen")!.geometry;
+  expect(flur).toMatchObject({quality:"approximate_partition"});
+  // The seam is one vertical line near the junction (area-guided); a geodesic seam steps diagonally through many x positions.
+  const seamX=Math.min(...flur.polygon!.map(p=>p.x));
+  expect(seamX).toBeGreaterThan(.29);expect(seamX).toBeLessThan(.35);
+  expect(new Set(flur.polygon!.map(p=>p.x.toFixed(3))).size).toBeLessThanOrEqual(3);
+  expect(wohnen.polygon!.filter(p=>p.x>.31).every(p=>Math.abs(p.x-seamX)<1e-9)).toBe(true);
+});
+
 const reference=process.env.RICHTFEST_REFERENCE_PLAN_PDF;
 test("touching apartment domains stay separate and decorative overlaps cannot steal ownership",()=>{
   const a={...fill,sourceKey:"a",rings:[rectangle(.1,.1,.2,.2)]},b={...fill,sourceKey:"b",rings:[rectangle(.3,.1,.2,.2)]};
@@ -153,10 +169,10 @@ test.skipIf(!reference)("page two retains all annotations and isolates apartment
   const words=parsePlanBbox(xml.stdout.toString()),labels=planLabels(words);
   const geometry=await extractPlanFootprints(reference!,2,new AbortController().signal);
   const result=inferPlanTopology(labels,geometry.candidates,words,1200,geometry.supplementaryBarriers,0,geometry.fillRegions,geometry.pageAspectRatio,undefined,{doorSwings:geometry.doorSwings,barrierLines:geometry.barrierLines,metresPerPageHeight:geometry.pageHeightPoints/72*.0254*100});
-  // Topology-v7 (stroked partitions, segmented door arcs, furniture gaps): 87 labels, 74 polygons on the reference PDF.
+  // Topology-v7 (stroked partitions, segmented door arcs, furniture gaps): 87 labels, 75 polygons on the reference PDF.
   expect(result.coverage.labelCount).toBeGreaterThanOrEqual(87);
   expect(result.coverage).toMatchObject({apartmentDomainCount:11,supplementaryBarrierCount:0});
-  expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(74);
+  expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(75);
   expect(result.rooms.filter(r=>r.name==="Garderobe")).toHaveLength(1);
   expect(result.rooms.filter(r=>r.geometry.polygon).every(r=>r.geometry.groupLabel&&r.geometry.topology.apartmentOwner===r.geometry.groupSourceKey)).toBe(true);
   expect(new Set(result.rooms.flatMap(r=>r.geometry.groupLabel?[r.geometry.groupLabel]:[]))).toEqual(new Set(Array.from({length:11},(_,i)=>`WE ${i+1}`)));

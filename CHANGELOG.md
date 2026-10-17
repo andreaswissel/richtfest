@@ -24,6 +24,7 @@
 
 ## 2026-10-17
 
+- Building model plan parsing splits open-plan rooms (for example a living room and its hall) along straight wall-to-wall lines instead of jagged diagonal seams. Existing plans are re-extracted automatically.
 - Building Model: an older plan set can be marked as superseded by a newer one. Its draft storeys, rooms and candidates leave the model and agent context without deleting the file, and it can be restored at any time. Includes database migration 0043.
 - The Building Model plan view now draws each detected room as its actual outline instead of a rectangle around it, so L-shaped rooms, notches and door closures are visible where they were extracted.
 - Building model plan parsing now reads plans whose walls, partitions and doors are drawn as outlines, as on the Bendenweg approval plans: outlined partitions bound rooms, door arcs drawn as many short lines are recognised so doorways close, and beds, kitchens and other furniture cut out of the floor fill count as room area instead of carving notches into rooms. Existing plans are re-extracted automatically.

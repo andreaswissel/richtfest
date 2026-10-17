@@ -114,7 +114,7 @@ export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) 
 
 /** Bounded raster topology with one construction scenario, hard unit ownership,
  * inferred gap closure and printed-area-guided partitions. No door claims. */
-export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1, normalizedPageAreaM2?: number, options: { doorSwings?: PlanDoorSwing[]; metresPerPageHeight?: number | null; barrierLines?: PlanBarrierLine[] } = {}) {
+export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1, normalizedPageAreaM2?: number, options: { doorSwings?: PlanDoorSwing[]; metresPerPageHeight?: number | null; barrierLines?: PlanBarrierLine[]; straightSeams?: boolean } = {}) {
   const n = Math.max(64, Math.min(1600, Math.floor(resolution))), size = n * n;
   const horizontalCost = Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : 1;
   const wall = new Uint8Array(size), owner = new Int32Array(size).fill(-1);
@@ -389,6 +389,16 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }
   if(!needsRefinement)break;
   }
+  // Open-plan seams: a geodesic split draws staircase diagonals that no plan has.
+  // Where a straight wall-to-wall cut separates the seeds, use it instead.
+  let chordSeamCount=0;
+  if(options.straightSeams!==false)regions.forEach((region,id)=>{
+    if(region.exterior||region.seeds.length<2)return;
+    const result=straightSeamPartition(component,id,region,labels,n,horizontalCost,options.metresPerPageHeight??null,observations);
+    if(!result)return;
+    chordSeamCount+=result.cuts;
+    for(const [p,owner] of result.owners)partition[p]=owner;
+  });
   const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0,shape_outlier:0,trace_failed:0 };
   const metresPerPageHeight = options.metresPerPageHeight && Number.isFinite(options.metresPerPageHeight) && options.metresPerPageHeight > 0 ? options.metresPerPageHeight : null;
   // Each opening records which seeded partition (room) lies on either side.
@@ -512,7 +522,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   return { rooms, assemblies, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
     highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
-    areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
+    areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, straightSeamCount:chordSeamCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
     openingEvidence:openings.slice(0,500).map(({sideProbes:_probes,...opening},o)=>({...opening,sides:openingSides[o].map(side=>typeof side==="number"?`topology-v5:${labels[side].sourceKey}`:side)})),
     metresPerPageHeight, scaleUse:metresPerPageHeight?"unreviewed_printed_scale_bounds_only":null,
     shapeQcAuditedCount:rooms.filter(room=>room.geometry.shapeQc).length, shapeOutlierCount:counts.shape_outlier,
@@ -642,6 +652,113 @@ export function detectOpenings(footprints: PlanFootprint[], doorSwings: PlanDoor
     }
   }
   return openings;
+}
+
+/**
+ * Split one shared free-space region with straight, axis-aligned wall-to-wall
+ * cuts (the way open-plan rooms are bounded on drawings: a line between two
+ * wall ends). Cuts are chosen greedily by recursive bisection: each cut must
+ * separate the remaining seeds, be at most 4.5 m long (or 6% of the page height
+ * without a scale) and is scored by length plus deviation from printed areas.
+ * Returns null when any group of seeds cannot be separated this way, so the
+ * caller keeps the geodesic partition.
+ */
+function straightSeamPartition(component: Int32Array, id: number, region: { minX: number; minY: number; maxX: number; maxY: number; count: number; seeds: number[] },
+  labels: PlanLabel[], n: number, aspect: number, metresPerPageHeight: number | null, observations: Map<string, { value: number }>) {
+  const w = region.maxX - region.minX + 1, h = region.maxY - region.minY + 1;
+  if (w * h > 250_000 || region.count > 120_000 || region.seeds.length > 12) return null;
+  const local = (x: number, y: number) => (y - region.minY) * w + (x - region.minX);
+  const inside = new Uint8Array(w * h);
+  for (let y = region.minY; y <= region.maxY; y++) for (let x = region.minX; x <= region.maxX; x++) if (component[y * n + x] === id) inside[local(x, y)] = 1;
+  const seedCell = (i: number) => { const r = labels[i].geometry.planRegion; return local(Math.min(n - 1, Math.floor((r.x + r.width / 2) * n)), Math.min(n - 1, Math.floor((r.y + r.height / 2) * n))); };
+  const cellM = metresPerPageHeight ? metresPerPageHeight / n : null;
+  const maxCells = (horizontal: boolean) => cellM ? 4.5 / (cellM * (horizontal ? aspect : 1)) : .06 * n / (horizontal ? aspect : 1);
+  const minCells = (horizontal: boolean) => cellM ? .4 / (cellM * (horizontal ? aspect : 1)) : 3;
+  const cellArea = cellM ? cellM * cellM * aspect : null;
+  const printed = (i: number) => observations.get(labels[i].sourceKey)?.value;
+  // Every maximal straight run of region cells bounded by non-region cells at both ends.
+  const chords: { cells: number[]; length: number; horizontal: boolean }[] = [];
+  for (const horizontal of [true, false]) {
+    const lines = horizontal ? h : w, span = horizontal ? w : h;
+    // Parallel runs with the same extent cut the region the same way; keep one every 4 cells.
+    let previous = new Set<string>(), sinceKept = new Map<string, number>();
+    for (let line = 0; line < lines; line++) {
+      const current = new Set<string>();
+      let start = -1;
+      for (let t = 0; t <= span; t++) {
+        const p = t < span ? (horizontal ? line * w + t : t * w + line) : -1, on = p >= 0 && inside[p] === 1;
+        if (on && start < 0) start = t;
+        if (!on && start >= 0) {
+          const length = t - start;
+          // The run must end at a real boundary inside the box, not at the box edge of an open region.
+          const key = `${start}:${t}`; current.add(key);
+          const repeat = previous.has(key) ? (sinceKept.get(key) ?? 0) + 1 : 0;
+          if (repeat % 4 === 0 && length >= minCells(horizontal) && length <= maxCells(horizontal))
+            chords.push({ cells: Array.from({ length }, (_, k) => horizontal ? line * w + start + k : (start + k) * w + line), length, horizontal });
+          sinceKept.set(key, repeat);
+          start = -1;
+        }
+      }
+      previous = current;
+    }
+  }
+  if (!chords.length || chords.length > 1500) return null;
+  const owner = new Int32Array(w * h).fill(-1);
+  const pieces = (cells: Uint8Array, cut: Set<number>) => {
+    const piece = new Int32Array(w * h).fill(-1), sizes: number[] = [], stack: number[] = [];
+    for (let start = 0; start < w * h; start++) {
+      if (!cells[start] || cut.has(start) || piece[start] >= 0) continue;
+      const k = sizes.length; let size = 0; piece[start] = k; stack.push(start);
+      while (stack.length) { const p = stack.pop()!; size++; const x = p % w;
+        for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) if (q >= 0 && q < w * h && cells[q] && !cut.has(q) && piece[q] < 0) { piece[q] = k; stack.push(q); } }
+      sizes.push(size);
+    }
+    return { piece, sizes };
+  };
+  let cuts = 0;
+  const split = (cells: Uint8Array, seeds: number[]): boolean => {
+    if (seeds.length === 1) { for (let p = 0; p < w * h; p++) if (cells[p]) owner[p] = seeds[0]; return true; }
+    let best: { score: number; cut: Set<number>; piece: Int32Array; groups: number[][] } | null = null;
+    for (const chord of chords) {
+      if (!chord.cells.every(p => cells[p])) continue;
+      const cut = new Set(chord.cells), { piece, sizes } = pieces(cells, cut);
+      if (sizes.length < 2) continue;
+      const groups = sizes.map(() => [] as number[]);
+      if (seeds.some(i => cut.has(seedCell(i)) || piece[seedCell(i)] < 0)) continue;
+      for (const i of seeds) groups[piece[seedCell(i)]].push(i);
+      const seeded = groups.filter(g => g.length);
+      if (seeded.length < 2) continue;
+      // Area guidance: compare each side with the sum of its printed room areas.
+      let areaError = 0;
+      if (cellArea) for (let k = 0; k < sizes.length; k++) {
+        if (!groups[k].length) continue;
+        const values = groups[k].map(printed);
+        if (values.every(v => v !== undefined)) { const target = values.reduce<number>((s, v) => s + v!, 0); areaError += Math.abs(sizes[k] * cellArea / target - 1); }
+      }
+      const lengthM = cellM ? chord.length * cellM * (chord.horizontal ? aspect : 1) : chord.length / n * 50;
+      const score = lengthM + 4 * areaError;
+      if (!best || score < best.score) best = { score, cut, piece, groups };
+    }
+    if (!best) return false;
+    cuts++;
+    // Seedless pockets and the cut line itself join the piece of the nearest seeded side.
+    const seededPieces = best.groups.map((g, k) => g.length ? k : -1).filter(k => k >= 0);
+    const assign = new Int32Array(w * h).fill(-1), queue: number[] = [];
+    for (let p = 0; p < w * h; p++) if (cells[p] && best.piece[p] >= 0 && best.groups[best.piece[p]].length) { assign[p] = best.piece[p]; queue.push(p); }
+    for (let head = 0; head < queue.length; head++) { const p = queue[head], x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) if (q >= 0 && q < w * h && cells[q] && assign[q] < 0) { assign[q] = assign[p]; queue.push(q); } }
+    return seededPieces.every(k => { const sub = new Uint8Array(w * h); for (let p = 0; p < w * h; p++) if (assign[p] === k) sub[p] = 1; return split(sub, best!.groups[k]); });
+  };
+  if (!split(inside, region.seeds.slice())) return null;
+  // A straight cut that misses a printed room area badly is worse than the guided geodesic split.
+  if (cellArea) for (const i of region.seeds) {
+    const target = printed(i); if (target === undefined) continue;
+    let cells = 0; for (let p = 0; p < w * h; p++) if (owner[p] === i) cells++;
+    if (Math.abs(cells * cellArea / target - 1) > .3) return null;
+  }
+  const owners: [number, number][] = [];
+  for (let p = 0; p < w * h; p++) if (owner[p] >= 0) owners.push([(region.minY + Math.floor(p / w)) * n + region.minX + p % w, owner[p]]);
+  return { owners, cuts };
 }
 
 /**
