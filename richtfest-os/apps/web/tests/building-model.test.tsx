@@ -763,3 +763,31 @@ test("wall type review groups values by value and unit, and only offers unreview
   expect(groups.map((group) => [group.value, group.walls, group.approved, group.pending.map((item) => item.propertyId)])).toEqual([[24, 3, 1, ["p1", "p3"]], [25, 1, 0, ["p4"]]]);
   expect(missing).toBe(2);
 });
+
+test("the data request reads like an email to the architect, grouped by wall type", async () => {
+  const { dataRequestText } = await import("../src/components/building-model/sound-insulation");
+  const t = ((key: keyof typeof en) => en[key] ?? key) as any;
+  const text = dataRequestText([
+    { componentType: "wall", wallRole: "apartment_partition", count: 3, componentIds: [], fields: [
+      { field: "construction", missing: 3, unconfirmed: [] },
+      { field: "thickness", missing: 1, unconfirmed: [{ value: 24, unit: "cm", inferred: true, count: 2 }] },
+    ] },
+    { componentType: "ceiling", wallRole: null, count: 1, componentIds: [], fields: [{ field: "bulkDensity", missing: 1, unconfirmed: [] }] },
+  ], t);
+  expect(text).toBe(`${en.buildingSoundRequestIntro}
+
+Apartment partition wall (3 walls)
+- Please provide: Construction, Thickness (1/3)
+- Please confirm: Thickness 24 cm (from plan, 2 walls)
+
+Ceilings (1 ceiling)
+- Please provide: Bulk density`);
+});
+
+test("model adapter exposes ceilings' rooms and the building's requirement level", () => {
+  const model = adaptBuildingModel({ buildings: [{ id: "b1", name: "Haus" }], elements: [{ id: "c1", kind: "draft_ceiling", name: "Ceiling above EG", constructionState: "unknown", geometry: { source: { sourceVersionId: "v", page: 1 } } }],
+    properties: [{ id: "p1", entityType: "building", entityId: "b1", propertyKey: "soundInsulationLevel", current: { version: 1, value: "elevated", reviewStatus: "unreviewed", provenance: "manual" } }],
+    relationships: [{ relationshipType: "covers", fromEntityType: "element", fromEntityId: "c1", toEntityType: "room", toEntityId: "r1" }] });
+  expect(model.buildings[0].componentProperties.soundInsulationLevel).toMatchObject({ value: "elevated", reviewStatus: "unreviewed" });
+  expect(model.states.existing.find((region) => region.id === "c1")).toMatchObject({ elementKind: "draft_ceiling", covers: ["r1"] });
+});

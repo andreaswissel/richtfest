@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Building model: **Sound insulation** in the toolbar records the agreed requirement level, lists the walls and ceilings that need a sound insulation verification and whether their inputs are complete, and builds a data request per wall type that can be copied into an email to the architect. **Derive from plan** now also creates one ceiling per storey with its own component data. The calculation itself remains unavailable until a validated DIN 4109-2 tool exists.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

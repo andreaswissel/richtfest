@@ -354,7 +354,8 @@ export function PdfEvidenceRenderer({
     const [rest] = [...pointers.current.values()];
     dragRef.current = !rest ? undefined : wasPinch ? { x: rest.x, y: rest.y, panX: pan.x, panY: pan.y } : dragRef.current;
   };
-  const pageRegions = regions.filter((region) => region.page === page);
+  // Regions without plan geometry, such as derived storey ceilings, are listed in the outliner but not drawn.
+  const pageRegions = regions.filter((region) => region.page === page && region.box);
   const pickStart = useRef<{ x: number; y: number } | undefined>(undefined);
   const magicSurface = useRef<HTMLDivElement>(null);
   // Magic picks are resolved on the canvas: panning captures the pointer there, so the

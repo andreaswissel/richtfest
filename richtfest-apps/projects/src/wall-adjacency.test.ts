@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { componentInputGaps, deriveWallRole, validateBuildingComponentProperty } from "@richtfest/shared";
+import { componentDataRequest, componentInputGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
 import { planWallAdjacency, roomSpaceContext } from "./wall-adjacency";
+import { planStoreyCeilings } from "./storey-ceilings";
 
 const rect = (x0: number, y0: number, x1: number, y1: number) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
 const source = { sourceVersionId: "00000000-0000-4000-8000-000000000001", page: 2 };
@@ -90,4 +91,49 @@ test("component properties are typed and calculation gaps are explicit", () => {
     { field: "thickness", status: "unreviewed" }, { field: "bulkDensity", status: "missing" }, { field: "wallRole", status: "missing" }]);
   expect(componentInputGaps("wall", { construction: approved("drywall"), thickness: approved(12.5), wallRole: approved("internal") })).toEqual([]);
   expect(componentInputGaps("ceiling", {}).map(gap => gap.field)).toEqual(["construction", "thickness", "bulkDensity"]);
+});
+
+test("the data request asks per wall type for what is missing or unconfirmed", () => {
+  const approved = (value: unknown, unit: string | null = null) => ({ value, unit, reviewStatus: "approved", provenance: "manual" });
+  const inferred = (value: unknown, unit: string | null = null) => ({ value, unit, reviewStatus: "unreviewed", provenance: "inferred" });
+  const components = [
+    { id: "w1", componentType: "wall" as const, properties: { wallRole: inferred("apartment_partition"), thickness: inferred(24, "cm") } },
+    { id: "w2", componentType: "wall" as const, properties: { wallRole: approved("apartment_partition"), thickness: inferred(24, "cm"), construction: approved("masonry") } },
+    { id: "w3", componentType: "wall" as const, properties: { wallRole: approved("internal"), construction: approved("drywall"), thickness: approved(12.5, "cm") } },
+    { id: "w4", componentType: "wall" as const, properties: { wallRole: { value: "stairwell", unit: null, reviewStatus: "rejected", provenance: "inferred" } } },
+    { id: "c1", componentType: "ceiling" as const, properties: {} },
+    { id: "x", componentType: null, properties: {} },
+  ];
+  const request = componentDataRequest(components);
+  // Complete groups drop out; a rejected role counts as no role; ceilings come last.
+  expect(request.map(group => [group.componentType, group.wallRole, group.count])).toEqual([["wall", "apartment_partition", 2], ["wall", null, 1], ["ceiling", null, 1]]);
+  expect(request[0].fields).toEqual([
+    { field: "construction", missing: 1, unconfirmed: [] },
+    { field: "thickness", missing: 0, unconfirmed: [{ value: 24, unit: "cm", inferred: true, count: 2 }] },
+    { field: "bulkDensity", missing: 2, unconfirmed: [] },
+  ]);
+  // The role is Richtfest's to settle, so it is never asked of the architect.
+  expect(request[1].fields.map(field => field.field)).toEqual(["construction", "thickness", "bulkDensity"]);
+
+  const checks = soundInsulationChecks(components);
+  expect(checks.map(check => [check.componentId, check.ready])).toEqual([["w1", false], ["w2", false], ["c1", false]]);
+  const done = soundInsulationChecks([{ id: "w", componentType: "wall", properties: { wallRole: approved("corridor_partition"), construction: approved("masonry"), thickness: approved(24, "cm"), bulkDensity: approved(1800, "kg/m³") } }]);
+  expect(done).toEqual([{ componentId: "w", componentType: "wall", wallRole: "corridor_partition", ready: true, gaps: [] }]);
+});
+
+test("each storey with plan rooms gets one ceiling; the storey above is linked only with known levels", () => {
+  const storeys = [
+    { id: "eg", buildingId: "b", name: "EG", levelIndex: 0 }, { id: "og1", buildingId: "b", name: "OG 1", levelIndex: 1 },
+    { id: "og2", buildingId: "b", name: "OG 2", levelIndex: null }, { id: "empty", buildingId: "b", name: "DG", levelIndex: 2 },
+  ];
+  const rooms = [
+    { id: "r1", storeyId: "eg", constructionState: "unknown", geometry: { source } }, { id: "r2", storeyId: "eg", constructionState: "unknown", geometry: { source: { ...source, page: 3 } } },
+    { id: "r3", storeyId: "eg", constructionState: "unknown", geometry: { source: { ...source, page: 3 } } },
+    { id: "r4", storeyId: "og1", constructionState: "proposed", geometry: { source } }, { id: "r5", storeyId: "og2", geometry: { source } },
+    { id: "manual", storeyId: "empty", geometry: null },
+  ];
+  const ceilings = planStoreyCeilings({ storeys, rooms, elements: [{ id: "existing", stableKey: "ceiling-above:og1", geometry: null }] });
+  expect(ceilings.map(ceiling => [ceiling.storeyId, ceiling.upperStoreyId, ceiling.existingId, ceiling.source.page, ceiling.roomIds.length, ceiling.constructionState])).toEqual([
+    ["eg", "og1", null, 3, 3, "unknown"], ["og1", "empty", "existing", 2, 1, "proposed"], ["og2", null, null, 2, 1, "unknown"]]);
+  expect(ceilings[0].name).toBe("Ceiling above EG");
 });

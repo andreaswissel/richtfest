@@ -94,6 +94,8 @@ export type BuildingRegion = {
   componentProperties?: Record<string, BuildingComponentPropertyState>;
   /** Rooms on each face of a wall, from derived plan adjacency. */
   separates?: Array<{ side: number; roomIds: string[]; exterior?: boolean }>;
+  /** Rooms under a derived storey ceiling. */
+  covers?: string[];
   status?: "unreviewed" | "reviewed" | "needs-review" | "accepted" | "rejected" | "matched" | string;
   /** Extraction candidates use the same normalized geometry as reviewed regions. */
   isCandidate?: boolean;
@@ -230,6 +232,8 @@ export type BuildingModel = {
   /** Plan sets replaced by another revision; hidden from the model, restorable. */
   supersededSources: BuildingSupersededSource[];
   storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
+  /** Buildings with their shared properties, such as the agreed sound insulation level. */
+  buildings: Array<{ id: string; name: string; componentProperties: Record<string, BuildingComponentPropertyState> }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
   updatedAt?: string;
 };
@@ -353,11 +357,7 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
       evidence: Array.isArray(row.evidence) ? row.evidence : fieldEvidence.concat(geometryEvidence),
       elementKind: entityType === "element" && typeof row.kind === "string" ? row.kind : null,
       groupLabel: typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null,
-      componentProperties: Object.fromEntries(entityProperties.filter((property) => property.current).map((property) => [String(property.propertyKey), {
-        propertyId: String(property.id), version: asNumber(property.current.version, 1), value: property.current.value, unit: typeof property.current.unit === "string" ? property.current.unit : null,
-        provenance: asString(property.current.provenance), reviewStatus: asString(property.current.reviewStatus, "unreviewed"), reviewRevision: asNumber(property.current.reviewRevision, 0),
-        reviewedValue: property.reviewed ? property.reviewed.value : null,
-      }])),
+      componentProperties: componentStates(entityProperties),
       measurements: Array.isArray(row.measurements) ? row.measurements : entityMeasurements.map((item) => ({ key: item.id, label: item.label || item.quantity || "Measurement", semanticQuantity: item.quantity, value: item.value == null ? null : Number(item.value), sourceValue: item.method === "manual" ? null : item.value ?? item.quantity, calibratedValue: item.method === "manual" ? item.value : item.calibratedValue, unit: item.unit, sourcePage: item.evidence?.[0]?.page, method: item.method, uncertainty: item.uncertainty, evidence: item.evidence })),
       status: row.status === "reviewed" || row.status === "needs-review" ? row.status : "unreviewed",
     }];
@@ -433,6 +433,21 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
 
 const propertyLabel = (properties: RecordData[]) => properties[0]?.propertyKey || "Property";
 
+function componentStates(entityProperties: RecordData[]): Record<string, BuildingComponentPropertyState> {
+  return Object.fromEntries(entityProperties.filter((property) => property.current).map((property) => [String(property.propertyKey), {
+    propertyId: String(property.id), version: asNumber(property.current.version, 1), value: property.current.value, unit: typeof property.current.unit === "string" ? property.current.unit : null,
+    provenance: asString(property.current.provenance), reviewStatus: asString(property.current.reviewStatus, "unreviewed"), reviewRevision: asNumber(property.current.reviewRevision, 0),
+    reviewedValue: property.reviewed ? property.reviewed.value : null,
+  }]));
+}
+
+function coversByCeiling(relationships: RecordData[]) {
+  const result = new Map<string, string[]>();
+  for (const relationship of relationships) if (relationship.relationshipType === "covers" && relationship.fromEntityType === "element" && relationship.toEntityType === "room")
+    result.set(relationship.fromEntityId, [...(result.get(relationship.fromEntityId) ?? []), relationship.toEntityId]);
+  return result;
+}
+
 function separatesByWall(relationships: RecordData[]) {
   const result = new Map<string, NonNullable<BuildingRegion["separates"]>>();
   for (const relationship of relationships) {
@@ -491,9 +506,11 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     page: region.sourceVersionId ? region.page : planSources.find((source) => source.storeyId && source.storeyId === region.storeyId)?.page ?? region.page,
   }));
   const separates = separatesByWall(Array.isArray(raw.relationships) ? raw.relationships : []);
+  const covers = coversByCeiling(Array.isArray(raw.relationships) ? raw.relationships : []);
   const entityRowsForState = (state: BuildingModelState) => [
     ...entityRows(raw.rooms, state, "room", "room", properties, measurements),
-    ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => separates.has(region.id) ? { ...region, separates: separates.get(region.id) } : region),
+    ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => ({ ...region,
+      ...(separates.has(region.id) ? { separates: separates.get(region.id) } : {}), ...(covers.has(region.id) ? { covers: covers.get(region.id) } : {}) })),
   ];
   return {
     id: asString(source.id) || undefined,
@@ -532,6 +549,10 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
       if (!item || typeof item !== "object") return [];
       const row = item as RecordData;
       return typeof row.id === "string" ? [{ id: row.id, name: typeof row.name === "string" ? row.name : undefined, levelIndex: typeof row.levelIndex === "number" ? row.levelIndex : null }] : [];
+    }) : [],
+    buildings: Array.isArray(raw.buildings) ? raw.buildings.flatMap((item: unknown) => {
+      const row = item && typeof item === "object" ? item as RecordData : null;
+      return row && typeof row.id === "string" ? [{ id: row.id, name: asString(row.name), componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "building" && property.entityId === row.id)) }] : [];
     }) : [],
     states: {
       existing: withPlanSourcePage(source.states?.existing ? regions(source.states.existing) : entityRowsForState("existing")),

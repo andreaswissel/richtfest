@@ -93,6 +93,13 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     const relationshipCount = async () => Number((await pool.query("select count(*) from projects_building_relationships")).rows[0].count);
     expect(derived.body.data.summary.relationships).toBe(await relationshipCount());
     expect(audits).toContain("projects.building.wall_adjacency.derived");
+    // The storey gets one ceiling over all its rooms; the plan has no storey above, so none is linked.
+    expect(derived.body.data.summary).toMatchObject({ ceilings: 1, ceilingsCreated: 1 });
+    const ceiling = (await pool.query("select id, storey_id, geometry from projects_building_elements where kind='draft_ceiling'")).rows;
+    expect(ceiling).toHaveLength(1); expect(ceiling[0].storey_id).toBe(storey);
+    const covered = async () => (await pool.query("select relationship_type, to_entity_id from projects_building_relationships where from_entity_id=$1", [ceiling[0].id])).rows;
+    expect((await covered()).map(r => r.relationship_type)).toEqual(Array(5).fill("covers"));
+    expect(new Set((await covered()).map(r => r.to_entity_id))).toEqual(new Set(rooms.values()));
 
     // A person's entry is kept; re-running replaces derived adjacency without duplicating rows or versions.
     const kitchenWall = [...byWall.entries()].find(([, names]) => names === "Küche|Wohnen")![0];
@@ -100,6 +107,9 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     const versionsBefore = Number((await pool.query("select count(*) from projects_building_property_versions")).rows[0].count);
     const rerun = await post("/wall-adjacency", { baseRevision: await revision() });
     expect(rerun.body.data.summary.roleProposals).toBe(0);
+    expect(rerun.body.data.summary).toMatchObject({ ceilings: 1, ceilingsCreated: 0 });
+    expect((await pool.query("select count(*) from projects_building_elements where kind='draft_ceiling'")).rows[0].count).toBe("1");
+    expect(await covered()).toHaveLength(5);
     expect(Number((await pool.query("select count(*) from projects_building_property_versions")).rows[0].count)).toBe(versionsBefore);
     expect(await separated()).toEqual(byWall);
     expect(rerun.body.data.summary.relationships).toBe(await relationshipCount());
@@ -140,7 +150,24 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     const facade = [...byWall.entries()].find(([, names]) => names === "Küche+Wohnen|outside")![0];
     expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: facade, keys: ["thickness"] })).body.data.summary).toMatchObject({ wallRole: "exterior", updated: {} });
 
+    // The agreed requirement level is a reviewed property of the building.
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "soundInsulationLevel", claimKind: "requirement", value: "louder", provenance: "manual" })).status).toBe(422);
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "soundInsulationLevel", claimKind: "requirement", value: "elevated", provenance: "manual" })).status).toBe(201);
+
     const context = await (await fetch(base + "/agent-context")).json();
+    const sound = context.data.soundInsulation;
+    expect(sound.requirementLevel).toEqual({ value: "elevated", reviewStatus: "unreviewed" });
+    expect(sound.calculation.available).toBe(false);
+    // Apartment partitions (3 walls incl. the kitchen wall a person marked) and the ceiling need verifying; none is complete yet.
+    expect(sound.checks).toMatchObject({ total: [...(await roles()).values()].filter(r => ["apartment_partition", "corridor_partition", "stairwell"].includes(r.value)).length + 1, ready: 0 });
+    const ceilingRequest = sound.dataRequest.find((group: any) => group.componentType === "ceiling");
+    expect(ceilingRequest).toMatchObject({ count: 1, componentIds: [ceiling[0].id] });
+    expect(ceilingRequest.fields).toEqual(["construction", "thickness", "bulkDensity"].map(field => ({ field, missing: 1, unconfirmed: [] })));
+    const partitionRequest = sound.dataRequest.find((group: any) => group.wallRole === "apartment_partition");
+    // Bathroom and kitchen thickness are approved; only the corridor wall's entered 25 cm still needs confirming.
+    expect(partitionRequest.fields.find((field: any) => field.field === "thickness")).toEqual({ field: "thickness", missing: 0, unconfirmed: [{ value: 25, unit: "cm", inferred: false, count: 1 }] });
+    expect(context.data.ceilings).toEqual([{ ceilingId: ceiling[0].id, roomIds: expect.any(Array), upperStoreyId: null }]);
+    expect(context.data.entities.find((entity: any) => entity.id === ceiling[0].id)).toMatchObject({ provenance: "inferred", reviewStatus: "unreviewed" });
     const wallGaps = context.data.missingInputs.filter((gap: any) => gap.entityId === kitchenWall).map((gap: any) => `${gap.field}:${gap.status}`);
     expect(wallGaps).toEqual(["construction:unreviewed", "bulkDensity:unreviewed", "wallRole:unreviewed"]);
     expect(context.data.wallAdjacency.some((item: any) => item.exterior && item.roomId === null)).toBe(true);

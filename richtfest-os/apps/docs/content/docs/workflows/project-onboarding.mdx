@@ -77,7 +77,20 @@ Architects usually specify construction per wall type. After entering constructi
 
 On a wall with a role, **Properties → Wall type review** lists, for each field, the values found on every wall with that role, with the number of walls and how many are approved. **Approve on N** approves exactly the unreviewed versions shown; a value changed in the meantime is skipped and stays unreviewed. When walls of one role disagree, the section shows **Values differ** so the outliers can be checked, and it counts walls without a value.
 
+**Derive from plan** also creates one ceiling per storey that has accepted rooms, named "Ceiling above …" and linked to the rooms it covers. A floor plan does not show slabs, so a ceiling has no outline on the plan; select it in the outliner under accepted elements. It carries the same component data as a wall, without a role, and its construction and thickness come from sections or the architect, never from the plan. The storey above is linked only when both storeys have a known level. Re-running keeps the ceiling and its data and refreshes only its derived links.
+
 Under the fields, **Needed for sound insulation** lists what a calculation still lacks for this wall or ceiling: construction, thickness, bulk density (not for drywall or timber) and, for walls, the wall role, each marked missing or unreviewed. Agents receive the same list and the derived adjacency in their building-model context. Sound insulation calculations do not read these values yet.
+
+### Sound insulation preparation
+
+**Sound insulation** in the building model toolbar collects what the assessment needs before anyone calculates:
+
+- **Requirement level**: the level agreed with client and architect, DIN 4109-1 minimum, elevated (about 3 dB better) or DEGA 103. It is a reviewed requirement on the building.
+- **Separating components**: the apartment partition, corridor partition and stairwell walls and the ceilings that need a verification, and how many have complete, reviewed inputs.
+- **Calculation**: shown as not available. Airborne and impact sound need a validated DIN 4109-2 calculation tool, which Richtfest does not have yet; no values are estimated in its place.
+- **Data request**: what is still missing or unconfirmed, grouped the way architects answer: per wall role, walls without a role, and ceilings. Missing fields are listed to provide; unreviewed values are listed to confirm, marked when they were derived from the plan. **Copy request** copies it as plain text for an email; Richtfest does not send it.
+
+Agents receive the same requirement level, checks, data request and ceiling links in their building-model context.
 
 ### Extract room and construction candidates from a plan
 

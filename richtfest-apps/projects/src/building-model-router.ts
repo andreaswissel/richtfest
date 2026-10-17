@@ -13,9 +13,12 @@ import {
   buildingReviewStatusSchema,
   ok,
   buildingComponentProperties,
+  componentDataRequest,
   componentInputGaps,
+  elementComponentType,
+  soundInsulationChecks,
   validateBuildingComponentProperty,
-  type ComponentType,
+  type BuildingComponentRecord,
 } from "@richtfest/shared";
 import {
   buildingAlternatives,
@@ -47,6 +50,7 @@ import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
 import { effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks } from "./schema";
+import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
 
 type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
@@ -290,17 +294,50 @@ const readModel = async (d: AppDeps, model: any) => {
   };
 };
 
-/** Missing or unreviewed component inputs per wall/ceiling, for agents and the model view. */
-const componentGaps = (projectId: string, data: any, objectId?: string) => {
+/** Walls and ceilings with the current state of their component data. */
+const componentRecords = (data: any): BuildingComponentRecord[] => {
   const latest = new Map<string, any>();
   for (const property of data.properties as any[]) if (property.entityType === "element") latest.set(`${property.entityId}:${property.propertyKey}`, property);
-  return (data.elements as any[]).filter(element => !objectId || element.id === objectId).flatMap(element => {
-    const state = (key: string) => { const property = latest.get(`${element.id}:${key}`); return property?.current ? { value: property.current.value, reviewStatus: property.current.reviewStatus } : null; };
-    const declared = effectiveValue(latest.get(`${element.id}:componentType`));
-    const componentType = typeof declared === "string" ? declared as ComponentType : element.kind === "draft_wall" ? "wall" : null;
-    const properties = Object.fromEntries(["construction", "thickness", "bulkDensity", "wallRole"].map(key => [key, state(key)]));
-    return componentInputGaps(componentType, properties).map(gap => ({ entityType: "element" as const, entityId: element.id, ...gap, deepLink: buildingDeepLink(projectId, "element", element.id) }));
+  return (data.elements as any[]).map(element => {
+    const state = (key: string) => { const current = latest.get(`${element.id}:${key}`)?.current;
+      return current ? { value: current.value, unit: current.unit ?? null, reviewStatus: current.reviewStatus, provenance: current.provenance } : null; };
+    return { id: element.id, componentType: elementComponentType(element.kind, effectiveValue(latest.get(`${element.id}:componentType`))),
+      properties: Object.fromEntries(["construction", "material", "thickness", "bulkDensity", "wallRole"].map(key => [key, state(key)])) };
   });
+};
+
+/** Missing or unreviewed component inputs per wall/ceiling, for agents and the model view. */
+const componentGaps = (projectId: string, data: any, objectId?: string) => componentRecords(data).filter(record => !objectId || record.id === objectId)
+  .flatMap(record => componentInputGaps(record.componentType, record.properties).map(gap => ({ entityType: "element" as const, entityId: record.id, ...gap, deepLink: buildingDeepLink(projectId, "element", record.id) })));
+
+/**
+ * Sound insulation preparation for agents: the agreed requirement level, which
+ * separating walls and ceilings need a verification and whether their inputs
+ * are complete, and what to ask the architect per wall type. No calculation.
+ */
+const soundInsulationContext = (projectId: string, data: any) => {
+  const records = componentRecords(data);
+  const level = (data.properties as any[]).find(property => property.entityType === "building" && property.propertyKey === "soundInsulationLevel");
+  const checks = soundInsulationChecks(records);
+  return {
+    requirementLevel: level?.current && level.current.reviewStatus !== "rejected" ? { value: level.current.value, reviewStatus: level.current.reviewStatus } : null,
+    checks: { total: checks.length, ready: checks.filter(check => check.ready).length,
+      items: checks.slice(0, 500).map(check => ({ ...check, deepLink: buildingDeepLink(projectId, "element", check.componentId) })) },
+    calculation: { available: false, reason: "No validated DIN 4109-2 airborne or impact sound calculation tool exists yet." },
+    dataRequest: componentDataRequest(records).map(group => ({ ...group, componentIds: group.componentIds.slice(0, 200) })),
+  };
+};
+
+/** Derived ceilings for agents: the rooms each covers and the storey above, when known. */
+const ceilingContext = (data: any) => {
+  const ceilings = new Map<string, { ceilingId: string; roomIds: string[]; upperStoreyId: string | null }>();
+  for (const relationship of data.relationships as any[]) {
+    if (!["covers", "under_storey"].includes(relationship.relationshipType) || relationship.metadata?.method !== storeyCeilingMethod) continue;
+    const ceiling = ceilings.get(relationship.fromEntityId) ?? { ceilingId: relationship.fromEntityId, roomIds: [] as string[], upperStoreyId: null as string | null };
+    if (relationship.relationshipType === "covers") ceiling.roomIds.push(relationship.toEntityId); else ceiling.upperStoreyId = relationship.toEntityId;
+    ceilings.set(relationship.fromEntityId, ceiling);
+  }
+  return [...ceilings.values()];
 };
 
 /** Derived wall faces for agents: the rooms each wall separates, or that a face is outside. */
@@ -310,7 +347,7 @@ const wallAdjacencyContext = (data: any, objectId?: string) => (data.relationshi
     side: relationship.metadata?.side ?? null, method: relationship.metadata?.method ?? null, reviewStatus: relationship.reviewStatus }));
 
 /** Automatic draft storeys/buildings are page hypotheses, not reviewed structure; label them for agents. */
-const inferredStructure = (entity: any) => ["unreviewed_page_hypothesis", "unreviewed_source_container"].includes(entity.geometry?.quality)
+const inferredStructure = (entity: any) => ["unreviewed_page_hypothesis", "unreviewed_source_container", "derived_storey_ceiling"].includes(entity.geometry?.quality)
   ? { provenance: "inferred" as const, reviewStatus: "unreviewed" as const } : {};
 
 export type BuildingModelContextOptions = { objectId?: string };
@@ -364,6 +401,8 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
     conflicts: (data.conflicts as any[]).filter(conflict => !options.objectId || selectedIds.has(conflict.entityId)),
     missingInputs: [...missingInputs, ...missingComponentInputs.slice(0, 500)],
     wallAdjacency: wallAdjacency.slice(0, 1000),
+    ceilings: ceilingContext(data).filter(ceiling => !options.objectId || ceiling.ceilingId === options.objectId).slice(0, 200),
+    soundInsulation: options.objectId ? undefined : soundInsulationContext(projectId, data),
     pendingProposals: (data.proposals as any[]).filter(proposal => proposal.status === "pending").slice(0, 100).map(proposal => ({ id: proposal.id, proposalType: proposal.proposalType, payload: proposal.payload, expectedRevision: proposal.expectedRevision, deepLink: proposal.deepLink })),
     truncated: selectedAll.length > selected.length || reviewedPropertiesAll.length > reviewedProperties.length || (data.planSources as any[]).length > 100 || missingComponentInputs.length > 500 || wallAdjacency.length > 1000,
   };
@@ -436,6 +475,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         missingInputs: [...(data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
           ...componentGaps(projectId, data).slice(0, 500)],
         wallAdjacency: wallAdjacencyContext(data).slice(0, 1000),
+        ceilings: ceilingContext(data).slice(0, 200),
+        soundInsulation: soundInsulationContext(projectId, data),
         draftCandidates: draftCandidates.slice(0, 500).map(candidate => {
           const evidence = Array.isArray(candidate.evidence) ? candidate.evidence.find((item: any) => item?.kind === "page") : null;
           const geometry = candidate.geometry && typeof candidate.geometry === "object" ? candidate.geometry : {};
@@ -663,12 +704,36 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
             thicknessProposals++;
           }
         }
-        const summary = { walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
+        // One ceiling per storey with accepted rooms; derived links are replaced, the ceiling and its data stay.
+        await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
+          inArray(buildingRelationships.relationshipType, ["covers", "under_storey"]), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' = ${storeyCeilingMethod}`));
+        const ceilings = planStoreyCeilings({ storeys: data.storeys as any[], rooms: data.rooms as any[], elements: data.elements as any[] });
+        const ceilingRelationships: any[] = []; const createdCeilings: string[] = [];
+        for (const ceiling of ceilings) {
+          let ceilingId = ceiling.existingId;
+          if (!ceilingId) {
+            const [created] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId: modelRow.model.id, buildingId: ceiling.buildingId, storeyId: ceiling.storeyId,
+              stableKey: ceiling.stableKey, kind: "draft_ceiling", name: ceiling.name, constructionState: ceiling.constructionState,
+              geometry: { quality: "derived_storey_ceiling", method: storeyCeilingMethod, source: { ...ceiling.source, storeyId: ceiling.storeyId } }, createdBy: d.actorId })
+              .onConflictDoNothing().returning({ id: buildingElements.id });
+            ceilingId = created?.id ?? (await tx.select({ id: buildingElements.id }).from(buildingElements)
+              .where(and(eq(buildingElements.modelId, modelRow.model.id), eq(buildingElements.stableKey, ceiling.stableKey))).limit(1))[0]?.id ?? null;
+            if (created) createdCeilings.push(created.id);
+          }
+          if (!ceilingId) continue;
+          const metadata = { method: storeyCeilingMethod, sourceVersionId: ceiling.source.sourceVersionId, page: ceiling.source.page };
+          for (const roomId of ceiling.roomIds) ceilingRelationships.push({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: ceilingId,
+            toEntityType: "room", toEntityId: roomId, relationshipType: "covers", metadata, createdBy: d.actorId });
+          if (ceiling.upperStoreyId) ceilingRelationships.push({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: ceilingId,
+            toEntityType: "storey", toEntityId: ceiling.upperStoreyId, relationshipType: "under_storey", metadata, createdBy: d.actorId });
+        }
+        if (ceilingRelationships.length) await tx.insert(buildingRelationships).values(ceilingRelationships);
+        const summary = { ceilings: ceilings.length, ceilingsCreated: createdCeilings.length, walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
           exterior: walls.filter(wall => wall.sides.includes("exterior")).length, unresolvedSides: walls.filter(wall => !wall.sides[0] || !wall.sides[1]).length,
           roles: walls.filter(wall => wall.role).length, roleProposals, thicknesses: walls.filter(wall => wall.thicknessCm !== null).length, thicknessProposals,
-          relationships: relationships.length, method: wallAdjacencyMethod };
+          relationships: relationships.length + ceilingRelationships.length, method: wallAdjacencyMethod };
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
-        await d.audit(tx, "projects.building.wall_adjacency.derived", "building_model", modelRow.model.id, { projectId, modelRevision: revision, ...summary });
+        await d.audit(tx, "projects.building.wall_adjacency.derived", "building_model", modelRow.model.id, { projectId, modelRevision: revision, ...summary, createdCeilingIds: createdCeilings });
         return { revision, summary };
       });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);

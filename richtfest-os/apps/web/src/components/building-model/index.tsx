@@ -11,10 +11,12 @@ import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
+import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { ComponentProperties, WallTypeReview, regionComponentType, type ComponentPropertySave } from "./component-properties";
+import { componentRecord, DataRequest, SoundInsulationOverview } from "./sound-insulation";
+import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
 import "./building-model.css";
@@ -407,7 +409,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const deriveWallRoles = useMutation({
-    mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
+    mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -424,6 +426,16 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  // The agreed sound insulation level belongs to the building; it is a requirement, not an observation.
+  const saveBuildingProperty = useMutation({
+    mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const modelComponents = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region)).map((region) => [region.id, region])).values()], [model]);
+  const soundChecks = useMemo(() => { const checks = soundInsulationChecks(modelComponents.map(componentRecord)); return { total: checks.length, ready: checks.filter((check) => check.ready).length }; }, [modelComponents]);
   const modelWalls = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region) === "wall").map((region) => [region.id, region])).values()], [model]);
   const wallRoles = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element").map((region) => {
     const role = region.componentProperties?.wallRole;
@@ -751,6 +763,25 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               superseded={model.supersededSources} pending={supersedePlanSet.isPending}
               onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
               onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
+          </PopoverContent>
+        </Popover>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingSoundInsulation")}: ${t("buildingSoundChecksShort").replace("{ready}", String(soundChecks.ready)).replace("{total}", String(soundChecks.total))}`} title={t("buildingSoundInsulation")}>
+              <AudioLines className="size-icon-sm" aria-hidden="true" />
+              <span>{t("buildingSoundInsulation")} · {t("buildingSoundChecksShort").replace("{ready}", String(soundChecks.ready)).replace("{total}", String(soundChecks.total))}</span>
+              <ChevronDown className="size-icon-sm" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
+            <h2 className="building-model-panel-title">{t("buildingSoundInsulation")}</h2>
+            <SoundInsulationOverview components={modelComponents} level={model.buildings[0]?.componentProperties.soundInsulationLevel} t={t}
+              pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+              onLevel={model.buildings[0] ? (save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save }) : undefined}
+              onReviewLevel={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
+              derive={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }} />
+            <h2 className="building-model-panel-title">{t("buildingSoundRequest")}</h2>
+            <DataRequest components={modelComponents} t={t} />
           </PopoverContent>
         </Popover>
         <Badge title={model.reviewStatus === "needs-review" ? t("buildingModelReviewInWorkspace") : model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}>{statusLabel(model.reviewStatus, t)}</Badge>
