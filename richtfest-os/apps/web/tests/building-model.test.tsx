@@ -303,8 +303,14 @@ test("automatic page coverage distinguishes floor, non-plan, and unresolved page
       { id: "assembly-1", jobId: "job-1", sourceVersionId: "version-1", storeyId: "storey-1", page: 1, entityType: "element", name: "Construction assembly", groupLabel: "WE 1", status: "unreviewed", geometry: { quality: "assembly", planRegion: { x: .2, y: .2, width: .1, height: .1 }, polygons: [[{ x: .2, y: .2 }, { x: .3, y: .2 }, { x: .3, y: .3 }, { x: .2, y: .3 }]], limitations: "Observed source construction; not a verified wall." } },
     ],
     automaticPlanProcessing: [automatic],
+    supersededSources: [{ sourceVersionId: "version-0", fileName: "Old plans.pdf", supersededByVersionId: "version-1" }],
   }, "?view=building-model&page=1");
   expect(html).toContain("PDF page coverage");
+  // A replaced plan set is listed for restore; superseding needs a second active plan set to choose.
+  expect(html).toContain("Old plans.pdf");
+  expect(html).toContain("Superseded by Plan packet.pdf");
+  expect(html).toContain("Restore plan set");
+  expect(html).not.toContain("Mark plan set superseded");
   expect(html).toContain("Floor plan detected");
   expect(html).toContain("Non-floor-plan page · elevation");
   expect(html).toContain("Unresolved page");

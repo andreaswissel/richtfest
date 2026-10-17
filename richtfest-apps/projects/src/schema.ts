@@ -335,6 +335,18 @@ export const buildingPlanSources = pgTable("projects_building_plan_sources", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** A plan set (source revision) replaced by another one in this building model. Its storeys,
+ * extractions and candidates leave the model view and agent context; the file itself is untouched. */
+export const buildingSupersededSources = pgTable("projects_building_superseded_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
+  sourceVersionId: uuid("source_version_id").notNull().references(() => fileVersions.id, { onDelete: "cascade" }),
+  supersededByVersionId: uuid("superseded_by_version_id").references(() => fileVersions.id, { onDelete: "set null" }),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ source: uniqueIndex("projects_building_superseded_sources_unique").on(table.modelId, table.sourceVersionId) }));
+
 export const buildingRelationships = pgTable("projects_building_relationships", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

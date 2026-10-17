@@ -10,7 +10,7 @@ import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Copy, ExternalLink, Link2, LoaderCircle, ScanLine } from "lucide-react";
-import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
+import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import "./building-model.css";
 
@@ -365,6 +365,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
+  const supersedePlanSet = useMutation({
+    mutationFn: ({ sourceVersionId, supersededByVersionId }: { sourceVersionId: string; supersededByVersionId: string | null }) =>
+      api<RecordData>(`/projects/${projectId}/building-model/superseded-sources/${sourceVersionId}`,
+        supersededByVersionId ? { baseRevision: model.revision, supersededByVersionId } : { baseRevision: model.revision }, supersededByVersionId ? "PUT" : "DELETE"),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
+  });
   const reviewCandidate = useMutation({
     mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => api(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
     onSuccess: async () => {
@@ -486,7 +493,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             onStart={() => startExtraction.mutate()}
             t={t}
           />
-          {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")} t={t} />}
+          {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")}
+            superseded={model.supersededSources} pending={supersedePlanSet.isPending}
+            onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
+            onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
         </div>
       </details>
       <div className="building-model-workbench">
@@ -705,8 +715,12 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
   </section>;
 }
 
-export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, t }: {
+export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, superseded = [], onSupersede, onRestore, pending = false, t }: {
   processing: BuildingAutomaticPlanProcessing[];
+  superseded?: BuildingSupersededSource[];
+  onSupersede?: (sourceVersionId: string, supersededByVersionId: string) => void;
+  onRestore?: (sourceVersionId: string) => void;
+  pending?: boolean;
   sources: BuildingPlanSource[];
   storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
   selectedPage: number;
@@ -719,7 +733,8 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
     {processing.map((item) => {
       const pages = Array.from({ length: Math.max(0, item.registeredPageCount || item.pageCount || 0) }, (_, index) => index + 1);
       return <div className="building-model-page-coverage-source" key={item.sourceVersionId}>
-        <div className="building-model-page-coverage-meta"><strong>{item.fileName}</strong><Badge>{automaticStatusLabel(item.status, t)}</Badge><small>{item.reason}</small></div>
+        <div className="building-model-page-coverage-meta"><strong>{item.fileName}</strong><Badge>{automaticStatusLabel(item.status, t)}</Badge><small>{item.reason}</small>
+          {onSupersede && processing.length > 1 && <SupersedePlanSet item={item} processing={processing} pending={pending} onSupersede={onSupersede} t={t} />}</div>
         <div className="building-model-page-coverage-pages">{pages.map((pageNumber) => {
           const disposition = automaticPageDisposition(item, pageNumber);
           const nonPlan = item.nonFloorPlanPages.find((entry) => entry.page === pageNumber);
@@ -731,7 +746,27 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
         {item.coverageTruncated && <Callout tone="warning">{t("buildingModelCoverageTruncated")}</Callout>}
       </div>;
     })}
+    {superseded.length > 0 && <div className="building-model-superseded-sources">
+      <h3>{t("buildingModelSupersededSets")}</h3><p className="muted text-ui-xs">{t("buildingModelSupersededHint")}</p>
+      {superseded.map((item) => {
+        const replacement = processing.find((entry) => entry.sourceVersionId === item.supersededByVersionId)?.fileName;
+        return <div className="building-model-page-coverage-meta" key={item.sourceVersionId}><strong>{item.fileName}</strong>{replacement && <small>{t("buildingModelSupersededBy")} {replacement}</small>}
+          {onRestore && <Button size="sm" variant="outline" type="button" disabled={pending} onClick={() => onRestore(item.sourceVersionId)}>{t("buildingModelRestorePlanSet")}</Button>}</div>;
+      })}
+    </div>}
   </section>;
+}
+
+function SupersedePlanSet({ item, processing, pending, onSupersede, t }: { item: BuildingAutomaticPlanProcessing; processing: BuildingAutomaticPlanProcessing[]; pending: boolean;
+  onSupersede: (sourceVersionId: string, supersededByVersionId: string) => void; t: ReturnType<typeof useT> }) {
+  const [replacement, setReplacement] = useState("_none");
+  return <span className="building-model-supersede">
+    <NativeSelect aria-label={t("buildingModelSupersededBy")} value={replacement} onChange={(event) => setReplacement(event.target.value)}>
+      <option value="_none">{t("buildingModelSupersedeWith")}</option>
+      {processing.filter((entry) => entry.sourceVersionId !== item.sourceVersionId).map((entry) => <option key={entry.sourceVersionId} value={entry.sourceVersionId}>{entry.fileName}</option>)}
+    </NativeSelect>
+    <Button size="sm" variant="outline" type="button" disabled={pending || replacement === "_none"} onClick={() => onSupersede(item.sourceVersionId, replacement)}>{t("buildingModelMarkSuperseded")}</Button>
+  </span>;
 }
 
 type BuildingModelBootstrapProps = {

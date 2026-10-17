@@ -192,6 +192,8 @@ export type BuildingExtractionCandidate = BuildingRegion & {
   isCandidate: true;
 };
 
+export type BuildingSupersededSource = { sourceVersionId: string; fileName: string; supersededByVersionId: string | null };
+
 export type BuildingModel = {
   id?: string;
   revision?: number;
@@ -204,6 +206,8 @@ export type BuildingModel = {
   extractionCandidates: BuildingExtractionCandidate[];
   extractionCoverage?: BuildingExtractionCoverage | null;
   automaticPlanProcessing: BuildingAutomaticPlanProcessing[];
+  /** Plan sets replaced by another revision; hidden from the model, restorable. */
+  supersededSources: BuildingSupersededSource[];
   storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
   updatedAt?: string;
@@ -452,6 +456,11 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
       return { ...candidate, storeyId: candidate.storeyId || job?.storeyId || null, sourceVersionId: candidate.sourceVersionId || job?.sourceVersionId || null, page: candidate.page || job?.page || 1 };
     }),
     extractionCoverage: coverage && typeof coverage === "object" ? coverage as BuildingExtractionCoverage : undefined,
+    supersededSources: Array.isArray(raw.supersededSources) ? raw.supersededSources.flatMap((item: unknown) => {
+      const row = item && typeof item === "object" ? item as RecordData : null;
+      return row && typeof row.sourceVersionId === "string" ? [{ sourceVersionId: row.sourceVersionId, fileName: asString(row.fileName, "Building plan.pdf"),
+        supersededByVersionId: typeof row.supersededByVersionId === "string" ? row.supersededByVersionId : null }] : [];
+    }) : [],
     automaticPlanProcessing: Array.isArray(raw.automaticPlanProcessing) ? raw.automaticPlanProcessing.flatMap((item: unknown) => {
       if (!item || typeof item !== "object") return [];
       const row = item as RecordData;

@@ -1,10 +1,14 @@
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { SourceExtractionDeps } from "./deps";
-import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingModels, buildingRevisions, fileVersions } from "./schema";
+import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingModels, buildingRevisions, buildingSupersededSources, fileVersions } from "./schema";
 import { buildingExtractorVersion, extractPlanLabels } from "./plan-extraction";
 export { buildingExtractorVersion };
 import { proposeRoomUses } from "./room-use-classifier";
 import { ensureAutomaticPlanExtractions } from "./automatic-building-model";
+
+/** Superseded plan sets are out of the model: never claim or upgrade their jobs. */
+const notSuperseded = () => sql`not exists (select 1 from ${buildingSupersededSources} as superseded
+  where superseded.model_id=${jobs.modelId} and superseded.source_version_id=${jobs.sourceVersionId})`;
 
 export async function runBuildingExtraction(d: SourceExtractionDeps, signal: AbortSignal, options: { plan?: boolean; onPlanned?: (found: boolean) => void } = {}) {
   // Upload-time source extraction/classification and plan geometry use separate
@@ -14,7 +18,7 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
   if (options.plan ?? true) try { options.onPlanned?.(await ensureAutomaticPlanExtractions(d, signal)); } catch { options.onPlanned?.(false); d.reportError(); }
   const token = crypto.randomUUID();
   const job = await d.db.transaction(async (tx: any) => {
-    const [row] = await tx.select().from(jobs).where(and(inArray(jobs.status,["queued","running"]),sql`(${jobs.leaseUntil} is null or ${jobs.leaseUntil} < now())`)).orderBy(jobs.createdAt).limit(1).for("update",{skipLocked:true});
+    const [row] = await tx.select().from(jobs).where(and(inArray(jobs.status,["queued","running"]),sql`(${jobs.leaseUntil} is null or ${jobs.leaseUntil} < now())`,notSuperseded())).orderBy(jobs.createdAt).limit(1).for("update",{skipLocked:true});
     if (!row) return null;
     await tx.update(jobs).set({status:"running",attempts:row.attempts+1,leaseToken:token,leaseUntil:new Date(Date.now()+10*60_000),
       result:{phase:"extracting_geometry",inference:{provider:"typesafe",active:false,configured:null}},updatedAt:new Date()}).where(eq(jobs.id,row.id));
@@ -117,7 +121,7 @@ export async function upgradeOutdatedExtraction(d: SourceExtractionDeps) {
     const current = sql`select 1 from ${jobs} as newer where newer.model_id=${jobs.modelId} and newer.source_version_id=${jobs.sourceVersionId}
       and newer.storey_id=${jobs.storeyId} and newer.page=${jobs.page} and newer.extractor_version=${buildingExtractorVersion}`;
     const [row] = await tx.select().from(jobs).where(and(inArray(jobs.status,["complete","failed"]),sql`${jobs.extractorVersion} <> ${buildingExtractorVersion}`,
-      sql`not exists (${current})`)).orderBy(jobs.updatedAt).limit(1).for("update",{skipLocked:true});
+      sql`not exists (${current})`,notSuperseded())).orderBy(jobs.updatedAt).limit(1).for("update",{skipLocked:true});
     if (!row) return false;
     await tx.update(jobs).set({extractorVersion:buildingExtractorVersion,status:"queued",attempts:0,leaseToken:null,leaseUntil:null,
       result:{phase:"extracting_geometry",upgradeFrom:row.extractorVersion,inference:{provider:"typesafe",active:false,configured:null}},updatedAt:new Date()}).where(eq(jobs.id,row.id));

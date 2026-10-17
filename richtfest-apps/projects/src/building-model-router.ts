@@ -31,6 +31,7 @@ import {
   buildingRevisions,
   buildingRooms,
   buildingStoreys,
+  buildingSupersededSources,
   fileVersions,
   files,
   projects,
@@ -144,7 +145,7 @@ const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string
 };
 
 const readModel = async (d: AppDeps, model: any) => {
-  const [extractions, extractionCandidates, automaticSources] = await Promise.all([
+  const [allExtractions, allExtractionCandidates, allAutomaticSources, supersededRows] = await Promise.all([
     d.db.select().from(buildingExtractionJobs).where(and(eq(buildingExtractionJobs.modelId, model.id), eq(buildingExtractionJobs.tenantId, d.tenantId))),
     d.db.select().from(buildingExtractionCandidates).where(and(eq(buildingExtractionCandidates.modelId, model.id), eq(buildingExtractionCandidates.tenantId, d.tenantId))),
     d.db.select({ fileId: files.id, fileName: files.name, sourceVersionId: fileVersions.id,
@@ -159,8 +160,18 @@ const readModel = async (d: AppDeps, model: any) => {
         sql`(${fileVersions.mimeType} = 'application/pdf' or ${files.name} ~* '\\.pdf$')`,
         // Only sources enrolled for automatic processing; others would never progress.
         sql`${sourceModels.metadata}->'automaticBuildingModel' is not null`)),
+    d.db.select({ superseded: buildingSupersededSources, fileName: files.name }).from(buildingSupersededSources)
+      .innerJoin(fileVersions, and(eq(fileVersions.id, buildingSupersededSources.sourceVersionId), eq(fileVersions.tenantId, d.tenantId)))
+      .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId)))
+      .where(and(eq(buildingSupersededSources.modelId, model.id), eq(buildingSupersededSources.tenantId, d.tenantId))),
   ]);
-  const [buildings, storeys, rooms, elements, properties, propertyVersions, measurements, planSources, placementRows, relationships, conflicts, proposals, revisions, alternatives] = await Promise.all([
+  // Superseded plan sets leave the model: their jobs, candidates and page storeys are kept but not shown.
+  const supersededVersionIds = new Set((supersededRows as any[]).map(row => row.superseded.sourceVersionId));
+  const extractions = (allExtractions as any[]).filter(job => !supersededVersionIds.has(job.sourceVersionId));
+  const activeJobIds = new Set(extractions.map(job => job.id));
+  const extractionCandidates = (allExtractionCandidates as any[]).filter(candidate => activeJobIds.has(candidate.jobId));
+  const automaticSources = (allAutomaticSources as any[]).filter(source => !supersededVersionIds.has(source.sourceVersionId));
+  const [buildings, allStoreys, allRooms, allElements, properties, propertyVersions, measurements, allPlanSources, placementRows, relationships, conflicts, proposals, revisions, alternatives] = await Promise.all([
     d.db.select().from(buildingBuildings).where(eq(buildingBuildings.modelId, model.id)).orderBy(asc(buildingBuildings.createdAt)),
     d.db.select().from(buildingStoreys).where(eq(buildingStoreys.modelId, model.id)).orderBy(asc(buildingStoreys.levelIndex)),
     d.db.select().from(buildingRooms).where(eq(buildingRooms.modelId, model.id)).orderBy(asc(buildingRooms.createdAt)),
@@ -179,6 +190,14 @@ const readModel = async (d: AppDeps, model: any) => {
     d.db.select().from(buildingRevisions).where(eq(buildingRevisions.modelId, model.id)).orderBy(desc(buildingRevisions.revision)),
     d.db.select().from(buildingAlternatives).where(eq(buildingAlternatives.modelId, model.id)).orderBy(asc(buildingAlternatives.createdAt)),
   ]);
+  const planSources = (allPlanSources as any[]).filter(row => !supersededVersionIds.has(row.plan.sourceVersionId));
+  const activeStoreyIds = new Set(planSources.map(row => row.plan.storeyId).filter(Boolean));
+  const supersededStoreyIds = new Set((allPlanSources as any[]).filter(row => supersededVersionIds.has(row.plan.sourceVersionId) && row.plan.storeyId && !activeStoreyIds.has(row.plan.storeyId)).map(row => row.plan.storeyId));
+  const storeys = (allStoreys as any[]).filter(storey => !supersededStoreyIds.has(storey.id));
+  const rooms = (allRooms as any[]).filter(room => !supersededStoreyIds.has(room.storeyId));
+  const elements = (allElements as any[]).filter(element => !element.storeyId || !supersededStoreyIds.has(element.storeyId));
+  const supersededSources = (supersededRows as any[]).map(row => ({ sourceVersionId: row.superseded.sourceVersionId, fileName: row.fileName,
+    supersededByVersionId: row.superseded.supersededByVersionId, createdBy: row.superseded.createdBy, createdAt: row.superseded.createdAt }));
   const latestByProperty = new Map<string, any>();
   const reviewedByProperty = new Map<string, any>();
   for (const version of propertyVersions as any[]) {
@@ -246,6 +265,7 @@ const readModel = async (d: AppDeps, model: any) => {
     revisions,
     alternatives,
     automaticPlanProcessing,
+    supersededSources,
     summary: {
       projectId: model.projectId, modelId: model.id, revision: model.revision,
       buildings: buildings.length, storeys: storeys.length, rooms: rooms.length, elements: elements.length,
@@ -531,6 +551,49 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       if (input.storeyId && !(await entityExists(d.db, d, modelRow.model.id, "storey", input.storeyId))) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Storey not found" });
       const result = await modelTransaction(d.db, async (tx: any) => { const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision }; const [planSource] = await tx.insert(buildingPlanSources).values({ ...input, tenantId: d.tenantId, modelId: modelRow.model.id, createdBy: d.actorId }).returning(); await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId }); await d.audit(tx, "projects.building.plan_source.created", "building_plan_source", planSource.id, { projectId, sourceVersionId: input.sourceVersionId, page: input.page, modelRevision: revision }); return { planSource, revision }; });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 201, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Mark a plan set as replaced by another revision (or restore it). Only the model view changes:
+  // the file, its extractions and candidates stay intact and reappear on restore.
+  router.put("/projects/:projectId/building-model/superseded-sources/:sourceVersionId", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId)); const sourceVersionId = uuid.parse(id(req.params.sourceVersionId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), supersededByVersionId: uuid }).strict().parse(req.body);
+      if (input.supersededByVersionId === sourceVersionId) return send(res, 422, { data: null, error: { code: "invalid_replacement" }, message: "A plan set cannot supersede itself" });
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const versions = await d.db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId))
+        .where(and(inArray(fileVersions.id, [sourceVersionId, input.supersededByVersionId]), eq(fileVersions.tenantId, d.tenantId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
+      if (versions.length !== 2) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "Both plan sets must be file revisions in this project" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const [superseded] = await tx.insert(buildingSupersededSources).values({ tenantId: d.tenantId, modelId: modelRow.model.id, sourceVersionId, supersededByVersionId: input.supersededByVersionId, createdBy: d.actorId })
+          .onConflictDoUpdate({ target: [buildingSupersededSources.modelId, buildingSupersededSources.sourceVersionId], set: { supersededByVersionId: input.supersededByVersionId } }).returning();
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", label: "Plan set superseded", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.plan_source.superseded", "file_version", sourceVersionId, { projectId, supersededByVersionId: input.supersededByVersionId, modelRevision: revision });
+        return { superseded, revision };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  router.delete("/projects/:projectId/building-model/superseded-sources/:sourceVersionId", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId)); const sourceVersionId = uuid.parse(id(req.params.sourceVersionId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative() }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const removed = await tx.delete(buildingSupersededSources).where(and(eq(buildingSupersededSources.modelId, modelRow.model.id), eq(buildingSupersededSources.tenantId, d.tenantId), eq(buildingSupersededSources.sourceVersionId, sourceVersionId))).returning();
+        if (!removed.length) return { missing: true };
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", label: "Superseded plan set restored", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.plan_source.restored", "file_version", sourceVersionId, { projectId, modelRevision: revision });
+        return { restored: sourceVersionId, revision };
+      });
+      if ((result as any).missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Plan set is not superseded" });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
     } catch (e) { return next(e); }
   });
 

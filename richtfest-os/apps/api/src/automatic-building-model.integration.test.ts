@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import express from "express";
 import { ensureAutomaticPlanExtractions } from "@richtfest/projects/automatic-building-model";
 import { createBuildingModelRouter } from "@richtfest/projects/building-model";
+import { runBuildingExtraction } from "@richtfest/projects/building-extraction";
 import { SOURCE_IMAGE_MODEL, SOURCE_IMAGE_QUERY_VERSION } from "@richtfest/shared";
 import { createDatabase } from "./db/client";
 
@@ -81,6 +82,23 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(processing).toHaveLength(2);
     expect(processing.find((item: any) => item.sourceVersionId === version)).toMatchObject({ status: "partial", currentPhase: "partial", unresolvedPages: [12] });
     expect(processing.find((item: any) => item.sourceVersionId === stuckVersion)).toMatchObject({ status: "failed", currentPhase: "failed" });
+    // A superseded plan set leaves the model view and the worker queue; restoring it brings everything back.
+    const base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
+    const call = (method: string, body: unknown) => fetch(`${base}/superseded-sources/${version}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect((await call("PUT", { baseRevision: response.data.model.revision, supersededByVersionId: stuckVersion })).status).toBe(200);
+    const superseded = await fetch(base).then(result => result.json());
+    expect(superseded.data.storeys).toHaveLength(0);
+    expect(superseded.data.extractions).toHaveLength(0);
+    expect(superseded.data.planSources.some((source: any) => source.sourceVersionId === version)).toBe(false);
+    expect(superseded.data.automaticPlanProcessing.map((item: any) => item.sourceVersionId)).toEqual([stuckVersion]);
+    expect(superseded.data.supersededSources).toMatchObject([{ sourceVersionId: version, fileName: "plans.pdf", supersededByVersionId: stuckVersion }]);
+    await pool.query("update projects_building_extractions set status='queued'");
+    expect(await runBuildingExtraction(deps as any, new AbortController().signal, { plan: false })).toBe(false);
+    expect((await call("DELETE", { baseRevision: superseded.data.model.revision })).status).toBe(200);
+    expect((await call("DELETE", { baseRevision: superseded.data.model.revision + 1 })).status).toBe(404);
+    const restored = await fetch(base).then(result => result.json());
+    expect(restored.data.storeys).toHaveLength(5);
+    expect(restored.data.supersededSources).toHaveLength(0);
     server.close();
   } finally {
     await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end();
@@ -94,7 +112,7 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
   const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
   const { db, pool } = createDatabase(isolated.href);
   try {
-    await pool.query("CREATE TABLE projects_building_extractions (LIKE public.projects_building_extractions INCLUDING ALL)");
+    await pool.query("CREATE TABLE projects_building_extractions (LIKE public.projects_building_extractions INCLUDING ALL)"); await pool.query("CREATE TABLE projects_building_superseded_sources (LIKE public.projects_building_superseded_sources INCLUDING ALL)");
     const tenant = crypto.randomUUID(), model = crypto.randomUUID(), storey = crypto.randomUUID(), actor = crypto.randomUUID();
     const job = async (version: string, page: number, extractorVersion: string, status: string) => (await pool.query(
       "insert into projects_building_extractions (tenant_id,model_id,source_version_id,storey_id,page,extractor_version,status,created_by) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id",
