@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- Building model walls, ceilings and rooms now carry shared component data (construction, material, thickness, bulk density, wall role, apartment, space type) with review per value. **Derive from plan** finds the rooms on both sides of each wall, detects facades, proposes apartment partition, corridor, stairwell, exterior or internal roles and measures wall thickness at the printed plan scale. Construction data can be copied to all walls of the same role and approved per wall type in one step, and agents see which sound-insulation inputs are still missing.
-
-- Richtfest Docs gains a Sound insulation assessment page: the specialist workflow from requirement levels and regulatory hierarchy to exterior noise, and what Richtfest covers today.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -27,6 +23,10 @@
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
 ## 2026-10-17
+
+- Building model walls, ceilings and rooms now carry shared component data (construction, material, thickness, bulk density, wall role, apartment, space type) with review per value. **Derive from plan** finds the rooms on both sides of each wall, detects facades, proposes apartment partition, corridor, stairwell, exterior or internal roles and measures wall thickness at the printed plan scale. Construction data can be copied to all walls of the same role and approved per wall type in one step, and agents see which sound-insulation inputs are still missing.
+
+- Richtfest Docs gains a Sound insulation assessment page: the specialist workflow from requirement levels and regulatory hierarchy to exterior noise, and what Richtfest covers today.
 
 - Building model plans zoom with a two-finger pinch on phones and tablets, and the project bar no longer overlaps on narrow phone screens.
 - Building Model: planners can edit any room outline on the plan by dragging, adding and removing points, with the area updating live, or use **Magic select** to detect a room's outline with one click and then edit, confirm or name it as a new room. Every saved outline is logged as training data for plan detection. Existing plans are re-extracted automatically so magic select works on them. Includes database migration 0044.
