@@ -37,6 +37,8 @@ export type BuildingRegion = {
   page: number;
   box?: { x: number; y: number; width: number; height: number };
   polygon?: BuildingPlanPoint[];
+  /** Holes cut out of `polygon` (courtyards, shafts); drawn with the even-odd rule. */
+  holes?: BuildingPlanPoint[][];
   parts?: BuildingGeometryPart[];
   groupLabel?: string | null;
   sourceArea?: unknown;
@@ -220,6 +222,11 @@ function planBox(value: unknown): BuildingRegion["box"] {
   if ([item.left, item.top, item.right, item.bottom].every((part) => typeof part === "number" && Number.isFinite(part))) return { x: item.left, y: item.top, width: item.right - item.left, height: item.bottom - item.top };
   return undefined;
 }
+function planHoles(value: unknown): BuildingRegion["holes"] {
+  if (!Array.isArray(value)) return undefined;
+  const holes = value.map(planPolygon).filter((hole): hole is BuildingPlanPoint[] => Boolean(hole));
+  return holes.length ? holes : undefined;
+}
 function planPolygon(value: unknown): BuildingRegion["polygon"] {
   if (!Array.isArray(value)) return undefined;
   const points = value.flatMap((part) => {
@@ -355,6 +362,7 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       box,
       polygon,
+      holes: planHoles(geometry?.holes),
       parts,
       groupLabel: typeof row.groupLabel === "string" ? row.groupLabel : (typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null),
       sourceArea: row.sourceArea ?? geometry?.sourceArea ?? geometry?.printedArea ?? null,

@@ -20,6 +20,13 @@ export function polygonClipPath(region: Pick<BuildingRegion, "box" | "polygon" |
   const points = region.polygon.map((point) => `${(((point.x - region.box!.x) / region.box!.width) * 100).toFixed(2)}% ${(((point.y - region.box!.y) / region.box!.height) * 100).toFixed(2)}%`);
   return `polygon(${points.join(", ")})`;
 }
+/** SVG path of an extracted room outline (with holes) in its bounding box's 0–100 viewBox. */
+export function regionShapePath(region: Pick<BuildingRegion, "box" | "polygon" | "holes" | "geometryQuality">) {
+  if (region.geometryQuality === "anchor" || !region.box || !region.polygon?.length || region.box.width <= 0 || region.box.height <= 0) return undefined;
+  const { x, y, width, height } = region.box;
+  const ring = (points: NonNullable<BuildingRegion["polygon"]>) => `M${points.map((point) => `${(((point.x - x) / width) * 100).toFixed(3)} ${(((point.y - y) / height) * 100).toFixed(3)}`).join("L")}Z`;
+  return [region.polygon, ...(region.holes ?? [])].map(ring).join("");
+}
 export function regionOverlayStyle(region: Pick<BuildingRegion, "box">): CSSProperties | undefined {
   return region.box ? { left: `${region.box.x * 100}%`, top: `${region.box.y * 100}%`, width: `${region.box.width * 100}%`, height: `${region.box.height * 100}%` } : undefined;
 }
@@ -329,11 +336,13 @@ export function PdfEvidenceRenderer({
         <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
           {pageRegions.map((region) => {
             const role = region.isCandidate ? region.candidateRole || candidateRole(region) : undefined;
+            // Room outlines are drawn as their exact polygon; the bounding-box button only provides focus and hit area.
+            const shapePath = region.isCandidate && !region.parts?.length && region.entityType !== "element" ? regionShapePath(region) : undefined;
             const candidateClass = role === "draft-wall" ? "draft-wall" : role === "raw-footprint" ? "footprint" : role === "construction-assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : "";
             return (
-            <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}`} style={regionOverlayStyle(region)} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
+            <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}${shapePath ? " has-outline" : ""}`} style={regionOverlayStyle(region)} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
               <span className="building-model-region-hit-area" aria-hidden="true" />
-              {region.isCandidate && region.parts?.length ? region.parts.map((part, index) => <span key={`${region.id}-part-${index}`} className="building-model-region-shape" style={{ ...partOverlayStyle(part, region.box), clipPath: polygonClipPath({ box: part.box, polygon: part.polygon, geometryQuality: "assembly" }) }} aria-hidden="true" />) : region.isCandidate && polygonClipPath(region) ? <span className="building-model-region-shape" style={{ clipPath: polygonClipPath(region) }} aria-hidden="true" /> : null}
+              {region.isCandidate && region.parts?.length ? region.parts.map((part, index) => <span key={`${region.id}-part-${index}`} className="building-model-region-shape" style={{ ...partOverlayStyle(part, region.box), clipPath: polygonClipPath({ box: part.box, polygon: part.polygon, geometryQuality: "assembly" }) }} aria-hidden="true" />) : shapePath ? <svg className="building-model-region-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d={shapePath} fillRule="evenodd" vectorEffect="non-scaling-stroke" /></svg> : region.isCandidate && polygonClipPath(region) ? <span className="building-model-region-shape" style={{ clipPath: polygonClipPath(region) }} aria-hidden="true" /> : null}
               <span className="building-model-region-label">{region.label}</span>
             </button>
           );})}

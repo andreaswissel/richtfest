@@ -512,6 +512,19 @@ test("draft wall polygons render with a dedicated overlay class and no semantic 
   expect(html).toContain("Construction fragment · construction-assembly");
 });
 
+test("room candidates draw their extracted outline with holes, not their bounding box", () => {
+  // L-shaped room in the box (.2,.2)–(.4,.4) with a square hole; the outline path, not the box, carries the color.
+  const regions = adaptBuildingModel({ extractionCandidates: [
+    { id: "room-1", entityType: "room", name: "Wohnen", status: "unreviewed", sourceVersionId: "v", storeyId: "s", page: 3, geometry: { quality: "enclosed_region", planRegion: { x: .2, y: .2, width: .2, height: .2 },
+      polygon: [{ x: .2, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .3 }, { x: .3, y: .3 }, { x: .3, y: .4 }, { x: .2, y: .4 }], holes: [[{ x: .22, y: .22 }, { x: .24, y: .22 }, { x: .24, y: .24 }, { x: .22, y: .24 }]] } },
+  ] }).extractionCandidates;
+  expect(regions[0]?.holes).toHaveLength(1);
+  const html = renderToStaticMarkup(<PdfEvidenceRenderer projectId={projectId} evidence={{ fileName: "Plan.pdf", pageCount: 3 }} page={3} regions={regions} layerVisibility={{}} onLayers={() => undefined} onSelect={() => undefined} labels={{ empty: "No PDF", loading: "Loading", region: "Regions", zoom: "Controls", zoomIn: "In", zoomOut: "Out", fit: "Fit" }} />);
+  expect(html).toContain("has-outline");
+  expect(html).toContain('d="M0.000 0.000L100.000 0.000L100.000 50.000L50.000 50.000L50.000 100.000L0.000 100.000ZM10.000 10.000L20.000 10.000L20.000 20.000L10.000 20.000Z"');
+  expect(html).toContain('fill-rule="evenodd"');
+});
+
 test("semantic extraction coverage names hypotheses, unresolved anchors, assemblies, and source-area observations", () => {
   const html = render({
     model: { id: "model-1", revision: 4 }, storeys: [{ id: "storey-1", name: "Ground" }], rooms: [], elements: [], properties: [], measurements: [], proposals: [], conflicts: [], revisions: [],
