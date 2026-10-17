@@ -1740,7 +1740,11 @@
   "buildingComponentGapMissing": "missing",
   "buildingComponentGapUnreviewed": "unreviewed",
   "buildingComponentWallRoles": "Wall roles",
-  "buildingComponentWallRolesHint": "Finds the accepted rooms on both sides of each accepted wall and proposes its role from their apartments. Proposals stay unreviewed; roles entered by a person are kept.",
-  "buildingComponentDeriveWallRoles": "Derive wall roles",
-  "buildingComponentDeriveResult": "{walls} walls · {bothSides} with rooms on both sides · {roles} roles found · {proposals} new proposals"
+  "buildingComponentWallRolesHint": "Finds the rooms on both sides of each accepted wall, detects facades, proposes wall roles from the rooms' apartments and measures thickness at the printed plan scale. Proposals stay unreviewed; values entered or reviewed by a person are kept.",
+  "buildingComponentDeriveWallRoles": "Derive from plan",
+  "buildingComponentDeriveResult": "{walls} walls · {exterior} facing outside · {roles} roles found · {proposals} new role and {thickness} new thickness proposals",
+  "buildingComponentOutside": "Outside",
+  "buildingComponentCopyToRole": "Copy to other walls with this role ({count})",
+  "buildingComponentCopyHint": "Copies construction, material, thickness and bulk density. Values entered or reviewed on those walls are kept; copies stay unreviewed.",
+  "buildingComponentCopyResult": "{updated} values copied · {kept} entered values kept"
 }

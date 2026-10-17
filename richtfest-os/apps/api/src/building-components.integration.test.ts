@@ -59,10 +59,10 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     const roles = async () => new Map((await pool.query(`select e.id, v.value, v.provenance, v.review_status from projects_building_elements e
       join projects_building_properties p on p.entity_id=e.id and p.property_key='wallRole'
       join lateral (select * from projects_building_property_versions v where v.property_id=p.id order by version desc limit 1) v on true`)).rows.map(r => [r.id, r]));
-    // "A|B" per wall: rooms on each face joined by "+", faces sorted; a face without accepted rooms is "-".
+    // "A|B" per wall: rooms on each face joined by "+", faces sorted; "outside" for an exterior face, "-" for an unresolved one.
     const separated = async () => {
-      const rows = (await pool.query(`select from_entity_id as wall, metadata->>'side' as side, string_agg(r.name, '+' order by r.name) as rooms from projects_building_relationships x
-        join projects_building_rooms r on r.id=x.to_entity_id where relationship_type='separates' group by from_entity_id, metadata->>'side'`)).rows;
+      const rows = (await pool.query(`select from_entity_id as wall, metadata->>'side' as side, coalesce(string_agg(r.name, '+' order by r.name), 'outside') as rooms from projects_building_relationships x
+        left join projects_building_rooms r on r.id=x.to_entity_id where relationship_type in ('separates','faces_exterior') group by from_entity_id, metadata->>'side'`)).rows;
       const faces = new Map<string, string[]>();
       for (const row of rows) faces.set(row.wall, [...(faces.get(row.wall) ?? []), row.rooms]);
       return new Map([...faces].map(([id, list]) => [id, (list.length === 1 ? [...list, "-"] : list).sort().join("|")]));
@@ -76,6 +76,18 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(roleFor("Flur|Schlafen")).toEqual(["apartment_partition"]);
     // One corridor wall faces both Bad (WE 1) and Schlafen (WE 2): mixed roles are left for a person.
     expect(roleFor("Bad+Schlafen|Flur")).toEqual([null]);
+    // Facades: nothing lies beyond them on the sheet. The top facade runs past Wohnen and Küche.
+    expect(roleFor("Küche+Wohnen|outside")).toEqual(["exterior"]);
+    expect([...byWall.values()].filter(names => names.endsWith("|outside")).length).toBeGreaterThanOrEqual(3);
+    // Thickness from the printed 1:100 scale: 30 cm facades and 12 cm partitions in the synthetic plan.
+    const thickness = async () => new Map((await pool.query(`select p.entity_id, v.value, v.unit, v.provenance, v.evidence from projects_building_properties p
+      join lateral (select * from projects_building_property_versions v where v.property_id=p.id order by version desc limit 1) v on true where p.property_key='thickness'`)).rows.map(r => [r.entity_id, r]));
+    const thicknesses = await thickness();
+    const thicknessFor = (names: string) => [...byWall.entries()].filter(([, rooms]) => rooms === names).map(([id]) => thicknesses.get(id)?.value);
+    expect(thicknessFor("Küche|Wohnen")).toEqual([12]);
+    expect(thicknessFor("Küche+Wohnen|outside")).toEqual([30]);
+    expect([...thicknesses.values()].every(r => r.unit === "cm" && r.provenance === "inferred" && r.evidence[0].quote === "Printed scale 1:100")).toBe(true);
+    expect(derived.body.data.summary).toMatchObject({ thicknesses: 9, thicknessProposals: 9 });
     expect([...wallRoles.values()].every(r => r.provenance === "inferred" && r.review_status === "unreviewed")).toBe(true);
     expect(derived.body.data.summary).toMatchObject({ walls: 9, roleProposals: wallRoles.size });
     const relationshipCount = async () => Number((await pool.query("select count(*) from projects_building_relationships")).rows[0].count);
@@ -93,8 +105,29 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(rerun.body.data.summary.relationships).toBe(await relationshipCount());
     expect((await roles()).get(kitchenWall)).toMatchObject({ value: "apartment_partition", provenance: "manual" });
 
+    // The architect answers per wall type: copy one apartment partition wall's data to the others.
+    const bathWall = [...byWall.entries()].find(([, names]) => names === "Bad|Schlafen")![0], corridorWall = [...byWall.entries()].find(([, names]) => names === "Flur|Schlafen")![0];
+    for (const [key, value, unit] of [["construction", "masonry", null], ["thickness", 24, "cm"], ["bulkDensity", 1800, "kg/m³"]] as const)
+      expect((await post("/properties", { baseRevision: await revision(), entityType: "element", entityId: bathWall, propertyKey: key, value, unit, provenance: "manual", evidence })).status).toBe(201);
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "element", entityId: corridorWall, propertyKey: "thickness", value: 25, unit: "cm", provenance: "manual", evidence })).status).toBe(201);
+    const roleless = (await pool.query("select id from projects_building_elements where id <> all($1::uuid[]) limit 1", [[...wallRoles.keys(), kitchenWall]])).rows[0]?.id;
+    if (roleless) expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: roleless, keys: ["construction"] })).status).toBe(422);
+    const copied = await post("/component-copy", { baseRevision: await revision(), sourceElementId: bathWall, keys: ["construction", "material", "thickness", "bulkDensity"] });
+    expect(copied.status).toBe(200);
+    // Targets: the corridor wall and the kitchen wall a person marked as apartment partition. The corridor wall keeps its entered 25 cm.
+    expect(copied.body.data.summary).toEqual({ wallRole: "apartment_partition", targets: 2, updated: { construction: 2, thickness: 1, bulkDensity: 2 }, kept: 1 });
+    const after = await thickness();
+    expect(after.get(kitchenWall)).toMatchObject({ value: 24, provenance: "manual" });
+    expect(after.get(corridorWall)).toMatchObject({ value: 25, provenance: "manual" });
+    expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: bathWall, keys: ["construction", "thickness", "bulkDensity"] })).body.data.summary.updated).toEqual({});
+
+    // A derived thickness is not passed on as if a person had entered it.
+    const facade = [...byWall.entries()].find(([, names]) => names === "Küche+Wohnen|outside")![0];
+    expect((await post("/component-copy", { baseRevision: await revision(), sourceElementId: facade, keys: ["thickness"] })).body.data.summary).toMatchObject({ wallRole: "exterior", updated: {} });
+
     const context = await (await fetch(base + "/agent-context")).json();
     const wallGaps = context.data.missingInputs.filter((gap: any) => gap.entityId === kitchenWall).map((gap: any) => `${gap.field}:${gap.status}`);
-    expect(wallGaps).toEqual(["construction:missing", "thickness:missing", "bulkDensity:missing", "wallRole:unreviewed"]);
+    expect(wallGaps).toEqual(["construction:unreviewed", "thickness:unreviewed", "bulkDensity:unreviewed", "wallRole:unreviewed"]);
+    expect(context.data.wallAdjacency.some((item: any) => item.exterior && item.roomId === null)).toBe(true);
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);

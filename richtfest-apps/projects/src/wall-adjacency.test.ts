@@ -24,18 +24,39 @@ const walls = [
   wall("facade", rect(0.1, 0.096, 0.298, 0.1)),
 ];
 // Side order follows the wall's drawing direction, so compare the two sides as a set.
-const sideRooms = (item: any) => item.sides.map((side: any) => side?.map((room: any) => room.roomId).sort().join("+") ?? null).sort();
+const sideRooms = (item: any) => item.sides.map((side: any) => side === "exterior" ? "outside" : side?.map((room: any) => room.roomId).sort().join("+") ?? null).sort();
 const plan = (properties: any[] = []) => new Map(planWallAdjacency({ rooms, elements: walls, properties }).map(item => [item.wallId, item]));
 
 test("wall roles follow the spaces a wall separates", () => {
   const result = plan();
   expect([...result.values()].map(item => [item.wallId, item.role])).toEqual([
     ["between-apartments", "apartment_partition"], ["inside-we2", "internal"], ["we1-corridor", "corridor_partition"],
-    ["we2-corridor", "corridor_partition"], ["we2-stairs", "stairwell"], ["facade", null]]);
+    ["we2-corridor", "corridor_partition"], ["we2-stairs", "stairwell"], ["facade", "exterior"]]);
   expect(sideRooms(result.get("between-apartments"))).toEqual(["we1-wohnen", "we2-wohnen"]);
   // A corridor wall spanning two WE 2 rooms records both; beyond the plan's rooms nothing is assumed.
   expect(sideRooms(result.get("we2-corridor"))).toEqual(["flur", "we2-bad+we2-wohnen"]);
+  expect(sideRooms(result.get("facade"))).toEqual(["outside", "we1-wohnen"]);
+});
+
+test("a face is outside only when nothing, not even an unreviewed room, lies beyond it", () => {
+  const candidate = { id: "candidate", name: "Balkon", geometry: { polygon: rect(0.1, 0.02, 0.298, 0.09), source } };
+  const result = new Map(planWallAdjacency({ rooms, elements: walls, properties: [], candidateRooms: [candidate] }).map(item => [item.wallId, item]));
   expect(sideRooms(result.get("facade"))).toEqual([null, "we1-wohnen"]);
+  expect(result.get("facade")!.role).toBeNull();
+  // Probes that land between rooms inside the building are unresolved, never outside.
+  const gap = wall("gap", rect(0.6, 0.1, 0.604, 0.3));
+  expect(sideRooms(planWallAdjacency({ rooms: [...rooms, room("east", "Bad", rect(0.7, 0.1, 0.8, 0.3), "WE 3")], elements: [gap], properties: [] })[0])).toEqual([null, "treppe"]);
+});
+
+test("thickness comes from the printed scale, in metres on both page axes", () => {
+  // Landscape sheet (width 1.414 × height); the page height spans 30 m at this scale.
+  const scales = new Map([[`${source.sourceVersionId}:${source.page}`, { pageAspectRatio: 1.414, metresPerPageHeight: 30, denominator: 100 }]]);
+  const result = new Map(planWallAdjacency({ rooms, elements: walls, properties: [], scales }).map(item => [item.wallId, item]));
+  expect(result.get("between-apartments")!.thicknessCm).toBe(17); // 0.004 × 1.414 × 30 m = 16.97 cm
+  expect(result.get("we1-corridor")!.thicknessCm).toBe(12); // 0.004 × 30 m
+  expect(plan().get("we1-corridor")!).toMatchObject({ thicknessCm: null, writeThickness: false });
+  const entered = [{ entityType: "element", entityId: "we1-corridor", propertyKey: "thickness", current: { value: 11.5, reviewStatus: "unreviewed", provenance: "manual" }, reviewed: null }];
+  expect(new Map(planWallAdjacency({ rooms, elements: walls, properties: entered, scales }).map(item => [item.wallId, item])).get("we1-corridor")!.writeThickness).toBe(false);
 });
 
 test("people's entries win over geometry and labels", () => {

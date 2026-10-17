@@ -54,6 +54,8 @@ export type SpaceContext = { apartmentUnit: string | null; spaceType: SpaceType 
  */
 export function deriveWallRole(a: SpaceContext | null, b: SpaceContext | null): WallRole | null {
   if (!a?.spaceType || !b?.spaceType) return null;
+  // Any indoor space facing outside is an exterior wall, whatever else it separates.
+  if ((a.spaceType === "exterior") !== (b.spaceType === "exterior")) return "exterior";
   const [apartment, other] = a.spaceType === "apartment" ? [a, b] : b.spaceType === "apartment" ? [b, a] : [null, null];
   if (!apartment || !other) return null;
   if (other.spaceType === "apartment") {
@@ -61,8 +63,7 @@ export function deriveWallRole(a: SpaceContext | null, b: SpaceContext | null): 
     return apartment.apartmentUnit === other.apartmentUnit ? "internal" : "apartment_partition";
   }
   return other.spaceType === "common_corridor" ? "corridor_partition"
-    : other.spaceType === "stairwell" ? "stairwell"
-    : other.spaceType === "exterior" ? "exterior" : null;
+    : other.spaceType === "stairwell" ? "stairwell" : null;
 }
 
 export type ComponentPropertyState = { value: unknown; reviewStatus: string } | null | undefined;

@@ -1740,7 +1740,11 @@
   "buildingComponentGapMissing": "fehlt",
   "buildingComponentGapUnreviewed": "ungeprüft",
   "buildingComponentWallRoles": "Wandfunktionen",
-  "buildingComponentWallRolesHint": "Ermittelt die angenommenen Räume beidseits jeder angenommenen Wand und schlägt ihre Funktion anhand der Wohnungen vor. Vorschläge bleiben ungeprüft; von Personen eingetragene Funktionen bleiben erhalten.",
-  "buildingComponentDeriveWallRoles": "Wandfunktionen ermitteln",
-  "buildingComponentDeriveResult": "{walls} Wände · {bothSides} mit Räumen auf beiden Seiten · {roles} Funktionen erkannt · {proposals} neue Vorschläge"
+  "buildingComponentWallRolesHint": "Ermittelt die Räume beidseits jeder angenommenen Wand, erkennt Fassaden, schlägt Wandfunktionen anhand der Wohnungen vor und misst die Dicke im gedruckten Planmaßstab. Vorschläge bleiben ungeprüft; von Personen eingetragene oder geprüfte Werte bleiben erhalten.",
+  "buildingComponentDeriveWallRoles": "Aus Plan ableiten",
+  "buildingComponentDeriveResult": "{walls} Wände · {exterior} nach außen · {roles} Funktionen erkannt · {proposals} neue Funktions- und {thickness} neue Dickenvorschläge",
+  "buildingComponentOutside": "Außen",
+  "buildingComponentCopyToRole": "Auf weitere Wände mit dieser Funktion übertragen ({count})",
+  "buildingComponentCopyHint": "Überträgt Bauweise, Material, Dicke und Rohdichte. Auf diesen Wänden eingetragene oder geprüfte Werte bleiben erhalten; Kopien bleiben ungeprüft.",
+  "buildingComponentCopyResult": "{updated} Werte übertragen · {kept} eingetragene Werte beibehalten"
 }

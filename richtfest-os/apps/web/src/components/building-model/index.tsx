@@ -407,11 +407,21 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const deriveWallRoles = useMutation({
-    mutationFn: () => api<{ summary: { walls: number; bothSides: number; roles: number; roleProposals: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
+    mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  const copyWallType = useMutation({
+    mutationFn: ({ region, keys }: { region: BuildingRegion; keys: string[] }) => api<{ summary: { targets: number; updated: Record<string, number>; kept: number } }>(`/projects/${projectId}/building-model/component-copy`, { baseRevision: model.revision, sourceElementId: region.id, keys }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const wallRoles = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element").map((region) => {
+    const role = region.componentProperties?.wallRole;
+    return [region.id, role && role.reviewStatus !== "rejected" ? role.value : role?.reviewedValue ?? null] as const;
+  })), [model]);
   const roomNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "room").map((region) => [region.id, region.label])), [model]);
   const startExtraction = useMutation({
     mutationFn: () => {
@@ -794,7 +804,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
                 components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
-                  derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }} /> : undefined} />
+                  derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
+                  copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
+                    sameRoleCount: [...wallRoles].filter(([id, role]) => id !== selected.id && role != null && role === wallRoles.get(selected.id)).length }} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
         </aside>

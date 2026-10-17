@@ -44,8 +44,8 @@ import {
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
-import { effectiveValue, planWallAdjacency, wallAdjacencyMethod } from "./wall-adjacency";
-import { buildingExtractionJobs, buildingExtractionCandidates } from "./schema";
+import { effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
+import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks } from "./schema";
 
 type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
@@ -302,6 +302,12 @@ const componentGaps = (projectId: string, data: any, objectId?: string) => {
   });
 };
 
+/** Derived wall faces for agents: the rooms each wall separates, or that a face is outside. */
+const wallAdjacencyContext = (data: any, objectId?: string) => (data.relationships as any[])
+  .filter(relationship => ["separates", "faces_exterior"].includes(relationship.relationshipType) && (!objectId || relationship.fromEntityId === objectId || relationship.toEntityId === objectId))
+  .map(relationship => ({ wallId: relationship.fromEntityId, roomId: relationship.relationshipType === "separates" ? relationship.toEntityId : null, exterior: relationship.relationshipType === "faces_exterior",
+    side: relationship.metadata?.side ?? null, method: relationship.metadata?.method ?? null, reviewStatus: relationship.reviewStatus }));
+
 /** Automatic draft storeys/buildings are page hypotheses, not reviewed structure; label them for agents. */
 const inferredStructure = (entity: any) => ["unreviewed_page_hypothesis", "unreviewed_source_container"].includes(entity.geometry?.quality)
   ? { provenance: "inferred" as const, reviewStatus: "unreviewed" as const } : {};
@@ -346,8 +352,7 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
     .filter(room => !room.roomUse && (!options.objectId || room.id === options.objectId))
     .map(room => ({ entityType: "room" as const, entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) }));
   const missingComponentInputs = componentGaps(projectId, data, options.objectId);
-  const wallAdjacency = (data.relationships as any[]).filter(relationship => relationship.relationshipType === "separates" && (!options.objectId || relationship.fromEntityId === options.objectId || relationship.toEntityId === options.objectId))
-    .map(relationship => ({ wallId: relationship.fromEntityId, roomId: relationship.toEntityId, side: relationship.metadata?.side ?? null, method: relationship.metadata?.method ?? null, reviewStatus: relationship.reviewStatus }));
+  const wallAdjacency = wallAdjacencyContext(data, options.objectId);
   return {
     projectId, modelId: row.model.id, revision: row.model.revision,
     entities: selected.map(({ entityType, entity }) => ({ id: entity.id, entityType, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entityType, entity.id) })),
@@ -429,6 +434,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         ].map((entity: any) => ({ id: entity.id, stableKey: entity.stableKey, name: entity.name, roomUse: entity.roomUse ?? null, constructionState: entity.constructionState, ...inferredStructure(entity), deepLink: buildingDeepLink(projectId, entity.entityType, entity.id) })),
         missingInputs: [...(data.rooms as any[]).filter(room => !room.roomUse).map(room => ({ entityType: "room", entityId: room.id, field: "roomUse", deepLink: buildingDeepLink(projectId, "room", room.id) })),
           ...componentGaps(projectId, data).slice(0, 500)],
+        wallAdjacency: wallAdjacencyContext(data).slice(0, 1000),
         draftCandidates: draftCandidates.slice(0, 500).map(candidate => {
           const evidence = Array.isArray(candidate.evidence) ? candidate.evidence.find((item: any) => item?.kind === "page") : null;
           const geometry = candidate.geometry && typeof candidate.geometry === "object" ? candidate.geometry : {};
@@ -568,7 +574,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     } catch (e) { return next(e); }
   });
 
-  // Deterministic: re-running replaces earlier derived adjacency and never overrides a person's wall role.
+  // Deterministic: re-running replaces earlier derived adjacency and never overrides a person's entry or review.
   router.post("/projects/:projectId/building-model/wall-adjacency", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
@@ -576,27 +582,97 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       if (modelRow.model.revision !== input.baseRevision) return revisionConflict(res, modelRow.model.revision);
       const data = await readModel(d, modelRow.model);
-      const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[] });
+      const jobsById = new Map((data.extractions as any[]).map(job => [job.id, job]));
+      const candidateRooms = (data.extractionCandidates as any[]).filter(candidate => candidate.entityType === "room" && candidate.status === "unreviewed" && jobsById.has(candidate.jobId))
+        .map(candidate => { const job = jobsById.get(candidate.jobId); return { id: candidate.id, name: candidate.name, geometry: { ...candidate.geometry, source: { sourceVersionId: job.sourceVersionId, page: job.page } } }; });
+      // Printed scale per plan page, newest extraction first; an unreviewed title-block scale only ever yields inferred values.
+      const maskRows = await d.db.select({ mask: buildingSelectionMasks, job: buildingExtractionJobs }).from(buildingSelectionMasks)
+        .innerJoin(buildingExtractionJobs, eq(buildingExtractionJobs.id, buildingSelectionMasks.jobId))
+        .where(and(eq(buildingSelectionMasks.modelId, modelRow.model.id), eq(buildingSelectionMasks.tenantId, d.tenantId))).orderBy(desc(buildingSelectionMasks.updatedAt));
+      const scales = new Map<string, PageScale>();
+      for (const row of maskRows as any[]) {
+        const key = `${row.job.sourceVersionId}:${row.job.page}`;
+        if (!scales.has(key) && row.mask.metresPerPageHeight != null) scales.set(key, { pageAspectRatio: Number(row.mask.pageAspectRatio),
+          metresPerPageHeight: Number(row.mask.metresPerPageHeight), denominator: row.job.result?.scaleObservation?.denominator ?? null });
+      }
+      const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[], candidateRooms, scales });
+      const storeyOf = new Map((data.elements as any[]).map(element => [element.id, element.storeyId]));
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
-          eq(buildingRelationships.relationshipType, "separates"), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' = ${wallAdjacencyMethod}`));
-        const relationships = walls.flatMap(wall => wall.sides.flatMap((side, sideIndex) => (side ?? []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id,
-          fromEntityType: "element", fromEntityId: wall.wallId, toEntityType: "room", toEntityId: room.roomId, relationshipType: "separates",
-          metadata: { method: wallAdjacencyMethod, side: sideIndex, probeHits: room.hits, sourceVersionId: wall.sourceVersionId, page: wall.page }, createdBy: d.actorId }))));
+          inArray(buildingRelationships.relationshipType, ["separates", "faces_exterior"]), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' like 'plan_side_probe_%'`));
+        const relationships = walls.flatMap(wall => wall.sides.flatMap((side, sideIndex) => {
+          const metadata = { method: wallAdjacencyMethod, side: sideIndex, sourceVersionId: wall.sourceVersionId, page: wall.page };
+          if (side === "exterior") return storeyOf.get(wall.wallId) ? [{ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
+            toEntityType: "storey", toEntityId: storeyOf.get(wall.wallId), relationshipType: "faces_exterior", metadata, createdBy: d.actorId }] : [];
+          return (side ?? []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
+            toEntityType: "room", toEntityId: room.roomId, relationshipType: "separates", metadata: { ...metadata, probeHits: room.hits }, createdBy: d.actorId }));
+        }));
         if (relationships.length) await tx.insert(buildingRelationships).values(relationships);
-        let roleProposals = 0;
-        for (const wall of walls.filter(item => item.writeRole)) {
+        let roleProposals = 0, thicknessProposals = 0;
+        for (const wall of walls) {
           const region = wall.planRegion && wall.planRegion.width > 0 && wall.planRegion.height > 0 ? { region: wall.planRegion } : {};
-          const evidence = buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: wall.sourceVersionId, page: wall.page, ...region });
-          await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: wall.wallId, propertyKey: "wallRole", value: wall.role, unit: null, provenance: "inferred", evidence: [evidence] });
-          roleProposals++;
+          if (wall.writeRole) {
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: wall.wallId, propertyKey: "wallRole", value: wall.role, unit: null, provenance: "inferred",
+              evidence: [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: wall.sourceVersionId, page: wall.page, ...region })] });
+            roleProposals++;
+          }
+          if (wall.writeThickness) {
+            const quote = wall.scaleDenominator ? { quote: `Printed scale 1:${wall.scaleDenominator}` } : {};
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: wall.wallId, propertyKey: "thickness", value: wall.thicknessCm, unit: "cm", provenance: "inferred",
+              evidence: [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: wall.sourceVersionId, page: wall.page, ...region, ...quote })] });
+            thicknessProposals++;
+          }
         }
         const summary = { walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
-          oneSide: walls.filter(wall => Boolean(wall.sides[0]) !== Boolean(wall.sides[1])).length, noSide: walls.filter(wall => !wall.sides[0] && !wall.sides[1]).length,
-          roles: walls.filter(wall => wall.role).length, roleProposals, relationships: relationships.length, method: wallAdjacencyMethod };
+          exterior: walls.filter(wall => wall.sides.includes("exterior")).length, unresolvedSides: walls.filter(wall => !wall.sides[0] || !wall.sides[1]).length,
+          roles: walls.filter(wall => wall.role).length, roleProposals, thicknesses: walls.filter(wall => wall.thicknessCm !== null).length, thicknessProposals,
+          relationships: relationships.length, method: wallAdjacencyMethod };
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
         await d.audit(tx, "projects.building.wall_adjacency.derived", "building_model", modelRow.model.id, { projectId, modelRevision: revision, ...summary });
+        return { revision, summary };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
+      return res.json(ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // Architects answer per wall type, so one wall's construction data can fill every wall with the same role.
+  router.post("/projects/:projectId/building-model/component-copy", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), sourceElementId: uuid,
+        keys: z.array(z.enum(["construction", "material", "thickness", "bulkDensity"])).min(1).max(4) }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (modelRow.model.revision !== input.baseRevision) return revisionConflict(res, modelRow.model.revision);
+      const data = await readModel(d, modelRow.model);
+      const props = new Map((data.properties as any[]).filter(property => property.entityType === "element").map(property => [`${property.entityId}:${property.propertyKey}`, property]));
+      if (!(data.elements as any[]).some(element => element.id === input.sourceElementId)) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Element not found" });
+      const role = effectiveValue(props.get(`${input.sourceElementId}:wallRole`));
+      if (typeof role !== "string") return send(res, 422, { data: null, error: { code: "wall_role_required" }, message: "Set this wall's role before copying its data to walls of the same role" });
+      const targets = (data.elements as any[]).filter(element => element.id !== input.sourceElementId && effectiveValue(props.get(`${element.id}:wallRole`)) === role);
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const updated: Record<string, number> = {}; let kept = 0;
+        for (const key of input.keys) {
+          // Only what a person entered or approved is copied; a derived guess is not passed on as an entry.
+          const source = props.get(`${input.sourceElementId}:${key}`) as any;
+          const entered = source?.current && source.current.reviewStatus !== "rejected" && (source.current.provenance !== "inferred" || source.current.reviewStatus === "approved") ? source.current : source?.reviewed ?? null;
+          if (!entered || entered.value === null) continue;
+          const value = entered.value, unit = entered.unit ?? null, evidence = (entered.evidence ?? []).slice(0, 20);
+          for (const target of targets) {
+            const existing = props.get(`${target.id}:${key}`) as any;
+            if (JSON.stringify(effectiveValue(existing)) === JSON.stringify(value)) continue;
+            // Only fill gaps and replace derived guesses; a person's entry or a reviewed value stays.
+            if (existing?.reviewed || (existing?.current && existing.current.provenance !== "inferred" && existing.current.reviewStatus !== "rejected")) { kept++; continue; }
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: target.id, propertyKey: key, value, unit, provenance: "manual", evidence });
+            updated[key] = (updated[key] ?? 0) + 1;
+          }
+        }
+        const summary = { wallRole: role, targets: targets.length, updated, kept };
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.component.copied", "building_element", input.sourceElementId, { projectId, modelRevision: revision, keys: input.keys, ...summary });
         return { revision, summary };
       });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);

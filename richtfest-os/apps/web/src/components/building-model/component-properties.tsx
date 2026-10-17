@@ -77,11 +77,13 @@ function PropertyRow({ propertyKey, state, placeholder, t, pending, onSave, onRe
   </>;
 }
 
-export type WallRoleDerivation = { pending: boolean; result?: { walls: number; bothSides: number; roles: number; roleProposals: number }; onDerive: () => void };
+export type WallRoleDerivation = { pending: boolean; result?: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number }; onDerive: () => void };
+export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: { targets: number; updated: Record<string, number>; kept: number }; onCopy: (keys: string[]) => void };
+const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
 /** Shared component data for a selected wall/ceiling or room, laid out as property rows. */
-export function ComponentProperties({ region, roomNames, t, pending, onSave, onReview, derivation }: { region: BuildingRegion; roomNames: Map<string, string>; t: T; pending: boolean;
-  onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation }) {
+export function ComponentProperties({ region, roomNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; t: T; pending: boolean;
+  onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation; copy?: WallTypeCopy }) {
   const states = region.componentProperties ?? {};
   const isRoom = region.entityType === "room";
   const componentType = isRoom ? null : regionComponentType(region);
@@ -92,22 +94,32 @@ export function ComponentProperties({ region, roomNames, t, pending, onSave, onR
     // Mirrors the server's inference: a room inside an apartment is an apartment room.
     : key === "spaceType" && (states.apartmentUnit?.value || region.groupLabel) ? "apartment" : undefined;
   const result = derivation?.result;
+  const roleValue = states.wallRole && states.wallRole.reviewStatus !== "rejected" ? states.wallRole.value : null;
+  const filledCopyKeys = copyKeys.filter((key) => { const state = states[key];
+    return state && state.value !== null && ((state.reviewStatus !== "rejected" && state.provenance !== "inferred") || state.reviewStatus === "approved" || state.reviewedValue != null); });
   return <>
     <dl className="building-model-component-rows">
       {componentType === "wall" && <>
         {(region.separates?.length ? region.separates : [{ side: 0, roomIds: [] }, { side: 1, roomIds: [] }]).map((face) => <Fragment key={face.side}>
           <dt>{t("buildingComponentFace")} {face.side + 1}</dt>
-          <dd className={face.roomIds.length ? undefined : "muted"}>{face.roomIds.length ? face.roomIds.map((id) => roomNames.get(id) || id).join(", ") : t("buildingModelUnknownValue")}</dd>
+          <dd className={face.roomIds.length || face.exterior ? undefined : "muted"}>{face.exterior ? t("buildingComponentOutside") : face.roomIds.length ? face.roomIds.map((id) => roomNames.get(id) || id).join(", ") : t("buildingModelUnknownValue")}</dd>
         </Fragment>)}
       </>}
       {keys.map((key) => <PropertyRow key={`${region.id}:${key}`} propertyKey={key} state={states[key]} placeholder={placeholder(key)} t={t} pending={pending}
         onSave={onSave} onReview={(decision) => states[key] && onReview(states[key], decision)} />)}
     </dl>
     {gaps.length > 0 && <p className="muted text-ui-2xs">{t("buildingComponentGaps")}: {gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingComponentGapUnreviewed")})`).join(", ")}</p>}
+    {componentType === "wall" && copy && typeof roleValue === "string" && copy.sameRoleCount > 0 && filledCopyKeys.length > 0 && <div className="building-model-component-derive">
+      <Button size="xs" variant="outline" disabled={copy.pending} onClick={() => copy.onCopy(filledCopyKeys)}>
+        {t("buildingComponentCopyToRole").replace("{count}", String(copy.sameRoleCount))}
+      </Button>
+      <p className="muted text-ui-2xs" role="status">{copy.result ? t("buildingComponentCopyResult").replace("{updated}", String(Object.values(copy.result.updated).reduce((sum, count) => sum + count, 0))).replace("{kept}", String(copy.result.kept))
+        : t("buildingComponentCopyHint")}</p>
+    </div>}
     {componentType === "wall" && derivation && <div className="building-model-component-derive">
       <Button size="xs" variant="outline" disabled={derivation.pending} onClick={derivation.onDerive}>{t("buildingComponentDeriveWallRoles")}</Button>
-      <p className="muted text-ui-2xs" role="status">{result ? t("buildingComponentDeriveResult").replace("{walls}", String(result.walls)).replace("{bothSides}", String(result.bothSides))
-        .replace("{roles}", String(result.roles)).replace("{proposals}", String(result.roleProposals)) : t("buildingComponentWallRolesHint")}</p>
+      <p className="muted text-ui-2xs" role="status">{result ? t("buildingComponentDeriveResult").replace("{walls}", String(result.walls)).replace("{exterior}", String(result.exterior))
+        .replace("{roles}", String(result.roles)).replace("{proposals}", String(result.roleProposals)).replace("{thickness}", String(result.thicknessProposals)) : t("buildingComponentWallRolesHint")}</p>
     </div>}
   </>;
 }

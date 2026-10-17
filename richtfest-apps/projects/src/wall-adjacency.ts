@@ -2,10 +2,14 @@ import { deriveWallRole, type SpaceContext, type SpaceType, type WallRole } from
 
 type Point = { x: number; y: number };
 export type AdjacencyRoom = { id: string; polygon: Point[]; holes?: Point[][] };
-/** Rooms touched by a wall face, with probe hits; null when most probes found no accepted room. */
-export type WallSide = Array<{ roomId: string; hits: number }> | null;
+/**
+ * Rooms touched by a wall face, with probe hits; "exterior" when nothing lies
+ * beyond the face up to the page edge; null when the face is unresolved.
+ */
+export type WallSide = Array<{ roomId: string; hits: number }> | "exterior" | null;
+export type PageScale = { pageAspectRatio: number; metresPerPageHeight: number | null; denominator?: number | null };
 
-export const wallAdjacencyMethod = "plan_side_probe_v1";
+export const wallAdjacencyMethod = "plan_side_probe_v2";
 const probeFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
 
 const inside = (point: Point, ring: Point[]) => {
@@ -18,15 +22,8 @@ const inside = (point: Point, ring: Point[]) => {
 };
 const inRoom = (point: Point, room: AdjacencyRoom) => inside(point, room.polygon) && !(room.holes ?? []).some(hole => inside(point, hole));
 
-/**
- * Which accepted rooms lie on either side of a wall polygon, in the same
- * normalized page space. Probes step off both long faces at several points
- * along the wall; a side resolves only when most probes land in accepted
- * rooms. A face may border several rooms (a long corridor wall).
- * Rooms are raster regions that stop short of the wall face, so the probe
- * clears the face by at least the wall's own thickness.
- */
-export function wallSides(wall: Point[], rooms: AdjacencyRoom[]): [WallSide, WallSide] | null {
+/** Long axis, extents and centre line of a wall polygon in the given space. */
+function wallFrame(wall: Point[]) {
   if (wall.length < 3) return null;
   let start = wall[0], end = wall[1], longest = 0;
   for (let i = 0; i < wall.length; i++) {
@@ -38,19 +35,57 @@ export function wallSides(wall: Point[], rooms: AdjacencyRoom[]): [WallSide, Wal
   const along = wall.map(p => (p.x - start.x) * u.x + (p.y - start.y) * u.y);
   const across = wall.map(p => (p.x - start.x) * v.x + (p.y - start.y) * v.y);
   const [minAlong, maxAlong] = [Math.min(...along), Math.max(...along)], [minAcross, maxAcross] = [Math.min(...across), Math.max(...across)];
-  const thickness = maxAcross - minAcross, centre = (minAcross + maxAcross) / 2;
+  const thickness = maxAcross - minAcross;
   if (!(thickness > 0) || maxAlong - minAlong < thickness) return null;
+  const at = (s: number, t: number) => ({ x: start.x + u.x * s + v.x * t, y: start.y + u.y * s + v.y * t });
+  return { u, v, minAlong, maxAlong, thickness, centre: (minAcross + maxAcross) / 2, at };
+}
+
+/**
+ * Wall thickness in cm at the page's printed scale, to the nearest 0.5 cm, or
+ * null without a scale. Measured across the exact source polygon.
+ */
+export function wallThicknessCm(wall: Point[], scale: PageScale) {
+  if (!scale.metresPerPageHeight || !(scale.pageAspectRatio > 0)) return null;
+  const metres = wall.map(p => ({ x: p.x * scale.pageAspectRatio * scale.metresPerPageHeight!, y: p.y * scale.metresPerPageHeight! }));
+  const frame = wallFrame(metres);
+  return frame ? Math.round(frame.thickness * 200) / 2 : null;
+}
+
+/**
+ * Which accepted rooms lie on either side of a wall polygon, in the same
+ * normalized page space. Probes step off both long faces at several points
+ * along the wall; a side resolves only when most probes land in accepted
+ * rooms. A face may border several rooms (a long corridor wall).
+ * Rooms are raster regions that stop short of the wall face, so the probe
+ * clears the face by at least the wall's own thickness.
+ * A face without rooms is exterior only when rays cast outward from it reach
+ * the page edge without crossing any room, accepted or still a candidate.
+ */
+export function wallSides(wall: Point[], rooms: AdjacencyRoom[], obstacles: AdjacencyRoom[] = rooms): [WallSide, WallSide] | null {
+  const frame = wallFrame(wall);
+  if (!frame) return null;
+  const { minAlong, maxAlong, thickness, centre, at } = frame;
   const clearance = thickness / 2 + Math.max(thickness, 0.004);
+  const outside = (s: number, direction: 1 | -1) => {
+    for (let t = clearance; t < 2; t += 0.002) {
+      const point = at(s, centre + direction * t);
+      if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return true;
+      if (obstacles.some(room => inRoom(point, room))) return false;
+    }
+    return true;
+  };
   const side = (direction: 1 | -1): WallSide => {
     const counts = new Map<string, number>();
     for (const fraction of probeFractions) {
-      const s = minAlong + (maxAlong - minAlong) * fraction, t = centre + direction * clearance;
-      const point = { x: start.x + u.x * s + v.x * t, y: start.y + u.y * s + v.y * t };
+      const point = at(minAlong + (maxAlong - minAlong) * fraction, centre + direction * clearance);
       const room = rooms.find(candidate => inRoom(point, candidate));
       if (room) counts.set(room.id, (counts.get(room.id) ?? 0) + 1);
     }
     const hits = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    return hits > probeFractions.length / 2 ? [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([roomId, count]) => ({ roomId, hits: count })) : null;
+    if (hits > probeFractions.length / 2) return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([roomId, count]) => ({ roomId, hits: count }));
+    if (hits === 0 && [0.35, 0.5, 0.65].every(fraction => outside(minAlong + (maxAlong - minAlong) * fraction, direction))) return "exterior";
+    return null;
   };
   return [side(-1), side(1)];
 }
@@ -88,14 +123,19 @@ export const effectiveValue = (property: ModelProperty | undefined) =>
   property?.current && property.current.reviewStatus !== "rejected" ? property.current.value : property?.reviewed?.value ?? null;
 
 export type PlannedWall = { wallId: string; sourceVersionId: string; page: number; planRegion: PlanGeometry["planRegion"] | null;
-  sides: [WallSide, WallSide]; role: WallRole | null; writeRole: boolean };
+  sides: [WallSide, WallSide]; role: WallRole | null; writeRole: boolean; thicknessCm: number | null; writeThickness: boolean; scaleDenominator: number | null };
+
+/** Derived values never replace a person's entry or any reviewed value, and are not repeated or re-proposed after rejection. */
+const derivedWritable = (existing: ModelProperty | undefined, value: unknown) => value !== null && !existing?.reviewed
+  && (!existing?.current || (existing.current.provenance === "inferred" && existing.current.reviewStatus !== "approved" && existing.current.value !== value));
 
 /**
- * Plans adjacency and wall-role proposals for accepted walls. Pure: the caller
- * persists the result. A role is proposed only when every room pair across the
- * wall yields the same role, and never over a person's entry or review.
+ * Plans adjacency, wall-role and thickness proposals for accepted walls. Pure:
+ * the caller persists the result. A role is proposed only when every pair of
+ * sides across the wall yields the same role.
  */
-export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: ModelEntity[]; properties: ModelProperty[] }) {
+export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: ModelEntity[]; properties: ModelProperty[];
+  candidateRooms?: ModelEntity[]; scales?: Map<string, PageScale> }) {
   const props = new Map<string, ModelProperty>();
   for (const property of input.properties) props.set(`${property.entityType}:${property.entityId}:${property.propertyKey}`, property);
   const prop = (type: string, id: string, key: string) => props.get(`${type}:${id}:${key}`);
@@ -109,21 +149,29 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
       { apartmentUnit: effectiveValue(prop("room", room.id, "apartmentUnit")), spaceType: effectiveValue(prop("room", room.id, "spaceType")) });
     roomsBySource.set(key, [...(roomsBySource.get(key) ?? []), { id: room.id, polygon: g.polygon, holes: g.holes, context }]);
   }
+  // Unreviewed room regions still block the exterior test: an unaccepted room is not outside.
+  const candidatesBySource = new Map<string, AdjacencyRoom[]>();
+  for (const candidate of input.candidateRooms ?? []) {
+    const g = geometry(candidate), key = sourceKey(g);
+    if (key && Array.isArray(g.polygon) && g.polygon.length >= 3) candidatesBySource.set(key, [...(candidatesBySource.get(key) ?? []), { id: candidate.id, polygon: g.polygon, holes: g.holes }]);
+  }
+  const outside: SpaceContext = { apartmentUnit: null, spaceType: "exterior" };
   const walls: PlannedWall[] = [];
   for (const element of input.elements) {
     const g = geometry(element), key = sourceKey(g);
     const isWall = element.kind === "draft_wall" || effectiveValue(prop("element", element.id, "componentType")) === "wall";
     if (!isWall || !key || !Array.isArray(g.polygon)) continue;
     const rooms = roomsBySource.get(key) ?? [];
-    const sides = wallSides(g.polygon, rooms);
+    const sides = wallSides(g.polygon, rooms, [...rooms, ...(candidatesBySource.get(key) ?? [])]);
     if (!sides) continue;
-    const context = (id: string) => rooms.find(room => room.id === id)!.context;
-    const roles = sides[0] && sides[1] ? sides[0].flatMap(a => sides[1]!.map(b => deriveWallRole(context(a.roomId), context(b.roomId)))) : [null];
+    const contexts = (side: WallSide) => side === "exterior" ? [outside] : side ? side.map(item => rooms.find(room => room.id === item.roomId)!.context) : [null];
+    const roles = contexts(sides[0]).flatMap(a => contexts(sides[1]).map(b => deriveWallRole(a, b)));
     const role = roles.every(item => item && item === roles[0]) ? roles[0] : null;
-    const existing = prop("element", element.id, "wallRole");
-    const writeRole = Boolean(role) && !existing?.reviewed && (!existing?.current || (existing.current.provenance === "inferred"
-      && existing.current.value !== role && existing.current.reviewStatus !== "approved"));
-    walls.push({ wallId: element.id, sourceVersionId: g.source!.sourceVersionId!, page: g.source!.page!, planRegion: g.planRegion ?? null, sides, role, writeRole });
+    const scale = input.scales?.get(key);
+    const thicknessCm = scale ? wallThicknessCm(g.polygon, scale) : null;
+    walls.push({ wallId: element.id, sourceVersionId: g.source!.sourceVersionId!, page: g.source!.page!, planRegion: g.planRegion ?? null, sides, role,
+      writeRole: derivedWritable(prop("element", element.id, "wallRole"), role), thicknessCm,
+      writeThickness: derivedWritable(prop("element", element.id, "thickness"), thicknessCm), scaleDenominator: scale?.denominator ?? null });
   }
   return walls;
 }

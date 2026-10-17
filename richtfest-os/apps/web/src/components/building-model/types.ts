@@ -93,7 +93,7 @@ export type BuildingRegion = {
   /** Latest version of each shared component property (componentType, thickness, wallRole, ...). */
   componentProperties?: Record<string, BuildingComponentPropertyState>;
   /** Rooms on each face of a wall, from derived plan adjacency. */
-  separates?: Array<{ side: number; roomIds: string[] }>;
+  separates?: Array<{ side: number; roomIds: string[]; exterior?: boolean }>;
   status?: "unreviewed" | "reviewed" | "needs-review" | "accepted" | "rejected" | "matched" | string;
   /** Extraction candidates use the same normalized geometry as reviewed regions. */
   isCandidate?: boolean;
@@ -434,12 +434,14 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
 const propertyLabel = (properties: RecordData[]) => properties[0]?.propertyKey || "Property";
 
 function separatesByWall(relationships: RecordData[]) {
-  const result = new Map<string, Array<{ side: number; roomIds: string[] }>>();
+  const result = new Map<string, NonNullable<BuildingRegion["separates"]>>();
   for (const relationship of relationships) {
-    if (relationship.relationshipType !== "separates" || relationship.fromEntityType !== "element") continue;
+    if (!["separates", "faces_exterior"].includes(relationship.relationshipType) || relationship.fromEntityType !== "element") continue;
     const side = asNumber(relationship.metadata?.side, 0), faces = result.get(relationship.fromEntityId) ?? [];
+    const exterior = relationship.relationshipType === "faces_exterior";
     const face = faces.find((item) => item.side === side);
-    if (face) face.roomIds.push(relationship.toEntityId); else faces.push({ side, roomIds: [relationship.toEntityId] });
+    if (face) { if (exterior) face.exterior = true; else face.roomIds.push(relationship.toEntityId); }
+    else faces.push({ side, roomIds: exterior ? [] : [relationship.toEntityId], ...(exterior ? { exterior } : {}) });
     result.set(relationship.fromEntityId, faces.sort((a, b) => a.side - b.side));
   }
   return result;
