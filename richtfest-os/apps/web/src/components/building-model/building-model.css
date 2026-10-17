@@ -338,3 +338,17 @@
 .building-model-component-rows > dt.building-model-request-group { flex-direction: column; align-items: flex-start; justify-content: center; }
 .building-model-sound-popover { width: min(440px, calc(100vw - 24px)); }
 .building-model-component-rows > dd.building-model-stack { flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; }
+
+/* Sound insulation plan: accepted walls filled by wall role. Data colours, not accents. */
+.building-model-region-layer.color-wall-roles .building-model-region.element { opacity: 1; border: 1px dashed var(--wall-role, oklch(.7 0 0)); background: color-mix(in oklch, var(--wall-role, oklch(.7 0 0)) 30%, transparent); }
+.building-model-region-layer.color-wall-roles .building-model-region.element:not([data-wall-role="none"]) { border-style: solid; background: color-mix(in oklch, var(--wall-role) 80%, transparent); }
+.building-model-region-layer.color-wall-roles .building-model-region.element.selected { outline: 2px solid var(--foreground); outline-offset: 1px; }
+[data-wall-role="apartment_partition"], .building-model-role-swatch.is-apartment_partition { --wall-role: oklch(.58 .19 25); }
+[data-wall-role="corridor_partition"], .building-model-role-swatch.is-corridor_partition { --wall-role: oklch(.74 .15 70); }
+[data-wall-role="stairwell"], .building-model-role-swatch.is-stairwell { --wall-role: oklch(.52 .18 300); }
+[data-wall-role="exterior"], .building-model-role-swatch.is-exterior { --wall-role: oklch(.6 .11 220); }
+[data-wall-role="internal"], .building-model-role-swatch.is-internal { --wall-role: oklch(.62 0 0); }
+.building-model-role-legend { position: absolute; z-index: 6; left: 10px; bottom: 10px; display: grid; gap: 3px; padding: 6px 8px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: color-mix(in oklch, var(--background) 92%, transparent); font-size: var(--ui-2xs); }
+.building-model-role-legend > span { display: flex; align-items: center; gap: 6px; }
+.building-model-role-swatch { width: 14px; height: 6px; border-radius: 1px; background: var(--wall-role, oklch(.7 0 0)); }
+.building-model-role-swatch.is-none { background: transparent; border: 1px dashed oklch(.7 0 0); }

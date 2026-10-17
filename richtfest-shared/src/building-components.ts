@@ -31,6 +31,10 @@ export const buildingComponentProperties = {
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },
   },
+  /** 0 is the ground floor; upper storeys count up, basements down. */
+  storey: {
+    level: { value: z.number().int().min(-9).max(99), unit: null },
+  },
   room: {
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
     spaceType: { value: spaceTypeSchema, unit: null },

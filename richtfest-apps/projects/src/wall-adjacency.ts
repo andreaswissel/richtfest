@@ -112,7 +112,7 @@ export function roomSpaceContext(room: { name: string; groupLabel?: string | nul
   return { apartmentUnit, spaceType, inferred: true };
 }
 
-type ModelProperty = { entityType: string; entityId: string; propertyKey: string;
+export type ModelProperty = { entityType: string; entityId: string; propertyKey: string;
   current: { value: unknown; reviewStatus: string; provenance: string } | null; reviewed: { value: unknown } | null };
 type ModelEntity = { id: string; name: string; kind?: string; geometry: unknown };
 type PlanGeometry = { polygon?: Point[]; holes?: Point[][]; groupLabel?: string | null; planRegion?: { x: number; y: number; width: number; height: number };
@@ -126,7 +126,7 @@ export type PlannedWall = { wallId: string; sourceVersionId: string; page: numbe
   sides: [WallSide, WallSide]; role: WallRole | null; writeRole: boolean; thicknessCm: number | null; writeThickness: boolean; scaleDenominator: number | null };
 
 /** Derived values never replace a person's entry or any reviewed value, and are not repeated or re-proposed after rejection. */
-const derivedWritable = (existing: ModelProperty | undefined, value: unknown) => value !== null && !existing?.reviewed
+export const derivedWritable = (existing: ModelProperty | undefined, value: unknown) => value !== null && !existing?.reviewed
   && (!existing?.current || (existing.current.provenance === "inferred" && existing.current.reviewStatus !== "approved" && existing.current.value !== value));
 
 /**

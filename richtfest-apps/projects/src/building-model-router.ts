@@ -51,6 +51,8 @@ import { createBuildingOutlineRouter } from "./building-outline-router";
 import { effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks } from "./schema";
 import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
+import { planStoreyLevels, storeyLevelFromText, type StoreyLevelReading } from "./storey-levels";
+import { sourcePages } from "./schema";
 
 type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
@@ -319,7 +321,10 @@ const soundInsulationContext = (projectId: string, data: any) => {
   const records = componentRecords(data);
   const level = (data.properties as any[]).find(property => property.entityType === "building" && property.propertyKey === "soundInsulationLevel");
   const checks = soundInsulationChecks(records);
+  const levelOf = (storeyId: string) => (data.properties as any[]).find(property => property.entityType === "storey" && property.entityId === storeyId && property.propertyKey === "level");
   return {
+    storeys: (data.storeys as any[]).slice(0, 100).map(storey => { const level = levelOf(storey.id)?.current;
+      return { id: storey.id, name: storey.name, level: level && level.reviewStatus !== "rejected" ? { value: level.value, reviewStatus: level.reviewStatus, provenance: level.provenance } : storey.levelIndex === null ? null : { value: storey.levelIndex, reviewStatus: "approved", provenance: "manual" } }; }),
     requirementLevel: level?.current && level.current.reviewStatus !== "rejected" ? { value: level.current.value, reviewStatus: level.current.reviewStatus } : null,
     checks: { total: checks.length, ready: checks.filter(check => check.ready).length,
       items: checks.slice(0, 500).map(check => ({ ...check, deepLink: buildingDeepLink(projectId, "element", check.componentId) })) },
@@ -677,6 +682,17 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       }
       const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[], candidateRooms, scales });
       const storeyOf = new Map((data.elements as any[]).map(element => [element.id, element.storeyId]));
+      // Storey levels from each plan page's printed title, so ceilings know the storey above.
+      const storeyPages = (data.planSources as any[]).filter(source => source.storeyId);
+      const pageRows = storeyPages.length ? await d.db.select({ versionId: sourcePages.versionId, page: sourcePages.page, text: sql<string>`left(coalesce(${sourcePages.content}->>'text',''), 20000)` }).from(sourcePages)
+        .where(and(eq(sourcePages.tenantId, d.tenantId), inArray(sourcePages.versionId, [...new Set(storeyPages.map(source => source.sourceVersionId))]))) : [];
+      const readings = new Map<string, StoreyLevelReading & { sourceVersionId: string; page: number }>();
+      for (const source of storeyPages) {
+        const row = (pageRows as any[]).find(item => item.versionId === source.sourceVersionId && Number(item.page) === source.page);
+        const reading = row ? storeyLevelFromText(String(row.text)) : null;
+        if (reading && !readings.has(source.storeyId)) readings.set(source.storeyId, { ...reading, sourceVersionId: source.sourceVersionId, page: source.page });
+      }
+      const levels = planStoreyLevels({ storeys: data.storeys as any[], properties: data.properties as any[], readings });
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
@@ -704,10 +720,18 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
             thicknessProposals++;
           }
         }
+        let levelProposals = 0;
+        for (const level of levels.filter(item => item.write)) {
+          const reading = readings.get(level.storeyId)!;
+          await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "storey", entityId: level.storeyId, propertyKey: "level", value: level.level, unit: null, provenance: "inferred",
+            evidence: [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: reading.sourceVersionId, page: reading.page, quote: level.quote })] });
+          levelProposals++;
+        }
+        const levelOf = new Map(levels.map(level => [level.storeyId, level.level]));
         // One ceiling per storey with accepted rooms; derived links are replaced, the ceiling and its data stay.
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
           inArray(buildingRelationships.relationshipType, ["covers", "under_storey"]), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' = ${storeyCeilingMethod}`));
-        const ceilings = planStoreyCeilings({ storeys: data.storeys as any[], rooms: data.rooms as any[], elements: data.elements as any[] });
+        const ceilings = planStoreyCeilings({ storeys: (data.storeys as any[]).map(storey => ({ ...storey, levelIndex: levelOf.get(storey.id) ?? null })), rooms: data.rooms as any[], elements: data.elements as any[] });
         const ceilingRelationships: any[] = []; const createdCeilings: string[] = [];
         for (const ceiling of ceilings) {
           let ceilingId = ceiling.existingId;
@@ -728,7 +752,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
             toEntityType: "storey", toEntityId: ceiling.upperStoreyId, relationshipType: "under_storey", metadata, createdBy: d.actorId });
         }
         if (ceilingRelationships.length) await tx.insert(buildingRelationships).values(ceilingRelationships);
-        const summary = { ceilings: ceilings.length, ceilingsCreated: createdCeilings.length, walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
+        const summary = { storeyLevels: levels.filter(level => level.level !== null).length, levelProposals, ceilings: ceilings.length, ceilingsCreated: createdCeilings.length, walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
           exterior: walls.filter(wall => wall.sides.includes("exterior")).length, unresolvedSides: walls.filter(wall => !wall.sides[0] || !wall.sides[1]).length,
           roles: walls.filter(wall => wall.role).length, roleProposals, thicknesses: walls.filter(wall => wall.thicknessCm !== null).length, thicknessProposals,
           relationships: relationships.length + ceilingRelationships.length, method: wallAdjacencyMethod };

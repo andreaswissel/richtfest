@@ -25,7 +25,7 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
   const post = async (path: string, body: unknown) => { const r = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
   const revision = async () => Number((await pool.query("select revision from projects_building_models")).rows[0].revision);
   try {
-    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
       if (!/^projects_[a-z_]+$/.test(table)) throw new Error("Unexpected test table");
       await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
     }
@@ -35,6 +35,9 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     await pool.query("insert into projects_building_storeys (id,tenant_id,model_id,building_id,stable_key,name,created_by) values ($1,$2,$3,$4,'test','Test',$5)", [storey, tenant, model, building, actor]);
     await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'plan.pdf','upload',$4)", [file, tenant, project, actor]);
     await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [version, tenant, file, actor]);
+    // The page's printed title names the storey.
+    await pool.query("insert into projects_building_plan_sources (tenant_id,model_id,storey_id,source_version_id,page,created_by) values ($1,$2,$3,$4,1,$5)", [tenant, model, storey, version, actor]);
+    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,1,$3)", [version, tenant, JSON.stringify({ status: "available", text: "Wohnen\nGrundriss EG\nOKFF 1. OG +2,95\nM 1:100" })]);
     await db.insert(buildingExtractionJobs).values({ tenantId: tenant, modelId: model, sourceVersionId: version, storeyId: storey, page: 1, extractorVersion: "topology-v8", createdBy: actor });
     const pdf = syntheticPlanPdf({ unitFill: true });
     expect(await runBuildingExtraction({ db, fileStorage: { read: async () => Readable.from([pdf]) }, audit: async () => {}, reportError: () => {} } as any, new AbortController().signal)).toBe(true);
@@ -94,7 +97,9 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(derived.body.data.summary.relationships).toBe(await relationshipCount());
     expect(audits).toContain("projects.building.wall_adjacency.derived");
     // The storey gets one ceiling over all its rooms; the plan has no storey above, so none is linked.
-    expect(derived.body.data.summary).toMatchObject({ ceilings: 1, ceilingsCreated: 1 });
+    expect(derived.body.data.summary).toMatchObject({ storeyLevels: 1, levelProposals: 1, ceilings: 1, ceilingsCreated: 1 });
+    const level = (await pool.query(`select v.value, v.provenance, v.evidence from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.entity_type='storey' and p.property_key='level'`)).rows;
+    expect(level).toEqual([{ value: 0, provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: version, page: 1, quote: "Grundriss EG" }] }]);
     const ceiling = (await pool.query("select id, storey_id, geometry from projects_building_elements where kind='draft_ceiling'")).rows;
     expect(ceiling).toHaveLength(1); expect(ceiling[0].storey_id).toBe(storey);
     const covered = async () => (await pool.query("select relationship_type, to_entity_id from projects_building_relationships where from_entity_id=$1", [ceiling[0].id])).rows;
@@ -107,7 +112,7 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     const versionsBefore = Number((await pool.query("select count(*) from projects_building_property_versions")).rows[0].count);
     const rerun = await post("/wall-adjacency", { baseRevision: await revision() });
     expect(rerun.body.data.summary.roleProposals).toBe(0);
-    expect(rerun.body.data.summary).toMatchObject({ ceilings: 1, ceilingsCreated: 0 });
+    expect(rerun.body.data.summary).toMatchObject({ levelProposals: 0, ceilings: 1, ceilingsCreated: 0 });
     expect((await pool.query("select count(*) from projects_building_elements where kind='draft_ceiling'")).rows[0].count).toBe("1");
     expect(await covered()).toHaveLength(5);
     expect(Number((await pool.query("select count(*) from projects_building_property_versions")).rows[0].count)).toBe(versionsBefore);

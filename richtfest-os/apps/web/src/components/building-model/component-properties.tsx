@@ -28,6 +28,13 @@ export function regionComponentType(region: BuildingRegion): ComponentType | nul
   return elementComponentType(region.elementKind, region.componentProperties?.componentType?.value);
 }
 
+/** Current wall role: the latest non-rejected value, else the last approved one; "none" when unset. */
+export const wallRoleOf = (region: BuildingRegion) => {
+  const state = region.componentProperties?.wallRole;
+  const value = state && state.reviewStatus !== "rejected" ? state.value : state?.reviewedValue;
+  return typeof value === "string" ? value : "none";
+};
+
 export function StatusLine({ state, t, pending, onReview }: { state?: BuildingComponentPropertyState; t: T; pending: boolean; onReview: (decision: "approved" | "rejected") => void }) {
   if (!state) return null;
   const label = state.reviewStatus === "approved" ? t("buildingComponentReviewed")
@@ -81,7 +88,7 @@ export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: {
 const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
 /** Shared component data for a selected wall/ceiling or room, laid out as property rows. */
-export function ComponentProperties({ region, roomNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; t: T; pending: boolean;
+export function ComponentProperties({ region, roomNames, storeyNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; storeyNames?: Map<string, string>; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation; copy?: WallTypeCopy }) {
   const states = region.componentProperties ?? {};
   const isRoom = region.entityType === "room";
@@ -107,6 +114,8 @@ export function ComponentProperties({ region, roomNames, t, pending, onSave, onR
       {componentType === "ceiling" && region.covers && <>
         <dt>{t("buildingComponentOverRooms")}</dt>
         <dd>{region.covers.map((id) => roomNames.get(id) || id).join(", ")}</dd>
+        <dt>{t("buildingComponentStoreyAbove")}</dt>
+        <dd className={region.underStorey ? undefined : "muted"}>{region.underStorey ? storeyNames?.get(region.underStorey) || region.underStorey : t("buildingComponentStoreyAboveUnknown")}</dd>
       </>}
       {keys.map((key) => <PropertyRow key={`${region.id}:${key}`} propertyKey={key} state={states[key]} placeholder={placeholder(key)} t={t} pending={pending}
         onSave={onSave} onReview={(decision) => states[key] && onReview(states[key], decision)} />)}

@@ -96,6 +96,8 @@ export type BuildingRegion = {
   separates?: Array<{ side: number; roomIds: string[]; exterior?: boolean }>;
   /** Rooms under a derived storey ceiling. */
   covers?: string[];
+  /** Storey directly above a derived ceiling, when both levels are known. */
+  underStorey?: string;
   status?: "unreviewed" | "reviewed" | "needs-review" | "accepted" | "rejected" | "matched" | string;
   /** Extraction candidates use the same normalized geometry as reviewed regions. */
   isCandidate?: boolean;
@@ -231,7 +233,7 @@ export type BuildingModel = {
   automaticPlanProcessing: BuildingAutomaticPlanProcessing[];
   /** Plan sets replaced by another revision; hidden from the model, restorable. */
   supersededSources: BuildingSupersededSource[];
-  storeys: Array<{ id: string; name?: string; levelIndex?: number | null }>;
+  storeys: Array<{ id: string; name?: string; levelIndex?: number | null; componentProperties?: Record<string, BuildingComponentPropertyState> }>;
   /** Buildings with their shared properties, such as the agreed sound insulation level. */
   buildings: Array<{ id: string; name: string; componentProperties: Record<string, BuildingComponentPropertyState> }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
@@ -442,9 +444,15 @@ function componentStates(entityProperties: RecordData[]): Record<string, Buildin
 }
 
 function coversByCeiling(relationships: RecordData[]) {
-  const result = new Map<string, string[]>();
-  for (const relationship of relationships) if (relationship.relationshipType === "covers" && relationship.fromEntityType === "element" && relationship.toEntityType === "room")
-    result.set(relationship.fromEntityId, [...(result.get(relationship.fromEntityId) ?? []), relationship.toEntityId]);
+  const result = new Map<string, { covers: string[]; underStorey?: string }>();
+  for (const relationship of relationships) {
+    if (relationship.fromEntityType !== "element") continue;
+    const entry = result.get(relationship.fromEntityId) ?? { covers: [] };
+    if (relationship.relationshipType === "covers" && relationship.toEntityType === "room") entry.covers.push(relationship.toEntityId);
+    else if (relationship.relationshipType === "under_storey" && relationship.toEntityType === "storey") entry.underStorey = relationship.toEntityId;
+    else continue;
+    result.set(relationship.fromEntityId, entry);
+  }
   return result;
 }
 
@@ -510,7 +518,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
   const entityRowsForState = (state: BuildingModelState) => [
     ...entityRows(raw.rooms, state, "room", "room", properties, measurements),
     ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => ({ ...region,
-      ...(separates.has(region.id) ? { separates: separates.get(region.id) } : {}), ...(covers.has(region.id) ? { covers: covers.get(region.id) } : {}) })),
+      ...(separates.has(region.id) ? { separates: separates.get(region.id) } : {}), ...covers.get(region.id) })),
   ];
   return {
     id: asString(source.id) || undefined,
@@ -548,7 +556,8 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     storeys: Array.isArray(raw.storeys) ? raw.storeys.flatMap((item: unknown) => {
       if (!item || typeof item !== "object") return [];
       const row = item as RecordData;
-      return typeof row.id === "string" ? [{ id: row.id, name: typeof row.name === "string" ? row.name : undefined, levelIndex: typeof row.levelIndex === "number" ? row.levelIndex : null }] : [];
+      return typeof row.id === "string" ? [{ id: row.id, name: typeof row.name === "string" ? row.name : undefined, levelIndex: typeof row.levelIndex === "number" ? row.levelIndex : null,
+        componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "storey" && property.entityId === row.id)) }] : [];
     }) : [],
     buildings: Array.isArray(raw.buildings) ? raw.buildings.flatMap((item: unknown) => {
       const row = item && typeof item === "object" ? item as RecordData : null;

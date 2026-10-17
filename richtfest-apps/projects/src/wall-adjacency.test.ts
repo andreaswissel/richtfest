@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { componentDataRequest, componentInputGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
 import { planWallAdjacency, roomSpaceContext } from "./wall-adjacency";
 import { planStoreyCeilings } from "./storey-ceilings";
+import { planStoreyLevels, storeyLevelFromText } from "./storey-levels";
 
 const rect = (x0: number, y0: number, x1: number, y1: number) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
 const source = { sourceVersionId: "00000000-0000-4000-8000-000000000001", page: 2 };
@@ -136,4 +137,20 @@ test("each storey with plan rooms gets one ceiling; the storey above is linked o
   expect(ceilings.map(ceiling => [ceiling.storeyId, ceiling.upperStoreyId, ceiling.existingId, ceiling.source.page, ceiling.roomIds.length, ceiling.constructionState])).toEqual([
     ["eg", "og1", null, 3, 3, "unknown"], ["og1", "empty", "existing", 2, 1, "proposed"], ["og2", null, null, 2, 1, "unknown"]]);
   expect(ceilings[0].name).toBe("Ceiling above EG");
+});
+
+test("storey levels come from the drawing title, never from level marks of other storeys", () => {
+  const cases: Array<[string, number | "top" | null]> = [
+    ["Wohnen\nGrundriss EG\nM 1:100", 0], ["GRUNDRISS 1. OG\nOKFF EG ±0,00\nOKFF 1. OG +2,95", 1], ["Grundriss 2. Obergeschoss", 2], ["Grundriss OG2", 2],
+    ["Grundriss Dachgeschoss\nOKFF 3. OG", "top"], ["Kellergeschoss", -1], ["Bendenweg 12", null], ["OKFF EG\nOKFF 1.OG", null], ["Grundriss UG", -1],
+  ];
+  expect(cases.map(([text]) => [text, storeyLevelFromText(text)?.level ?? null])).toEqual(cases);
+  expect(storeyLevelFromText("GRUNDRISS 1. OG\nOKFF EG")!.quote).toBe("GRUNDRISS 1. OG");
+
+  const storeys = [{ id: "eg", buildingId: "b", levelIndex: null }, { id: "og", buildingId: "b", levelIndex: null }, { id: "dg", buildingId: "b", levelIndex: null }, { id: "set", buildingId: "b", levelIndex: 5 }];
+  const readings = new Map([["eg", { level: 0, quote: "Grundriss EG" }], ["og", { level: 1, quote: "Grundriss 1. OG" }], ["dg", { level: "top" as const, quote: "Grundriss DG" }], ["set", { level: 0, quote: "Grundriss EG" }]]);
+  // The attic sits above every other storey of the building, including one whose level a person set.
+  expect(planStoreyLevels({ storeys, properties: [], readings }).map(item => [item.storeyId, item.level, item.write])).toEqual([["eg", 0, true], ["og", 1, true], ["dg", 6, true], ["set", 5, false]]);
+  const entered = [{ entityType: "storey", entityId: "og", propertyKey: "level", current: { value: 2, reviewStatus: "unreviewed", provenance: "manual" }, reviewed: null }];
+  expect(planStoreyLevels({ storeys: storeys.slice(0, 2), properties: entered, readings }).map(item => [item.storeyId, item.level, item.write])).toEqual([["eg", 0, true], ["og", 2, false]]);
 });

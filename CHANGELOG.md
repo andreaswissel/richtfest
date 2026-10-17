@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Building model: **Derive from plan** reads each storey's level from the plan title (for example "Grundriss 1. OG"), so ceilings know the storey above; levels can be corrected under **Sound insulation → Storeys**. **Color walls by role** fills the plan's walls by wall role with a legend.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

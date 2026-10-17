@@ -1780,5 +1780,15 @@
   "buildingSoundNothingToRequest": "Nothing to request: every wall and ceiling has its inputs.",
   "buildingSoundWallOne": "1 wall",
   "buildingSoundCeilingOne": "1 ceiling",
-  "buildingSoundChecksShort": "{ready}/{total} ready"
+  "buildingSoundChecksShort": "{ready}/{total} ready",
+  "buildingStoreys": "Storeys",
+  "buildingStoreyLevel": "Storey level",
+  "buildingStoreyGround": "Ground floor (EG)",
+  "buildingStoreyUpper": "Upper floor {n} ({n}. OG)",
+  "buildingStoreyBasement": "Basement {n} ({n}. UG)",
+  "buildingStoreyLevelsHint": "Read from each plan's title by Derive from plan. Ceilings use the levels to find the storey above.",
+  "buildingComponentStoreyAbove": "Storey above",
+  "buildingComponentStoreyAboveUnknown": "Unknown · set storey levels under Sound insulation",
+  "buildingSoundColorWalls": "Color walls by role",
+  "buildingSoundWallRoleLegend": "Wall roles"
 }

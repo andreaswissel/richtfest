@@ -11,11 +11,13 @@ import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
+import { AudioLines, ChevronDown, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
-import { ComponentProperties, WallTypeReview, regionComponentType, type ComponentPropertySave } from "./component-properties";
-import { componentRecord, DataRequest, SoundInsulationOverview } from "./sound-insulation";
+import { wallRoleSchema } from "@richtfest/shared";
+const wallRoleOptions: string[] = wallRoleSchema.options;
+import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
+import { componentRecord, DataRequest, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
@@ -434,6 +436,19 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  const [colorWallRoles, setColorWallRoles] = useState(false);
+  const saveStoreyLevel = useMutation({
+    mutationFn: ({ storeyId, level }: { storeyId: string; level: number | null }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+      entityType: "storey", entityId: storeyId, propertyKey: "level", value: level, unit: null, provenance: "manual", evidence: [] }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const storeyNames = useMemo(() => new Map(model.storeys.map((storey) => {
+    const state = storey.componentProperties?.level;
+    const level = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null;
+    return [storey.id, level === null ? storey.name || storey.id : `${storeyLevelLabel(level, t)} · ${storey.name || storey.id}`];
+  })), [model, t]);
   const modelComponents = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region)).map((region) => [region.id, region])).values()], [model]);
   const soundChecks = useMemo(() => { const checks = soundInsulationChecks(modelComponents.map(componentRecord)); return { total: checks.length, ready: checks.filter((check) => check.ready).length }; }, [modelComponents]);
   const modelWalls = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region) === "wall").map((region) => [region.id, region])).values()], [model]);
@@ -780,10 +795,14 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               onLevel={model.buildings[0] ? (save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save }) : undefined}
               onReviewLevel={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
               derive={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }} />
+            <h2 className="building-model-panel-title">{t("buildingStoreys")}</h2>
+            <StoreyLevels storeys={model.storeys} t={t} pending={saveStoreyLevel.isPending || reviewComponentProperty.isPending}
+              onSave={(storeyId, level) => saveStoreyLevel.mutate({ storeyId, level })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
             <h2 className="building-model-panel-title">{t("buildingSoundRequest")}</h2>
             <DataRequest components={modelComponents} t={t} />
           </PopoverContent>
         </Popover>
+        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles} onClick={() => setColorWallRoles((value) => !value)}><Palette className="size-icon-sm" aria-hidden="true" /></Button>
         <Badge title={model.reviewStatus === "needs-review" ? t("buildingModelReviewInWorkspace") : model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}>{statusLabel(model.reviewStatus, t)}</Badge>
         <div className="building-model-toolbar-end">
           <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelUndo")} title={`${t("buildingModelUndo")} (⌘Z)`} disabled={!outlineSession?.history.length} onClick={undoOutline}><Undo2 className="size-icon-sm" aria-hidden="true" /></Button>
@@ -813,11 +832,15 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
           <div className={`building-model-automatic-canvas is-tool-${activeTool}`}>
             <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
               <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => { const candidate = sourceCandidates.find((item) => item.id === id); if (candidate) selectCandidate(candidate); else selectRegion(id); }} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView"), magicSurface: planTool === "measure" ? t("buildingModelMeasureHint") : t("buildingModelMagicHint"), point: t("buildingModelOutlinePoint"), addPoint: t("buildingModelOutlineAddPoint") }}
-                hideViewControls tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
+                hideViewControls colorWallRoles={colorWallRoles} tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
                 onPlanPick={(point) => { if (planTool === "measure") setMeasurePoints((current) => current.length >= 2 ? [point] : [...current, point]); else if (!magicSelect.isPending) magicSelect.mutate(point); }}
                 outline={outlineSession ? { draft: outlineSession.draft, snap: snapToWalls, onBegin: beginOutlineChange, onChange: (draft) => updateOutline((session) => ({ ...session, draft })) } : null} />
             </Suspense>
             {currentAutomaticActive && <div className="building-model-scan-sweep" aria-hidden="true" />}
+            {colorWallRoles && <div className="building-model-role-legend" aria-label={t("buildingSoundWallRoleLegend")}>
+              {[...wallRoleOptions, "none"].flatMap((role) => { const count = pageRegions.filter((region) => region.entityType === "element" && regionComponentType(region) === "wall" && wallRoleOf(region) === role).length;
+                return count ? [<span key={role}><i className={`building-model-role-swatch is-${role}`} aria-hidden="true" />{role === "none" ? t("buildingSoundWallsWithoutRole") : t(`buildingComponentWallRole${role.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase())}` as keyof typeof import("../../locales/en.json"))} · {count}</span>] : []; })}
+            </div>}
             {(conflict || modelError || magicNotice || magicSelect.isPending) && <div className="building-model-canvas-notices" aria-live="polite">
               {conflict && <Callout tone="warning">{conflict}</Callout>}
               {modelError && <Callout tone="error">{modelError.message}</Callout>}
@@ -840,7 +863,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
               : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
                 onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
-                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} storeyNames={storeyNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),

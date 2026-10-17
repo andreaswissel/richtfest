@@ -1,3 +1,4 @@
+import { wallRoleOf } from "./component-properties";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Minus, Plus, RotateCcw } from "lucide-react";
@@ -179,6 +180,7 @@ export function PdfEvidenceRenderer({
   outline,
   measure,
   hideViewControls = false,
+  colorWallRoles = false,
 }: {
   projectId: string;
   evidence: BuildingEvidence;
@@ -201,6 +203,8 @@ export function PdfEvidenceRenderer({
   measure?: { points: BuildingPlanPoint[]; label?: string } | null;
   /** The workbench renders its own zoom controls in the tool rail. */
   hideViewControls?: boolean;
+  /** Fill accepted walls by their wall role, as on a sound insulation plan. */
+  colorWallRoles?: boolean;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const evidenceCanvas = useRef<HTMLDivElement>(null);
@@ -404,14 +408,14 @@ export function PdfEvidenceRenderer({
       </div>}
       <div ref={surfaceRef} className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         {source ? <canvas ref={canvas} className="building-model-pdf" aria-label={`${evidence.fileName} · page ${page}`} /> : <div className="building-model-pdf-empty"><span className="mono">PDF</span><p>{labels.empty}</p></div>}
-        <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}${outline || tool !== "select" ? " is-inert" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
+        <div className={`building-model-region-layer${colorWallRoles ? " color-wall-roles" : ""}${hasSelectedRegion ? " has-selection" : ""}${outline || tool !== "select" ? " is-inert" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
           {pageRegions.map((region) => {
             const role = region.isCandidate ? region.candidateRole || candidateRole(region) : undefined;
             // Room outlines are drawn as their exact polygon; the bounding-box button only provides focus and hit area.
             const shapePath = !region.parts?.length && region.entityType !== "element" && region.kind !== "element" ? regionShapePath(region) : undefined;
             const candidateClass = role === "draft-wall" ? "draft-wall" : role === "raw-footprint" ? "footprint" : role === "construction-assembly" ? "assembly" : region.isCandidate && (region.geometryQuality === "approximate_partition" || region.geometryQuality === "approximate_region") ? "approximate" : region.isCandidate ? "anchor" : "";
             return (
-            <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}${shapePath ? " has-outline" : ""}`} style={regionOverlayStyle(region)} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
+            <button key={region.id} ref={(node) => { if (node) regionButtonRefs.current.set(region.id, node); else regionButtonRefs.current.delete(region.id); }} type="button" className={`building-model-region ${region.kind} ${region.isCandidate ? "candidate" : ""} ${candidateClass} ${selectedId === region.id ? "selected" : ""}${shapePath ? " has-outline" : ""}`} style={regionOverlayStyle(region)} data-wall-role={region.entityType === "element" ? wallRoleOf(region) : undefined} onClick={(event) => selectOverlayRegion(event, region)} aria-pressed={selectedId === region.id} aria-label={`${region.label} · ${role || region.kind}`}>
               <span className="building-model-region-hit-area" aria-hidden="true" />
               {region.isCandidate && region.parts?.length ? region.parts.map((part, index) => <span key={`${region.id}-part-${index}`} className="building-model-region-shape" style={{ ...partOverlayStyle(part, region.box), clipPath: polygonClipPath({ box: part.box, polygon: part.polygon, geometryQuality: "assembly" }) }} aria-hidden="true" />) : shapePath ? <svg className="building-model-region-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d={shapePath} fillRule="evenodd" vectorEffect="non-scaling-stroke" /></svg> : region.isCandidate && polygonClipPath(region) ? <span className="building-model-region-shape" style={{ clipPath: polygonClipPath(region) }} aria-hidden="true" /> : null}
               <span className="building-model-region-label">{region.label}</span>

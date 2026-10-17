@@ -2,7 +2,8 @@ import { Fragment, useState } from "react";
 import { componentDataRequest, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
-import { fieldLabel, optionLabel, PropertyRow, regionComponentType, type ComponentPropertySave } from "./component-properties";
+import { NativeSelect } from "../ui/native-select";
+import { fieldLabel, optionLabel, PropertyRow, regionComponentType, StatusLine, type ComponentPropertySave } from "./component-properties";
 import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
 
 type T = ReturnType<typeof useT>;
@@ -86,5 +87,38 @@ export function DataRequest({ components, t }: { components: BuildingRegion[]; t
         <p className="muted text-ui-2xs" role="status">{copied ? t("buildingSoundCopied") : t("buildingSoundRequestHint")}</p>
       </div>
     </> : <p className="muted text-ui-2xs">{t("buildingSoundNothingToRequest")}</p>}
+  </>;
+}
+
+/** "EG", "1. OG", "UG" style label for a storey level. */
+export const storeyLevelLabel = (level: number, t: T) => level === 0 ? t("buildingStoreyGround")
+  : (level > 0 ? t("buildingStoreyUpper") : t("buildingStoreyBasement")).replace("{n}", String(Math.abs(level)));
+const levelOptions = Array.from({ length: 16 }, (_, index) => index - 3);
+
+/** Storey levels: read from each plan's title, set by a person when the title does not say. Ceilings use them to find the storey above. */
+export function StoreyLevels({ storeys, t, pending, onSave, onReview }: {
+  storeys: Array<{ id: string; name?: string; levelIndex?: number | null; componentProperties?: Record<string, BuildingComponentPropertyState> }>; t: T; pending: boolean;
+  onSave: (storeyId: string, level: number | null) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void;
+}) {
+  if (!storeys.length) return null;
+  return <>
+    <dl className="building-model-component-rows">
+      {storeys.map((storey) => {
+        const state = storey.componentProperties?.level;
+        const value = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : state?.reviewedValue ?? storey.levelIndex ?? null;
+        return <Fragment key={storey.id}>
+          <dt>{storey.name || storey.id}</dt>
+          <dd>
+            <NativeSelect aria-label={`${t("buildingStoreyLevel")}: ${storey.name || storey.id}`} value={value === null ? "" : String(value)} disabled={pending}
+              onChange={(event) => onSave(storey.id, event.target.value === "" ? null : Number(event.target.value))}>
+              <option value="">{t("buildingModelUnknownValue")}</option>
+              {levelOptions.map((level) => <option key={level} value={level}>{storeyLevelLabel(level, t)}</option>)}
+            </NativeSelect>
+            <StatusLine state={state} t={t} pending={pending} onReview={(decision) => state && onReview(state, decision)} />
+          </dd>
+        </Fragment>;
+      })}
+    </dl>
+    <p className="muted text-ui-2xs">{t("buildingStoreyLevelsHint")}</p>
   </>;
 }

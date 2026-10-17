@@ -1780,5 +1780,15 @@
   "buildingSoundNothingToRequest": "Nichts anzufragen: Alle Wände und Decken haben ihre Angaben.",
   "buildingSoundWallOne": "1 Wand",
   "buildingSoundCeilingOne": "1 Decke",
-  "buildingSoundChecksShort": "{ready}/{total} bereit"
+  "buildingSoundChecksShort": "{ready}/{total} bereit",
+  "buildingStoreys": "Geschosse",
+  "buildingStoreyLevel": "Geschossebene",
+  "buildingStoreyGround": "Erdgeschoss (EG)",
+  "buildingStoreyUpper": "{n}. Obergeschoss ({n}. OG)",
+  "buildingStoreyBasement": "{n}. Untergeschoss ({n}. UG)",
+  "buildingStoreyLevelsHint": "Wird von „Aus Plan ableiten“ aus dem Plantitel gelesen. Decken bestimmen damit das Geschoss darüber.",
+  "buildingComponentStoreyAbove": "Geschoss darüber",
+  "buildingComponentStoreyAboveUnknown": "Unbekannt · Geschossebenen unter Schallschutz festlegen",
+  "buildingSoundColorWalls": "Wände nach Funktion einfärben",
+  "buildingSoundWallRoleLegend": "Wandfunktionen"
 }
