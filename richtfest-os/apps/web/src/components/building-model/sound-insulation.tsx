@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { componentDataRequest, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup } from "@richtfest/shared";
+import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
@@ -120,5 +120,19 @@ export function StoreyLevels({ storeys, t, pending, onSave, onReview }: {
       })}
     </dl>
     <p className="muted text-ui-2xs">{t("buildingStoreyLevelsHint")}</p>
+  </>;
+}
+
+/** Which law and editions apply, checked first: federal state, Bebauungsplan, Landesbauordnung, VVTB and DIN 4109. Approving a value confirms it. */
+export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { properties: Record<string, BuildingComponentPropertyState>; t: T; pending: boolean;
+  onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void }) {
+  const live = (key: string) => properties[key] && properties[key].reviewStatus !== "rejected" ? properties[key].value : null;
+  const gaps = regulatoryBasisGaps(Object.fromEntries(Object.entries(properties).map(([key, state]) => [key, { value: state.value, reviewStatus: state.reviewStatus }])));
+  return <>
+    <dl className="building-model-component-rows">
+      {regulatoryBasisKeys.filter((key) => key !== "bebauungsplanNoise" || live("bebauungsplan") === "applies").map((key) =>
+        <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
+    </dl>
+    <p className="muted text-ui-2xs">{gaps.length ? `${t("buildingRegulatoryOpen")}: ${gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingRegulatoryUnconfirmed")})`).join(", ")}` : t("buildingRegulatoryConfirmed")}</p>
   </>;
 }

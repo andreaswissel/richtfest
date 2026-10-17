@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { componentConstructionSchema, componentInputGaps, componentTypeSchema, elementComponentType, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, componentConstructionSchema, componentInputGaps, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -15,6 +15,7 @@ export type ComponentPropertySave = { key: string; value: string | number | null
 const enumOptions: Record<string, readonly string[]> = {
   componentType: componentTypeSchema.options, construction: componentConstructionSchema.options,
   wallRole: wallRoleSchema.options, spaceType: spaceTypeSchema.options, soundInsulationLevel: soundInsulationLevelSchema.options,
+  federalState: federalStateSchema.options, bebauungsplan: bebauungsplanSchema.options,
 };
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];

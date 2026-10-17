@@ -17,6 +17,8 @@ import {
   componentInputGaps,
   elementComponentType,
   soundInsulationChecks,
+  regulatoryBasisGaps,
+  regulatoryBasisKeys,
   validateBuildingComponentProperty,
   type BuildingComponentRecord,
 } from "@richtfest/shared";
@@ -319,12 +321,17 @@ const componentGaps = (projectId: string, data: any, objectId?: string) => compo
  */
 const soundInsulationContext = (projectId: string, data: any) => {
   const records = componentRecords(data);
-  const level = (data.properties as any[]).find(property => property.entityType === "building" && property.propertyKey === "soundInsulationLevel");
+  const building = (data.buildings as any[])[0];
+  const buildingProperty = (key: string) => (data.properties as any[]).find(property => property.entityType === "building" && property.entityId === building?.id && property.propertyKey === key);
+  const level = buildingProperty("soundInsulationLevel");
+  const regulatory = Object.fromEntries(regulatoryBasisKeys.map(key => { const current = buildingProperty(key)?.current;
+    return [key, current ? { value: current.value, reviewStatus: current.reviewStatus } : null]; }));
   const checks = soundInsulationChecks(records);
   const levelOf = (storeyId: string) => (data.properties as any[]).find(property => property.entityType === "storey" && property.entityId === storeyId && property.propertyKey === "level");
   return {
     storeys: (data.storeys as any[]).slice(0, 100).map(storey => { const level = levelOf(storey.id)?.current;
       return { id: storey.id, name: storey.name, level: level && level.reviewStatus !== "rejected" ? { value: level.value, reviewStatus: level.reviewStatus, provenance: level.provenance } : storey.levelIndex === null ? null : { value: storey.levelIndex, reviewStatus: "approved", provenance: "manual" } }; }),
+    regulatoryBasis: { ...Object.fromEntries(Object.entries(regulatory).filter(([, state]) => state && state.reviewStatus !== "rejected")), gaps: regulatoryBasisGaps(regulatory) },
     requirementLevel: level?.current && level.current.reviewStatus !== "rejected" ? { value: level.current.value, reviewStatus: level.current.reviewStatus } : null,
     checks: { total: checks.length, ready: checks.filter(check => check.ready).length,
       items: checks.slice(0, 500).map(check => ({ ...check, deepLink: buildingDeepLink(projectId, "element", check.componentId) })) },

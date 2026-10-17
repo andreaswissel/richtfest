@@ -85,6 +85,7 @@ Under the fields, **Needed for sound insulation** lists what a calculation still
 
 **Sound insulation** in the building model toolbar collects what the assessment needs before anyone calculates:
 
+- **Regulatory basis**: checked first. The federal state (whose Landesbauordnung and VVTB apply), whether a Bebauungsplan covers the site and, if so, its noise requirements, and the editions of the Landesbauordnung, VVTB and DIN 4109 that apply. Approving a value confirms it for the project; the list below the fields shows what is still missing or unconfirmed. Richtfest does not look up plans or editions itself.
 - **Requirement level**: the level agreed with client and architect, DIN 4109-1 minimum, elevated (about 3 dB better) or DEGA 103. It is a reviewed requirement on the building.
 - **Separating components**: the apartment partition, corridor partition and stairwell walls and the ceilings that need a verification, and how many have complete, reviewed inputs.
 - **Calculation**: shown as not available. Airborne and impact sound need a validated DIN 4109-2 calculation tool, which Richtfest does not have yet; no values are estimated in its place.
@@ -93,7 +94,7 @@ Under the fields, **Needed for sound insulation** lists what a calculation still
 
 **Color walls by role** (palette button next to Sound insulation) fills every accepted wall on the plan by its role, with a legend: apartment partition, corridor partition, stairwell, exterior, within an apartment, and dashed for walls without a role. It is the quickest way to check derived roles against the plan.
 
-Agents receive the same requirement level, storey levels, checks, data request and ceiling links in their building-model context.
+Agents receive the same regulatory basis, requirement level, storey levels, checks, data request and ceiling links in their building-model context.
 
 ### Extract room and construction candidates from a plan
 

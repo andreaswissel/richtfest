@@ -159,9 +159,14 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "soundInsulationLevel", claimKind: "requirement", value: "louder", provenance: "manual" })).status).toBe(422);
     expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "soundInsulationLevel", claimKind: "requirement", value: "elevated", provenance: "manual" })).status).toBe(201);
 
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "federalState", claimKind: "requirement", value: "XX", provenance: "manual" })).status).toBe(422);
+    expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: "bebauungsplan", claimKind: "requirement", value: "applies", provenance: "manual" })).status).toBe(201);
+
     const context = await (await fetch(base + "/agent-context")).json();
     const sound = context.data.soundInsulation;
     expect(sound.requirementLevel).toEqual({ value: "elevated", reviewStatus: "unreviewed" });
+    expect(sound.regulatoryBasis.bebauungsplan).toEqual({ value: "applies", reviewStatus: "unreviewed" });
+    expect(sound.regulatoryBasis.gaps.map((gap: any) => `${gap.field}:${gap.status}`)).toEqual(["federalState:missing", "bebauungsplan:unreviewed", "bebauungsplanNoise:missing", "stateBuildingCodeEdition:missing", "vvtbEdition:missing", "din4109Edition:missing"]);
     expect(sound.calculation.available).toBe(false);
     // Apartment partitions (3 walls incl. the kitchen wall a person marked) and the ceiling need verifying; none is complete yet.
     expect(sound.checks).toMatchObject({ total: [...(await roles()).values()].filter(r => ["apartment_partition", "corridor_partition", "stairwell"].includes(r.value)).length + 1, ready: 0 });

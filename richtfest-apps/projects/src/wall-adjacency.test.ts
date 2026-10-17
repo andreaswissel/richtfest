@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { componentDataRequest, componentInputGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
+import { componentDataRequest, componentInputGaps, regulatoryBasisGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
 import { planWallAdjacency, roomSpaceContext } from "./wall-adjacency";
 import { planStoreyCeilings } from "./storey-ceilings";
 import { planStoreyLevels, storeyLevelFromText } from "./storey-levels";
@@ -153,4 +153,12 @@ test("storey levels come from the drawing title, never from level marks of other
   expect(planStoreyLevels({ storeys, properties: [], readings }).map(item => [item.storeyId, item.level, item.write])).toEqual([["eg", 0, true], ["og", 1, true], ["dg", 6, true], ["set", 5, false]]);
   const entered = [{ entityType: "storey", entityId: "og", propertyKey: "level", current: { value: 2, reviewStatus: "unreviewed", provenance: "manual" }, reviewed: null }];
   expect(planStoreyLevels({ storeys: storeys.slice(0, 2), properties: entered, readings }).map(item => [item.storeyId, item.level, item.write])).toEqual([["eg", 0, true], ["og", 2, false]]);
+});
+
+test("the regulatory basis asks for Bebauungsplan noise requirements only when a plan applies", () => {
+  const approved = (value: unknown) => ({ value, reviewStatus: "approved" });
+  const settled = { federalState: approved("RP"), stateBuildingCodeEdition: approved("LBauO 2024"), vvtbEdition: approved("VVTB RLP 2023"), din4109Edition: approved("2018-01") };
+  expect(regulatoryBasisGaps({ ...settled, bebauungsplan: approved("none") })).toEqual([]);
+  expect(regulatoryBasisGaps({ ...settled, bebauungsplan: approved("applies") })).toEqual([{ field: "bebauungsplanNoise", status: "missing" }]);
+  expect(regulatoryBasisGaps({ ...settled, din4109Edition: { value: "2018-01", reviewStatus: "unreviewed" } }).map(gap => `${gap.field}:${gap.status}`)).toEqual(["bebauungsplan:missing", "din4109Edition:unreviewed"]);
 });

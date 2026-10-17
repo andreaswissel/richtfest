@@ -16,6 +16,12 @@ export const spaceTypeSchema = z.enum(["apartment", "common_corridor", "stairwel
 export type SpaceType = z.infer<typeof spaceTypeSchema>;
 /** Agreed sound insulation level: the statutory DIN 4109-1 minimum, the elevated civil-law level or DEGA 103. */
 export const soundInsulationLevelSchema = z.enum(["statutory_minimum", "elevated", "dega"]);
+/** German federal state: its Landesbauordnung and VVTB apply. */
+export const federalStateSchema = z.enum(["BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH"]);
+/** Whether a Bebauungsplan covers the site; it is checked first and binds the assessment. */
+export const bebauungsplanSchema = z.enum(["applies", "none"]);
+/** Regulatory basis keys, in the order the specialist checks them. */
+export const regulatoryBasisKeys = ["federalState", "bebauungsplan", "bebauungsplanNoise", "stateBuildingCodeEdition", "vvtbEdition", "din4109Edition"] as const;
 export type SoundInsulationLevel = z.infer<typeof soundInsulationLevelSchema>;
 
 type PropertySpec = { value: z.ZodTypeAny; unit: string | null };
@@ -30,6 +36,13 @@ export const buildingComponentProperties = {
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },
+    // Regulatory basis: which law and editions apply, confirmed by approving each value.
+    federalState: { value: federalStateSchema, unit: null },
+    bebauungsplan: { value: bebauungsplanSchema, unit: null },
+    bebauungsplanNoise: { value: z.string().trim().min(1).max(1000), unit: null },
+    stateBuildingCodeEdition: { value: z.string().trim().min(1).max(120), unit: null },
+    vvtbEdition: { value: z.string().trim().min(1).max(120), unit: null },
+    din4109Edition: { value: z.string().trim().min(1).max(120), unit: null },
   },
   /** 0 is the ground floor; upper storeys count up, basements down. */
   storey: {
@@ -175,5 +188,18 @@ export function soundInsulationChecks(components: BuildingComponentRecord[]): So
     if (component.componentType === "wall" ? !role || !(verifiedWallRoles as readonly string[]).includes(role) : component.componentType !== "ceiling") return [];
     const gaps = componentInputGaps(component.componentType, Object.fromEntries(Object.entries(component.properties).map(([key, state]) => [key, state ? { value: state.value, reviewStatus: state.reviewStatus } : null])));
     return [{ componentId: component.id, componentType: component.componentType as "wall" | "ceiling", wallRole: role, ready: gaps.length === 0, gaps }];
+  });
+}
+
+/**
+ * Regulatory basis items still to settle: missing or not yet confirmed by a
+ * person. Bebauungsplan noise requirements are only asked for when a plan applies.
+ */
+export function regulatoryBasisGaps(properties: Record<string, ComponentPropertyState>): ComponentInputGap[] {
+  const keys = regulatoryBasisKeys.filter(key => key !== "bebauungsplanNoise" || properties.bebauungsplan?.value === "applies");
+  return keys.flatMap((field): ComponentInputGap[] => {
+    const state = properties[field];
+    if (!state || state.value === null || state.value === undefined || state.reviewStatus === "rejected") return [{ field, status: "missing" }];
+    return state.reviewStatus === "approved" ? [] : [{ field, status: "unreviewed" }];
   });
 }

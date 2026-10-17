@@ -17,7 +17,7 @@ import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
-import { componentRecord, DataRequest, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
+import { componentRecord, DataRequest, RegulatoryBasis, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
@@ -789,6 +789,11 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
+            {model.buildings[0] && <>
+              <h2 className="building-model-panel-title">{t("buildingRegulatoryBasis")}</h2>
+              <RegulatoryBasis properties={model.buildings[0].componentProperties} t={t} pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+                onSave={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+            </>}
             <h2 className="building-model-panel-title">{t("buildingSoundInsulation")}</h2>
             <SoundInsulationOverview components={modelComponents} level={model.buildings[0]?.componentProperties.soundInsulationLevel} t={t}
               pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
