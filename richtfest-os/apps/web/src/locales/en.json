@@ -1900,5 +1900,19 @@
   "inquiryImportEmail": "Import email (.eml)",
   "inquiryImportEmailHint": "Fills the entry from an exported email; the email and its attachments are kept in Sources.",
   "inquiryImportEmailPending": "Reading email and saving attachments…",
-  "inquiryImportEmailDone": "From {from} · saved to Sources: {files}. Check the entry, then add it."
+  "inquiryImportEmailDone": "From {from} · saved to Sources: {files}. Check the entry, then add it.",
+  "inquiryForwardingAddress": "Forwarding address",
+  "inquiryForwardingUnconfigured": "Email forwarding is not set up for this workspace.",
+  "inquiryForwardingHint": "Forward or CC emails here; each inquiry has its own reply address.",
+  "inquiryForwardingCreate": "Create forwarding address",
+  "inquiryAddressCopy": "Copy",
+  "inquiryAddressCopied": "Copied",
+  "inquiryInbox": "Inbox",
+  "inquiryOriginalEmail": "Original email",
+  "inquiryFileTo": "File to inquiry",
+  "inquiryFileEmail": "File email",
+  "inquiryDismissEmail": "Dismiss",
+  "inquiryReplyAddress": "Reply address",
+  "inquiryReplyAddressHint": "CC it when you send the request; replies to it are filed here automatically.",
+  "inquiryViaForwarding": "Forwarded"
 }

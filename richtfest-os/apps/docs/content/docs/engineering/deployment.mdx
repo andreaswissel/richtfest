@@ -57,6 +57,16 @@ Configure the database connection, canonical HTTPS origin, authentication secret
 
 Choose the canonical origin before enrolling production passkeys. Keep local/test identities and preview mail delivery out of production. Missing delivery or provider configuration must remain explicit.
 
+### Inbound email
+
+Project forwarding addresses need a Resend receiving domain and webhook:
+
+1. In Resend, enable receiving on a domain: a custom subdomain such as `in.richtfest.ai` with Resend's MX record, or the account's managed `<id>.resend.app` address.
+2. Create a webhook for `email.received` pointing at `https://app.richtfest.ai/api/inbound-email/resend` and copy its signing secret.
+3. Set `INBOUND_EMAIL_DOMAIN` (the receiving domain) and `RESEND_WEBHOOK_SECRET` on the API service; `RESEND_API_KEY` is reused to fetch each message.
+
+Without all three, the endpoint is not mounted and the Inquiries view says forwarding is not set up. Only signed requests are accepted. The payload carries metadata only; Richtfest downloads the original message from Resend, keeps it and its attachments as project sources and files it. Mail to an unknown address is acknowledged and dropped; a failure returns 502 so Resend retries, and a retried message is filed once.
+
 ### Project address search
 
 Set `GEOAPIFY_API_KEY` on the API service to enable project address autocomplete. Keep it server-side, never in a `VITE_` variable or source control. The Railway declaration preserves the secret; preparing the declaration does not configure an account, apply infrastructure or deploy. Without a key, the selector reports that search is unconfigured and still accepts manual addresses.

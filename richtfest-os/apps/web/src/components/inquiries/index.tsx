@@ -13,6 +13,7 @@ import { inquiryDirectionLabel, inquiryEntryKindLabel, inquiryStatusLabel } from
 import { inquiryLink, type InquiryDetail, type InquiryDirection, type InquiryEntry, type InquiryStatus, type InquirySummary } from "./types";
 import { fieldLabel, optionLabel } from "../building-model/component-properties";
 import { importEmail } from "./email-import";
+import { CopyAddress, ForwardingInbox } from "./inbox";
 import "./inquiries.css";
 
 type T = ReturnType<typeof useT>;
@@ -36,6 +37,7 @@ export function Inquiries({ projectId, selectedId }: { projectId: string; select
   const [creating, setCreating] = useState(false);
   return <div className="inquiries">
     <Section title={t("inquiries")} meta={<Button size="sm" variant="outline" onClick={() => setCreating((value) => !value)} aria-expanded={creating}>＋ {t("inquiryNew")}</Button>}>
+      <ForwardingInbox projectId={projectId} inquiries={inquiries} t={t} />
       {creating && <NewInquiry projectId={projectId} t={t} onDone={() => setCreating(false)} />}
       {query.isError && <Callout tone="error">{(query.error as Error).message}</Callout>}
       {inquiries.length ? <Table headers={[t("inquiryTitle"), t("inquiryCounterpart"), t("inquiryStatus"), t("inquiryOutstanding"), t("inquiryUpdated")]}
@@ -90,6 +92,8 @@ function InquiryView({ projectId, inquiryId, t }: { projectId: string; inquiryId
   </div>}>
     <dl className="inquiry-facts">
       <dt>{t("inquiryCounterpart")}</dt><dd>{inquiry.counterpart}</dd>
+      {inquiry.replyAddress && <><dt>{t("inquiryReplyAddress")}</dt><dd className="inquiry-stack"><CopyAddress address={inquiry.replyAddress} t={t} />
+        <span className="muted text-ui-xs">{t("inquiryReplyAddressHint")}</span></dd></>}
       <dt>{t("inquiryKind")}</dt>
       <dd>{inquiry.kind === "component_data" ? t("inquiryKindComponentData") : t("inquiryKindGeneral")}</dd>
       {inquiry.progress && <>
@@ -125,6 +129,7 @@ function EntryItem({ projectId, inquiry, entry, t }: { projectId: string; inquir
       <strong>{inquiryEntryKindLabel(entry.kind, t)}</strong>
       <span className="muted">{inquiryDirectionLabel(entry.direction, t)} · {formatDate(entry.occurredAt, true)}</span>
       {entry.subject && <span className="inquiry-entry-subject">{entry.subject}</span>}
+      {entry.inboundEmailId && <Badge variant="outline">{t("inquiryViaForwarding")}</Badge>}
     </div>
     {entry.body && <p className="inquiry-entry-body">{entry.body}</p>}
     {entry.fileId && <Link className="text-ui-xs" to={`/projects/${projectId}?view=sources&file=${entry.fileId}`}>{entry.fileName ?? t("inquiryEntryDocument")}</Link>}

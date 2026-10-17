@@ -14,3 +14,8 @@
 .inquiry-form { display: grid; gap: var(--stack); max-width: 880px; }
 .inquiry-form-row { display: flex; flex-wrap: wrap; gap: var(--stack); align-items: flex-start; }
 .inquiry-form-row > .field { min-width: 200px; }
+.inquiry-forwarding { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: var(--stack); }
+.inquiry-address { display: inline-flex; align-items: center; gap: 6px; }
+.inquiry-address code { font-size: var(--ui-xs); }
+.inquiry-entry-preview { max-height: 7.5em; overflow: hidden; }
+.inquiry-inbox { margin-bottom: var(--section); }

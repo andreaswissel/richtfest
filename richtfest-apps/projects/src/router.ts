@@ -16,7 +16,8 @@ import { readPdfRepresentations } from "./source-representations";
 import { createBuildingModelRouter } from "./building-model-router";
 import { createDocumentTypesRouter, documentTypesFor } from "./document-types";
 import { createInquiriesRouter } from "./inquiries";
-import { bootstrapAutomaticBuildingModel } from "./automatic-building-model";
+import { createInboundEmailRouter } from "./inbound-email";
+import { enrollReadyVersion } from "./project-files";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -82,6 +83,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(createBuildingModelRouter(getDeps));
   router.use(createDocumentTypesRouter(getDeps));
   router.use(createInquiriesRouter(getDeps));
+  router.use(createInboundEmailRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -775,16 +777,7 @@ export function createRouter(getDeps: GetDeps) {
               status: 409,
               code: "upload_already_completed",
             });
-          await tx.insert(sourceExtractions).values({ versionId: updated.id, tenantId: d.tenantId });
-          // Only project-evidence PDFs uploaded from here on are enrolled; the
-          // automatic planner never claims sources without this explicit receipt.
-          const enrolled = row.file.purpose === "project_evidence" &&
-            (updated.mimeType === "application/pdf" || /\.pdf$/i.test(row.file.name));
-          await tx.insert(sourceModels).values({ versionId: updated.id, tenantId: d.tenantId,
-            ...(enrolled ? { metadata: { automaticBuildingModel: { status: "pending", enrolledAt: new Date().toISOString(),
-              provenance: "inferred", reviewStatus: "unreviewed" } } } : {}) });
-          if (enrolled)
-            await bootstrapAutomaticBuildingModel(tx, d, { projectId, sourceVersionId: updated.id, fileName: row.file.name });
+          await enrollReadyVersion(tx, d, { projectId, versionId: updated.id, fileName: row.file.name, mimeType: updated.mimeType, purpose: row.file.purpose });
           await d.audit(tx, "projects.file.upload.completed", "file", fileId, {
             projectId,
             versionId: row.version.id,

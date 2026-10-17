@@ -11,8 +11,8 @@ export type InquirySummary = {
 };
 export type InquiryEntry = {
   id: string; kind: InquiryEntryKind; direction: InquiryDirection; subject: string | null; body: string | null;
-  fileId: string | null; fileName: string | null; occurredAt: string; createdBy: string;
+  fileId: string | null; fileName: string | null; occurredAt: string; createdBy: string; inboundEmailId?: string | null;
 };
-export type InquiryDetail = Omit<InquirySummary, "entryCount"> & { entries: InquiryEntry[] };
+export type InquiryDetail = Omit<InquirySummary, "entryCount"> & { entries: InquiryEntry[]; replyAddress: string | null };
 
 export const inquiryLink = (projectId: string, inquiryId: string) => `/projects/${projectId}?view=inquiries&inquiry=${inquiryId}`;

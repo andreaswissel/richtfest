@@ -76,6 +76,7 @@
         "drizzle-orm": "^0.38.4",
         "express": "^4.21.2",
         "pdfjs-dist": "5.7.284",
+        "postal-mime": "4.0.8",
         "saxes": "6.0.0",
         "web-ifc": "0.0.78",
         "zod": "^3.24.2",

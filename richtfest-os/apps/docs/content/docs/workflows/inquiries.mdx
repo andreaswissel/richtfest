@@ -18,6 +18,16 @@ To file an email without copying it, export it from the mail program as `.eml` (
 
 Status follows the exchange: something sent sets **Waiting for reply**, something received sets **Answered**, notes change nothing. Close an inquiry when it is done; a closed inquiry stays closed until reopened.
 
+## Forwarding address
+
+Each project can get a forwarding address. In **Inquiries**, choose **Create forwarding address**; it stays the same for the project, so it can be saved in an address book. Every inquiry also shows its own **Reply address**, the project address with a short suffix.
+
+- CC an inquiry's reply address when you send the request. The architect's reply-all, and anything else sent or forwarded to that address, is filed into the inquiry automatically and marked **Forwarded**. Your own CC counts as sent and sets **Waiting for reply**; mail from outside counts as received.
+- Mail to the project address lands in the **Inbox** above the inquiry list. Choose the inquiry and **File email**, or **Dismiss** it.
+- The original email and its attachments are always kept in Sources, also when dismissed. A PDF attachment is linked to the entry so **Read component data** reads it.
+
+Richtfest never sends email from these addresses. Anyone who knows an address can send to it, so filed mail is shown with its sender, and component values from it stay proposals until reviewed. Setup is described in [deployment](/docs/engineering/deployment#inbound-email).
+
 ## Read component data from a reply
 
 For component data inquiries, **Read component data** on a received entry reads the reply the same way as a construction description, for example "Außenwände: Kalksandstein 36,5 cm, RDK 1,8". Quoted earlier messages ("> …", "Am … schrieb …", "-----Original Message-----") are skipped, so Richtfest's own question is never read back as an answer. An attached document's pages are read as well.

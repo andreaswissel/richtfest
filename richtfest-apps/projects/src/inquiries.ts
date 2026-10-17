@@ -4,6 +4,8 @@ import { z } from "zod";
 import { componentDataRequest, dataRequestProgress, ok, type ComponentRequestGroup } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, inquiries, inquiryEntries, projects, sourcePages } from "./schema";
+import { statusAfter } from "./inquiry-status";
+import { inquiryReplyAddress } from "./inbound-email";
 import { modelForProject, proposeStatedComponentData, readComponentRecords } from "./building-model-router";
 
 /**
@@ -25,8 +27,6 @@ const entryInput = z.object({
   occurredAt: z.string().datetime({ offset: true }).nullable().optional(),
 }).strict().refine(input => Boolean(input.body?.trim() || input.fileId), { message: "An entry needs text or a file" });
 
-/** Sending moves the ticket to waiting; anything received makes it answered. Closed tickets stay closed until reopened. */
-const statusAfter = (current: string, direction: string) => current === "closed" || direction === "internal" ? current : direction === "outgoing" ? "waiting" : "answered";
 
 /**
  * Text a reply states itself: quoted earlier messages ("> …", "Am … schrieb",
@@ -73,7 +73,7 @@ export function createInquiriesRouter(getDeps: (req: Request) => AppDeps) {
       const entries = await d.db.select({ entry: inquiryEntries, fileName: files.name }).from(inquiryEntries).leftJoin(files, eq(files.id, inquiryEntries.fileId))
         .where(and(eq(inquiryEntries.inquiryId, inquiryId), eq(inquiryEntries.tenantId, d.tenantId))).orderBy(asc(inquiryEntries.occurredAt), asc(inquiryEntries.createdAt));
       const progress = inquiry.kind === "component_data" ? dataRequestProgress(inquiry.items as ComponentRequestGroup[], await readComponentRecords(d, projectId)) : null;
-      return res.json(ok({ ...inquiry, progress, entries: entries.map((row: any) => ({ ...row.entry, fileName: row.fileName ?? null })) }));
+      return res.json(ok({ ...inquiry, progress, replyAddress: await inquiryReplyAddress(d, projectId, inquiryId), entries: entries.map((row: any) => ({ ...row.entry, fileName: row.fileName ?? null })) }));
     } catch (e) { return next(e); }
   });
 

@@ -1900,5 +1900,19 @@
   "inquiryImportEmail": "E-Mail importieren (.eml)",
   "inquiryImportEmailHint": "Füllt den Eintrag aus einer exportierten E-Mail; E-Mail und Anhänge werden in den Quellen abgelegt.",
   "inquiryImportEmailPending": "E-Mail wird gelesen, Anhänge werden gespeichert …",
-  "inquiryImportEmailDone": "Von {from} · in den Quellen abgelegt: {files}. Eintrag prüfen, dann hinzufügen."
+  "inquiryImportEmailDone": "Von {from} · in den Quellen abgelegt: {files}. Eintrag prüfen, dann hinzufügen.",
+  "inquiryForwardingAddress": "Weiterleitungsadresse",
+  "inquiryForwardingUnconfigured": "Die E-Mail-Weiterleitung ist für diesen Workspace nicht eingerichtet.",
+  "inquiryForwardingHint": "E-Mails hierher weiterleiten oder in CC setzen; jede Anfrage hat eine eigene Antwortadresse.",
+  "inquiryForwardingCreate": "Weiterleitungsadresse anlegen",
+  "inquiryAddressCopy": "Kopieren",
+  "inquiryAddressCopied": "Kopiert",
+  "inquiryInbox": "Posteingang",
+  "inquiryOriginalEmail": "Original-E-Mail",
+  "inquiryFileTo": "Anfrage zuordnen",
+  "inquiryFileEmail": "E-Mail zuordnen",
+  "inquiryDismissEmail": "Verwerfen",
+  "inquiryReplyAddress": "Antwortadresse",
+  "inquiryReplyAddressHint": "Beim Versand der Anfrage in CC setzen; Antworten daran werden hier automatisch abgelegt.",
+  "inquiryViaForwarding": "Weitergeleitet"
 }

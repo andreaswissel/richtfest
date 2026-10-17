@@ -532,6 +532,8 @@ export const inquiryEntries = pgTable("projects_inquiry_entries", {
   subject: text("subject"),
   body: text("body"),
   fileId: uuid("file_id").references(() => files.id, { onDelete: "set null" }),
+  /** Set when the entry was filed from an email received at the project's forwarding address. */
+  inboundEmailId: uuid("inbound_email_id").references((): any => inboundEmails.id, { onDelete: "set null" }),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -539,4 +541,47 @@ export const inquiryEntries = pgTable("projects_inquiry_entries", {
   inquiry: index("projects_inquiry_entries_inquiry").on(table.inquiryId, table.occurredAt),
   kindCheck: check("projects_inquiry_entries_kind_check", sql`${table.kind} in ('request','email','call','note','document')`),
   directionCheck: check("projects_inquiry_entries_direction_check", sql`${table.direction} in ('outgoing','incoming','internal')`),
+}));
+
+/** A project's forwarding address: <token>@<inbound domain>, and <token>+<inquiry ref>@… per inquiry. */
+export const inboundMailboxes = pgTable("projects_inbound_mailboxes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull().unique().references(() => projects.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Every email received at a forwarding address, kept once per provider message.
+ * Mail to an inquiry's address is filed there; mail to the project address
+ * waits in the project's inbox until a person files or dismisses it.
+ */
+export const inboundEmails = pgTable("projects_inbound_emails", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  providerEmailId: text("provider_email_id").notNull(),
+  messageId: text("message_id"),
+  recipient: text("recipient").notNull(),
+  fromAddress: text("from_address"),
+  fromName: text("from_name"),
+  /** Sent by a workspace member (a CC on their own request) or received from outside. */
+  direction: text("direction").$type<"incoming" | "outgoing">().notNull().default("incoming"),
+  subject: text("subject"),
+  body: text("body"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+  fileId: uuid("file_id").references(() => files.id, { onDelete: "set null" }),
+  attachmentFileIds: jsonb("attachment_file_ids").$type<string[]>().notNull().default([]),
+  status: text("status").$type<"filed" | "unfiled" | "dismissed">().notNull(),
+  inquiryId: uuid("inquiry_id").references(() => inquiries.id, { onDelete: "set null" }),
+  handledBy: uuid("handled_by"),
+  handledAt: timestamp("handled_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  provider: uniqueIndex("projects_inbound_emails_provider_unique").on(table.provider, table.providerEmailId),
+  project: index("projects_inbound_emails_project").on(table.tenantId, table.projectId, table.status, table.receivedAt),
+  statusCheck: check("projects_inbound_emails_status_check", sql`${table.status} in ('filed','unfiled','dismissed')`),
 }));

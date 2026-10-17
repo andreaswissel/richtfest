@@ -4,6 +4,7 @@
 
 - Building model: **Read noise requirements** reads a Bebauungsplan's text into the regulatory basis: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation, prescribed measures and the cited DIN 4109 edition, each quoted for review.
 - Inquiries: **Import email (.eml)** fills an entry from an exported email and keeps the email and its attachments in Sources.
+- Inquiries: each project gets a **forwarding address**, and each inquiry its own reply address. CC it on a request and replies are filed into the inquiry automatically; other mail waits in the project inbox to be filed or dismissed. Emails and attachments are kept in Sources. Requires the Resend receiving domain and webhook to be configured.
 
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 

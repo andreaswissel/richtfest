@@ -50,6 +50,18 @@ export type AppDeps = {
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;
   geoapifyApiKey?: string;
+  /** Domain that receives forwarded email (for example in.richtfest.ai); unset when inbound email is not configured. */
+  inboundEmailDomain?: string | null;
+};
+
+/** Receiving email runs without a request actor; the OS verifies the provider webhook and supplies system-scoped audit. */
+export type InboundEmailDeps = {
+  db: any;
+  fileStorage: FileStorage;
+  domain: string;
+  audit: (tx: any, tenantId: string, action: string, entityType: string, entityId: string, metadata?: unknown) => Promise<void>;
+  /** Email addresses of the tenant's active members, to tell their own CCs from replies. */
+  memberEmails: (tenantId: string) => Promise<string[]>;
 };
 
 /** Background worker has no request actor. OS supplies system-scoped audit. */

@@ -7,6 +7,7 @@ import { HttpError, type Actor } from "./middleware/auth";
 import { recordAudit } from "./audit";
 import type { Database } from "./db/client";
 import { fileStorage } from "./file-storage";
+import { inboundEmailConfigured } from "./inbound-email-webhook";
 export { fileStorage } from "./file-storage";
 import { readSourceEvidence, readSourceModel } from "@richtfest/projects/source-model";
 import { readSourceDocumentModel } from "@richtfest/projects/source-document";
@@ -118,6 +119,7 @@ export const crmDeps = (db: Database, req: Request) => base(db, req) as CrmDeps;
 export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   ...base(db, req),
   geoapifyApiKey: env.GEOAPIFY_API_KEY,
+  inboundEmailDomain: inboundEmailConfigured() ? env.INBOUND_EMAIL_DOMAIN : null,
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),
 });
 export const knowledgeDeps = (

@@ -31,8 +31,9 @@ import { createAgentPresetsRouter, listAgentPresets } from "./agent-presets";
 import { createAuth } from "./auth";
 import { recordAudit } from "./audit";
 import { retainWebAssets, type WebAssetArchive } from "./web-assets";
+import { createInboundEmailWebhook, inboundEmailConfigured } from "./inbound-email-webhook";
 
-export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; allowDevAuth?: boolean; providerFetch?: import("./provider-runtime").ProviderFetch; supervisorRuntime?: Partial<Pick<import("@richtfest/knowledge/deps").AppDeps, "supervisorEnabled" | "executeSupervisor">> } = {}) => {
+export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; allowDevAuth?: boolean; providerFetch?: import("./provider-runtime").ProviderFetch; supervisorRuntime?: Partial<Pick<import("@richtfest/knowledge/deps").AppDeps, "supervisorEnabled" | "executeSupervisor">>; inboundEmailWebhook?: import("express").Router } = {}) => {
   const app = express();
   const allowDevAuth = env.NODE_ENV !== "production" && (options.allowDevAuth ?? env.ALLOW_DEV_AUTH);
   const auth = createAuth(db, { allowDevAuth });
@@ -42,6 +43,9 @@ export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; 
   app.get("/api/auth/delivery-readiness", (_req, res) => res.json(ok({ configured: Boolean(env.RESEND_API_KEY && env.RESEND_FROM), mode: env.RESEND_API_KEY && env.RESEND_FROM ? "resend" : env.NODE_ENV === "production" ? "unconfigured" : "development_outbox" })));
   app.get("/api/auth/me", async (req, res, next) => { try { const current = await actorFor(db, auth, req); if (!current) return res.status(401).json(fail("unauthorized", "Sign in is required")); return res.json(ok({ id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme, permissions: [...current.permissions], user: { id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme } })); } catch (e) { next(e); } });
   app.use("/api/auth", (req, res, next) => { void toNodeHandler(auth)(req, res).catch(next); });
+  // Signed provider webhooks read the raw body and run before sessions are required.
+  if (inboundEmailConfigured()) app.use(options.inboundEmailWebhook ?? createInboundEmailWebhook(db));
+  else if (options.inboundEmailWebhook) app.use(options.inboundEmailWebhook);
   // Larger generated documents must remain editable, including JSON escaping.
   app.use("/api/knowledge/artifacts", express.json({ limit: "4mb" }));
   app.use(express.json({ limit: "1mb" }));
