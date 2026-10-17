@@ -236,3 +236,20 @@ export function dataRequestProgress(items: ComponentRequestGroup[], components: 
   }
   return { total, answered, outstanding };
 }
+
+/**
+ * What to ask again for a sent request: the current data request for the
+ * requested components, limited to the items still open. Values the
+ * counterpart already stated in a reply are left out: they need an internal
+ * review, not another question. Other proposed values appear to confirm.
+ */
+export function followUpRequest(items: ComponentRequestGroup[], components: BuildingComponentRecord[]): ComponentRequestGroup[] {
+  const open = new Map<string, Set<string>>();
+  for (const group of dataRequestProgress(items, components).outstanding)
+    for (const id of group.componentIds) open.set(id, new Set([...(open.get(id) ?? []), ...group.fields.map(field => field.field)]));
+  return componentDataRequest(components.filter(component => open.has(component.id)))
+    .map(group => ({ ...group, fields: group.fields.filter(field => group.componentIds.some(id => open.get(id)?.has(field.field)))
+      .map(field => ({ ...field, unconfirmed: field.unconfirmed.filter(entry => entry.origin !== "correspondence") }))
+      .filter(field => field.missing > 0 || field.unconfirmed.length > 0) }))
+    .filter(group => group.fields.length);
+}

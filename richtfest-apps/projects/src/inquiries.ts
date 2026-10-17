@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { componentDataRequest, dataRequestProgress, ok, type ComponentRequestGroup } from "@richtfest/shared";
+import { componentDataRequest, dataRequestProgress, followUpRequest, ok, type ComponentRequestGroup } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, inquiries, inquiryEntries, projects, sourcePages } from "./schema";
 import { statusAfter } from "./inquiry-status";
@@ -72,8 +72,11 @@ export function createInquiriesRouter(getDeps: (req: Request) => AppDeps) {
       if (!inquiry) return notFound(res);
       const entries = await d.db.select({ entry: inquiryEntries, fileName: files.name }).from(inquiryEntries).leftJoin(files, eq(files.id, inquiryEntries.fileId))
         .where(and(eq(inquiryEntries.inquiryId, inquiryId), eq(inquiryEntries.tenantId, d.tenantId))).orderBy(asc(inquiryEntries.occurredAt), asc(inquiryEntries.createdAt));
-      const progress = inquiry.kind === "component_data" ? dataRequestProgress(inquiry.items as ComponentRequestGroup[], await readComponentRecords(d, projectId)) : null;
-      return res.json(ok({ ...inquiry, progress, replyAddress: await inquiryReplyAddress(d, projectId, inquiryId), entries: entries.map((row: any) => ({ ...row.entry, fileName: row.fileName ?? null })) }));
+      const records = inquiry.kind === "component_data" ? await readComponentRecords(d, projectId) : [];
+      const progress = inquiry.kind === "component_data" ? dataRequestProgress(inquiry.items as ComponentRequestGroup[], records) : null;
+      // What to ask again, with today's proposed values to confirm; empty once everything is answered.
+      const followUp = inquiry.kind === "component_data" ? followUpRequest(inquiry.items as ComponentRequestGroup[], records) : [];
+      return res.json(ok({ ...inquiry, progress, followUp, replyAddress: await inquiryReplyAddress(d, projectId, inquiryId), entries: entries.map((row: any) => ({ ...row.entry, fileName: row.fileName ?? null })) }));
     } catch (e) { return next(e); }
   });
 
@@ -176,7 +179,8 @@ export function createInquiriesRouter(getDeps: (req: Request) => AppDeps) {
       }
       if (!pages.some(page => page.text.trim())) return send(res, 422, { data: null, error: { code: "no_text" }, message: "The entry has no readable text yet" });
       const result = await proposeStatedComponentData(d, projectId, modelRow.model, input.baseRevision, pages,
-        stated => stated.page === 0 || !versionId ? { kind: "correspondence", inquiryId, entryId, quote: stated.quote } : { kind: "page", sourceVersionId: versionId, page: stated.page, quote: stated.quote },
+        // A document attached to the reply is the counterpart's statement too; it keeps its page for the evidence link.
+        stated => ({ kind: "correspondence", inquiryId, entryId, quote: stated.quote, ...(stated.page > 0 && versionId ? { sourceVersionId: versionId, page: stated.page } : {}) }),
         { inquiryId, entryId, sourceVersionId: versionId }, "projects.inquiry.reply_read");
       if ((result as any).conflict !== undefined) return send(res, 409, { data: { currentRevision: (result as any).conflict }, error: { code: "revision_conflict" }, message: "The building model changed; reload before saving." });
       return res.json(ok(result));

@@ -36,6 +36,9 @@ export const buildingEvidenceSchema = z.discriminatedUnion("kind", [
     kind: z.literal("correspondence"),
     inquiryId: z.string().uuid(),
     entryId: z.string().uuid(),
+    // Set when the value comes from a document attached to the reply.
+    sourceVersionId: z.string().uuid().optional(),
+    page: z.number().int().positive().optional(),
     quote: z.string().max(4000).optional(),
   }).strict(),
 ]);

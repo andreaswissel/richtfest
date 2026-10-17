@@ -158,7 +158,7 @@ const entityExists = async (db: any, d: AppDeps, modelId: string, type: string, 
 const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string, evidence: z.infer<typeof buildingEvidenceSchema>[]) => {
   // Correspondence evidence is written only by Richtfest when it reads an inquiry reply.
   if (evidence.some(item => item.kind === "correspondence")) return false;
-  const ids = [...new Set(evidence.flatMap(item => "sourceVersionId" in item ? [item.sourceVersionId] : []))];
+  const ids = [...new Set(evidence.flatMap(item => "sourceVersionId" in item && item.sourceVersionId ? [item.sourceVersionId] : []))];
   if (!ids.length) return true;
   const rows = await db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId)).where(and(inArray(fileVersions.id, ids), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready"), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
   return rows.length === ids.length;

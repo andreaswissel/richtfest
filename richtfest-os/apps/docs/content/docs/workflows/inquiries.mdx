@@ -14,7 +14,7 @@ An inquiry is a ticket for one question to a stakeholder. It collects the reques
 
 Under **Add entry**, choose **Email**, **Call**, **Document** or **Note**, whether it was **Received** or **Sent**, and paste the text: an email body, call notes or a transcript. Optionally attach a project file (upload it in Sources first). The date defaults to now. Entries appear in the timeline in the order they happened.
 
-To file an email without copying it, export it from the mail program as `.eml` (Outlook for Mac, Apple Mail, Thunderbird and webmail save or drag out `.eml`; classic Outlook for Windows saves `.msg`, which is not supported yet) and choose **Import email (.eml)**. Richtfest fills subject, time and text, sets **Received** unless the sender shares your email domain, and stores the original email and its attachments in Sources, where they get a document type. A PDF attachment is linked to the entry, otherwise the email itself. Check the filled entry, then add it.
+To file an email without copying it, export it from the mail program (`.eml` from Outlook for Mac, Apple Mail, Thunderbird or webmail; `.msg` from classic Outlook for Windows) and choose **Import email (.eml, .msg)**. Richtfest fills subject, time and text, sets **Received** unless the sender shares your email domain, and stores the original email and its attachments in Sources, where they get a document type. A PDF attachment is linked to the entry, otherwise the email itself. Check the filled entry, then add it.
 
 Status follows the exchange: something sent sets **Waiting for reply**, something received sets **Answered**, notes change nothing. Close an inquiry when it is done; a closed inquiry stays closed until reopened.
 
@@ -32,7 +32,11 @@ Richtfest never sends email from these addresses. Anyone who knows an address ca
 
 For component data inquiries, **Read component data** on a received entry reads the reply the same way as a construction description, for example "Außenwände: Kalksandstein 36,5 cm, RDK 1,8". Quoted earlier messages ("> …", "Am … schrieb …", "-----Original Message-----") are skipped, so Richtfest's own question is never read back as an answer. An attached document's pages are read as well.
 
-Values become unreviewed proposals for every wall of that role or the ceilings, citing the inquiry entry. They never replace entered or reviewed values. In the data request they are labelled "per reply" until confirmed.
+Values become unreviewed proposals for every wall of that role or the ceilings, citing the inquiry entry (and the page, for an attached document). They never replace entered or reviewed values. In the data request they are labelled "per reply" until confirmed.
+
+## Follow-up
+
+While items are open, a component data inquiry shows a **Follow-up**: the current request limited to what is still missing or unconfirmed, starting with a thank-you for the reply. Values the counterpart already stated in a reply or its attachment are not asked again; review them in the building model instead. **Copy follow-up** copies the text for an email, and **Log as sent** adds it to the timeline as a sent email, which sets **Waiting for reply**.
 
 ## Progress
 

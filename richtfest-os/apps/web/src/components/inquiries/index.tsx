@@ -12,6 +12,7 @@ import { Badge, Callout, Empty, Field, RowLink, Segmented, Table } from "../ui/p
 import { inquiryDirectionLabel, inquiryEntryKindLabel, inquiryStatusLabel } from "./labels";
 import { inquiryLink, type InquiryDetail, type InquiryDirection, type InquiryEntry, type InquiryStatus, type InquirySummary } from "./types";
 import { fieldLabel, optionLabel } from "../building-model/component-properties";
+import { dataRequestText } from "../building-model/sound-insulation";
 import { importEmail } from "./email-import";
 import { CopyAddress, ForwardingInbox } from "./inbox";
 import "./inquiries.css";
@@ -107,12 +108,33 @@ function InquiryView({ projectId, inquiryId, t }: { projectId: string; inquiryId
         </dd>
       </>}
     </dl>
+    {inquiry.followUp?.length > 0 && inquiry.status !== "closed" && <FollowUp projectId={projectId} inquiry={inquiry} t={t} />}
     <h3 className="inquiry-subtitle">{t("inquiryTimeline")}</h3>
     {inquiry.entries.length ? <ol className="inquiry-timeline">
       {inquiry.entries.map((entry) => <EntryItem key={entry.id} projectId={projectId} inquiry={inquiry} entry={entry} t={t} />)}
     </ol> : <p className="muted text-ui-xs">{t("inquiryTimelineEmpty")}</p>}
     <NewEntry projectId={projectId} path={path} t={t} />
   </Section>;
+}
+
+/** What is still open after the replies so far, as a follow-up to copy into an email and log once sent. */
+function FollowUp({ projectId, inquiry, t }: { projectId: string; inquiry: InquiryDetail; t: T }) {
+  const text = dataRequestText(inquiry.followUp, t, t("inquiryFollowUpIntro"));
+  const [copied, setCopied] = useState(false);
+  const log = useMutation({
+    mutationFn: () => api(`/projects/${projectId}/inquiries/${inquiry.id}/entries`, { kind: "email", direction: "outgoing", subject: `${t("inquiryFollowUpSubject")}: ${inquiry.title}`, body: text }),
+    onSuccess: () => invalidate(projectId),
+  });
+  return <>
+    <h3 className="inquiry-subtitle">{t("inquiryFollowUp")}</h3>
+    <p className="inquiry-entry-body inquiry-followup">{text}</p>
+    <div className="inline-actions">
+      <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}>{copied ? t("inquiryAddressCopied") : t("inquiryFollowUpCopy")}</Button>
+      <Button size="sm" variant="ghost" disabled={log.isPending} onClick={() => log.mutate()}>{t("inquiryFollowUpLog")}</Button>
+      <span className="muted text-ui-xs">{t("inquiryFollowUpHint")}</span>
+    </div>
+    {log.isError && <Callout tone="error">{(log.error as Error).message}</Callout>}
+  </>;
 }
 
 function EntryItem({ projectId, inquiry, entry, t }: { projectId: string; inquiry: InquiryDetail; entry: InquiryEntry; t: T }) {
@@ -181,7 +203,7 @@ function NewEntry({ projectId, path, t }: { projectId: string; path: string; t: 
   return <form className="inquiry-form" onSubmit={(event) => { event.preventDefault(); if (ready) add.mutate(); }}>
     <h3 className="inquiry-subtitle">{t("inquiryAddEntry")}</h3>
     <div className="inline-actions">
-      <input ref={emailInput} type="file" accept=".eml,message/rfc822" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) importMail.mutate(file); }} />
+      <input ref={emailInput} type="file" accept=".eml,.msg,message/rfc822,application/vnd.ms-outlook" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) importMail.mutate(file); }} />
       <Button type="button" size="sm" variant="outline" disabled={importMail.isPending} onClick={() => emailInput.current?.click()}>{t("inquiryImportEmail")}</Button>
       <span className="muted text-ui-xs" role="status">{importMail.isPending ? t("inquiryImportEmailPending")
         : importMail.data ? t("inquiryImportEmailDone").replace("{from}", importMail.data.email.from || "—").replace("{files}", [importMail.data.original, ...importMail.data.attachments].map((item) => item.name).join(", "))

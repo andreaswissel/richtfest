@@ -1897,7 +1897,7 @@
   "buildingBebauungsplanResult": "{statements} noise statements read · {proposals} values proposed",
   "buildingBebauungsplanNothing": "No noise requirements in the text. Check the Planzeichnung, then enter what applies.",
   "buildingBebauungsplanNone": "Mark the Bebauungsplan's document type in Sources to read its noise requirements here.",
-  "inquiryImportEmail": "Import email (.eml)",
+  "inquiryImportEmail": "Import email (.eml, .msg)",
   "inquiryImportEmailHint": "Fills the entry from an exported email; the email and its attachments are kept in Sources.",
   "inquiryImportEmailPending": "Reading email and saving attachments…",
   "inquiryImportEmailDone": "From {from} · saved to Sources: {files}. Check the entry, then add it.",
@@ -1914,5 +1914,11 @@
   "inquiryDismissEmail": "Dismiss",
   "inquiryReplyAddress": "Reply address",
   "inquiryReplyAddressHint": "CC it when you send the request; replies to it are filed here automatically.",
-  "inquiryViaForwarding": "Forwarded"
+  "inquiryViaForwarding": "Forwarded",
+  "inquiryFollowUp": "Follow-up",
+  "inquiryFollowUpIntro": "Thank you for your reply. For the sound insulation assessment we still need:",
+  "inquiryFollowUpSubject": "Follow-up",
+  "inquiryFollowUpCopy": "Copy follow-up",
+  "inquiryFollowUpLog": "Log as sent",
+  "inquiryFollowUpHint": "Only items still open; values from replies are reviewed here, not asked again."
 }

@@ -38,8 +38,8 @@ export function requestLines(group: ComponentRequestGroup, t: T) {
 }
 
 /** Plain text for an email to the architect or client, grouped the way they answer. */
-export function dataRequestText(groups: ComponentRequestGroup[], t: T) {
-  return [t("buildingSoundRequestIntro"), ...groups.map((group) => [`${groupLabel(group, t)} (${groupCount(group, t)})`, ...requestLines(group, t).map((line) => `- ${line}`)].join("\n"))].join("\n\n");
+export function dataRequestText(groups: ComponentRequestGroup[], t: T, intro = t("buildingSoundRequestIntro")) {
+  return [intro, ...groups.map((group) => [`${groupLabel(group, t)} (${groupCount(group, t)})`, ...requestLines(group, t).map((line) => `- ${line}`)].join("\n"))].join("\n\n");
 }
 
 /**

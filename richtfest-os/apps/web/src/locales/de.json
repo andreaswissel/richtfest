@@ -1897,7 +1897,7 @@
   "buildingBebauungsplanResult": "{statements} Lärmschutz-Angaben gelesen · {proposals} Werte vorgeschlagen",
   "buildingBebauungsplanNothing": "Keine Lärmschutz-Festsetzungen im Text. Planzeichnung prüfen und Zutreffendes eintragen.",
   "buildingBebauungsplanNone": "Dokumenttyp des Bebauungsplans in den Quellen setzen, um seine Lärmschutz-Festsetzungen hier zu lesen.",
-  "inquiryImportEmail": "E-Mail importieren (.eml)",
+  "inquiryImportEmail": "E-Mail importieren (.eml, .msg)",
   "inquiryImportEmailHint": "Füllt den Eintrag aus einer exportierten E-Mail; E-Mail und Anhänge werden in den Quellen abgelegt.",
   "inquiryImportEmailPending": "E-Mail wird gelesen, Anhänge werden gespeichert …",
   "inquiryImportEmailDone": "Von {from} · in den Quellen abgelegt: {files}. Eintrag prüfen, dann hinzufügen.",
@@ -1914,5 +1914,11 @@
   "inquiryDismissEmail": "Verwerfen",
   "inquiryReplyAddress": "Antwortadresse",
   "inquiryReplyAddressHint": "Beim Versand der Anfrage in CC setzen; Antworten daran werden hier automatisch abgelegt.",
-  "inquiryViaForwarding": "Weitergeleitet"
+  "inquiryViaForwarding": "Weitergeleitet",
+  "inquiryFollowUp": "Nachfrage",
+  "inquiryFollowUpIntro": "Vielen Dank für Ihre Rückmeldung. Für den Schallschutznachweis fehlen uns noch:",
+  "inquiryFollowUpSubject": "Nachfrage",
+  "inquiryFollowUpCopy": "Nachfrage kopieren",
+  "inquiryFollowUpLog": "Als gesendet erfassen",
+  "inquiryFollowUpHint": "Nur noch offene Punkte; Werte aus Antworten werden hier geprüft, nicht erneut erfragt."
 }

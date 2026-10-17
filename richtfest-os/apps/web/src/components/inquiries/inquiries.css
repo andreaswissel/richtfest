@@ -19,3 +19,4 @@
 .inquiry-address code { font-size: var(--ui-xs); }
 .inquiry-entry-preview { max-height: 7.5em; overflow: hidden; }
 .inquiry-inbox { margin-bottom: var(--section); }
+.inquiry-followup { max-width: 880px; padding: 8px 10px; border-left: 2px dashed var(--border); font-size: var(--ui-sm); }

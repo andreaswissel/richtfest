@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { componentDataRequest, componentInputGaps, regulatoryBasisGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
+import { componentDataRequest, followUpRequest, componentInputGaps, regulatoryBasisGaps, deriveWallRole, soundInsulationChecks, validateBuildingComponentProperty } from "@richtfest/shared";
 import { planWallAdjacency, roomSpaceContext } from "./wall-adjacency";
 import { planStoreyCeilings } from "./storey-ceilings";
 import { planStoreyLevels, storeyLevelFromText } from "./storey-levels";
@@ -161,4 +161,26 @@ test("the regulatory basis asks for Bebauungsplan noise requirements only when a
   expect(regulatoryBasisGaps({ ...settled, bebauungsplan: approved("none") })).toEqual([]);
   expect(regulatoryBasisGaps({ ...settled, bebauungsplan: approved("applies") })).toEqual([{ field: "bebauungsplanNoise", status: "missing" }]);
   expect(regulatoryBasisGaps({ ...settled, din4109Edition: { value: "2018-01", reviewStatus: "unreviewed" } }).map(gap => `${gap.field}:${gap.status}`)).toEqual(["bebauungsplan:missing", "din4109Edition:unreviewed"]);
+});
+
+test("a follow-up asks only what is still open and never asks the counterpart to confirm their own reply", () => {
+  const ok = (value: unknown, unit: string | null = null) => ({ value, unit, reviewStatus: "approved", provenance: "manual" });
+  const role = ok("apartment_partition");
+  const before = [
+    { id: "w1", componentType: "wall" as const, properties: { wallRole: role } },
+    { id: "w2", componentType: "wall" as const, properties: { wallRole: role } },
+    { id: "w3", componentType: "wall" as const, properties: { wallRole: ok("exterior") } },
+  ];
+  const sent = componentDataRequest(before);
+  const after = [
+    // Construction answered and approved; thickness stated in the reply, not yet reviewed; bulk density still missing on w2.
+    { id: "w1", componentType: "wall" as const, properties: { wallRole: role, construction: ok("masonry"), thickness: { value: 24, unit: "cm", reviewStatus: "unreviewed", provenance: "inferred", evidenceQuote: "KS 24 cm", evidenceKind: "correspondence" }, bulkDensity: ok(2000, "kg/m³") } },
+    { id: "w2", componentType: "wall" as const, properties: { wallRole: role, construction: ok("masonry"), thickness: { value: 24, unit: "cm", reviewStatus: "unreviewed", provenance: "inferred", evidenceQuote: "KS 24 cm", evidenceKind: "correspondence" } } },
+    // A document's value still needs the architect's confirmation.
+    { id: "w3", componentType: "wall" as const, properties: { wallRole: ok("exterior"), construction: ok("masonry"), thickness: { value: 36.5, unit: "cm", reviewStatus: "unreviewed", provenance: "inferred", evidenceQuote: "Außenwände 36,5 cm", evidenceKind: "page" }, bulkDensity: ok(1800, "kg/m³") } },
+  ];
+  expect(followUpRequest(sent, after)).toEqual([
+    { componentType: "wall", wallRole: "apartment_partition", count: 2, componentIds: ["w1", "w2"], fields: [{ field: "bulkDensity", missing: 1, unconfirmed: [] }] },
+    { componentType: "wall", wallRole: "exterior", count: 1, componentIds: ["w3"], fields: [{ field: "thickness", missing: 0, unconfirmed: [{ value: 36.5, unit: "cm", origin: "document", count: 1 }] }] },
+  ]);
 });
