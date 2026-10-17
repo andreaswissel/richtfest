@@ -24,6 +24,7 @@
 
 ## 2026-10-17
 
+- Building model plans zoom with a two-finger pinch on phones and tablets, and the project bar no longer overlaps on narrow phone screens.
 - Building Model: planners can edit any room outline on the plan by dragging, adding and removing points, with the area updating live, or use **Magic select** to detect a room's outline with one click and then edit, confirm or name it as a new room. Every saved outline is logged as training data for plan detection. Existing plans are re-extracted automatically so magic select works on them. Includes database migration 0044.
 - Building Model is now a workbench: one toolbar, an outliner of rooms by apartment with show/hide eyes, a tool rail (Select V, Magic select W, Edit points E, Pan H, Measure M), a sectioned properties panel with editable outline points in metres, and a status bar with Accept/Save on Enter. The plan can be panned at any zoom.
 - Projects open without the workspace sidebar: a slim project bar keeps the project's views, and **← Projects** leads back to open another project.

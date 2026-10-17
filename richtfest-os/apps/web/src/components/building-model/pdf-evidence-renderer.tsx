@@ -306,19 +306,53 @@ export function PdfEvidenceRenderer({
     updateTransform({ zoom: next, pan: { x: pan.x * next / zoom, y: pan.y * next / zoom } });
   };
   const fit = () => updateTransform({ zoom: 1, pan: { x: 0, y: 0 } });
+  // Touch: two fingers pinch-zoom around the point between them (the canvas disables the browser's own pinch).
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ distance: number; zoom: number; pan: { x: number; y: number }; mid: { x: number; y: number }; centre: { x: number; y: number } } | undefined>(undefined);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const pinchState = () => {
+    const [a, b] = [...pointers.current.values()];
+    return { distance: Math.hypot(b!.x - a!.x, b!.y - a!.y), mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 } };
+  };
+  const pinchedAt = useRef(0);
   const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button")) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+    const onButton = Boolean((event.target as HTMLElement).closest("button"));
+    // Presses on overlay buttons keep their click, but still count as a finger for pinching.
+    if (onButton && event.pointerType !== "touch") return;
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (!onButton) event.currentTarget.setPointerCapture(event.pointerId);
+    if (pointers.current.size === 2) {
+      // The surface scales about its centre; its untransformed centre is the current centre minus the pan.
+      const bounds = surfaceRef.current?.getBoundingClientRect();
+      const { distance, mid } = pinchState();
+      dragRef.current = undefined;
+      if (bounds && distance > 0) pinchRef.current = { distance, zoom, pan, mid, centre: { x: bounds.left + bounds.width / 2 - pan.x, y: bounds.top + bounds.height / 2 - pan.y } };
+      return;
+    }
+    if (pointers.current.size === 1 && !onButton) dragRef.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
   };
   const movePan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (pointers.current.has(event.pointerId)) pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const pinch = pinchRef.current;
+    if (pinch && pointers.current.size >= 2) {
+      const { distance, mid } = pinchState();
+      const next = Math.min(4, Math.max(1, pinch.zoom * distance / pinch.distance)), ratio = next / pinch.zoom;
+      // Keep the plan point that started under the fingers' midpoint under the current midpoint.
+      updateTransform({ zoom: next, pan: { x: mid.x - pinch.centre.x - ratio * (pinch.mid.x - pinch.centre.x - pinch.pan.x), y: mid.y - pinch.centre.y - ratio * (pinch.mid.y - pinch.centre.y - pinch.pan.y) } });
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) return;
     updateTransform({ zoom, pan: { x: drag.panX + event.clientX - drag.x, y: drag.panY + event.clientY - drag.y } });
   };
   const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (dragRef.current) event.currentTarget.releasePointerCapture?.(event.pointerId);
-    dragRef.current = undefined;
+    const wasPinch = Boolean(pinchRef.current);
+    pointers.current.delete(event.pointerId);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (wasPinch && pointers.current.size < 2) { pinchRef.current = undefined; pinchedAt.current = Date.now(); }
+    // Lifting one finger of a pinch continues as a pan with the remaining one.
+    const [rest] = [...pointers.current.values()];
+    dragRef.current = !rest ? undefined : wasPinch ? { x: rest.x, y: rest.y, panX: pan.x, panY: pan.y } : dragRef.current;
   };
   const pageRegions = regions.filter((region) => region.page === page);
   const pickStart = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -326,8 +360,9 @@ export function PdfEvidenceRenderer({
   // Magic picks are resolved on the canvas: panning captures the pointer there, so the
   // surface itself never sees the click. A press that moved more than 4 px was a pan.
   const pointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    pickStart.current = magicSurface.current && event.target === magicSurface.current ? { x: event.clientX, y: event.clientY } : undefined;
+    pickStart.current = magicSurface.current && event.target === magicSurface.current && !pointers.current.size ? { x: event.clientX, y: event.clientY } : undefined;
     beginPan(event);
+    if (pointers.current.size > 1) pickStart.current = undefined;
   };
   const pointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     endPan(event);
@@ -338,6 +373,8 @@ export function PdfEvidenceRenderer({
   };
   const hasSelectedRegion = Boolean(selectedId && pageRegions.some((region) => region.id === selectedId));
   const selectOverlayRegion = (event: React.MouseEvent<HTMLButtonElement>, focusedRegion: BuildingRegion) => {
+    // Lifting the fingers after a pinch is not a selection.
+    if (event.detail !== 0 && Date.now() - pinchedAt.current < 400) return;
     // Keyboard-generated clicks have no pointer coordinates. Preserve native
     // button semantics and select the region that owns keyboard focus.
     if (event.detail === 0) {
@@ -364,7 +401,7 @@ export function PdfEvidenceRenderer({
         <Button size="sm" variant="outline" type="button" onClick={() => adjustZoom(0.25)} disabled={zoom >= 4} aria-label={labels.zoomIn} title={labels.zoomIn}><Plus className="size-icon-sm" aria-hidden="true" /></Button>
         <Button size="sm" variant="ghost" type="button" onClick={fit} aria-label={labels.fit} title={labels.fit}><RotateCcw className="size-icon-sm" aria-hidden="true" /></Button>
       </div>}
-      <div className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+      <div ref={surfaceRef} className={`building-model-plan-surface${source ? "" : " is-empty"}`} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         {source ? <canvas ref={canvas} className="building-model-pdf" aria-label={`${evidence.fileName} · page ${page}`} /> : <div className="building-model-pdf-empty"><span className="mono">PDF</span><p>{labels.empty}</p></div>}
         <div className={`building-model-region-layer${hasSelectedRegion ? " has-selection" : ""}${outline || tool !== "select" ? " is-inert" : ""}`} style={overlayInteractionStyle(zoom)} aria-label={labels.region}>
           {pageRegions.map((region) => {

@@ -214,7 +214,7 @@ export function ProjectWorkspace() {
     <Page>
       <header className="project-bar">
         <Link to="/" className="project-bar-brand" aria-label="Richtfest">R</Link>
-        <Link className="project-bar-back" to="/projects">← {t("projects")}</Link>
+        <Link className="project-bar-back" to="/projects" aria-label={t("projects")}>←<span className="project-bar-back-label"> {t("projects")}</span></Link>
         <div className="project-bar-title">
           {project.data?.customerName && <span className="project-bar-customer">{project.data.customerName}</span>}
           <h1>{title}</h1>
