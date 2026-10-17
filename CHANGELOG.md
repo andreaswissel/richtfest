@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Building model: **Sound insulation** in the toolbar records the agreed requirement level, lists the walls and ceilings that need a sound insulation verification and whether their inputs are complete, and builds a data request per wall type that can be copied into an email to the architect. **Derive from plan** now also creates one ceiling per storey with its own component data. The calculation itself remains unavailable until a validated DIN 4109-2 tool exists.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -25,6 +23,8 @@
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
 ## 2026-10-17
+
+- Building model: **Sound insulation** in the toolbar records the agreed requirement level, lists the walls and ceilings that need a sound insulation verification and whether their inputs are complete, and builds a data request per wall type that can be copied into an email to the architect. **Derive from plan** now also creates one ceiling per storey with its own component data. The calculation itself remains unavailable until a validated DIN 4109-2 tool exists.
 
 - Building model walls, ceilings and rooms now carry shared component data (construction, material, thickness, bulk density, wall role, apartment, space type) with review per value. **Derive from plan** finds the rooms on both sides of each wall, detects facades, proposes apartment partition, corridor, stairwell, exterior or internal roles and measures wall thickness at the printed plan scale. Construction data can be copied to all walls of the same role and approved per wall type in one step, and agents see which sound-insulation inputs are still missing.
 
