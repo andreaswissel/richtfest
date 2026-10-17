@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compassOf, facadeDistances, planToSite, simplifyPolyline, siteToPlan, twoPointPlacement, type Point2 } from "./site-plan";
+import { aerialSourceFor, compassOf, facadeDistances, planToSite, simplifyPolyline, siteToPlan, twoPointPlacement, type Point2 } from "./site-plan";
 
 const close = (actual: Point2, expected: Point2) => {
   expect(actual[0]).toBeCloseTo(expected[0], 6);
@@ -62,4 +62,11 @@ test("compass sectors and polyline simplification", () => {
   expect(compassOf([0, -1])).toBe("S");
   expect(compassOf([-1, 0.1])).toBe("W");
   expect(simplifyPolyline<Point2>([[0, 0], [1, 0.05], [2, 0], [3, 5]], 0.5)).toEqual([[0, 0], [2, 0], [3, 5]]);
+});
+
+test("aerial imagery only for registers with an open orthophoto service in the site's CRS", () => {
+  expect(aerialSourceFor({ siteId: "rlp-address:1", crs: "EPSG:25832" })?.id).toBe("rlp-dop20");
+  expect(aerialSourceFor({ siteId: "rlp-address:1", crs: "EPSG:25833" })).toBeNull();
+  expect(aerialSourceFor({ siteId: "berlin-address:1" })?.id).toBe("berlin-truedop");
+  expect(aerialSourceFor({ siteId: "he-hako:1", crs: "EPSG:25832" })).toBeNull();
 });

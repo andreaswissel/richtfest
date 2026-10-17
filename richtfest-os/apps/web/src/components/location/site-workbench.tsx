@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Crosshair, FileStack, Route, Volume2 } from "lucide-react";
+import { Crosshair, FileStack, Image as ImageIcon, Route, Volume2 } from "lucide-react";
 import {
+  aerialSourceFor,
   railNoiseAttribution,
   siteToPlan,
   twoPointPlacement,
@@ -103,7 +104,7 @@ export function FacadeDistanceRow({ projectId, geometry, item, canWrite, compact
 export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: {
   projectId: string;
   context: LocationContext | null;
-  layers: { roads: boolean; railNoise: boolean; plan: boolean };
+  layers: { roads: boolean; railNoise: boolean; plan: boolean; aerial: boolean };
   tool: string;
   setTool: (tool: "select" | "align") => void;
 }) {
@@ -117,19 +118,27 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
     [picks],
   );
   const { geometry, sitePlan } = useSiteGeometry(projectId, pageIndex, pending);
-  const railNoise = useQuery({
-    queryKey: [`/projects/${projectId}/location/rail-noise`, context?.importedAt],
+  const [zoomedOut, setZoomedOut] = useState(false);
+  const aerialSource = context ? aerialSourceFor(context) : null;
+  const image = (path: string, enabled: boolean, error: string) => ({
+    queryKey: [`/projects/${projectId}/location/${path}`, context?.importedAt],
     queryFn: async () => {
-      const response = await fetch(`/api/projects/${projectId}/location/rail-noise`, { credentials: "include" });
-      if (!response.ok) throw new Error(t("siteRailNoiseUnavailable"));
+      const response = await fetch(`/api/projects/${projectId}/location/${path}`, { credentials: "include" });
+      if (!response.ok) throw new Error(error);
       return URL.createObjectURL(await response.blob());
     },
-    enabled: layers.railNoise && !!context,
+    enabled: enabled && !!context,
     staleTime: Infinity,
     gcTime: 10 * 60_000,
     retry: false,
     meta: { persist: false },
   });
+  const railNoise = useQuery(image("rail-noise", layers.railNoise, t("siteRailNoiseUnavailable")));
+  const aerialNear = useQuery(image("aerial/near", layers.aerial && !!aerialSource, t("siteAerialUnavailable")));
+  // The wide window is only fetched once the planner zooms out of the neighbourhood.
+  const aerialFar = useQuery(image("aerial/far", layers.aerial && !!aerialSource && zoomedOut, t("siteAerialUnavailable")));
+  useEffect(() => () => { if (aerialNear.data) URL.revokeObjectURL(aerialNear.data); }, [aerialNear.data]);
+  useEffect(() => () => { if (aerialFar.data) URL.revokeObjectURL(aerialFar.data); }, [aerialFar.data]);
   useEffect(() => () => { if (railNoise.data) URL.revokeObjectURL(railNoise.data); }, [railNoise.data]);
   const aligning = tool === "align";
   useEffect(() => { if (!aligning && picks.length < 4) setPicks([]); }, [aligning]);
@@ -180,14 +189,27 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
       label: `${item.distance.toFixed(1)} m`,
     })),
     railNoise: railNoise.data ?? null,
+    aerial: { near: aerialNear.data ?? null, far: aerialFar.data ?? null },
     picks: aligning ? picks.map((pick) => pick.local) : [],
     snaps: aligning ? (picks.length % 2 === 0 ? planVertices : siteVertices) : [],
-  }), [geometry, distances, context, railNoise.data, aligning, picks, planVertices, siteVertices]);
+  }), [geometry, distances, context, railNoise.data, aerialNear.data, aerialFar.data, aligning, picks, planVertices, siteVertices]);
 
   const steps = ["sitePickPlanA", "sitePickSiteA", "sitePickPlanB", "sitePickSiteB"] as const;
   const scaleOff = pending && Math.abs(pending.scaleRatio - 1) > 0.02;
-  const panel = (layer: (key: "roads" | "railNoise" | "plan", label: string, icon: ReactNode, count?: number) => ReactNode) => (
+  const panel = (layer: (key: "roads" | "railNoise" | "plan" | "aerial", label: string, icon: ReactNode, count?: number) => ReactNode) => (
     <>
+      {aerialSource && (
+        <div className="location-layer-section">
+          {layer("aerial", t("siteAerial"), <ImageIcon className="size-icon-sm" />)}
+          {layers.aerial && (
+            <>
+              {(aerialNear.isFetching || aerialFar.isFetching) && <p className="text-ui-xs muted">{t("siteAerialLoading")}</p>}
+              {(aerialNear.isError || aerialFar.isError) && <Callout tone="error">{t("siteAerialUnavailable")}</Callout>}
+              <p className="text-ui-2xs muted">{t("siteAerialHint")} {aerialSource.attribution}</p>
+            </>
+          )}
+        </div>
+      )}
       <div className="location-layer-section">
         {layer("roads", t("siteRoadsRail"), <Route className="size-icon-sm" />, geometry?.axes.length)}
         {geometry && !geometry.axes.length && <p className="text-ui-xs muted">{t("siteAxesMissing")}</p>}
@@ -247,7 +269,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
               </>
             ) : canWrite ? (
               <div className="inline-actions">
-                <Button size="sm" variant="outline" onClick={() => { setPicks([]); setTool("align"); }}>
+                <Button size="sm" variant="outline" title={`${t("siteAlignPlan")} (A)`} aria-keyshortcuts="A" onClick={() => { setPicks([]); setTool("align"); }}>
                   <Crosshair className="size-icon-sm" />
                   {t("siteAlignPlan")}
                 </Button>
@@ -283,5 +305,5 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
       )}
     </>
   );
-  return { overlay, onAlign, panel, canAlign: !!geometry?.page };
+  return { overlay, onAlign, onZoom: setZoomedOut, panel, canAlign: !!geometry?.page, snapVertices: [...siteVertices, ...planVertices] };
 }

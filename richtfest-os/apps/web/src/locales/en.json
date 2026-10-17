@@ -464,9 +464,9 @@
   "locationRedo": "Redo edit",
   "locationDelete": "Remove object",
   "locationSelectHint": "Select an object in the viewport or scene tree to inspect it.",
-  "locationControls": "Drag to orbit · Right-drag to pan · Scroll to zoom",
+  "locationControls": "Drag to orbit · Right-drag to pan · Scroll to zoom · V select · M measure · A align · T/3/S/U views · F frame",
   "locationPlaceHint": "Click the viewport to place the selected object in X/Z. Its base elevation stays unchanged.",
-  "locationMeasureHint": "Pick two visible surfaces or points. Empty space projects onto the flat ground reference. Values are model-space observations, not surveyed dimensions.",
+  "locationMeasureHint": "Pick two visible surfaces or points; clicks snap to building and plan corners within 1 m. Empty space projects onto the flat ground reference. Esc clears. Values are model-space observations, not surveyed dimensions.",
   "locationPosition": "Position · local metres",
   "locationDimensions": "Dimensions · metres",
   "locationRotation": "Rotation Y · degrees",
@@ -2066,5 +2066,10 @@
   "siteFacadeSW": "south-west",
   "siteFacadeW": "west",
   "siteFacadeNW": "north-west",
-  "locationArea": "Surroundings"
+  "locationArea": "Surroundings",
+  "locationShortcut": "Shortcut: {key}",
+  "siteAerial": "Aerial imagery",
+  "siteAerialLoading": "Loading aerial imagery…",
+  "siteAerialUnavailable": "The official aerial imagery could not be loaded.",
+  "siteAerialHint": "Official orthophotos: 500 m around the site, a 3 km window once you zoom out. Imagery date may differ from today; not a survey."
 }

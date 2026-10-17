@@ -26,6 +26,19 @@ export function toUtm(longitude: number, latitude: number, zone: 32 | 33): Point
 export const RAIL_NOISE_HALF_WIDTH_M = 1000;
 export const railNoiseAttribution = "© Eisenbahn-Bundesamt, Lärmkartierung Schiene (Lden), dl-de/by-2-0";
 
+/** Official orthophotos (DOP) around the site: a sharp near window loaded with the scene and a wide one loaded when zoomed out. */
+export const AERIAL_HALF_WIDTH_M = { near: 250, far: 1500 } as const;
+export type AerialExtent = keyof typeof AERIAL_HALF_WIDTH_M;
+export type AerialSource = { id: "rlp-dop20" | "berlin-truedop"; attribution: string };
+/** Aerial imagery by site register: Rheinland-Pfalz DOP20 and Berlin TrueDOP; other sites have none yet. */
+export function aerialSourceFor(context: { siteId: string; crs?: string }): AerialSource | null {
+  if (context.siteId.startsWith("rlp-") && context.crs === "EPSG:25832")
+    return { id: "rlp-dop20", attribution: "©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0, Digitale Orthophotos (DOP20)" };
+  if (context.siteId.startsWith("berlin-") && (context.crs ?? "EPSG:25833") === "EPSG:25833")
+    return { id: "berlin-truedop", attribution: "Geoportal Berlin / Digitale farbige TrueOrthophotos 2024, dl-de/zero-2-0" };
+  return null;
+}
+
 export const utmZone = (crs: string | undefined): 32 | 33 => crs === "EPSG:25832" ? 32 : 33;
 
 /** Douglas-Peucker on planar points; keeps both ends. */

@@ -1,13 +1,32 @@
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import { ok, projectAddressInput, locationMatchesAddress, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
+import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
 import { boundedBody, validateLocationAddress } from "./location-context";
 
 /** Federal rail noise map (EBA), nationwide incl. the extended mapping; open WMS under dl-de/by-2-0. */
 const EBA_RAIL_NOISE = "https://geoinformation.eisenbahn-bundesamt.de/wms/isophonen";
+/** Official orthophoto WMS per register; both open (RLP dl-de/by-2-0, Berlin dl-de/zero-2-0). */
+const AERIAL_WMS = {
+  "rlp-dop20": { url: "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", layer: "rp_dop20" },
+  "berlin-truedop": { url: "https://gdi.berlin.de/services/wms/truedop_2024", layer: "truedop_2024" },
+} as const;
+const unavailable = (what: string) => failure(`The ${what} service did not return an image`, 502, `${what.replace(/ /g, "_")}_unavailable`);
+
+/** A fixed window around the site from a known WMS, never a caller-chosen URL or extent. */
+async function sendWindow(res: any, base: string, params: Record<string, string>, crs: string, origin: [number, number], halfWidth: number, size: number, format: "image/png" | "image/jpeg", what: string) {
+  const url = new URL(base), [e, n] = origin;
+  for (const [key, value] of Object.entries({ SERVICE: "WMS", VERSION: "1.3.0", REQUEST: "GetMap", STYLES: "", CRS: crs, ...params,
+    BBOX: [e - halfWidth, n - halfWidth, e + halfWidth, n + halfWidth].map(v => v.toFixed(1)).join(","), WIDTH: String(size), HEIGHT: String(size), FORMAT: format })) url.searchParams.set(key, value);
+  const response = await fetch(url, { signal: AbortSignal.timeout(45000), redirect: "error" }).catch(() => { throw unavailable(what); });
+  if (!response.ok || !response.headers.get("content-type")?.startsWith(format)) throw unavailable(what);
+  const body = await boundedBody(response, 16 * 1024 * 1024);
+  res.setHeader("Content-Type", format);
+  res.setHeader("Cache-Control", "private, max-age=604800");
+  res.end(body);
+}
 
 const vector = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const sceneInput = z.object({
@@ -56,17 +75,20 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       const [row] = await d.db.select({ context: locations.context }).from(locations).where(where).limit(1);
       const context = row?.context;
       if (!context) throw failure("Import the location first", 409, "location_missing");
-      const crs = context.crs ?? "EPSG:25833", [e, n] = context.origin, w = RAIL_NOISE_HALF_WIDTH_M;
-      const url = new URL(EBA_RAIL_NOISE);
-      for (const [key, value] of Object.entries({ SERVICE: "WMS", VERSION: "1.3.0", REQUEST: "GetMap", LAYERS: "isophonen_ek_lden", STYLES: "", CRS: crs,
-        BBOX: [e - w, n - w, e + w, n + w].map(v => v.toFixed(1)).join(","), WIDTH: "1024", HEIGHT: "1024", FORMAT: "image/png", TRANSPARENT: "TRUE" })) url.searchParams.set(key, value);
-      const unavailable = () => failure("The rail noise map service did not return an image", 502, "rail_noise_unavailable");
-      const response = await fetch(url, { signal: AbortSignal.timeout(30000), redirect: "error" }).catch(() => { throw unavailable(); });
-      if (!response.ok || !response.headers.get("content-type")?.startsWith("image/png")) throw unavailable();
-      const body = await boundedBody(response, 8 * 1024 * 1024);
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Cache-Control", "private, max-age=86400");
-      res.end(body);
+      await sendWindow(res, EBA_RAIL_NOISE, { LAYERS: "isophonen_ek_lden", TRANSPARENT: "TRUE" }, context.crs ?? "EPSG:25833", context.origin, RAIL_NOISE_HALF_WIDTH_M, 1024, "image/png", "rail noise");
+    } catch (error) { next(error); }
+  });
+  router.get("/projects/:projectId/location/aerial/:extent", async (req, res, next) => {
+    try {
+      const { d, where } = await scope(req, false);
+      const extent = z.enum(["near", "far"]).parse(req.params.extent);
+      const [row] = await d.db.select({ context: locations.context }).from(locations).where(where).limit(1);
+      const context = row?.context;
+      if (!context) throw failure("Import the location first", 409, "location_missing");
+      const source = aerialSourceFor(context);
+      if (!source) throw failure("No aerial imagery for this site's register", 404, "aerial_unavailable");
+      const wms = AERIAL_WMS[source.id];
+      await sendWindow(res, wms.url, { LAYERS: wms.layer }, context.crs ?? "EPSG:25833", context.origin, AERIAL_HALF_WIDTH_M[extent], 2048, "image/jpeg", "aerial imagery");
     } catch (error) { next(error); }
   });
   router.put("/projects/:projectId/location", async (req, res, next) => {

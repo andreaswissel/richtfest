@@ -9,7 +9,7 @@ import type {
 } from "@richtfest/shared";
 import type { IfcGeometry } from "./ifc-loader";
 import type { SiteOverlay } from "./site-geometry";
-import { RAIL_NOISE_HALF_WIDTH_M, type Point2 } from "@richtfest/shared";
+import { AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type Point2 } from "@richtfest/shared";
 
 export type ViewportState = {
   context: LocationContext;
@@ -24,6 +24,7 @@ export type ViewportState = {
     roads: boolean;
     railNoise: boolean;
     plan: boolean;
+    aerial: boolean;
   };
   site: SiteOverlay;
   selected: string | null;
@@ -40,6 +41,8 @@ export function createViewport(
     place: (point: SceneVector) => void;
     measure: (point: SceneVector) => void;
     align: (point: Point2) => void;
+    /** Camera distance from its target, reported when it crosses the far-imagery threshold. */
+    zoom?: (zoomedOut: boolean) => void;
   },
 ) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -110,6 +113,7 @@ export function createViewport(
     railNoise: new THREE.Group(),
     plan: new THREE.Group(),
     dimensions: new THREE.Group(),
+    aerial: new THREE.Group(),
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
@@ -157,6 +161,13 @@ export function createViewport(
     controls.update();
   };
   controls.addEventListener("change", render);
+  // Far aerial imagery is only worth loading once the planner zooms out past the neighbourhood.
+  let zoomedOut = false;
+  const checkZoom = () => {
+    const out = camera.position.distanceTo(controls.target) > 320;
+    if (out !== zoomedOut) { zoomedOut = out; callbacks.zoom?.(out); }
+  };
+  controls.addEventListener("change", checkZoom);
   const resize = new ResizeObserver(() => {
     const { width, height } = host.getBoundingClientRect();
     if (!width || !height) return;
@@ -198,6 +209,13 @@ export function createViewport(
     );
     mesh.add(line);
   };
+  /** Stacked ground layers stay ordered at any zoom: depth offsets instead of centimetre gaps, which z-fight from far away. */
+  const groundLayer = <M extends THREE.Material>(material: M, level: number) => {
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -level;
+    material.polygonOffsetUnits = -level * 4;
+    return material;
+  };
   /** Flat strip along a polyline, one quad per segment: a visible axis at any zoom, unlike 1px lines. */
   const ribbon = (parts: Point2[][], width: number, color: number, opacity: number, y: number) => {
     const positions: number[] = [];
@@ -211,7 +229,7 @@ export function createViewport(
       }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
+    const mesh = new THREE.Mesh(geometry, groundLayer(new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }), 4));
     mesh.renderOrder = 2;
     return mesh;
   };
@@ -530,13 +548,31 @@ export function createViewport(
         // The image is north-up and centred on the site origin, which is local (0, 0).
         const plane = new THREE.Mesh(
           new THREE.PlaneGeometry(size, size),
-          new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }),
+          groundLayer(new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }), 3),
         );
         plane.rotation.x = -Math.PI / 2;
         plane.position.y = 0.01;
         plane.renderOrder = 1;
         groups.railNoise.add(plane);
       }
+    }
+    if (previous?.site.aerial.near !== next.site.aerial.near || previous?.site.aerial.far !== next.site.aerial.far) {
+      disposeGroup(groups.aerial);
+      // Both images are north-up and centred on the site origin; the sharp near window lies on top.
+      for (const [extent, url, y] of [["far", next.site.aerial.far, -0.035], ["near", next.site.aerial.near, -0.03]] as const) {
+        if (!url) continue;
+        const texture = new THREE.TextureLoader().load(url, () => { renderer.shadowMap.needsUpdate = true; render(); });
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        const size = AERIAL_HALF_WIDTH_M[extent] * 2;
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(size, size), groundLayer(new THREE.MeshStandardMaterial({ map: texture, roughness: 1 }), extent === "near" ? 2 : 1));
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = y;
+        // Shadows only on the near window: the sun's shadow box covers the site, and its edge would show as a seam far out.
+        plane.receiveShadow = extent === "near";
+        groups.aerial.add(plane);
+      }
+      renderer.shadowMap.needsUpdate = true;
     }
     if (previous?.site.plan !== next.site.plan) {
       disposeGroup(groups.plan);
@@ -574,8 +610,9 @@ export function createViewport(
       }
     }
     slice.constant = next.clipHeight;
-    for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan"] as const)
+    for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
       groups[key].visible = next.layers[key];
+    grid.visible = !(next.layers.aerial && groups.aerial.children.length);
     disposeGroup(groups.measure);
     if (next.measurement.length) {
       const geometry = new THREE.BufferGeometry().setFromPoints(
@@ -687,6 +724,7 @@ export function createViewport(
         controls.target.set(0, 0, 0);
         camera.position.set(0, 2400, 0.01);
         controls.update();
+        checkZoom();
         render();
         return;
       }

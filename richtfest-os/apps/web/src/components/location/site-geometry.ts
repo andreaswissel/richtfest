@@ -29,6 +29,7 @@ export type SiteOverlay = {
   plan: { walls: Array<{ id: string; exterior: boolean; ring: Point2[] }> } | null;
   distances: Array<{ id: string; from: Point2; to: Point2; label: string }>;
   railNoise: string | null;
+  aerial: { near: string | null; far: string | null };
   picks: Point2[];
   snaps: Point2[];
 };

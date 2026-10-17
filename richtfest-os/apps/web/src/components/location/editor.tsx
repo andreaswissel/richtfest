@@ -130,6 +130,7 @@ export function LocationEditor({
     roads: true,
     railNoise: false,
     plan: true,
+    aerial: true,
   });
   const [measurement, setMeasurement] = useState<SceneVector[]>([]);
   const [clipHeight, setClipHeight] = useState(50);
@@ -307,6 +308,7 @@ export function LocationEditor({
   });
   const callbacks = useRef({
     align: (_p: [number, number]) => {},
+    zoom: (_out: boolean) => {},
     select: setSelected,
     place: (_p: SceneVector) => {},
     measure: (_p: SceneVector) => {},
@@ -326,10 +328,55 @@ export function LocationEditor({
           ],
         });
     },
-    measure: (point) =>
-      setMeasurement((m) => (m.length === 1 ? [...m, point] : [point])),
+    measure: (point) => {
+      // Snap to the nearest building or plan corner within 1 m, keeping the picked height.
+      let best: [number, number] | null = null,
+        bestDistance = 1;
+      for (const vertex of site.snapVertices) {
+        const distance = Math.hypot(vertex[0] - point[0], vertex[1] - point[2]);
+        if (distance <= bestDistance) {
+          best = vertex;
+          bestDistance = distance;
+        }
+      }
+      const snapped: SceneVector = best ? [best[0], point[1], best[1]] : point;
+      setMeasurement((m) => (m.length === 1 ? [...m, snapped] : [snapped]));
+    },
     align: site.onAlign,
+    zoom: site.onZoom,
   };
+  const keys = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  keys.current = (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (event.defaultPrevented || !viewport.current || target?.closest("[role=dialog], [data-slot=popover-content]")) return;
+    if (event.key === "Escape") {
+      if (measurement.length) setMeasurement([]);
+      else if (tool !== "select") setTool("select");
+      return;
+    }
+    if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    const key = event.key.toLowerCase();
+    const tools: Record<string, ViewportState["tool"]> = { v: "select", g: "place", m: "measure", a: "align" };
+    const views: Record<string, "top" | "perspective" | "street" | "area"> = { t: "top", "3": "perspective", s: "street", u: "area" };
+    if (tools[key]) {
+      if ((key === "g" && !object) || (key === "a" && !site.canAlign)) return;
+      event.preventDefault();
+      if (key === "m") setTreeStyle("schematic");
+      setTool(tools[key]);
+    } else if (views[key]) {
+      event.preventDefault();
+      viewport.current.view(views[key]);
+    } else if (key === "f") {
+      event.preventDefault();
+      viewport.current.focus(selected);
+    }
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keys.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
   const hasContext = !!state.data?.context;
   const addressMismatch =
     hasContext && !locationMatchesAddress(state.data!.context!, address);
@@ -349,6 +396,7 @@ export function LocationEditor({
             place: (p) => callbacks.current.place(p),
             measure: (p) => callbacks.current.measure(p),
             align: (p) => callbacks.current.align(p),
+            zoom: (out) => callbacks.current.zoom(out),
           });
           setViewportReady(true);
         } catch {
@@ -826,16 +874,17 @@ export function LocationEditor({
                 <div className="location-toolbar-group">
                   {(
                     [
-                      ["select", MousePointer2, "locationSelect"],
-                      ["place", Move, "locationPlace"],
-                      ["measure", Ruler, "locationMeasure"],
+                      ["select", MousePointer2, "locationSelect", "V"],
+                      ["place", Move, "locationPlace", "G"],
+                      ["measure", Ruler, "locationMeasure", "M"],
                     ] as const
-                  ).map(([value, Icon, key]) => (
+                  ).map(([value, Icon, key, shortcut]) => (
                     <Button
                       key={value}
                       variant="ghost"
                       size="icon"
-                      title={t(key)}
+                      title={`${t(key)} (${shortcut})`}
+                      aria-keyshortcuts={shortcut}
                       aria-label={t(key)}
                       aria-pressed={tool === value}
                       disabled={value === "place" && !object}
@@ -851,24 +900,32 @@ export function LocationEditor({
                 <div className="location-toolbar-group">
                   <Button
                     variant="ghost"
+                    title={t("locationShortcut").replace("{key}", "T")}
+                    aria-keyshortcuts="T"
                     onClick={() => viewport.current?.view("top")}
                   >
                     {t("locationTop")}
                   </Button>
                   <Button
                     variant="ghost"
+                    title={t("locationShortcut").replace("{key}", "3")}
+                    aria-keyshortcuts="3"
                     onClick={() => viewport.current?.view("perspective")}
                   >
                     3D
                   </Button>
                   <Button
                     variant="ghost"
+                    title={t("locationShortcut").replace("{key}", "S")}
+                    aria-keyshortcuts="S"
                     onClick={() => viewport.current?.view("street")}
                   >
                     {t("locationStreet")}
                   </Button>
                   <Button
                     variant="ghost"
+                    title={t("locationShortcut").replace("{key}", "U")}
+                    aria-keyshortcuts="U"
                     onClick={() => viewport.current?.view("area")}
                   >
                     {t("locationArea")}
@@ -876,7 +933,8 @@ export function LocationEditor({
                   <Button
                     variant="ghost"
                     size="icon"
-                    title={t("locationFrame")}
+                    title={`${t("locationFrame")} (F)`}
+                    aria-keyshortcuts="F"
                     aria-label={t("locationFrame")}
                     onClick={() => viewport.current?.focus(selected)}
                   >

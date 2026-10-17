@@ -24,6 +24,8 @@
 
 ## 2026-10-18
 
+- 3D location: official aerial imagery under the scene for Rheinland-Pfalz and Berlin sites, with a wider window loaded when zooming out; keyboard shortcuts for tools and views (V, G, M, A, T, 3, S, U, F, Esc); measurements snap to building and plan corners.
+
 - 3D location shows mapped roads and railways and the federal rail noise map (EBA, Lden) as switchable layers, with a Surroundings view of 2 × 2 km. A floor plan can be placed on the site with two point pairs; facade distances to each road or railway are measured from it and can be taken over into Exterior noise with their basis.
 
 - **Exterior noise**: a new project view lists the roads and railways around the site from official map data (now also for Hessen addresses, e.g. Frankfurt and Hanau) with class, route number and distance. Added sources collect traffic volume, speed, surface, train volumes and facade distance with their basis, and missing traffic data can be requested from the authority as an inquiry that tracks its answers.
