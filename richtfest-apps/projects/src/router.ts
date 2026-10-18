@@ -19,6 +19,7 @@ import { createBuildingModelRouter } from "./building-model-router";
 import { createDocumentTypesRouter, documentTypesFor } from "./document-types";
 import { createInquiriesRouter } from "./inquiries";
 import { createNoiseSourcesRouter } from "./noise-sources";
+import { createExteriorNoiseLevelsRouter } from "./exterior-noise-levels";
 import { createInboundEmailRouter } from "./inbound-email";
 import { enrollReadyVersion } from "./project-files";
 import { createPlanningRouter } from "./planning-router";
@@ -89,6 +90,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(createDocumentTypesRouter(getDeps));
   router.use(createInquiriesRouter(getDeps));
   router.use(createNoiseSourcesRouter(getDeps));
+  router.use(createExteriorNoiseLevelsRouter(getDeps));
   router.use(createInboundEmailRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {

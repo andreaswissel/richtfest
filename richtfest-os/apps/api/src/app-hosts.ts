@@ -36,6 +36,9 @@ import type { AppDeps as KnowledgeDeps } from "@richtfest/knowledge/deps";
 import { availableUpdates } from "@richtfest/public-data/queries";
 import { trafficCountsInBox } from "@richtfest/public-data/traffic-count-queries";
 import { calculateAcoustics } from "@richtfest/acoustics";
+import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
+import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
+import { acousticNormPack } from "./acoustic-norm-pack";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
 const base = (db: Database, req: Request) => {
@@ -132,7 +135,19 @@ export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),
   // Imported reference counts are read whenever present; only their import is switched by TRAFFIC_COUNT_IMPORT_ENABLED.
   trafficCounts: bbox => trafficCountsInBox(db, bbox),
+  exteriorNoise: exteriorNoiseHost(),
 });
+const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
+  const pack = acousticNormPack();
+  if (!pack) return null;
+  return {
+    packId: pack.id,
+    editions: { rls19: pack.rls19.edition, din4109: pack.din4109.edition },
+    turnedAwayReductionDb: pack.din4109.turnedAwayReductionDb,
+    roadRatingLevels: (sources, receivers) => roadRatingLevels(pack, sources, receivers),
+    exteriorNoiseLevel: (contributions) => exteriorNoiseLevel(pack, contributions),
+  };
+};
 export const knowledgeDeps = (
   db: Database,
   req: Request,

@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { roadSurfaceTypeSchema } from "./acoustic-norm-pack";
 
 /**
  * Exterior noise sources of a project: the roads and railways a facade check
  * has to account for, with the inputs an emission calculation (RLS-19 for
  * roads, Schall 03 for railways) will need. Richtfest collects and requests
- * these inputs; it does not calculate emission or facade levels from them.
+ * these inputs. Road facade levels are calculated from them where a norm pack
+ * is configured; railway levels are taken over from a study as rating levels.
  */
 export const noiseSourceKindSchema = z.enum(["road", "rail"]);
 export type NoiseSourceKind = z.infer<typeof noiseSourceKindSchema>;
@@ -19,7 +21,9 @@ export const noiseSourceInputs = {
     dailyTraffic: { value: z.number().int().min(0).max(500_000), unit: "Kfz/24h" },
     heavyVehicleShare: { value: z.number().min(0).max(100), unit: "%" },
     speedLimit: { value: z.number().int().min(5).max(200), unit: "km/h" },
+    surfaceType: { value: roadSurfaceTypeSchema, unit: null },
     roadSurface: note(200),
+    gradient: { value: z.number().min(-30).max(30), unit: "%" },
     distanceToFacade: distance,
     trafficBasis: note(300),
   },
@@ -27,6 +31,9 @@ export const noiseSourceInputs = {
     trainVolumes: note(2000),
     speed: { value: z.number().int().min(5).max(400), unit: "km/h" },
     trackType: note(200),
+    /** Rating levels Lr from a rail noise study (Schall 03), at the most exposed facade. */
+    ratingLevelDay: { value: z.number().min(0).max(120), unit: "dB(A)" },
+    ratingLevelNight: { value: z.number().min(0).max(120), unit: "dB(A)" },
     distanceToFacade: distance,
     trafficBasis: note(300),
   },
@@ -36,7 +43,7 @@ export type RailNoiseInput = keyof typeof noiseSourceInputs.rail;
 
 /** Inputs only an authority or operator can supply; the facade distance is measured by the planner. */
 export const requestableNoiseInputs = {
-  road: ["dailyTraffic", "heavyVehicleShare", "speedLimit", "roadSurface", "trafficBasis"],
+  road: ["dailyTraffic", "heavyVehicleShare", "speedLimit", "surfaceType", "roadSurface", "trafficBasis"],
   rail: ["trainVolumes", "speed", "trackType", "trafficBasis"],
 } as const satisfies { road: readonly RoadNoiseInput[]; rail: readonly RailNoiseInput[] };
 

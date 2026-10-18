@@ -4,6 +4,8 @@ export * from "./agent-policy";
 export * from "./agent-document";
 export * from "./acoustic-concept";
 export * from "./acoustic-calculation";
+export * from "./acoustic-norm-pack";
+export * from "./exterior-noise-levels";
 export * from "./exterior-noise-reference";
 export * from "./agent-analytics";
 export * from "./agent-output";

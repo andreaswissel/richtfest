@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { noiseInputKeys, noiseInputUnit, requestableNoiseInputs, type LocationState, type MappedNoiseSource, type NoiseInputValue, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
+import { noiseInputKeys, noiseInputUnit, requestableNoiseInputs, roadSurfaceTypes, type LocationState, type MappedNoiseSource, type NoiseInputValue, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
 import { api, ApiError, type RecordData } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -9,11 +9,13 @@ import { Section } from "../layout";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input, Textarea } from "../ui/input";
+import { NativeSelect, NativeSelectOption } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, RowLink, Segmented, Table } from "../ui/primitives";
 import { inquiryLink } from "../inquiries/types";
 import { useSiteGeometry } from "../location/site-geometry";
 import { FacadeDistanceRow } from "../location/site-workbench";
 import { mappedClass, mappedDetails, mappedName } from "./labels";
+import { FacadeLevels } from "./facade-levels";
 import { noiseReasonText, noiseReferenceText, useNoiseSuggestions } from "./suggestions";
 import "./noise-sources.css";
 
@@ -30,6 +32,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const inputKeys = {
   dailyTraffic: "noiseInputDailyTraffic", heavyVehicleShare: "noiseInputHeavyVehicleShare", speedLimit: "noiseInputSpeedLimit", roadSurface: "noiseInputRoadSurface",
   distanceToFacade: "noiseInputDistanceToFacade", trafficBasis: "noiseInputTrafficBasis", trainVolumes: "noiseInputTrainVolumes", speed: "noiseInputSpeed", trackType: "noiseInputTrackType",
+  surfaceType: "noiseInputSurfaceType", gradient: "noiseInputGradient", ratingLevelDay: "noiseInputRatingLevelDay", ratingLevelNight: "noiseInputRatingLevelNight",
 } as const;
 export const noiseInputLabel = (key: string, t: T) => key in inputKeys ? t(inputKeys[key as keyof typeof inputKeys]) : key;
 const displayValue = (state: NoiseInputValue | undefined) => state ? `${state.value}${state.unit ? ` ${state.unit}` : ""}` : "";
@@ -71,6 +74,7 @@ export function NoiseSources({ projectId, selectedId }: { projectId: string; sel
     </Section>
     {selected && <SourceInputs key={selected.id} projectId={projectId} source={selected} canWrite={canWrite} t={t} />}
     {selectedId && !selected && query.isSuccess && <Callout>{t("noiseSourceNotFound")}</Callout>}
+    {data && <FacadeLevels projectId={projectId} />}
     {data && <SuggestedSources projectId={projectId} canWrite={canWrite} t={t} />}
     {data && <MappedSources projectId={projectId} survey={data.survey} sources={sources} canWrite={canWrite} t={t} />}
     {canWrite && sources.some((source) => source.missing.some((field) => (requestableNoiseInputs[source.kind] as readonly string[]).includes(field)))
@@ -194,7 +198,8 @@ function MeasuredDistance({ projectId, source, canWrite, t }: { projectId: strin
   </div>;
 }
 
-const numericInputs = new Set(["dailyTraffic", "heavyVehicleShare", "speedLimit", "distanceToFacade", "speed"]);
+const numericInputs = new Set(["dailyTraffic", "heavyVehicleShare", "speedLimit", "distanceToFacade", "speed", "gradient", "ratingLevelDay", "ratingLevelNight"]);
+const surfaceLabel = (surface: string, t: T) => t(`noiseSurface_${surface}` as Parameters<T>[0]);
 
 /** One input: its value with unit and the basis it comes from. Saving appends a version; the server rejects a stale edit. */
 function InputRow({ projectId, source, inputKey, canWrite, t }: { projectId: string; source: NoiseSource; inputKey: string; canWrite: boolean; t: T }) {
@@ -216,7 +221,11 @@ function InputRow({ projectId, source, inputKey, canWrite, t }: { projectId: str
   const label = `${noiseInputLabel(inputKey, t)}${unit ? ` (${unit})` : ""}`;
   return <form className="noise-input-row" onSubmit={(event) => { event.preventDefault(); if (changed && valid) save.mutate({ value: parsed, basis: basis.trim() || null }); }}>
     <Field label={label}>
-      {long ? <Textarea rows={2} value={value} disabled={!canWrite} onChange={(event) => setValue(event.target.value)} />
+      {inputKey === "surfaceType" ? <NativeSelect size="sm" className="w-full" value={value} disabled={!canWrite} onChange={(event) => setValue(event.target.value)}>
+        <NativeSelectOption value="">{t("noiseSurfaceChoose")}</NativeSelectOption>
+        {roadSurfaceTypes.map((surface) => <NativeSelectOption key={surface} value={surface}>{surfaceLabel(surface, t)}</NativeSelectOption>)}
+      </NativeSelect>
+        : long ? <Textarea rows={2} value={value} disabled={!canWrite} onChange={(event) => setValue(event.target.value)} />
         : <Input value={value} inputMode={numeric ? "decimal" : undefined} disabled={!canWrite} onChange={(event) => setValue(event.target.value)} />}
     </Field>
     <Field label={t("noiseBasis")}><Input value={basis} placeholder={t("noiseBasisPlaceholder")} disabled={!canWrite} onChange={(event) => setBasis(event.target.value)} /></Field>

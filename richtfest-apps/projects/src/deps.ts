@@ -1,4 +1,6 @@
-import type { PermissionKey, DocumentModelInput, DocumentModelResult } from "@richtfest/shared";
+import type {
+  PermissionKey, DocumentModelInput, DocumentModelResult, ExteriorNoiseLevel, RatingLevelContribution, RoadNoiseReceiver, RoadNoiseSource, RoadRatingLevel,
+} from "@richtfest/shared";
 export type StoredObject = {
   sizeBytes: number;
   checksum: string;
@@ -58,6 +60,14 @@ export type AppDeps = {
   nominatim?: { url: string; userAgent: string } | null;
   /** Domain that receives forwarded email (for example in.richtfest.ai); unset when inbound email is not configured. */
   inboundEmailDomain?: string | null;
+  /** Road noise (RLS-19) and relevant exterior noise levels (DIN 4109-2); null when no acoustic norm pack is configured. */
+  exteriorNoise?: {
+    packId: string;
+    editions: { rls19: string; din4109: string };
+    turnedAwayReductionDb: { open: number; closed: number };
+    roadRatingLevels: (sources: RoadNoiseSource[], receivers: RoadNoiseReceiver[]) => RoadRatingLevel[];
+    exteriorNoiseLevel: (contributions: RatingLevelContribution[]) => ExteriorNoiseLevel | null;
+  } | null;
 };
 
 /** Receiving email runs without a request actor; the OS verifies the provider webhook and supplies system-scoped audit. */

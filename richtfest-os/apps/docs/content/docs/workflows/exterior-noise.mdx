@@ -3,7 +3,7 @@ title: Exterior noise
 description: The roads and railways around a project and the traffic data an exterior noise assessment needs.
 ---
 
-Open **Exterior noise** in the project bar. It lists the project's noise sources: the roads and railways whose noise reaches the facades, each with the inputs an emission calculation needs. Richtfest collects and requests these inputs; it does not calculate road (RLS-19) or rail (Schall 03) levels.
+Open **Exterior noise** in the project bar. It lists the project's noise sources: the roads and railways whose noise reaches the facades, each with the inputs an emission calculation needs. Richtfest collects and requests these inputs and calculates draft road rating levels (RLS-19) and relevant exterior noise levels per facade (DIN 4109-2). It does not calculate rail levels (Schall 03); those come from a study.
 
 ## Mapped roads and railways
 
@@ -65,9 +65,25 @@ Select a source to enter its inputs. Each value has a **Basis**, for example "He
 | Traffic volume (DTV, Kfz/24h) | Train volumes and types, day and night |
 | Heavy vehicle share (%) | Line speed (km/h) |
 | Speed limit (km/h) | Track type |
-| Road surface | Distance to facade (m) |
-| Distance to facade (m) | Data basis (count year or forecast) |
+| Surface type (RLS-19) | Distance to facade (m) |
+| Road surface (free text) | Data basis (count year or forecast) |
+| Gradient (%) | Rating level day and night (dB(A), from a study) |
+| Distance to facade (m) | |
 | Data basis (count year or forecast) | |
+
+## Facade levels
+
+**Facade levels** shows, once the plan is placed in 3D location and its exterior walls are known, a draft of the levels a Schallschutznachweis starts from. It is marked **Draft, not reviewed**; the planner checks it before it is used.
+
+**Sources** lists every source with its status:
+
+- **Calculated**: a road with traffic volume, and a speed limit except on motorways. The row shows hourly traffic and truck shares day and night, the speed used and the emission level L'W, followed by every assumption: standard hourly traffic and truck shares for the road class when only DTV is known, the reference surface when no surface type is set, no gradient, two lanes, 3.5 m lanes and 50 km/h on municipal roads without a limit.
+- **From study**: a railway with rating levels day and night entered from a study.
+- **Inputs missing**, **No mapped axis**: not part of the levels until completed. Road levels need the mapped axis from the survey.
+
+**Facades** lists, per storey, each exterior wall with the rating level of each source, La day, La night and La for sleeping rooms, which is what the room requirement uses. The rules applied are those of DIN 4109-2 for calculated levels: the rail reduction, the night surcharge for sleeping rooms, sources combined per period with the addition applied once to the sum, and sleeping rooms taking the higher of day and night. A facade turned away from all sources takes the loudest facade of its storey less the reduction for turned-away facades in open development (**Turned away**).
+
+Limitations shown under the table: free propagation without screening by other buildings, flat ground, no reflections, no junction corrections, receivers at the ceiling of each storey with an assumed storey height of 3 m. Each makes the level more conservative or needs a check where it does not. The coefficients are configured on the server ([acoustic norm pack](/docs/engineering/deployment#acoustic-norm-pack)); the editions used are named above the tables.
 
 ## Measure facade distances on the site
 

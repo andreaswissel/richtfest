@@ -15,3 +15,5 @@
 .noise-input-group { display: grid; gap: 4px; }
 .noise-measured-distance { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; max-width: 640px; }
 .noise-measured-distance .site-distance-row { justify-content: flex-start; padding-block: 0; }
+.noise-sources > * { min-width: 0; }
+.facade-levels-wrap { display: block; min-width: 16rem; max-width: 32rem; white-space: normal; }

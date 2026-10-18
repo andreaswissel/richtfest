@@ -73,6 +73,12 @@ Set `GEOAPIFY_API_KEY` on the API service to enable project address autocomplete
 
 Authenticated users with project write permission can search through `/api/projects/address-suggestions`. Queries start after three characters and a short typing pause. Search text is sent to Geoapify, with Germany as a ranking bias and the user's English/German language; project IDs, names and customer records are not sent. Set usage limits appropriate to the account. The server bounds request time and response size, and hides upstream error bodies and credentials. Selected coordinates, provider IDs and data-source attribution are stored in Postgres; they are unreviewed search metadata, not survey evidence. The editor continues to resolve exact Berlin addresses through the official register rather than substituting search coordinates.
 
+### Acoustic norm pack
+
+Facade levels in [Exterior noise](/docs/workflows/exterior-noise#facade-levels) need the licensed coefficients of RLS-19 and DIN 4109. They are never in the repository, the web bundle, responses or logs: the API reads them at start from `ACOUSTIC_NORM_PACK` (the pack JSON, or its base64) or from a file named by `ACOUSTIC_NORM_PACK_PATH`. The pack's shape is `acousticNormPackSchema` in `@richtfest/shared`; a pack that fails validation is ignored and only the failing field paths are logged. Without a pack, facade levels report that the server is not configured.
+
+`richtfest-apps/acoustics/scripts/check-norm-pack.ts <pack.json> <cases.json>` checks a pack against test tasks such as TEST-20 before it is set.
+
 ## Social link previews
 
 The web HTML includes Open Graph and large-image Twitter card metadata, so crawlers do not need JavaScript or a session. In production, the API resolves preview URLs against the origin in `BETTER_AUTH_URL` at startup; set it to the public HTTPS origin, not a private Railway hostname. The image is the public, bundled 1200 × 630 JPEG at `/social-preview-v1.jpg`, not a private Bucket upload.
