@@ -344,6 +344,13 @@
       "when": 1792800000000,
       "tag": "0048_feasibility_studies",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0049_site_assessments",
+      "breakpoints": true
     }
   ]
 }

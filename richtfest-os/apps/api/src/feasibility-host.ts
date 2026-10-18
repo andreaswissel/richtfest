@@ -1,3 +1,4 @@
+import { resolveLocationAddress } from "@richtfest/projects/location-context";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
 import { formatProjectAddress } from "@richtfest/shared";
@@ -21,6 +22,12 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
       const [row] = await db.select({ id: projects.id, name: projects.name, street: projects.street, postalCode: projects.postalCode, city: projects.city, country: projects.country })
         .from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, actor.tenantId))).limit(1);
       return row ? { id: row.id, name: row.name, address: formatProjectAddress(row) || null } : null;
+    },
+    resolveBerlinSite: async (projectId, signal) => {
+      const [row] = await db.select().from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, actor.tenantId))).limit(1);
+      if (!row) throw new HttpError(404, "not_found", "Project not found");
+      if (row.city?.trim().toLowerCase() !== "berlin") throw new HttpError(422, "berlin_address_required", "Save a complete Berlin site address in project details first");
+      return resolveLocationAddress(row, signal);
     },
     siteFigures: projectId => readFeasibilitySiteFigures(projectsDeps(db, req), projectId),
   };

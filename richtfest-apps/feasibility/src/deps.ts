@@ -11,5 +11,7 @@ export type AppDeps = {
   /** The project's name and address in this tenant, or null when it does not exist here. */
   project: (projectId: string) => Promise<{ id: string; name: string; address: string | null } | null>;
   /** Approved parcel area, Bebauungsplan GRZ/GFZ and existing Geschossfläche from the project's building model. */
+  /** Exact Berlin address resolution, supplied by the host. No project geometry is changed. */
+  resolveBerlinSite?: (projectId: string, signal: AbortSignal) => Promise<{ address: string; origin: [number, number]; sources: { label: string; url: string }[] }>;
   siteFigures: (projectId: string) => Promise<FeasibilitySiteFigures>;
 };

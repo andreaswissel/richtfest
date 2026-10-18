@@ -7,6 +7,7 @@
     ".": "./src/router.ts",
     "./deps": "./src/deps.ts",
     "./schema": "./src/schema.ts",
+    "./location-context": "./src/location-context.ts",
     "./location-worker": "./src/location-worker.ts",
     "./source-text": "./src/source-text.ts",
     "./source-representations": "./src/source-representations.ts",

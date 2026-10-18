@@ -27,3 +27,5 @@ export * from "./noise-sources";
 export * from "./site-plan";
 export * from "./site-export";
 export * from "./feasibility";
+
+export * from "./site-assessment";

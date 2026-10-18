@@ -1,9 +1,47 @@
 ---
 title: Feasibility
-description: Compare keeping, densifying or rebuilding a site by residual land value, and export the study as a PDF report.
+description: Review Berlin site constraints and compare keeping, densifying or rebuilding a site by residual land value.
 ---
 
 The project view **Feasibility** answers the first economic question for a site: what may the land cost, if we keep the building, densify it or build new? It is an indicative residual land value calculation, not a market valuation, lending value (BelWertV) or permit planning.
+
+## Berlin site assessment
+
+Choose **Grundstücksprüfung / Site assessment** beside **Economics** in the project Feasibility view. Existing links still open the financial study. The assessment is an arithmetic capacity check for Berlin, not a building placement solver or permission decision.
+
+### Find and review the site evidence
+
+**Look up parcels and plans** uses the saved complete Berlin project address. It resolves an exact official address and queries the ALKIS parcel service plus the adopted and in-progress B-Plan registers within a 100 m square. The parcel preview uses EPSG:25833, north up, with the address point marked. Nearby candidates and polygons containing the address point are distinguished. Choose the actual parcel deliberately: an address is not proof of the correct development site, and a project may involve several parcels.
+
+**Use parcel area** puts the selected official area and its source reference into the draft, always unreviewed. The source record date is separate from the retrieval timestamp. Inspect and confirm it, then save. Lookup results themselves are a temporary preview; the adopted area, source URL, feature ID and retrieval time are retained in the saved constraint. No boundaries are adopted as a buildable envelope.
+
+Plan candidates link to their records and available plan PDFs. Check the coverage, legal status, amendments and relevant Baufeld. Empty results or unavailable services never establish that § 34 applies. Automatic plan extraction, Baufenster tracing and setback geometry are not part of this first assessment.
+
+### Reviewed constraints
+
+The main view compares footprint limits and full-floor capacity visually. Select a limit in the comparison or a row in the constraint summary to open its focused review panel. Values, sources and review controls stay in that panel; the overview shows the current values and outstanding reviews. Saving the assessment remains the final action.
+
+Select the planning basis and enter parcel area, GRZ, GFZ, the reviewed buildable footprint envelope, maximum full storeys, additional gross floor area and additional GFZ-countable area. Enter explicit zero for additional areas when none apply. Each numeric input has a source, source date, provenance kind and review checkbox. Changing its value or source revokes review.
+
+The envelope area must already account for the relevant building lines, building boundaries, setbacks and rights. Confirm the planning basis, Bauweise, height, setbacks, rights/Baulasten and heritage context with a source and explanation. These are human assessments, not automatic regulatory checks. § 34 assessments also need source-linked reference buildings and the reason for their selection; comparison GRZ/GFZ values do not create statutory limits.
+
+### What limits the area
+
+The result explains these stages and retains tied constraints:
+
+1. Footprint envelope = minimum of parcel area × GRZ and the reviewed buildable footprint.
+2. Full-storey area = minimum of footprint × maximum full storeys and parcel area × GFZ minus additional countable area.
+3. Countable GF adds the additional countable area. Above-ground BGF adds the additional gross area instead.
+
+This simplified model treats full-storey GF as the full-storey contribution to BGF. It does not derive DIN area measurements, floor layouts, roof shapes or a geometrically feasible Staffelgeschoss. Supply and review additional areas separately. The displayed footprint is an envelope limit, not necessarily a realised footprint when GFZ controls. The result also shows unused GFZ capacity, which is not a promise that the volume can be built.
+
+Missing or invalid numbers suppress the capacity. Unreviewed evidence, unresolved qualitative checks or missing § 34 references leave the numeric result **Indicative**. **Evidence reviewed** describes the input review only, never a permit. Additional-storey upside remains an explicitly separate indicative scenario requiring its own review and any necessary authority decision; it never changes the baseline.
+
+Save creates an immutable revision and audit event. Concurrent changes reject stale saves without overwriting the draft. The assessment follows existing project read/write permissions. Its link is `/projects/:id?view=feasibility&study=site`; GET and PUT use `/api/feasibility/projects/:id/site-assessment`. The explicit public lookup uses POST `/api/feasibility/projects/:id/berlin-context`. Migration `0049_site_assessments` adds only the assessment and revision tables.
+
+### Acceptance cases
+
+Automated tests use the user's Giersstraße and Eldenaer Straße examples as labelled synthetic arithmetic fixtures, not verified project records. Giersstraße uses a derived parcel area (375 / 0.38), a test envelope of 400 m², three full storeys and 348 m² additional gross area to reproduce 1,473 m² BGF. Eldenaer Straße derives an envelope of 1,041 × 1.27 / 4 = 330.5175 m² from the reported approved GFZ, producing 1,322.07 m² under four storeys and 343.53 m² unused GFZ capacity. A separate five-storey test yields 1,652.5875 m². These derived assumptions must not be presented as surveyed dimensions or approved rights.
 
 ## Site
 

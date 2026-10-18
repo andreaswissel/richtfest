@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { Link, useBlocker } from "react-router-dom";
+import { Link, useBlocker, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import { Input, Textarea } from "../ui/input";
 import { Badge, Callout, Modal, Segmented } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import "./feasibility.css";
+import { SiteAssessment } from "./site-assessment";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
@@ -90,6 +91,13 @@ function ValueField({ state, field, label, disabled, language, raw, onRaw, onCha
 }
 
 export function Feasibility({ projectId }: { projectId: string }) {
+  const t = useT(), [params] = useSearchParams();
+  const site = params.get("study") === "site";
+  const target = (isSite: boolean) => { const next = new URLSearchParams(params); if (isSite) next.set("study", "site"); else next.delete("study"); return `?${next}`; };
+  return <><nav className="site-study-nav text-ui-sm" aria-label={t("siteAssessmentTitle")}><Link to={target(false)} aria-current={!site ? "page" : undefined}>{t("siteAssessmentFinancial")}</Link><Link to={target(true)} aria-current={site ? "page" : undefined}>{t("siteAssessmentTitle")}</Link></nav>{site ? <SiteAssessment key={projectId} projectId={projectId} /> : <FinancialFeasibility key={projectId} projectId={projectId} />}</>;
+}
+
+function FinancialFeasibility({ projectId }: { projectId: string }) {
   const t = useT(), language = usePreferences(s => s.language);
   const locale = language === "de" ? "de-DE" : "en-GB";
   const euro = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : `${Math.round(value).toLocaleString(locale)} €`;

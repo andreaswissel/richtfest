@@ -6,6 +6,9 @@ import type { AppDeps } from "./deps";
 import { feasibilityStudies, feasibilityStudyRevisions } from "./schema";
 import { initialStudy } from "./defaults";
 
+import { createBerlinSiteContextRouter } from "./berlin-site-context";
+import { createSiteAssessmentRouter } from "./site-assessment-router";
+
 const error = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
 const uuid = z.string().uuid();
 
@@ -24,6 +27,8 @@ async function readStudy(d: AppDeps, projectId: string) {
 
 export function createRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
+  router.use(createSiteAssessmentRouter(getDeps));
+  router.use(createBerlinSiteContextRouter(getDeps));
 
   router.get("/projects/:projectId/study", async (req, res, next) => {
     try {
