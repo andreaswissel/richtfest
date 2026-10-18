@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?><wfs:FeatureCollection xmlns="http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" numberMatched="unknown" numberReturned="29" timeStamp="2026-10-18T20:24:16.353+02:00" xsi:schemaLocation="http://repository.gdi-de.org/schemas/adv/produkt/alkis-vereinfacht/2.0 https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WFS_OpenData/guest/extref_fe8f6a62-5faf-4577-9509-aac6f24eb328/schema/AAA-vereinfacht/2.0/schema/ALKIS-vereinfacht.xsd http://www.opengis.net/wfs/2.0 https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WFS_OpenData/guest/extref_fe8f6a62-5faf-4577-9509-aac6f24eb328/schema/ogc/wfs/2.0/wfs.xsd http://www.opengis.net/gml/3.2 https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WFS_OpenData/guest/extref_fe8f6a62-5faf-4577-9509-aac6f24eb328/schema/NAS/6.0.1/schema/gml/3.2.1/gml.xsd http://www.isotc211.org/2005/gco https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WFS_OpenData/guest/extref_fe8f6a62-5faf-4577-9509-aac6f24eb328/schema/NAS/6.0.1/schema/iso/19139/20070417/gco/gco.xsd http://www.isotc211.org/2005/gmd https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ALKIS_WFS_OpenData/guest/extref_fe8f6a62-5faf-4577-9509-aac6f24eb328/schema/NAS/6.0.1/schema/iso/19139/20070417/gmd/gmd.xsd">
+<wfs:boundedBy>
+<gml:Envelope srsDimension="2" srsName="urn:ogc:def:crs:EPSG::4326">
+<gml:lowerCorner>52.1300426202225 11.6344717696228</gml:lowerCorner>
+<gml:upperCorner>52.13098782132 11.6360348416111</gml:upperCorner>
+</gml:Envelope>
+</wfs:boundedBy>
+<wfs:member>
+<Flurstueck gml:id="DESTLIKA0003Ml6CFL">
+<gml:identifier codeSpace="urn:adv:oid:">urn:adv:oid:DESTLIKA0003Ml6CFL</gml:identifier>
+<idflurst>DESTLIKA0003Ml6C</idflurst>
+<flstkennz>15093814503017______</flstkennz>
+<land>Sachsen-Anhalt</land>
+<landschl>15</landschl>
+<gemarkung>Magdeburg</gemarkung>
+<gemaschl>150938</gemaschl>
+<flur>145</flur>
+<flurschl>150938145</flurschl>
+<flstnrzae>3017</flstnrzae>
+<kreis>Magdeburg</kreis>
+<kreisschl>15003</kreisschl>
+<gemeinde>Magdeburg, Landeshauptstadt</gemeinde>
+<gmdschl>15003000</gmdschl>
+<oid>DESTLIKA0003Ml6CFL</oid>
+<aktualit>2014-06-14Z</aktualit>
+<geometrie>
+<gml:MultiSurface gml:id="flurstueck.id.49612202.geometrie.Geom_0" srsDimension="2" srsName="urn:ogc:def:crs:EPSG::4326">
+<gml:surfaceMember>
+<gml:Polygon gml:id="flurstueck.id.49612202.geometrie.Geom_1">
+<gml:exterior>
+<gml:LinearRing>
+<gml:posList>52.1303099021061 11.6350435939063 52.1303088003731 11.6350526472443 52.1302969273503 11.6350446983979 52.1302914679293 11.6350785115593 52.130290550323 11.6350841563726 52.1302374429826 11.6350674021295 52.1301991517858 11.6353653605711 52.1301963659554 11.6353644654571 52.1301686458809 11.6356179672797 52.1301676774929 11.6356254794991 52.1302960588299 11.6357040780743 52.1303351162676 11.6352866318503 52.1303317850065 11.6352843893852 52.1303378429361 11.6352053118912 52.1303657960415 11.6350583937985 52.1303099021061 11.6350435939063</gml:posList>
+</gml:LinearRing>
+</gml:exterior>
+</gml:Polygon>
+</gml:surfaceMember>
+</gml:MultiSurface>
+</geometrie>
+<flaeche>590.0</flaeche>
+<abwrecht>Kein abweichender Rechtszustand</abwrecht>
+<lagebeztxt>Breiter Weg 172, 173; Ernst-Reuter-Allee 19; Ulrichplatz 1, 2</lagebeztxt>
+<tntxt>Industrie- und Gewerbefläche(funktion:Handel und Dienstleistung);590</tntxt>
+</Flurstueck>
+</wfs:member>
+<wfs:member>
+<Flurstueck gml:id="DESTLIKA0003Ml7LFL">
+<gml:identifier codeSpace="urn:adv:oid:">urn:adv:oid:DESTLIKA0003Ml7LFL</gml:identifier>
+<idflurst>DESTLIKA0003Ml7L</idflurst>
+<flstkennz>150938145030100001__</flstkennz>
+<land>Sachsen-Anhalt</land>
+<landschl>15</landschl>
+<gemarkung>Magdeburg</gemarkung>
+<gemaschl>150938</gemaschl>
+<flur>145</flur>
+<flurschl>150938145</flurschl>
+<flstnrzae>3010</flstnrzae>
+<flstnrnen>1</flstnrnen>
+<kreis>Magdeburg</kreis>
+<kreisschl>15003</kreisschl>
+<gemeinde>Magdeburg, Landeshauptstadt</gemeinde>
+<gmdschl>15003000</gmdschl>
+<oid>DESTLIKA0003Ml7LFL</oid>
+<aktualit>2014-06-14Z</aktualit>
+<geometrie>
+<gml:MultiSurface gml:id="flurstueck.id.49612265.geometrie.Geom_0" srsDimension="2" srsName="urn:ogc:def:crs:EPSG::4326">
+<gml:surfaceMember>
+<gml:Polygon gml:id="flurstueck.id.49612265.geometrie.Geom_1">
+<gml:exterior>
+<gml:LinearRing>
+<gml:posList>52.1303106982903 11.6344717696228 52.1303050731761 11.6344944965934 52.1303055306636 11.6346124195143 52.1304084561828 11.6346301409973 52.1304184373033 11.6345903695223 52.1303106982903 11.6344717696228</gml:posList>
+</gml:LinearRing>
+</gml:exterior>
+</gml:Polygon>
+</gml:surfaceMember>
+</gml:MultiSurface>
+</geometrie>
+<flaeche>80.0</flaeche>
+<abwrecht>Kein abweichender Rechtszustand</abwrecht>
+<lagebeztxt>Breiter Weg 172, 173; Ernst-Reuter-Allee 19; Ulrichplatz 1, 2</lagebeztxt>
+<tntxt>Industrie- und Gewerbefläche(funktion:Handel und Dienstleistung);80</tntxt>
+</Flurstueck>
+</wfs:member>
+</wfs:FeatureCollection>

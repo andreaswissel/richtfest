@@ -2,10 +2,11 @@ import { lockProject } from "./project-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, type EnvironmentSurvey } from "@richtfest/shared";
+import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, STATE_NAMES, type EnvironmentSurvey, type StateCode } from "@richtfest/shared";
+import { locateAddressPoint, nominatimGeocoder, stateAt } from "./address-points";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
-import { berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, inBerlin, groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
+import { berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, inBerlin, groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
 
 /** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
 const CONNECTOR = "rlp-basis-dlm-framap-spatial-v5";
@@ -36,7 +37,7 @@ async function scope(d: AppDeps, projectId: string, db = d.db): Promise<Scope> {
     const cacheKey = hash(JSON.stringify({ connector, address, siteId: context.siteId, latitude: context.latitude, longitude: context.longitude }));
     return { kind: "location", site: { siteId: context.siteId, address: context.address, latitude: context.latitude, longitude: context.longitude }, revision: location.revision, cacheKey };
   }
-  // Without an imported location the site point comes from Hessen's official house coordinates at research time.
+  // Without an imported location the site point comes from the state's address register at research time (address-points.ts).
   if (!address.street || !address.city) throw fail("environment_current_location_required");
   return { kind: "address", address, revision: location?.revision ?? 0, cacheKey: hash(JSON.stringify({ connector: HESSEN_CONNECTOR, address })) };
 }
@@ -296,13 +297,15 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   if (!options.refresh) { const prior = await cached(d, projectId, scoped.cacheKey); if (prior) return prior; }
   const retrievedAt = new Date().toISOString();
   const rawResponses: RawResponse[] = [];
-  let site: { siteId: string; address: string; latitude: number; longitude: number };
-  if (scoped.kind === "location") site = scoped.site;
+  // `state` (from the site point) selects the state's connector.
+  let site: { siteId: string; address: string; latitude: number; longitude: number; state: StateCode | null };
+  if (scoped.kind === "location") site = { ...scoped.site, state: await stateAt(scoped.site.longitude, scoped.site.latitude) };
   else {
-    const resolved = await resolveHessenAddress(scoped.address, timeout(options.signal, 20000)).catch(error => { options.signal?.throwIfAborted(); throw error; });
-    if (!resolved) throw fail("environment_current_location_required", "Site address not found in Hessen's house coordinates. Import the site location (Berlin, Rheinland-Pfalz) or check the address in project details.");
-    rawResponses.push({ url: resolved.sourceUrl, retrievedAt, sha256: hash(resolved.body), body: resolved.body });
-    site = resolved;
+    const lookup = await locateAddressPoint(scoped.address, timeout(options.signal, 20000), { fallback: d.nominatim ? nominatimGeocoder(d.nominatim) : null }).catch(error => { options.signal?.throwIfAborted(); throw error; });
+    if (!lookup.point) throw fail("environment_current_location_required", `${lookup.message} Alternatively import the site location (Berlin, Rheinland-Pfalz) or check the address in project details.`);
+    for (const response of lookup.point.responses) rawResponses.push({ url: response.url, retrievedAt, sha256: hash(response.body), body: response.body });
+    site = lookup.point;
+    if (site.state !== "HE") throw fail("environment_connector_unavailable", `Site point found in ${STATE_NAMES[site.state!]}; exterior-noise sources for that state are not connected yet.`);
   }
   const { latitude, longitude } = site;
   // This is a bounded planning search rectangle, not an acoustic propagation model.

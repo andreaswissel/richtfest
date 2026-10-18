@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?><wfs:FeatureCollection xmlns="http://www.adv-online.de/namespaces/adv/gid/7.1" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" timeStamp="2026-10-18T20:24:14.444+02:00" numberReturned="1" numberMatched="unknown" xsi:schemaLocation="http://www.adv-online.de/namespaces/adv/gid/7.1 http://download.lgln.niedersachsen.de/aaa-suite/schema/NAS/7.1/adv/nas/7.1/AAA-Fachschema.xsd http://www.opengis.net/wfs/2.0 http://download.lgln.niedersachsen.de/aaa-suite/schema/ogc/wfs/2.0/wfs.xsd http://www.opengis.net/gml/3.2 http://download.lgln.niedersachsen.de/aaa-suite/schema/NAS/7.1/ogc/gml/3.2.1/gml.xsd http://www.isotc211.org/2005/gco http://download.lgln.niedersachsen.de/aaa-suite/schema/NAS/7.1/iso/19139/20070417/gco/gco.xsd http://www.isotc211.org/2005/gmd http://download.lgln.niedersachsen.de/aaa-suite/schema/NAS/7.1/iso/19139/20070417/gmd/gmd.xsd">
+<wfs:member>
+<AX_LagebezeichnungKatalogeintrag gml:id="DENIKAKT00001vwQ">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DENIKAKT00001vwQ</gml:identifier>
+<lebenszeitintervall>
+<AA_Lebenszeitintervall>
+<beginnt>2011-09-05T14:16:50Z</beginnt>
+</AA_Lebenszeitintervall>
+</lebenszeitintervall>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DLKM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<anlass xlink:href="https://registry.gdi-de.org/codelist/de.adv-online.gid/AA_Anlassart/000000" xlink:title="Ersteinrichtung"/>
+<schluesselGesamt>0324100100841</schluesselGesamt>
+<bezeichnung>Ernst-August-Platz</bezeichnung>
+<schluessel>
+<AX_VerschluesselteLagebezeichnung>
+<land>03</land>
+<regierungsbezirk>2</regierungsbezirk>
+<kreis>41</kreis>
+<gemeinde>001</gemeinde>
+<lage>00841</lage>
+</AX_VerschluesselteLagebezeichnung>
+</schluessel>
+</AX_LagebezeichnungKatalogeintrag>
+</wfs:member>
+</wfs:FeatureCollection>

@@ -52,6 +52,8 @@ export type AppDeps = {
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;
   geoapifyApiKey?: string;
+  /** OpenStreetMap Nominatim for site address points in states without open house coordinates (BY, MV, SH); null when disabled. */
+  nominatim?: { url: string; userAgent: string } | null;
   /** Domain that receives forwarded email (for example in.richtfest.ai); unset when inbound email is not configured. */
   inboundEmailDomain?: string | null;
 };
