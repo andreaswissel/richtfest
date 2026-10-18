@@ -24,6 +24,8 @@
 
 ## 2026-10-18
 
+- Project navigation stays in place as the project name, customer and status badge load, and when switching to Project details.
+
 - 3D location: **Fit construction** (Shift+F) brings the planned build back into view after zooming or panning. A teal outline and readable label keep it distinct from the surroundings.
 
 - Feasibility now compares scenarios in a compact summary with one input group at a time, clearer review status and validation, protected unsaved edits, and reports in the selected language. Click anywhere in a scenario row to switch scenarios; keyboard selection remains available. Zoning checks require a confirmed storey inventory and GFZ counting basis; Bebauungsplan suggestions retain height references and mandatory storey qualifiers. Site downloads are explicitly 2D, use interoperable GeoJSON and Unicode-safe DXF, and wait for location edits to be saved.
