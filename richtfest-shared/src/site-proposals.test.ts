@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createEmptySiteAssessmentInput } from "./site-assessment";
 import { calculateSiteGeometry, createDefaultSetbacks, type GeometryEvidence, type GeometryMultiPolygon } from "./site-geometry";
+import type { SiteGeometryInput } from "./site-geometry-model";
 import { bestMassing, inferBuildingForm, proposeEnvelope, referenceFrame, type NeighbourBuilding } from "./site-proposals";
 
 const X = 392000, Y = 5820000;
@@ -38,7 +39,7 @@ describe("envelope proposal", () => {
     base.constraints.maxFullStoreys.value = storeys;
     return { ...base, geometry: { ...base.geometry!, ...emptyGeometry(), parcel } };
   };
-  const emptyGeometry = () => ({ version: 1 as const, crs: "EPSG:25833" as const, parcel: null, envelope: null, exclusions: [], exclusionsReviewed: false, setbacks: [], buildings: [], mandatoryLines: [], planOverlay: null });
+  const emptyGeometry = (): SiteGeometryInput => ({ version: 1 as const, crs: "EPSG:25833" as const, parcel: null, envelope: null, exclusions: [], exclusionsReviewed: false, setbacks: [], buildings: [], mandatoryLines: [], planOverlay: null });
 
   test("open form insets every edge by 0.4 H from the full storeys", () => {
     const r = proposeEnvelope(input(4), null);
