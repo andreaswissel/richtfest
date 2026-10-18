@@ -1,15 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import type { LocationBuilding, LocationContext, SiteAssessmentInput, SiteReference } from "@richtfest/shared";
+import { baunutzungsplanCoverage, type LocationBuilding, type LocationContext, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
 import { api } from "../../api";
 
 type Point = [number, number];
 type Locator = NonNullable<SiteAssessmentInput["siteLocator"]>;
 export type BerlinParcel = { id: string; label: string; number?: string; district?: string; area: number | null; sourceDate: string | null; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
-export type BerlinPlan = { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; polygons?: Point[][][]; containsAddress: boolean };
+export type BerlinPlan = { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; polygons?: Point[][][]; containsAddress: boolean; planType?: string | null; procedure?: string | null; courtReview?: string | null };
 export type BerlinLandUse = { id: string; label: string; purpose: string | null; category: "building" | "open" | "other"; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
 /** Heritage monuments and preservation areas (Erhaltungsverordnungen): social (Milieuschutz) or urban character. */
 export type BerlinHint = { id: string; kind: "heritage" | "social_preservation" | "urban_preservation" | "preservation"; type?: string | null; label: string; sourceUrl: string; detailUrl: string | null; effectiveDate?: string | null; polygons?: Point[][][]; containsAddress: boolean };
 export type BerlinSiteContext = {
+  /** Ortsteil at the address; absent in lookups cached before it was returned. */
+  locality?: { name: string; key: string; sourceUrl: string } | null;
   landUse?: BerlinLandUse[]; landUseStatus?: string;
   hints?: BerlinHint[];
   hintStatus?: string; address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: BerlinParcel[]; plans: BerlinPlan[];
@@ -59,10 +61,10 @@ export const containsPoint = (polygons: Point[][][], point: Point) => polygons.s
   };
   return !!outer && inRing(outer) && !holes.some(inRing);
 });
-export type PlanningLaw = { kind: "b_plan" | "in_progress" | "section34" | "section35" | "unresolved"; plans: BerlinPlan[]; landUse: BerlinLandUse | null };
+export type PlanningLaw = { kind: "b_plan" | "in_progress" | "baunutzungsplan" | "section34" | "section35" | "unresolved"; plans: BerlinPlan[]; landUse: BerlinLandUse | null };
 /**
- * Planning-law hint for a point: an adopted B-Plan decides; otherwise the land-use plan suggests § 34 (building land)
- * or § 35 (forest, green or farmland). Always a proposal for review, never a legal determination.
+ * Planning-law hint for a point: an adopted B-Plan decides; otherwise the land-use plan suggests § 35 (forest, green
+ * or farmland), the Baunutzungsplan applies in former West Berlin, and building land elsewhere suggests § 34. Always a proposal for review, never a legal determination.
  */
 export function planningLawAt(context: BerlinSiteContext, point: Point): PlanningLaw {
   // Cached responses from before plan outlines were returned only know whether a plan covers the address.
@@ -72,6 +74,8 @@ export function planningLawAt(context: BerlinSiteContext, point: Point): Plannin
   if (plans.length) return { kind: "in_progress", plans, landUse };
   if (context.planStatus !== "available") return { kind: "unresolved", plans, landUse };
   if (landUse?.category === "open") return { kind: "section35", plans, landUse };
+  // Former West Berlin: the Baunutzungsplan 1960 with BO 58 is a transferred B-Plan wherever no newer plan replaced it.
+  if (baunutzungsplanCoverage(context.locality?.key) === "covered") return { kind: "baunutzungsplan", plans, landUse };
   return { kind: landUse?.category === "building" ? "section34" : "unresolved", plans, landUse };
 }
 

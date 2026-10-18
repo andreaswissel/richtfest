@@ -1,0 +1,125 @@
+---
+title: Planning law for site feasibility
+description: Which rules decide what a parcel may hold, how a B-Plan check differs from § 34, and how the legal capacity becomes a deal decision.
+---
+
+This page is the planning-law reference behind the [Feasibility](/docs/workflows/feasibility) site assessment. It explains which rules apply to a parcel, what a B-Plan check has to read beyond the § 34 workflow, how neighbours and the street affect the result, and how to judge whether a purchase price is covered. It is background for planners and agents, not legal advice; a permit or Vorbescheid decides.
+
+## Which rulebook applies
+
+Three layers apply to every parcel. Planning law decides *whether and how much*, the state building code decides *how exactly*, and specialist law adds further limits.
+
+| Layer | Law | Scope | What it governs |
+| --- | --- | --- | --- |
+| Planning law (Bauplanungsrecht) | BauGB | Federal | Planning basis (§ 30, § 33, § 34, § 35), exemptions and deviations (§ 31, § 246e), development freezes (§ 14, § 15) |
+| | BauNVO | Federal | Area types (WA, MI, MU …), GRZ, GFZ, full storeys, building form, buildable area. Binding inside a B-Plan in the version the plan refers to; under § 34 only a guide, except for the type of use (§ 34 (2)) |
+| Building code (Bauordnungsrecht) | Landesbauordnung, in Berlin BauO Bln | State | Abstandsflächen, fire safety and building classes, Vollgeschoss definition, Baulasten, permit procedures. Applies under every planning basis |
+| Specialist and local law | Various | Federal, state, local | Monuments, preservation areas, tree protection, noise (TA Lärm, DIN 4109), rainwater, contaminated land, nature and species protection |
+
+BauGB and BauNVO are the same everywhere in Germany. Building codes differ by state; Richtfest keeps the rules it applies in a versioned table (see [building code rules](/docs/workflows/feasibility#building-code-rules)). Berlin-specific items on this page are marked as such: the Baunutzungsplan, the districts acting as the municipality, the biotope area factor, the rainwater limit and Berlin's guidance on the Wohnungsbau-Turbo.
+
+## Planning bases
+
+| Basis | When | Measure of what is allowed |
+| --- | --- | --- |
+| § 30 (1) qualified B-Plan | The plan fixes type of use, extent of use, buildable area and local streets | The plan's Festsetzungen. Little room, but certainty, and a compliant project can use the Genehmigungsfreistellung (Berlin: § 62 BauO Bln) |
+| § 30 (2) project-specific B-Plan (§ 12) | Drawn up at a developer's initiative with a project and implementation contract | Only the agreed project. A new developer needs the municipality's consent (§ 12 (5)) and takes over the contract's obligations and deadlines |
+| § 30 (3) simple B-Plan | The plan lacks one of the four elements, for example a text plan that only excludes retail | The plan where it rules, § 34 (or § 35) for everything else |
+| § 33 plan in progress | A plan has reached sufficient maturity (Planreife) | The draft, if the developer accepts it in writing |
+| § 34 inner area | Built-up area without a B-Plan | Fitting into the surrounding character, see the § 34 references in the site assessment |
+| § 35 outer area | Outside built-up areas | Generally not buildable unless privileged |
+
+All B-Plans are made by the municipality; in Berlin by the district, or by the Senate for plans of city-wide importance. A development freeze (§ 14) or deferral of an application (§ 15) protects a plan in progress and can block a project that conflicts with it, even where the current plan or § 34 would allow it.
+
+**Berlin data.** Berlin's B-Plan register (WFS `bplan:b_bp_fs`, dl-de/zero-2.0) states each adopted plan's type (`planartname`: qualified, simple or project-specific), its procedure (`verfahrensart`, for example § 13a), the adoption date (`festsg_am`), court reviews (`normkontr`: confirmed, partly invalid, partly void), which plans it replaces or is replaced by, and links to the plan scan and explanatory document. Plans in progress and repealed plans are separate layers. The Festsetzungen themselves are not published as data; they live in the plan PDF.
+
+### The BauNVO version
+
+A B-Plan applies the BauNVO in the version in force when the plan was adopted, not the current one. The adoption date therefore changes the result for the same drawing:
+
+| Plan adopted | Attic rooms in non-full storeys | Garages, ancillary and underground structures |
+| --- | --- | --- |
+| 1977 – 26 Jan 1990 (BauNVO 1977) | Habitable rooms, their stairs and walls **count** toward GF (§ 20 (2)) | Nebenanlagen do not count toward the footprint (§ 19 (4)). Garages and covered parking up to 0.1 of the parcel area do not count (§ 21a (3)). No GRZ 2 cap |
+| From 27 Jan 1990 (BauNVO 1990 and later) | Count only if the plan says so (§ 20 (3)) | Count toward the footprint, which may be exceeded by up to 50 %, at most to 0.8, unless the plan says otherwise (§ 19 (4)) |
+
+Earlier versions (1962, 1968) differ again and need reading case by case. Whether the state's Vollgeschoss definition applies in its current or historic form is a separate question to confirm for older plans.
+
+### Berlin: Baunutzungsplan 1960
+
+In former West Berlin, the Baunutzungsplan of 1960 together with the Bauordnung 1958 (BO 58) and formally established building lines counts as a transferred qualified B-Plan. Building classes such as V/3 (five storeys, GRZ 0.3, GFZ 1.5) set the extent. BO 58 counts habitable rooms in secondary storeys, including attics, toward GF (§ 7 Nr. 21 BO 58). The plan is published only as a map image (WMS `bnp`), so the building class is read from the map and its legend.
+
+Many Berlin blocks are far denser than GFZ 1.5. The Federal Administrative Court decided in 2024 (4 C 2.23) that the GFZ limit can become obsolete (funktionslos) case by case, judged over a larger plan area rather than one block. Where it has, density is judged under § 34. Berlin's planning guidelines also allow exemptions above GFZ 1.5 in V/3 areas. Both are upside scenarios that need the authority's confirmation, not the baseline.
+
+## What a B-Plan check reads
+
+The plan drawing, its legend (Nutzungsschablone), the textual Festsetzungen and the explanatory document (Begründung) together make the plan. Values that appear only in the drawing are as binding as the text.
+
+- **Type of use.** The area type, uses excluded or allowed as exceptions, and required shares (for example a minimum share of housing in MU or MK). In a mixed area (MI), housing can be refused if it would tip the area into a residential one (§ 15 BauNVO).
+- **Extent of use.** GRZ, GFZ or absolute floor areas per building field, full storeys (maximum, mandatory or minimum), heights with their reference point, and rules on garages and parking floors (§ 21a).
+- **Reference area.** GRZ and GFZ are measured on the building land behind the street boundary line (§ 19 (3) BauNVO), not on the full cadastral parcel. Parts designated as public street, green or other non-building land reduce the area every ratio is multiplied with.
+- **Buildable area.** A Baulinie must be built on; a Baugrenze must not be crossed; a building depth limits how far back the building may reach. Minor projections may be allowed (§ 23 (2), (3)). Garages, underground garages and parking are often limited to marked areas.
+- **Building form.** Open, closed or deviating (§ 22), plus orientation such as ridge direction.
+- **Costly Festsetzungen.** Noise protection (noise level zones, floor plans facing the quiet side, sound-insulated windows), green roofs and planting obligations, rights of way and utility rights across the parcel (§ 9 (1) Nr. 21), parking and driveway rules, and design rules such as roof form and pitch. Noise Festsetzungen feed the [exterior noise](/docs/workflows/exterior-noise) and sound insulation workflows.
+- **Marked and adopted content.** Monuments, contaminated land, water protection or flood areas and railway land shown in the plan.
+
+The state building code still applies inside a B-Plan. Abstandsflächen are required unless the plan requires or allows building on the boundary. Some states let a plan's Baulinien or Baugrenzen with fixed heights override the standard setback depth; in Berlin this is § 6 (5) BauO Bln, whose exact conditions must be checked before a plan geometry is treated as overriding. Building class thresholds (7 m, 13 m, 22 m to the highest habitable floor) drive fire-safety cost.
+
+## Neighbours and the street
+
+**Neighbours.** Neighbours can enforce the type of use (Gebietserhaltungsanspruch), Abstandsflächen and the general duty of consideration (Rücksichtnahme). The extent of use usually protects only the public interest, not neighbours. Every exemption involves the neighbours and raises the risk of an objection.
+
+- **Baulasten and easements.** A Baulast is a public-law obligation a landowner gives the building authority, for example to keep part of the parcel free as another parcel's setback area or to tolerate access. It is recorded in the Baulastenverzeichnis, in Berlin kept by each district (§ 84 BauO Bln). An easement (Grunddienstbarkeit) is a private right of one parcel over another, recorded in section II (Abteilung II) of the land register. Both run with the land and bind a buyer. Check both directions: burdens on the parcel and rights it holds over neighbours.
+- **Closed building form.** Building against neighbours' fire walls brings its own work and cost: windows in a neighbour's fire wall, raising neighbours' chimneys when building higher, underpinning neighbouring foundations, ground anchors and crane swing over neighbouring land (state neighbour law).
+- **Neighbouring businesses.** Their noise under TA Lärm can rule out housing or a deviation in their favour.
+
+**Street.**
+
+- The street boundary line can take parcel area for road widening.
+- § 30 requires secured access and utilities (Erschließung). Development charges apply if the street is not yet finally built.
+- Plans can fix where driveways are allowed; driveway crossings need approval and street trees can block them.
+- Abstandsflächen may extend onto public streets, green and water areas up to their centre (Berlin: § 6 (2) BauO Bln). This is building code, so it applies under § 30 and § 34 alike; the state rules, including restrictions in Baden-Württemberg, Hamburg and Niedersachsen, are in the building code table.
+- Fire brigade access matters where the second escape route relies on their ladder.
+- Berlin limits how much rainwater a new building may discharge into the sewer, which needs retention or infiltration area on the parcel.
+- Street noise sets the sound insulation requirements (DIN 4109).
+
+## Going beyond the plan
+
+| Route | What it allows | Conditions |
+| --- | --- | --- |
+| § 31 (1) exception | What the plan itself lists as an exception | Within the plan's own terms |
+| § 31 (2) exemption | Deviations that do not touch the plan's core concept (Grundzüge der Planung) | Public interest, sound planning or unintended hardship, and compatible with public interests including neighbours' |
+| § 31 (3) housing exemption | Deviations in favour of housing, in one or several comparable cases | Since 30 Oct 2025 nationwide and not time-limited. Requires the municipality's consent (§ 36a) |
+| § 246e Wohnungsbau-Turbo | Deviations from almost all planning law for housing, until 31 Dec 2030 | Consent (§ 36a), compatible with public and neighbours' interests. Specialist law (noise, nature, monuments) still applies |
+| Obsolete Festsetzung | A limit that has lost its function, such as the Baunutzungsplan GFZ in some areas | Case by case; usually needs a Vorbescheid or court |
+
+Consent under § 36a is not a formality. The municipality may refuse it for any planning reason, and it is deemed given if not refused within three months (one month for Berlin projects the Senate must be informed about). It may be tied to conditions in a contract: the legislator names 30 % subsidised housing, and Berlin's guidance adds contributions to social infrastructure and greening. In Berlin the district gives consent, or the Senate for plans it owns.
+
+## From capacity to a deal decision
+
+1. **Establish the basis.** Plan type, adoption date and BauNVO version, validity and court reviews, plans in progress, development freezes.
+2. **Find the binding limit.** The legal capacity is the smallest of GRZ, GRZ 2, buildable area, storeys × footprint, GFZ and the area left by rights and setbacks. In a B-Plan the binding limit is often the building window and storeys, not the GFZ; unused GFZ is not money.
+3. **Convert to sellable area.** From gross floor area to living or usable area, minus parking, circulation and areas a Festsetzung reserves.
+4. **Add plan-specific cost.** Noise protection, green roofs, rainwater retention, building class, fire walls and neighbour works, development charges.
+5. **Price the baseline.** The compliant project alone must cover the asking price. Compare the price per m² of realisable floor area with the standard land value (Bodenrichtwert), adjusted to the plan's GFZ.
+6. **Price each upside as an option.** Each deviation route gets its extra floor area, its conditions (an extra storey with 30 % subsidised housing is worth much less than its area), its probability and its time to permit. Upside never replaces the baseline.
+
+Stop criteria: a plan in progress or development freeze against the project, land lost to the street boundary line, unclear Baulasten or easements, a use the plan does not allow, or a price that only works with a deviation.
+
+## What Richtfest covers today
+
+The [site assessment](/docs/workflows/feasibility#berlin-site-assessment) classifies parcels as B-Plan, Baunutzungsplan, plan in progress, likely § 34 or likely § 35. It also:
+
+- records the plan type, adoption date, BauNVO version and court review from Berlin's register, and applies the version's rules to GRZ 2 and to counting attic and Staffel rooms (see [planning regime](/docs/workflows/feasibility#planning-regime))
+- proposes figures and building form from a Baunutzungsplan building class
+- imports and reads the plan PDF for GRZ, GRZ 2, GFZ, storeys, heights and building form
+- traces Baugrenzen, Baulinien and public traffic areas on the parcel from an aligned plan
+- measures GRZ and GFZ on the building land behind the street boundary line once non-building land is marked
+- applies the state's Abstandsflächen
+- keeps a separate scenario with one additional storey
+
+Not yet covered, in planned order:
+
+1. **All Festsetzungen as review items.** Every Festsetzung with its page, tagged as a limit, a cost or a check.
+2. **Deviation scenarios.** Name the Festsetzung deviated from, the route, the consent conditions, the probability and the time, instead of only one additional storey.
+3. **Rights and boundary conditions.** Baulasten, easements, fire walls and neighbour works recorded per parcel edge, with proposed to-dos for register and land-register extracts.
+4. **Residual land value per scenario.** The residual land value study (behind a feature flag) fed with each scenario's area and plan-specific cost.

@@ -139,3 +139,54 @@ describe("one-click site summary", () => {
   });
 });
 
+
+describe("planning regime", () => {
+  const plan = (effectiveDate: string, extra: Partial<BerlinSiteContext["plans"][number]> = {}) => ({ id: "IV-2c", name: "IV-2c", status: "adopted", sourceUrl: "https://gdi.berlin.de/bplan", documentUrl: "https://example.org/iv-2c.pdf", explanationUrl: null, effectiveDate, containsAddress: true, planType: "Qualifizierter B-Plan", ...extra });
+  const cited = (key: string, value: number) => ({ key, value: { value, source: `/projects/p?page=1 · quote ${key}`, sourceDate: null, kind: "assessment" as const, reviewed: false as const } });
+  const figures = { plan: "IV-2c", status: "extracted" as const, constraints: [cited("grz", 0.4), cited("gfz", 1.2), cited("maxFullStoreys", 4)], facts: [] };
+
+  test("a plan adopted in 1985 follows BauNVO 1977: no GRZ 2 cap is proposed, and an earlier default is withdrawn", () => {
+    const start = structuredClone(empty);
+    start.constraints.grz2 = { value: 0.6, source: "berlin_proposals_v1: § 19 (4) BauNVO default (GRZ + 50 %, at most 0.8)", sourceDate: null, kind: "assessment", reviewed: false };
+    const { draft } = applySiteSummary(start, { context: context(undefined, [plan("1985-03-12")]), discovery: discovery([]), plan: figures }, engine, "2026-10-18");
+    expect(draft.planRegime).toMatchObject({ regime: "b_plan", planType: "qualified", adoptedOn: "1985-03-12", ordinance: "baunvo_1977", reviewed: false });
+    expect(draft.constraints.grz2).toBeUndefined();
+    expect(draft.constraints.additionalCountableArea.source).toContain("BauNVO 1977");
+  });
+  test("a plan adopted in 1995 keeps the § 19 (4) default; a court finding makes the basis need a person", () => {
+    const { draft, steps } = applySiteSummary(empty, { context: context(undefined, [plan("1995-06-01", { courtReview: "teilunwirksam" })]), discovery: discovery([]), plan: figures }, engine, "2026-10-18");
+    expect(draft.planRegime).toMatchObject({ ordinance: "baunvo_1990", courtReview: "teilunwirksam" });
+    expect(draft.constraints.grz2).toMatchObject({ value: 0.6, reviewed: false });
+    expect(steps.find((s) => s.id === "basis")).toMatchObject({ status: "needs_input", detail: "BasisBPlanCourtReview" });
+  });
+  test("a reviewed regime is never replaced by the register", () => {
+    const start = structuredClone(empty);
+    start.planningBasis = "b_plan";
+    start.planRegime = { regime: "b_plan", planType: "qualified", planName: "IV-2c", adoptedOn: "1985-03-12", ordinance: "baunvo_1968", buildingClass: null, courtReview: null, source: "Begründung S. 4: öffentliche Auslegung 1976", sourceDate: "1985-03-12", reviewed: true };
+    const { draft } = applySiteSummary(start, { context: context(undefined, [plan("1985-03-12")]), discovery: discovery([]), plan: figures }, engine, "2026-10-18");
+    expect(draft.planRegime).toEqual(start.planRegime);
+  });
+  test("former West Berlin without a newer plan: Baunutzungsplan, figures and form from the building class", () => {
+    const kreuzberg = { ...context(), locality: { name: "Kreuzberg", key: "110000020202", sourceUrl: "ortsteile" } };
+    const first = applySiteSummary(empty, { context: kreuzberg, discovery: discovery([]) }, engine, "2026-10-18");
+    expect(first.draft.planningBasis).toBe("b_plan");
+    expect(first.draft.planRegime).toMatchObject({ regime: "baunutzungsplan", ordinance: "bo_58", buildingClass: null });
+    expect(first.steps.find((s) => s.id === "basis")).toMatchObject({ status: "done", detail: "BasisBaunutzungsplan", values: { locality: "Kreuzberg" } });
+    expect(first.steps.find((s) => s.id === "frame")).toMatchObject({ status: "needs_input", detail: "FrameBuildingClass" });
+    expect(first.draft.constraints.grz2).toBeUndefined();
+    // The person reads V/3 from the map; a second run proposes its figures and closed form.
+    const start = { ...first.draft, planRegime: { ...first.draft.planRegime!, buildingClass: "V/3" as const } };
+    const { draft } = applySiteSummary(start, { context: kreuzberg, discovery: discovery([]) }, engine, "2026-10-18");
+    expect(draft.constraints.grz).toMatchObject({ value: 0.3, kind: "official", reviewed: false });
+    expect(draft.constraints.gfz.value).toBe(1.5);
+    expect(draft.constraints.maxFullStoreys.value).toBe(5);
+    expect(draft.designRules).toMatchObject({ buildingForm: "closed", reviewed: false });
+  });
+  test("east of the former border, building land without a plan stays § 34", () => {
+    const friedrichshain = { ...context(), locality: { name: "Friedrichshain", key: "110000020201", sourceUrl: "ortsteile" } };
+    expect(planningLawAt(friedrichshain, friedrichshain.origin).kind).not.toBe("baunutzungsplan");
+    const { draft } = applySiteSummary(empty, { context: friedrichshain, discovery: discovery([]) }, engine, "2026-10-18");
+    expect(draft.planningBasis).toBe("section34");
+    expect(draft.planRegime).toBeUndefined();
+  });
+});

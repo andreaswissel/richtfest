@@ -2,9 +2,9 @@ import type { SiteAssessmentInput, SiteReference } from "@richtfest/shared";
 import type { MassingOptions } from "@richtfest/shared/site-geometry-model";
 import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import type * as Proposals from "@richtfest/shared/site-proposals";
-import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
+import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinPlan, type BerlinSiteContext, type PlanningLaw, type SiteDiscovery } from "./site-lookups";
 import { planBuildingForm, PLAN_FIGURES, PLAN_LISTED, type PlanExtraction } from "./plan-extraction";
-import { SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS } from "@richtfest/shared";
+import { BO58_CLASS_FIGURES, ordinanceForAdoption, planTypeFromRegister, regimeRules, SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS, type PlanRegime } from "@richtfest/shared";
 const CONSTRAINT_KEYS: string[] = [...SITE_ASSESSMENT_CONSTRAINT_KEYS, ...SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS];
 
 type Draft = Omit<SiteAssessmentInput, "baseRevision">;
@@ -42,9 +42,16 @@ export function proposeFrameFigures(c: Constraints, references: SiteReference[],
   return filled;
 }
 
-/** GRZ 2: § 19 (4) BauNVO lets garages, parking, access and ancillary structures exceed GRZ by 50 %, up to 0.8, unless the plan says otherwise. */
-export function proposeGrz2Default(c: Constraints, engine: Pick<typeof Proposals, "siteProposalMethod">) {
-  if (c.grz.value === null || !replaceable(c.grz2, engine.siteProposalMethod, GRZ2_DEFAULT)) return;
+/**
+ * GRZ 2: from BauNVO 1990 (and when the version is unknown) § 19 (4) lets garages, parking, access and ancillary structures exceed GRZ by
+ * 50 %, up to 0.8, unless the plan says otherwise. Earlier versions and BO 58 have no such cap, so no default is proposed and an earlier
+ * default proposal is withdrawn.
+ */
+export function proposeGrz2Default(c: Constraints, engine: Pick<typeof Proposals, "siteProposalMethod">, regime?: Pick<PlanRegime, "ordinance"> | null) {
+  if (!replaceable(c.grz2, engine.siteProposalMethod, GRZ2_DEFAULT)) return;
+  const rules = regimeRules(regime);
+  if (rules && rules.ancillary !== "overrun_50") { if (c.grz2?.value != null) delete c.grz2; return; }
+  if (c.grz.value === null) return;
   c.grz2 = proposal(round(Math.max(c.grz.value, Math.min(0.8, c.grz.value * 1.5))), `${engine.siteProposalMethod}: ${GRZ2_DEFAULT} (GRZ + 50 %, at most 0.8); replace with the plan's figure if it deviates`, "assessment");
 }
 
@@ -78,6 +85,37 @@ export function correctReferenceStoreys(reference: SiteReference, storeys: numbe
   const gfz = m.gfz?.value != null && before ? { ...m.gfz, value: round((m.gfz.value * storeys) / before), source: `${m.gfz.source} · scaled to ${storeys} storeys`.slice(0, 2000), kind: "estimated" as const, reviewed: false }
     : m.gfz?.value == null && m.grz?.value != null ? { value: round(m.grz.value * storeys), source: `${m.grz.source} · GRZ × ${storeys} storeys`.slice(0, 2000), sourceDate: null, kind: "estimated" as const, reviewed: false } : m.gfz;
   return { ...reference, metrics: { ...m, storeys: { value: storeys, source, sourceDate: null, kind: "estimated", reviewed: false }, ...(gfz ? { gfz } : {}) } };
+}
+
+const REGIME = "planning regime";
+/** Partly or wholly invalid after a court review: a person must check which Festsetzungen still apply. */
+const invalidated = (review: string | null | undefined) => /unwirksam|nichtig/i.test(review ?? "");
+
+/** Regime proposal from the register; an existing unreviewed proposal is refreshed, a reviewed one is never replaced. */
+export function proposeRegime(law: PlanningLaw, adopted: BerlinPlan | undefined, current: PlanRegime | undefined, method: string): PlanRegime | null {
+  if (current?.reviewed) return current;
+  if (adopted) {
+    const { ordinance, transitional } = ordinanceForAdoption(adopted.effectiveDate);
+    const notes = [transitional ? "adopted within two years of a BauNVO change: the older version applies if the public display began earlier" : "", adopted.courtReview ? `court review: ${adopted.courtReview}` : ""].filter(Boolean).join("; ");
+    return { regime: "b_plan", planType: planTypeFromRegister(adopted.planType), planName: adopted.name.slice(0, 300), adoptedOn: adopted.effectiveDate, ordinance, buildingClass: null, courtReview: adopted.courtReview ?? null,
+      source: `${method}: ${REGIME} from the Berlin B-Plan register (${adopted.sourceUrl})${notes ? `; ${notes}` : ""}`.slice(0, 2000), sourceDate: adopted.effectiveDate, reviewed: false };
+  }
+  if (law.kind === "baunutzungsplan")
+    return { regime: "baunutzungsplan", planType: null, planName: "Baunutzungsplan 1960", adoptedOn: "1961-06-30", ordinance: "bo_58", buildingClass: current?.regime === "baunutzungsplan" ? current.buildingClass : null, courtReview: null,
+      source: `${method}: ${REGIME}: former West Berlin without a newer B-Plan; Baunutzungsplan 1960 with BO 58 (qualified where formally established building lines exist); read the building class from the plan map`, sourceDate: null, reviewed: false };
+  return null;
+}
+
+/** Storeys, GRZ and GFZ of a BO 58 building class; replaces only empty figures and earlier building-class proposals. */
+export function proposeBuildingClassFigures(c: Constraints, buildingClass: keyof typeof BO58_CLASS_FIGURES, method: string): string[] {
+  const figures = BO58_CLASS_FIGURES[buildingClass], kind = "BO 58 building class", filled: string[] = [];
+  const set = (key: "grz" | "gfz" | "maxFullStoreys", value: number | null) => {
+    if (value === null || !replaceable(c[key], method, kind) || c[key].value === value) return;
+    c[key] = proposal(value, `${method}: ${kind} ${buildingClass} (BO 58 § 7 Nr. 14); the building class is read from the Baunutzungsplan map`, "official");
+    filled.push(key === "maxFullStoreys" ? "storeys" : key);
+  };
+  set("grz", figures.grz); set("gfz", figures.gfz); set("maxFullStoreys", figures.storeys);
+  return filled;
 }
 
 /**
@@ -115,17 +153,29 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   }
   next = { ...next, geometry };
 
-  // 2. Planning basis from the plan register: an adopted plan covering the address suggests a B-Plan, none suggests § 34.
+  // 2. Planning basis from the plan register: an adopted plan covering the address suggests a B-Plan, the Baunutzungsplan applies in
+  // former West Berlin, building land elsewhere suggests § 34.
+  const law = context && context.planStatus === "available" ? planningLawAt(context, context.origin) : null;
+  const adopted = law?.plans.find((p) => p.status === "adopted");
   if (next.planningBasis !== "unresolved") step("basis", "kept", next.planningBasis === "b_plan" ? "BasisBPlan" : "BasisSection34");
-  else if (!context || context.planStatus !== "available") step("basis", "needs_input", "BasisUnavailable");
+  else if (!law) step("basis", "needs_input", "BasisUnavailable");
   else {
     // B-Plan register first, then the land-use plan: open land points to § 35, which the assessment cannot model.
-    const law = planningLawAt(context, context.origin);
-    const adopted = law.plans.find((p) => p.status === "adopted");
-    if (adopted) { next = { ...next, planningBasis: "b_plan" }; step("basis", "done", "BasisBPlanFound", { plan: adopted.name }); }
+    if (adopted) next = { ...next, planningBasis: "b_plan" };
     else if (law.kind === "in_progress") step("basis", "needs_input", "BasisInProgress", { plan: law.plans[0]!.name });
     else if (law.kind === "section35") { next = { ...next, planningBasis: "section35" }; step("basis", "needs_input", "BasisSection35", { landUse: law.landUse!.label }); }
+    else if (law.kind === "baunutzungsplan") next = { ...next, planningBasis: "b_plan" };
     else { next = { ...next, planningBasis: "section34" }; step("basis", "done", law.landUse ? "BasisSection34Fnp" : "BasisSection34", law.landUse ? { landUse: law.landUse.label } : undefined); }
+  }
+  // The regime decides how GF and GRZ 2 count: plan type and BauNVO version from the register, or BO 58 for the Baunutzungsplan.
+  if (next.planningBasis === "b_plan" && law && !next.planRegime?.reviewed) {
+    const regime = proposeRegime(law, adopted, next.planRegime, engine.siteProposalMethod);
+    if (regime) next = { ...next, planRegime: regime };
+  }
+  if (next.planningBasis === "b_plan" && !steps.some((s) => s.id === "basis")) {
+    const regime = next.planRegime;
+    if (regime?.regime === "baunutzungsplan") step("basis", "done", "BasisBaunutzungsplan", { locality: context?.locality?.name ?? "" });
+    else if (adopted) step("basis", invalidated(adopted.courtReview) ? "needs_input" : "done", invalidated(adopted.courtReview) ? "BasisBPlanCourtReview" : "BasisBPlanFound", { plan: adopted.name, review: adopted.courtReview ?? "" });
   }
 
   // 3. § 34 references: the nearest buildings with measured coverage, outside the site itself. A person still gives each a reason.
@@ -146,6 +196,14 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   if (next.planningBasis === "section34") {
     const filled = proposeFrameFigures(c, next.references, engine);
     step("frame", filled.length ? "done" : c.grz.value !== null && c.gfz.value !== null && c.maxFullStoreys.value !== null ? "kept" : "needs_input", filled.length ? "FrameFilled" : "FrameMissing", { items: filled.join(", ") });
+  } else if (next.planningBasis === "b_plan" && next.planRegime?.regime === "baunutzungsplan") {
+    // Baunutzungsplan: the building class read from the plan map sets storeys, GRZ and GFZ (BO 58 § 7 Nr. 14).
+    const buildingClass = next.planRegime.buildingClass;
+    if (!buildingClass) step("frame", PLAN_FIGURES.every((k) => c[k].value !== null) ? "kept" : "needs_input", PLAN_FIGURES.every((k) => c[k].value !== null) ? "FrameKept" : "FrameBuildingClass");
+    else {
+      const filled = proposeBuildingClassFigures(c, buildingClass, engine.siteProposalMethod);
+      step("frame", filled.length ? "done" : "kept", filled.length ? "FrameBuildingClass_done" : "FrameKept", { items: filled.join(", "), class: buildingClass });
+    }
   } else if (next.planningBasis === "b_plan") {
     // A B-Plan sets the figures: take what was read from the plan sheet (cited, unreviewed), never neighbours.
     const plan = sources.plan, filled: string[] = [];
@@ -166,10 +224,13 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     else step("frame", "needs_input", "FramePlanMissing");
   } else step("frame", "needs_input", next.planningBasis === "section35" ? "FrameSection35" : "FrameNeedsBasis");
   // GRZ 2: § 19 (4) BauNVO lets garages, parking, access and ancillary structures exceed GRZ by 50 %, up to 0.8, unless the plan says otherwise.
-  if (next.planningBasis !== "section35") proposeGrz2Default(c, engine);
+  if (next.planningBasis !== "section35") proposeGrz2Default(c, engine, next.planningBasis === "b_plan" ? next.planRegime : null);
   // Area additions default to zero only as visible, unreviewed proposals so the capacity can be shown.
+  const atticRules = next.planningBasis === "b_plan" ? regimeRules(next.planRegime) : null;
   for (const key of ["additionalGrossArea", "additionalCountableArea"] as const)
-    if (c[key].value === null) c[key] = proposal(0, `${engine.siteProposalMethod}: no additional area assumed; enter Staffel or attic areas if planned`, "assessment");
+    if (c[key].value === null) c[key] = proposal(0, key === "additionalCountableArea" && atticRules?.atticRooms === "count"
+      ? `${engine.siteProposalMethod}: no additional area assumed; under ${atticRules.citation} habitable rooms in attics and Staffel storeys count toward GF, so enter their planned area here`
+      : `${engine.siteProposalMethod}: no additional area assumed; enter Staffel or attic areas if planned`, "assessment");
 
   // 5. Building form from neighbours standing on the boundaries.
   const parcel = next.geometry!.parcel!;
@@ -178,7 +239,9 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   else {
     inference = engine.inferBuildingForm(parcel, discovery.buildings.map((b) => ({ id: b.id, label: b.label, polygons: discoveryPolygons(discovery, b) })));
     const rules = next.designRules;
-    const planFact = next.planningBasis === "b_plan" ? next.planningFacts?.buildingForm : undefined;
+    // The Baunutzungsplan's building class fixes the form: II/1 and II/2 open, from II/3 closed (BO 58 § 7 Nr. 16).
+    const buildingClass = next.planningBasis === "b_plan" && next.planRegime?.regime === "baunutzungsplan" ? next.planRegime.buildingClass : null;
+    const planFact = next.planningBasis === "b_plan" ? next.planningFacts?.buildingForm ?? (buildingClass ? { value: BO58_CLASS_FIGURES[buildingClass].buildingForm, source: `${engine.siteProposalMethod}: BO 58 § 7 Nr. 16, building class ${buildingClass}` } : undefined) : undefined;
     const planForm = planFact ? planBuildingForm(planFact.value) : null;
     if (rules && (rules.reviewed || rules.buildingForm !== "unresolved")) step("form", "kept", "FormKept");
     // The plan's Bauweise wins over what the neighbours suggest.

@@ -152,3 +152,14 @@ describe("base footprint proposal",()=>{
   expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:rect(3,3,24,34),height:15}],setback:{factor:.2,minimum:3}})[0]!.ok).toBe(true);
  });
 });
+test("street land on the parcel leaves the GRZ/GFZ reference area; an ordinary exclusion does not",()=>{
+ const input=fixture();
+ // 20 × 20 parcel; a 2.5 m strip along the south edge is street land, a 4 × 4 easement is only an exclusion.
+ input.exclusions=[{...ev(rect(0,0,20,2.5),"street"),nonBuildingLand:true},ev(rect(10,10,4,4),"easement")];
+ const r=calculateSiteGeometry(input);
+ expect(r.parcelArea).toBeCloseTo(400);expect(r.buildingLandArea).toBeCloseTo(350);
+ expect(r.usableArea).toBeCloseTo(400-50-16);
+ // Street land reaching beyond the parcel only counts where it overlaps it.
+ input.exclusions=[{...ev(rect(-5,-5,30,7.5),"street"),nonBuildingLand:true}];
+ expect(calculateSiteGeometry(input).buildingLandArea).toBeCloseTo(400-20*2.5);
+});

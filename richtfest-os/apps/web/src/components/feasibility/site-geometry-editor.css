@@ -236,6 +236,17 @@
   stroke-width: 2;
   cursor: pointer;
 }
+/* Street or other non-building land: grey, so it reads as land outside the plot rather than a restriction on it. */
+.geometry-exclusion[data-non-building] {
+  fill: #64748b33;
+  stroke: #475569;
+  stroke-dasharray: 6 3;
+}
+.geometry-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
 .geometry-building {
   fill: #6366f155;
   stroke: #4338ca;

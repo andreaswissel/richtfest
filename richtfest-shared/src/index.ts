@@ -30,6 +30,7 @@ export * from "./site-export";
 export * from "./feasibility";
 
 export * from "./site-assessment";
+export * from "./planning-regime";
 
 export * from "./site-references";
 export * from "./project-planning";

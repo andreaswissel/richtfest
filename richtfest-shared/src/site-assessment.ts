@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { siteGeometryInputSchema } from "./site-geometry-model";
 import { siteReferenceSchema } from "./site-references";
+import { planRegimeSchema } from "./planning-regime";
 export const siteAssessmentMethod = "berlin_arithmetic_v1" as const;
 export const SITE_ASSESSMENT_CONSTRAINT_KEYS = ["parcelArea", "grz", "gfz", "buildableFootprint", "maxFullStoreys", "additionalGrossArea", "additionalCountableArea"] as const;
 /** Optional inputs: absent in older assessments, never required for a result. GRZ 2 is the § 19 (4) BauNVO cap including garages and ancillary structures. */
@@ -19,6 +20,8 @@ export const siteAssessmentInputSchema = z.object({
   geometry: siteGeometryInputSchema.nullable().optional(),
   siteLocator: z.object({origin:z.tuple([z.number().min(350000).max(430000),z.number().min(5780000).max(5860000)]),label:z.string().min(1).max(300),source:z.string().max(2000),reviewed:z.boolean()}).strict().optional(),
   designRules: z.object({maxHeight:z.number().finite().positive().nullable(),heightNotSpecified:z.boolean(),buildingForm:z.enum(["open","closed","deviating","unresolved"]),source:z.string().max(2000),sourceDate:date.nullable(),reviewed:z.boolean()}).strict().optional(),
+  /** Plan type, adoption date and land-use ordinance (BauNVO version or BO 58); absent in older assessments. */
+  planRegime: planRegimeSchema.optional(),
   planningFacts: z.record(z.enum(["landUse", "buildingForm", "roofForm", "heightRule", "encroachments"]), z.object({ value:z.string().max(4000), source:z.string().max(2000), sourceDate:date.nullable(), reviewed:z.boolean(), kind:z.enum(["official","calculated","estimated","assessment"]) }).strict()).optional(),
   references: z.array(siteReferenceSchema).max(100), notes: z.string().max(10000), upside: z.object({ maxFullStoreys: constraint(z.number().int().min(1).max(200)), note: z.string().trim().max(2000) }).strict().nullable(),
 }).strict();

@@ -65,7 +65,7 @@ import { fromLocal, toLocal } from "../location/site-geometry";
 import type { createViewport, ViewportState } from "../location/viewport";
 import "./site-geometry-editor.css";
 import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
-import { TRACED_LINE_PREFIX } from "./plan-lines";
+import { applyTrace } from "./plan-lines";
 import { containsPoint, useBerlinContext, useSiteDiscovery, type BerlinParcel } from "./site-lookups";
 
 type Engine = typeof import("@richtfest/shared/site-geometry");
@@ -315,6 +315,7 @@ export function SiteGeometryEditor({
   onChange,
   onReference,
   onUseArea,
+  onUseBuildingLand,
   contextOverride,
   referenceBuildingIds = [],
   emptyAction,
@@ -334,6 +335,8 @@ export function SiteGeometryEditor({
   onReference?: (building: LocationBuilding, context: LocationContext) => void;
   contextOverride?: LocationContext | null;
   onUseArea?: (area: number) => void;
+  /** Parcel area less non-building land (§ 19 (3) BauNVO), proposed as the reference area for GRZ and GFZ. */
+  onUseBuildingLand?: (area: number) => void;
   /** Building ids already chosen as § 34 references, outlined on the plan. */
   referenceBuildingIds?: string[];
   /** Shown on the empty canvas before a parcel exists, e.g. a link to the parcel lookup. */
@@ -1496,6 +1499,7 @@ export function SiteGeometryEditor({
                       <path
                         key={e.id}
                         className="geometry-exclusion"
+                        data-non-building={e.nonBuildingLand ? "" : undefined}
                         d={pathFor(e.geometry, project)}
                         onClick={(event) => {
                           if (tool === "select") {
@@ -1879,6 +1883,12 @@ export function SiteGeometryEditor({
                         <dd><Badge variant="outline">{label(result.status)}</Badge></dd>
                         <dt>{label("ParcelArea")}</dt>
                         <dd>{format(result.parcelArea)} m²</dd>
+                        {result.buildingLandArea > 0 && result.parcelArea - result.buildingLandArea > 0.5 && (
+                          <>
+                            <dt title={label("BuildingLandHint")}>{label("BuildingLand")}</dt>
+                            <dd>{format(result.buildingLandArea)} m²</dd>
+                          </>
+                        )}
                         <dt>{label("Usable")}</dt>
                         <dd>{format(result.usableArea)} m²</dd>
                         {result.buildings.map((b) => {
@@ -1891,6 +1901,14 @@ export function SiteGeometryEditor({
                       </dl>
                     ) : (
                       <p className="text-ui-xs muted">{label("NeedParcel")}</p>
+                    )}
+                    {onUseBuildingLand && result && geometry.parcel && result.buildingLandArea > 0 && result.parcelArea - result.buildingLandArea > 0.5 && (
+                      <div className="geometry-review">
+                        <Button size="sm" variant="outline" disabled={disabled} onClick={() => onUseBuildingLand(result.buildingLandArea)}>
+                          {label("UseBuildingLand")}
+                        </Button>
+                        <small className="muted">{label("UseBuildingLandHint").replace("{area}", format(result.buildingLandArea))}</small>
+                      </div>
                     )}
                     {onUseArea && result && geometry.parcel && (
                       <div className="geometry-review">
@@ -1934,6 +1952,16 @@ export function SiteGeometryEditor({
                         />
                       </Field>
                     )}
+                    {selected.kind === "exclusion" && (() => {
+                      const exclusion = geometry.exclusions.find((e) => e.id === selected.id);
+                      return exclusion && (
+                        <label className="geometry-toggle text-ui-xs">
+                          <Checkbox disabled={disabled} checked={!!exclusion.nonBuildingLand}
+                            onCheckedChange={(v) => update({ exclusions: geometry.exclusions.map((e) => (e.id === exclusion.id ? { ...e, nonBuildingLand: v === true, reviewed: false } : e)), exclusionsReviewed: false })} />
+                          <span>{label("NonBuildingLand")}<br /><small className="muted">{label("NonBuildingLandHint")}</small></span>
+                        </label>
+                      );
+                    })()}
                     {evidenceFields(selectedEvidence, (patch) => updateEvidence({ ...selectedEvidence, ...patch }))}
                     <div className="geometry-move" role="group" aria-label={label("Move")}>
                       <span className="text-ui-xs">{label("Move")}</span>
@@ -2131,11 +2159,7 @@ export function SiteGeometryEditor({
             parcel={geometry.parcel}
             envelopeReviewed={!!geometry.envelope?.reviewed}
             onTrace={(traced) => {
-              // A new trace replaces earlier unreviewed traced lines; lines a person drew or reviewed stay.
-              update({
-                envelope: traced.envelope ?? geometry.envelope,
-                mandatoryLines: [...geometry.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines],
-              });
+              update(applyTrace(geometry, traced));
               if (traced.envelope) setSelected({ kind: "envelope", id: "envelope" });
             }}
           />

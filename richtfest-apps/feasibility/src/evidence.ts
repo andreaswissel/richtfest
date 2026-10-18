@@ -39,6 +39,8 @@ export type PlanLinesRequest = z.infer<typeof planLinesRequestSchema>;
 export const planLinesOutputSchema = z.object({
   baugrenzen: z.array(z.object({ points: z.array(unit).min(3).max(200), reason: z.string().trim().min(1).max(1000) }).strict()).max(10),
   baulinien: z.array(z.object({ points: z.array(unit).min(2).max(200), reason: z.string().trim().min(1).max(1000) }).strict()).max(10),
+  /** Public traffic areas (PlanZV 6.1, bounded by the Straßenbegrenzungslinie) overlapping the site: not building land for GRZ/GFZ (§ 19 (3) BauNVO). Absent in older proposals. */
+  verkehrsflaechen: z.array(z.object({ points: z.array(unit).min(3).max(200), reason: z.string().trim().min(1).max(1000) }).strict()).max(10).default([]),
   limitations: z.array(z.string().max(1000)).max(20),
 }).strict();
 export type PlanLinesOutput = z.infer<typeof planLinesOutputSchema>;

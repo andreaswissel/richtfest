@@ -534,3 +534,19 @@
 .site-assessment.is-design .geometry-workbench { flex: 1; height: auto; min-height: 0; border: 0; border-radius: 0; }
 .site-map > svg[data-picking] { cursor: crosshair; }
 .building-code-cite { width: 15rem; }
+
+/* Planning regime under the planning basis: inputs in one row, consequences as a short list, the Baunutzungsplan map below. */
+.site-regime { display: flex; flex-direction: column; gap: var(--stack); margin-top: var(--stack); }
+.site-regime-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--stack) 12px; }
+.site-regime-fields .field { min-width: 150px; }
+.site-regime-date { width: 130px; }
+.site-regime-review { display: inline-flex; align-items: center; gap: 6px; padding-bottom: 6px; }
+.site-regime-rules { margin: 0; padding-left: 16px; list-style: disc; }
+.site-regime-source { overflow-wrap: anywhere; }
+.site-regime-map { margin: 0; max-width: 600px; }
+.site-regime-map-frame { position: relative; }
+.site-regime-map img { display: block; width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+.site-regime-marker { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #111827; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.site-regime-map figcaption { margin-top: 4px; }
+.site-map-parcel[data-law="baunutzungsplan"] { fill: rgb(20 184 166 / .18); }
+.site-map-legend i[data-law="baunutzungsplan"] { background: rgb(20 184 166 / .45); }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-19
+
+- **B-Plan rules version:** The site assessment now records a B-Plan's type, adoption date and court review from the Berlin register and derives which BauNVO version applies. Plans before 1990 and the Baunutzungsplan no longer get a GRZ 2 default, and attic and Staffel rooms count toward GF there. In former West Berlin without a newer plan, parcels are marked "Baunutzungsplan 1960" instead of § 34; choosing the building class (e.g. V/3) on the plan map proposes storeys, GRZ, GFZ and building form.
+- **Street land on the parcel:** In Design, mark an exclusion as "Not building land" (or let the plan trace find public traffic areas on the parcel); GRZ and GFZ then refer to the remaining building land (§ 19 (3) BauNVO), which can be adopted as the parcel area.
+- **Planning law guide:** New Docs page explaining which rules decide what a parcel may hold, how a B-Plan check differs from § 34, neighbours and street, deviation routes (§ 31, Bau-Turbo) and how capacity becomes a deal decision.
+
 ## 2026-10-18
 
 - **Residual land value as a feature flag:** The paused keep / densify / rebuild study is back as a second Feasibility tab, "Residual land value", for people who have the new per-user feature flag `feasibility_financial_study`; everyone else still sees only the site assessment, and old `study=financial` links open it. Operators enable flags per person by email (see Accounts → Feature flags). Includes a database migration.

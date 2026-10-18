@@ -253,7 +253,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
               {(["heritage", "social_preservation", "urban_preservation"] as const).map(kind => <span key={kind}><i className="is-outline" data-kind={kind} />{label(`Protection_${kind}`)}</span>)}
             </p>}
             {layers.law && <p className="site-map-legend muted text-ui-2xs">
-              {(["b_plan", "in_progress", "section34", "section35"] as const).map(kind => <span key={kind}><i data-law={kind} />{t(`berlinContextLaw_${kind}` as Parameters<typeof t>[0])}</span>)}
+              {(["b_plan", "in_progress", "baunutzungsplan", "section34", "section35"] as const).map(kind => <span key={kind}><i data-law={kind} />{t(`berlinContextLaw_${kind}` as Parameters<typeof t>[0])}</span>)}
             </p>}
           </PopoverContent>
         </Popover>

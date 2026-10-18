@@ -66,7 +66,9 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
   const hintUrls = hintLayers.map(([service,layer]) => serviceUrl(service,layer,site.origin,150,200));
   // Land-use plan (FNP): building land suggests § 34 where no B-Plan applies; forest, green or farmland suggests § 35.
   const landUseUrl = serviceUrl("fnp_ak", "fnp_ak_vektor", site.origin);
-  const [parcelResult, adoptedPlan, draftPlan, landUseResult, ...hintResults] = await Promise.allSettled([features(parcelUrl, signal), ...planUrls.map(url => features(url, signal)), features(landUseUrl, signal), ...hintUrls.map(url => features(url, signal))]);
+  // Locality (Ortsteil): in former West Berlin the Baunutzungsplan 1960 applies where no newer B-Plan replaced it.
+  const localityUrl = serviceUrl("alkis_ortsteile", "ortsteile", site.origin, 1, 10);
+  const [parcelResult, adoptedPlan, draftPlan, landUseResult, localityResult, ...hintResults] = await Promise.allSettled([features(parcelUrl, signal), ...planUrls.map(url => features(url, signal)), features(landUseUrl, signal), features(localityUrl, signal, 10), ...hintUrls.map(url => features(url, signal))]);
   const planResults = [adoptedPlan!, draftPlan!];
   const retrievedAt = new Date().toISOString();
   const parcels = parcelResult.status === "fulfilled" ? parcelResult.value.flatMap(feature => {
@@ -80,13 +82,17 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
     id: text(feature.id), name: text(feature.properties.planname), status: index === 0 ? "adopted" : "in_progress",
     sourceUrl: planUrls[index]!, documentUrl: publicLink(feature.properties.scan_www), explanationUrl: publicLink(feature.properties.grund_www),
     effectiveDate: text(feature.properties.festsg_am) || null, polygons: polygonsOf(feature), containsAddress: containsPoint(polygonsOf(feature), site.origin),
+    // Register facts: plan type (qualified, simple, project-specific), procedure and court review (e.g. partly invalid).
+    planType: text(feature.properties.planartname) || null, procedure: text(feature.properties.verfahrensart) || null, courtReview: text(feature.properties.normkontr) || null,
   })));
+  const localityFeature = localityResult!.status === "fulfilled" ? localityResult!.value.find(feature => containsPoint(polygonsOf(feature), site.origin)) : undefined;
+  const locality = localityFeature && text(localityFeature.properties.sch) ? { name: text(localityFeature.properties.nam), key: text(localityFeature.properties.sch), sourceUrl: localityUrl } : null;
   const hints = hintResults.flatMap((result,index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({id: text(feature.id),kind:(["heritage","social_preservation","urban_preservation"] as const)[index]!, type: text(feature.properties.typ) || null, label: text(feature.properties.gebietsname) || text(feature.properties.typ) || text(feature.properties.id),polygons:polygonsOf(feature),sourceUrl:hintUrls[index]!,detailUrl:publicLink(feature.properties.link),effectiveDate:text(feature.properties.ae_inkraft)||text(feature.properties.f_in_kraft)||null,containsAddress:containsPoint(polygonsOf(feature),site.origin)})));
   const landUse = landUseResult!.status !== "fulfilled" ? [] : landUseResult!.value.flatMap(feature => {
     const polygons = polygonsOf(feature), label = text(feature.properties.nutzungsart);
     return polygons.length && label ? [{ id: text(feature.properties.gisid) || text(feature.id), label, purpose: text(feature.properties.zweckbestimmung) || null, category: landUseCategory(label), sourceUrl: landUseUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }] : [];
   });
-  return { landUse, landUseStatus: landUseResult!.status === "fulfilled" ? "available" : "unavailable", hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
+  return { locality, landUse, landUseStatus: landUseResult!.status === "fulfilled" ? "available" : "unavailable", hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
     parcelStatus: parcelResult.status === "fulfilled" ? "available" : "unavailable",
     planStatus: planResults.every(r => r.status === "fulfilled") ? "available" : "unavailable",
     sources: [...site.sources, { label: "ALKIS Berlin · dl-de/zero-2-0", url: parcelUrl }, ...planUrls.map(url => ({ label: "Berlin B-Plan register", url }))] };

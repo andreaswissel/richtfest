@@ -74,3 +74,19 @@ test("FNP land use is only a planning-law hint by category", async () => {
   expect(landUseCategory("Grünfläche")).toBe("open");
   expect(landUseCategory("Fläche für Ver- und Entsorgung")).toBe("other");
 });
+
+test("plan register facts and the locality come through for the planning regime", async () => {
+  const original = globalThis.fetch;
+  const square = { type: "Polygon", coordinates: [[[0,0],[10,0],[10,10],[0,10],[0,0]]] };
+  globalThis.fetch = (async (input: any) => {
+    const url = String(input);
+    if (url.includes("typeNames=bplan%3Ab_bp_fs")) return Response.json({numberMatched:1,features:[{id:"b_bp_fs.1",properties:{planname:"IV-2c",festsg_am:"1985-03-12",planartname:"Qualifizierter B-Plan",verfahrensart:"Normal",normkontr:"teilunwirksam"},geometry:square}]});
+    if (url.includes("alkis_ortsteile")) return Response.json({numberMatched:1,features:[{id:"o.1",properties:{nam:"Kreuzberg",sch:"110000020202"},geometry:square}]});
+    return Response.json({numberMatched:0,features:[]});
+  }) as unknown as typeof fetch;
+  try {
+    const r = await lookupBerlinContext({address:"Test",origin:[5,5],sources:[]},new AbortController().signal);
+    expect(r.plans[0]).toMatchObject({ name: "IV-2c", effectiveDate: "1985-03-12", planType: "Qualifizierter B-Plan", courtReview: "teilunwirksam" });
+    expect(r.locality).toMatchObject({ name: "Kreuzberg", key: "110000020202" });
+  } finally { globalThis.fetch = original; }
+});

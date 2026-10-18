@@ -9,12 +9,14 @@ type LinesProposal = {
   id: string;
   status: "completed" | "unconfigured" | "failed" | "running";
   error?: string | null;
-  payload: { baugrenzen: { points: GeometryPoint[]; reason: string }[]; baulinien: { points: GeometryPoint[]; reason: string }[]; limitations: string[] } | null;
+  payload: { baugrenzen: { points: GeometryPoint[]; reason: string }[]; baulinien: { points: GeometryPoint[]; reason: string }[]; verkehrsflaechen?: { points: GeometryPoint[]; reason: string }[]; limitations: string[] } | null;
 };
 export type TracedLines = {
   status: "traced" | "empty" | "unconfigured" | "failed";
   envelope: GeometryEvidence | null;
   lines: MandatoryLine[];
+  /** Public traffic areas on the parcel, as exclusions that are not building land (§ 19 (3) BauNVO). */
+  nonBuildingLand: SiteGeometryInput["exclusions"];
   limitations: string[];
   message?: string;
 };
@@ -93,7 +95,7 @@ export function clipLineToParcel(line: GeometryPoint[], parcel: GeometryMultiPol
  * are clipped to it. Everything stays unreviewed: the traced corners are approximate until a person corrects them.
  */
 export async function traceBuildingLines(projectId: string, overlay: PlanOverlay, parcel: GeometryEvidence, provider: PlanProvider): Promise<TracedLines> {
-  const result: TracedLines = { status: "empty", envelope: null, lines: [], limitations: [] };
+  const result: TracedLines = { status: "empty", envelope: null, lines: [], nonBuildingLand: [], limitations: [] };
   const engine = await import("@richtfest/shared/site-geometry");
   const matrix = engine.affineFromControlPoints(overlay.controlPoints);
   const inverse = matrix && invertAffine(matrix);
@@ -126,7 +128,27 @@ export async function traceBuildingLines(projectId: string, overlay: PlanOverlay
   for (const [index, line] of proposal.payload.baulinien.entries())
     for (const [part, piece] of clipLineToParcel(line.points.map(toSite), parcel.geometry).entries())
       result.lines.push({ id: `${TRACED_LINE_PREFIX}${proposal.id.slice(0, 8)}-${index}-${part}`, label: `Baulinie ${result.lines.length + 1} (traced)`, line: piece, source: source("Baulinie", line.reason), sourceDate: overlay.sourceDate, reviewed: false });
+  for (const [index, area] of (proposal.payload.verkehrsflaechen ?? []).entries()) {
+    const ring = area.points.map(toSite);
+    ring.push(ring[0]!);
+    if (engine.validateGeometry([[ring]]).length) continue;
+    const onParcel = engine.intersectGeometry([[ring]], parcel.geometry);
+    if (engine.geometryArea(onParcel) < 0.5) continue;
+    result.nonBuildingLand.push({ id: `${TRACED_LINE_PREFIX}${proposal.id.slice(0, 8)}-street-${index}`, label: `Straßenland ${result.nonBuildingLand.length + 1} (traced)`, geometry: onParcel, source: source("Verkehrsfläche", area.reason), sourceDate: overlay.sourceDate, reviewed: false, nonBuildingLand: true });
+  }
   result.limitations = proposal.payload.limitations;
-  result.status = result.envelope || result.lines.length ? "traced" : "empty";
+  result.status = result.envelope || result.lines.length || result.nonBuildingLand.length ? "traced" : "empty";
   return result;
+}
+
+/** A new trace replaces earlier unreviewed traced lines and street areas; whatever a person drew or reviewed stays. */
+export function applyTrace(geometry: SiteGeometryInput, traced: TracedLines): Pick<SiteGeometryInput, "envelope" | "mandatoryLines" | "exclusions" | "exclusionsReviewed"> {
+  const keep = <T extends { id: string; reviewed: boolean }>(items: T[]) => items.filter((item) => item.reviewed || !item.id.startsWith(TRACED_LINE_PREFIX));
+  const exclusions = [...keep(geometry.exclusions), ...traced.nonBuildingLand];
+  return {
+    envelope: traced.envelope ?? geometry.envelope,
+    mandatoryLines: [...keep(geometry.mandatoryLines), ...traced.lines],
+    exclusions,
+    exclusionsReviewed: geometry.exclusionsReviewed && exclusions.length === geometry.exclusions.length && exclusions.every((e, i) => e === geometry.exclusions[i]),
+  };
 }

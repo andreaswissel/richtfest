@@ -38,8 +38,16 @@ import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinPa
 import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
 import { applySiteSummary, massingOptions, proposeFrameFigures, proposeGrz2Default, type SummaryStep, type SummaryStepId } from "./site-summary";
 import { SiteSummaryPanel } from "./site-summary-panel";
-import { TRACED_LINE_PREFIX } from "./plan-lines";
+import { applyTrace } from "./plan-lines";
+import { PlanRegimePanel } from "./plan-regime-panel";
 
+/** Centre of the parcel's outer ring bounds, for maps around the site. */
+const parcelCentre = (geometry: [number, number][][][] | undefined): [number, number] | null => {
+  const ring = geometry?.[0]?.[0];
+  if (!ring?.length) return null;
+  const xs = ring.map((p) => p[0]), ys = ring.map((p) => p[1]);
+  return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+};
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
 type Step = "site" | "limits" | "design" | "result";
@@ -183,6 +191,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
         planningFacts: assessment.planningFacts,
         siteLocator: assessment.siteLocator,
         designRules: assessment.designRules,
+        ...(assessment.planRegime ? { planRegime: assessment.planRegime } : {}),
       },
     [assessment],
   );
@@ -459,9 +468,8 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             envelopeReviewed: !!assessment.geometry?.envelope?.reviewed,
             onChange: (planOverlay) => update({ geometry: { ...(assessment.geometry ?? createEmptySiteGeometryInput()), planOverlay } }),
             onTrace: (traced) => {
-              // Same rule as in Design: a new trace replaces earlier unreviewed traced lines; drawn or reviewed lines stay.
               const current = assessment.geometry ?? createEmptySiteGeometryInput();
-              update({ geometry: { ...current, envelope: traced.envelope ?? current.envelope, mandatoryLines: [...current.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines] } });
+              update({ geometry: { ...current, ...applyTrace(current, traced) } });
             },
           }}
         />
@@ -483,6 +491,16 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             onChange={(planningBasis) => update({ planningBasis: planningBasis as Assessment["planningBasis"], checks: { ...assessment.checks, planningBasis: { ...assessment.checks.planningBasis, status: "unresolved" } } })}
             items={["b_plan", "section34", "section35", "unresolved"].map((value) => ({ value, label: label(value), disabled }))}
           />
+          {assessment.planningBasis === "b_plan" && (
+            <PlanRegimePanel
+              regime={assessment.planRegime}
+              constraints={assessment.constraints}
+              origin={assessment.siteLocator?.origin ?? parcelCentre(assessment.geometry?.parcel?.geometry) ?? null}
+              disabled={disabled}
+              label={label}
+              onChange={({ planRegime, constraints }) => update({ planRegime, ...(constraints ? { constraints } : {}) })}
+            />
+          )}
           {assessment.planningBasis === "section35" && <Callout tone="warning">{label("Section35Hint")}</Callout>}
           {assessment.planningBasis === "section34" && (
             <Callout>
@@ -590,6 +608,14 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             onScenario={setScenario}
             upsideMassing={upsideMassing}
             upsideStoreys={assessment.upside?.maxFullStoreys.value ?? null}
+            onUseBuildingLand={(value) =>
+              update({
+                constraints: {
+                  ...assessment.constraints,
+                  parcelArea: { value, source: "berlin_geometry_v1 · parcel less non-building land (street, green) behind the street boundary line, § 19 (3) BauNVO", sourceDate: new Date().toISOString().slice(0, 10), kind: "calculated", reviewed: false },
+                },
+              })
+            }
             onUseArea={(value) =>
               update({
                 constraints: {

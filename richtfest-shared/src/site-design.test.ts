@@ -21,3 +21,10 @@ test("placement failure stays separate from arithmetic ratio pass",()=>{const in
 
 test("closed form cannot borrow boundary contact from an unrelated building",()=>{const input=fixture();input.designRules!.buildingForm="closed";input.geometry!.setbacks[0]!.profile="boundary_exception";input.geometry!.buildings=[b(rect(10,0,10,10),"boundary"),b(rect(40,40,10,10),"detached")];expect(check(input,"building_form").status).toBe("unresolved");expect(calculateSiteDesign(input).status).toBe("indicative");});
 test("unreviewed boundary source cannot establish closed form",()=>{const input=fixture();input.designRules!.buildingForm="closed";input.geometry!.setbacks[0]!.profile="boundary_exception";input.geometry!.setbacks[0]!.reviewed=false;input.geometry!.buildings=[b(rect(10,0,10,10))];expect(check(input,"building_form").status).toBe("unresolved");});
+test("under BauNVO 1977 a non-full Staffel counts toward GF; under 1990 only when marked countable",()=>{const input=fixture();input.geometry!.buildings[0]!.staffel=[{footprint:ev(rect(10,10,10,5),"s"),countable:false,height:3,areaAbove230:20,averageTopAboveTerrain:12,classificationReviewed:true}];
+ expect(check(input,"gfz").actual).toBeCloseTo(300/10000);
+ input.planRegime={regime:"b_plan",planType:"qualified",planName:"IV-2c",adoptedOn:"1985-03-12",ordinance:"baunvo_1977",buildingClass:null,courtReview:null,source:"register",sourceDate:"1985-03-12",reviewed:true};
+ expect(check(input,"gfz").actual).toBeCloseTo(350/10000);
+ input.planRegime.ordinance="baunvo_1990";expect(check(input,"gfz").actual).toBeCloseTo(300/10000);});
+test("the scalar parcel area is checked against building land when street land is marked",()=>{const input=fixture();input.geometry!.exclusions=[{...ev(rect(0,0,100,10),"street"),nonBuildingLand:true}];input.constraints.parcelArea.value=9000;
+ expect(check(input,"parcel_area_consistency").status).toBe("pass");input.constraints.parcelArea.value=10000;expect(check(input,"parcel_area_consistency").status).toBe("exceeded");});
