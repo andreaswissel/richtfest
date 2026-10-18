@@ -318,6 +318,7 @@ export function SiteGeometryEditor({
   upsideStoreys,
   onAdoptParcel,
   parcelArea,
+  jurisdiction = "BE",
 }: {
   projectId: string;
   value: SiteGeometryInput | null;
@@ -341,6 +342,8 @@ export function SiteGeometryEditor({
   onAdoptParcel?: (parcel: BerlinParcel) => void;
   /** Entered parcel area for GRZ/GFZ, as in the design check; the drawn parcel is the fallback. */
   parcelArea?: number | null;
+  /** Landesbauordnung that sets the Staffel full-storey share. */
+  jurisdiction?: string;
 }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
@@ -702,6 +705,50 @@ export function SiteGeometryEditor({
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
   };
+  /**
+   * Drag a Staffel as a whole, in 10 cm steps, kept within its building's footprint: a move that would leave the floor below
+   * slides along the wall it hits (each axis is tried on its own) instead of stopping.
+   */
+  const dragStaffel = (building: BuildingGeometry, staffel: BuildingGeometry["staffel"][number], event: React.PointerEvent) => {
+    if (tool !== "select" || disabled || event.button !== 0 || scenario === "upside" || !engine) return;
+    event.stopPropagation();
+    const origin = siteAt(event), base = geometry, startX = event.clientX, startY = event.clientY, below = building.footprint.geometry;
+    const fits = (dx: number, dy: number) => {
+      try {
+        const moved = translateRings(staffel.footprint.geometry, dx, dy);
+        return engine.geometryArea(moved) - engine.geometryArea(engine.intersectGeometry(moved, below)) < 0.01;
+      } catch {
+        return false;
+      }
+    };
+    let moved = false, frameRequest = 0, last: [number, number] = [0, 0];
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return;
+      if (!moved) {
+        moved = true;
+        beginGesture();
+        setSelected({ kind: "staffel", id: staffel.footprint.id });
+      }
+      cancelAnimationFrame(frameRequest);
+      frameRequest = requestAnimationFrame(() => {
+        const p = siteAt(ev);
+        const dx = Math.round((p[0] - origin[0]) * 10) / 10, dy = Math.round((p[1] - origin[1]) * 10) / 10;
+        const next: [number, number] | null = fits(dx, dy) ? [dx, dy] : fits(dx, last[1]) ? [dx, last[1]] : fits(last[0], dy) ? [last[0], dy] : null;
+        if (!next || (next[0] === last[0] && next[1] === last[1])) return;
+        last = next;
+        const footprint = { ...staffel.footprint, geometry: translateRings(staffel.footprint.geometry, next[0], next[1]), reviewed: false };
+        onChange({ ...base, buildings: base.buildings.map((b) => (b.id === building.id ? { ...b, staffel: b.staffel.map((st) => (st.footprint.id === staffel.footprint.id ? { ...st, footprint, classificationReviewed: false } : st)) } : b)) });
+      });
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
   // Live massing: the footprint being drawn previews at the default height, every building gets its Abstandsflächen.
   const defaultStoreys = options?.maxFullStoreys ?? 1;
   const draft = useMemo(() => {
@@ -753,16 +800,20 @@ export function SiteGeometryEditor({
   const staffelProposal = (b: BuildingGeometry, share: number, name: string): GeometryEvidence | null => {
     if (!engine) return null;
     const footprint = engine.proposeStaffel(b.footprint.geometry, share);
-    return footprint.length ? { ...evidence(name, []), geometry: footprint, source: label("StaffelProposalSource").replace("{share}", format(share * 100, 0)) } : null;
+    const source = label("StaffelProposalSource").replace("{share}", format(share * 100, 0)) + (staffelRule ? ` · ${staffelRule.rule}` : "");
+    return footprint.length ? { ...evidence(name, []), geometry: footprint, source } : null;
   };
-  // Below the full-storey threshold (2/3) the Staffel is not a Vollgeschoss; its classification stays for review.
-  const addStaffel = (b: BuildingGeometry, share = 2 / 3) => {
+  // The state's building code sets from which share of the floor below a Staffel is a Vollgeschoss; the proposal stays just below it.
+  const staffelRule = engine?.suggestedStaffelShare(jurisdiction) ?? null;
+  const shareText = (share: number) => (Math.abs(share - 2 / 3) < 1e-6 ? "⅔" : `${format(share * 100, 0)} %`);
+  const fullStorey = (share: number) => (staffelRule ? share >= staffelRule.threshold - 1e-6 : true);
+  const addStaffel = (b: BuildingGeometry, share = staffelRule?.share ?? 2 / 3) => {
     const e = staffelProposal(b, share, label("ObjectStaffel").replace("{n}", String(b.staffel.length + 1)));
     if (!e) return;
     patchBuilding(b.id, (x) => ({
       ...x,
       height: null,
-      staffel: [...x.staffel, { footprint: e, countable: share > 2 / 3 + 1e-6, height: b.storeyHeight, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }],
+      staffel: [...x.staffel, { footprint: e, countable: fullStorey(share), height: b.storeyHeight, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }],
     }));
     setSelected({ kind: "staffel", id: e.id });
   };
@@ -770,7 +821,7 @@ export function SiteGeometryEditor({
   const reshapeStaffel = (b: BuildingGeometry, staffel: BuildingGeometry["staffel"][number], share: number) => {
     const e = staffelProposal(b, share, staffel.footprint.label);
     if (!e) return;
-    patchBuilding(b.id, (x) => ({ ...x, staffel: x.staffel.map((st) => (st === staffel ? { ...st, footprint: { ...e, id: st.footprint.id }, countable: share > 2 / 3 + 1e-6, classificationReviewed: false } : st)) }));
+    patchBuilding(b.id, (x) => ({ ...x, staffel: x.staffel.map((st) => (st === staffel ? { ...st, footprint: { ...e, id: st.footprint.id }, countable: fullStorey(share), classificationReviewed: false } : st)) }));
   };
   /** 3D drags: moving follows the ground like the plan drag (10 cm steps), extruding snaps to whole floors. */
   const drag3d = useRef<{ base: SiteGeometryInput; floors: number } | null>(null);
@@ -1338,6 +1389,7 @@ export function SiteGeometryEditor({
                             key={s.footprint.id}
                             className="geometry-staffel"
                             d={pathFor(s.footprint.geometry, project)}
+                            onPointerDown={(event) => dragStaffel(b, s, event)}
                             onClick={(event) => {
                               if (tool === "select") {
                                 event.stopPropagation();
@@ -1411,7 +1463,8 @@ export function SiteGeometryEditor({
                         }),
                         holes: [],
                       }}
-                      labels={{ point: label("Point"), addPoint: label("AddPoint") }}
+                      labels={{ point: label("Point"), addPoint: label("AddPoint"), edge: label("DragEdge") }}
+                      edges
                       onBegin={beginGesture}
                       onChange={(draft) =>
                         updateEvidence({
@@ -1764,11 +1817,16 @@ export function SiteGeometryEditor({
                           {!disabled && (
                             <Field label={label("MassingStaffelShare")}>
                               <Segmented
-                                value={share > 0.7 ? "0.75" : share > 0.6 ? String(2 / 3) : ""}
+                                value={share > 0.7 ? "0.75" : staffelRule && Math.abs(share - staffelRule.share) < 0.02 ? String(staffelRule.share) : ""}
                                 onChange={(v) => reshapeStaffel(selectedBuilding, selectedStaffel, Number(v))}
-                                items={[{ value: String(2 / 3), label: "⅔" }, { value: "0.75", label: "75 %" }]}
+                                items={[...(staffelRule ? [{ value: String(staffelRule.share), label: label("StaffelBelowThreshold").replace("{share}", shareText(staffelRule.threshold)) }] : []), { value: "0.75", label: "75 %" }]}
                               />
                             </Field>
+                          )}
+                          {staffelRule && (
+                            <p className="text-ui-2xs muted">
+                              {label("StaffelRuleHint").replace("{rule}", staffelRule.rule).replace("{share}", shareText(staffelRule.threshold))}
+                            </p>
                           )}
                         </div>
                       );

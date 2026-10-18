@@ -1,5 +1,5 @@
 import {describe,test,expect} from "bun:test";
-import {proposeStaffel,createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
+import {suggestedStaffelShare,proposeStaffel,createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
 const X=392000,Y=5820000;
 const rect=(x:number,y:number,w:number,h:number):GeometryMultiPolygon=>[[[[X+x,Y+y],[X+x+w,Y+y],[X+x+w,Y+y+h],[X+x,Y+y+h],[X+x,Y+y]]]];
 const ev=(geometry:GeometryMultiPolygon,id="p"):GeometryEvidence=>({id,label:id,geometry,source:"Synthetic test survey",sourceDate:"2026-10-19",reviewed:true});
@@ -89,4 +89,12 @@ test("Staffel proposal insets the footprint to at most two thirds of the floor b
  expect(geometryArea(s)).toBeCloseTo(17*7,1);
  // A wide plate needs more than 1.5 m: 40 × 40, (40-2d)² ≤ 1066.7 → d ≥ 3.67.
  const w=proposeStaffel(rect(0,0,40,40));expect(geometryArea(w)).toBeLessThanOrEqual(1600*2/3+1e-6);expect(geometryArea(w)).toBeGreaterThan(1600*2/3-5);
+});
+test("the suggested Staffel share stays just below the state's full-storey threshold, where equality already counts",()=>{
+ const be=suggestedStaffelShare("BE")!;
+ expect(be.rule).toBe("BauO Bln § 2 Abs. 12");
+ expect(be.share).toBeLessThan(2/3);
+ // At exactly 2/3 Berlin counts a Vollgeschoss; the proposal must not land there.
+ expect(classifyBerlinStorey({areaAbove230:geometryArea(proposeStaffel(rect(0,0,40,40),be.share)),referenceArea:1600,averageTopAboveTerrain:10,reviewed:true})).toBe("not_full");
+ expect(suggestedStaffelShare("XX")).toBeNull();
 });

@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import type { GeometryEvidence, GeometryPoint, PlanOverlay } from "@richtfest/shared/site-geometry-model";
+import { api } from "../../api";
+import { queryClient } from "../../query";
+import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
+import type { TracedLines } from "./plan-lines";
 import { Link } from "react-router-dom";
 import { Search } from "lucide-react";
 import { useT } from "../../i18n";
@@ -14,7 +20,7 @@ import { SiteParcelMap } from "./site-parcel-map";
 import { correctReferenceStoreys, parcelReference, storeysFromHeight } from "./site-summary";
 const VISIBLE_PARCELS = 5;
 
-export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign, siteLocator, adopted, references = [], onReferences }: {
+export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign, siteLocator, adopted, references = [], onReferences, active = true, plan: alignment }: {
   projectId: string;
   disabled: boolean;
   siteLocator?: SiteAssessmentInput["siteLocator"];
@@ -27,6 +33,10 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   /** § 34 references; parcels picked on the map join them with their observed GRZ, GFZ and storeys. */
   references?: SiteReference[];
   onReferences?: (references: SiteReference[]) => void;
+  /** The Site step is shown: the lookup then runs on its own, so the aerial map with its data is always there. */
+  active?: boolean;
+  /** Plan overlay of the assessment geometry, aligned here on the aerial map with three points. */
+  plan?: { overlay: PlanOverlay | null; parcel: GeometryEvidence | null; envelopeReviewed: boolean; onChange: (overlay: PlanOverlay | null) => void; onTrace: (traced: TracedLines) => void };
 }) {
   const t = useT(), language = usePreferences(s => s.language);
   const label = (key: string) => t(`berlinContext${key}` as Parameters<typeof t>[0]);
@@ -43,6 +53,23 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   useEffect(() => {
     if (context && !discoveryQuery.data && !discoveryQuery.isFetching && !discoveryQuery.isError) void discoveryQuery.refetch();
   }, [lookup.dataUpdatedAt]);
+  useEffect(() => {
+    if (active && !lookup.data && !lookup.isFetching && !lookup.error) void lookup.refetch();
+  }, [active, lookup.data, lookup.error]);
+  // Plan overlay: import the covering B-Plan PDF into project sources, then align it on this map.
+  const [picking, setPicking] = useState(false), [pickedSite, setPickedSite] = useState<GeometryPoint | null>(null);
+  const [focusSource, setFocusSource] = useState<{ versionId: string; at: number } | null>(null);
+  const [engine, setEngine] = useState<typeof import("@richtfest/shared/site-geometry")>();
+  useEffect(() => { if (alignment?.overlay) void import("@richtfest/shared/site-geometry").then(setEngine); }, [!!alignment?.overlay]);
+  const planImage = usePlanRaster(projectId, alignment?.overlay ?? null);
+  const affine = alignment?.overlay && engine?.affineFromControlPoints(alignment.overlay.controlPoints);
+  const importPlan = useMutation({
+    mutationFn: (url: string) => api<{ versionId: string }>(`/feasibility/projects/${projectId}/evidence/import`, { url, ...(siteLocator ? { mapOrigin: siteLocator.origin, mapLabel: siteLocator.label } : {}) }, "POST"),
+    onSuccess: async (source) => {
+      await queryClient.invalidateQueries({ queryKey: [`/feasibility/projects/${projectId}/evidence`] });
+      setFocusSource({ versionId: source.versionId, at: Date.now() });
+    },
+  });
   useEffect(() => {
     if (!context) return;
     setSelected(context.parcels.find(p => p.containsAddress)?.id);
@@ -98,6 +125,8 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
       </p>}
       {parcels.length > 0 ? <div className="berlin-parcels">
         <SiteParcelMap projectId={projectId} context={context} discovery={discovery} selected={selected} adoptedId={adopted?.id} referenceIds={referenceIds} onSelect={setSelected}
+          planOverlay={planImage && affine && alignment?.overlay ? { image: planImage, affine, opacity: alignment.overlay.opacity } : null}
+          picking={picking} onPick={(point) => { setPickedSite(point); setPicking(false); }}
           renderPanel={(parcel, facts) => <>
             <dl className="site-map-facts text-ui-xs">
               <dt>{label("Area")}</dt><dd className="tabular-nums">{area(parcel.area)}</dd>
@@ -156,6 +185,9 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
                   {plan.explanationUrl && <a href={plan.explanationUrl} target="_blank" rel="noreferrer">{label("Explanation")}</a>}
                   {!plan.documentUrl && !plan.explanationUrl && <span className="muted">{label("PlanNoDocuments")}</span>}
                 </p>
+                {plan.documentUrl && alignment && <Button size="sm" variant="outline" disabled={disabled || importPlan.isPending} onClick={() => importPlan.mutate(plan.documentUrl!)}>
+                  {label(importPlan.isPending ? "PlanImporting" : "PlanOverlay")}
+                </Button>}
               </div>)}
               {facts.law.landUse && <p><span className="muted">{label("LandUse")}: </span>{facts.law.landUse.label}</p>}
               <p className="muted">{label(`LawHint_${facts.law.kind}`)}</p>
@@ -179,7 +211,10 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
               <a className="text-ui-xs underline" href={parcel.sourceUrl} target="_blank" rel="noreferrer">{label("Source")} ↗</a>
             </div>
           </>} />
-        <p className="muted text-ui-2xs">{label("PreviewHint")}</p>
+        <p className="muted text-ui-2xs">{label(picking ? "PickOnMap" : "PreviewHint")}</p>
+        {alignment && <SitePlanAlignment projectId={projectId} overlay={alignment.overlay} disabled={disabled} pickedSite={pickedSite} onRequestSite={() => setPicking(true)}
+          onChange={alignment.onChange} parcel={alignment.parcel} envelopeReviewed={alignment.envelopeReviewed} onTrace={alignment.onTrace} focusSource={focusSource} />}
+        {importPlan.error && <Callout tone="error">{importPlan.error.message}</Callout>}
         <div className="berlin-parcel-table">
           <Table aria-label={label("Candidates")}>
             <TableHeader><TableRow><TableHead>{label("Parcel")}</TableHead><TableHead className="text-right">{label("Area")}</TableHead><TableHead>{label("Relation")}</TableHead><TableHead><span className="sr-only">{label("Actions")}</span></TableHead></TableRow></TableHeader>

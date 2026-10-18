@@ -15,7 +15,7 @@ type Range = { mean: number; max: number };
 /** What the map knows about one parcel: observed ratios, covering plans and the § 34 frame of its neighbours. */
 export type ParcelFacts = { grz: number | null; grz2: number | null; gfz: number | null; storeys: number | null; law: PlanningLaw | null; frame: { grz: Range | null; grz2: Range | null; gfz: Range | null; storeys: Range | null; count: number } };
 const FRAME_RADIUS_M = 100;
-type LayerKey = "aerial" | "law" | "plans" | "heritage" | "preservation" | "buildings" | "labels" | "ratios";
+type LayerKey = "aerial" | "overlay" | "law" | "plans" | "heritage" | "preservation" | "buildings" | "labels" | "ratios";
 /** Must match the server's orthophoto window (AERIAL_WINDOW_M / AERIAL_SNAP_M in the feasibility app). */
 const AERIAL_WINDOW_M = 200, AERIAL_SNAP_M = 25;
 const MIN_HALF = 12, MAX_HALF = AERIAL_WINDOW_M;
@@ -47,7 +47,7 @@ const labelPoint = (polygons: Point[][][]): Point | null => {
  * ALKIS parcels labelled with their number and observed GRZ/GFZ, B-Plan areas by name and nearby building
  * footprints. Selecting a parcel opens its record on the left; adopting it stays an explicit action.
  */
-export function SiteParcelMap({ projectId, context, discovery, selected, adoptedId, referenceIds, onSelect, renderPanel }: {
+export function SiteParcelMap({ projectId, context, discovery, selected, adoptedId, referenceIds, onSelect, renderPanel, planOverlay, picking = false, onPick }: {
   projectId: string;
   context: BerlinSiteContext;
   discovery?: SiteDiscovery;
@@ -57,12 +57,17 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   referenceIds?: Set<string>;
   onSelect: (id: string | undefined) => void;
   renderPanel: (parcel: BerlinParcel, facts: ParcelFacts) => ReactNode;
+  /** Aligned plan page drawn over the aerial: rendered image and its page→site affine (a, b, c, d, e, f). */
+  planOverlay?: { image: string; affine: [number, number, number, number, number, number]; opacity: number } | null;
+  /** While aligning a plan, a click picks the site point instead of selecting a parcel. */
+  picking?: boolean;
+  onPick?: (point: Point) => void;
 }) {
   const t = useT();
   const label = (key: string) => t(`berlinMap${key}` as Parameters<typeof t>[0]);
   const frame = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<[number, number]>([800, 480]);
-  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, law: true, plans: true, heritage: true, preservation: true, buildings: true, labels: true, ratios: true });
+  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, overlay: true, law: true, plans: true, heritage: true, preservation: true, buildings: true, labels: true, ratios: true });
   const [aerialFailed, setAerialFailed] = useState(false);
   const fit = useMemo(() => {
     const own = context.parcels.filter(p => p.containsAddress);
@@ -113,10 +118,16 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
     d.moved = true;
     setView(clampView({ ...d.view, cx: d.view.cx - dx * m, cy: d.view.cy + dy * m }));
   };
-  const onPointerUp = () => {
+  const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
     const d = drag.current;
     drag.current = null;
-    if (d && !d.moved) onSelect(d.parcel ?? undefined);
+    if (!d || d.moved) return;
+    if (picking && onPick) {
+      const r = event.currentTarget.getBoundingClientRect();
+      const lxp = viewBox[0]! + ((event.clientX - r.left) / r.width) * viewBox[2]!, lyp = viewBox[1]! + ((event.clientY - r.top) / r.height) * viewBox[3]!;
+      return onPick([lxp + aerial[0], aerial[1] - lyp]);
+    }
+    onSelect(d.parcel ?? undefined);
   };
   useEffect(() => {
     const el = frame.current?.querySelector("svg");
@@ -173,10 +184,16 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   return <div className="site-map" ref={frame}>
     <svg role="img" aria-label={label("Title")} viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet"
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; }}
-      data-aerial={layers.aerial && !aerialFailed}>
+      data-aerial={layers.aerial && !aerialFailed} data-picking={picking || undefined}>
       {layers.aerial && !aerialFailed && <image href={`/api/feasibility/projects/${projectId}/aerial?e=${aerial[0]}&n=${aerial[1]}`}
         x={-AERIAL_WINDOW_M} y={-AERIAL_WINDOW_M} width={AERIAL_WINDOW_M * 2} height={AERIAL_WINDOW_M * 2}
         preserveAspectRatio="none" onError={() => setAerialFailed(true)} />}
+      {layers.overlay && planOverlay && (() => {
+        // Page (0–1) → site (EPSG:25833) → map metres around the aerial origin, y down.
+        const [a, b, c, d, e, f] = planOverlay.affine;
+        return <image href={planOverlay.image} width={1} height={1} preserveAspectRatio="none" opacity={planOverlay.opacity} style={{ pointerEvents: "none" }}
+          transform={`matrix(${a},${-d},${b},${-e},${c - aerial[0]},${aerial[1] - f})`} />;
+      })()}
       {layers.buildings && buildings.map(b => <path key={b.id} className="site-map-building" d={b.d} />)}
       {protections.map(({ hint, d }) => (hint.kind === "heritage" ? layers.heritage : layers.preservation) && <path key={`${hint.kind}:${hint.id}`} className="site-map-protection" data-kind={hint.kind} d={d}><title>{hint.label}</title></path>)}
       {layers.plans && plans.map(({ plan, d }) => <path key={plan.id} className="site-map-plan" data-status={plan.status} d={d}><title>{plan.name}</title></path>)}
@@ -228,7 +245,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
           <PopoverTrigger asChild><WorkbenchTool tooltipSide="left" label={label("Layers")}><Layers className="size-icon-sm" /></WorkbenchTool></PopoverTrigger>
           <PopoverContent side="left" align="start" className="site-map-layers w-56">
             <p className="text-ui-sm font-medium">{label("Layers")}</p>
-            {(["aerial", "law", "plans", "heritage", "preservation", "buildings", "labels", "ratios"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
+            {(["aerial", "overlay", "law", "plans", "heritage", "preservation", "buildings", "labels", "ratios"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
               <span>{label(`Layer_${key}`)}{(key === "buildings" || key === "ratios") && !discovery && <span className="muted text-ui-2xs"> · {label("BuildingsAfterDiscovery")}</span>}</span>
               <Switch checked={layers[key]} onCheckedChange={() => toggle(key)} />
             </label>)}

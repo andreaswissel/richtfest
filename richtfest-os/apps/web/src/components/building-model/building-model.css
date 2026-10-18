@@ -352,3 +352,7 @@
 .building-model-zoning-results { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .building-model-zoning-result { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .building-model-zoning-result > .muted { flex-basis: 100%; }
+/* Edge hit lines: a wide invisible stroke to grab a whole flank; highlighted while hovered or dragged. */
+.building-model-outline-editor-edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.building-model-outline-editor-edges line { stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: move; touch-action: none; }
+.building-model-outline-editor-edges line:hover, .building-model-outline-editor-edges line.is-active { stroke: color-mix(in oklch, var(--primary) 45%, transparent); stroke-width: 6px; }

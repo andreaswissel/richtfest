@@ -136,8 +136,11 @@ export async function testSiteAssessment() {
     { initialEntries: ["/project?view=feasibility&study=site"] },
   );
   window.fetch = async (url, options) => {
+    // The Site step runs the parcel lookup when it opens; answer with an empty, well-formed context.
     if (String(url).includes("berlin-context"))
-      return Response.json({ data: { candidates: [] } });
+      return Response.json({ data: { address: "Test", origin: [0, 0], retrievedAt: "2026-10-18T10:00:00Z", parcelStatus: "available", planStatus: "available", parcels: [], plans: [], hints: [] } });
+    if (String(url).includes("references/discover"))
+      return Response.json({ data: { address: "Test", origin: [0, 0], longitude: 13.4, latitude: 52.5, retrievedAt: "2026-10-18T10:00:00Z", references: [], buildings: [], sources: [], status: [] } });
     if (String(url) !== `/api${path}`) return originalFetch(url, options);
     if (options?.method === "PUT") {
       const next = JSON.parse(String(options.body));
@@ -157,6 +160,8 @@ export async function testSiteAssessment() {
   };
   try {
     usePreferences.getState().hydrate({ language: "en" });
+    // Lookups are cached per project (and persisted); start without results from earlier runs.
+    queryClient.removeQueries({ queryKey: ["feasibility", "site-ui-regression"] });
     queryClient.setQueryData([path], record);
     queryClient.setQueryData(["/feasibility/projects/site-ui-regression/evidence"], {});
     flushSync(() =>

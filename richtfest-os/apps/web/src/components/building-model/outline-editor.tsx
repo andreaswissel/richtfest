@@ -7,15 +7,17 @@ const ringPath = (ring: BuildingPlanPoint[]) => `M${ring.map((point) => `${(poin
 
 /** Path-edit overlay for one room outline in normalized page coordinates. Points are
  * real buttons: drag them, nudge with arrow keys, remove with Delete; midpoints insert. */
-export function OutlineEditorLayer({ draft, onBegin, onChange, labels, style, snap = true }: {
+export function OutlineEditorLayer({ draft, onBegin, onChange, labels, style, snap = true, edges = false }: {
   draft: OutlineDraft;
+  /** Drag an edge to move that whole flank parallel to itself; both corners follow. */
+  edges?: boolean;
   /** Snap dragged points to a neighbour's wall line; Alt always turns snapping off. */
   snap?: boolean;
   style?: React.CSSProperties;
   /** Called once before each change so the parent can record undo history. */
   onBegin: () => void;
   onChange: (draft: OutlineDraft) => void;
-  labels: { point: string; addPoint: string };
+  labels: { point: string; addPoint: string; edge?: string };
 }) {
   const layer = useRef<HTMLDivElement>(null);
   const handles = useRef(new Map<number, HTMLButtonElement>());
@@ -59,6 +61,32 @@ export function OutlineEditorLayer({ draft, onBegin, onChange, labels, style, sn
     window.addEventListener("pointercancel", end);
   };
 
+  /** Moves edge `index` (point index → index + 1) along its normal, measured in screen pixels so the plan's aspect ratio does not skew it. */
+  const dragEdge = (index: number, start: React.PointerEvent) => {
+    start.preventDefault();
+    start.stopPropagation();
+    onBegin();
+    const base = latest.current.polygon, count = base.length, a = base[index]!, b = base[(index + 1) % count]!;
+    const origin = toPoint(start), w = origin.bounds.width, h = origin.bounds.height;
+    const ex = (b.x - a.x) * w, ey = (b.y - a.y) * h, length = Math.hypot(ex, ey) || 1, nx = -ey / length, ny = ex / length;
+    setActive(-1 - index);
+    const move = (event: PointerEvent) => {
+      const bounds = layer.current!.getBoundingClientRect();
+      const d = (event.clientX - start.clientX) * nx + (event.clientY - start.clientY) * ny;
+      const shift = (p: BuildingPlanPoint) => ({ x: clamp(p.x + (d * nx) / bounds.width), y: clamp(p.y + (d * ny) / bounds.height) });
+      onChange({ ...latest.current, polygon: base.map((p, i) => (i === index || i === (index + 1) % count ? shift(p) : p)) });
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      setActive(undefined);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   const onKey = (index: number, event: React.KeyboardEvent) => {
     const polygon = latest.current.polygon;
     if ((event.key === "Delete" || event.key === "Backspace") && polygon.length > 3) {
@@ -83,6 +111,13 @@ export function OutlineEditorLayer({ draft, onBegin, onChange, labels, style, sn
       <svg className="building-model-outline-editor-shape" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
         <path d={[polygon, ...holes].map(ringPath).join("")} fillRule="evenodd" vectorEffect="non-scaling-stroke" />
       </svg>
+      {edges && <svg className="building-model-outline-editor-edges" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+        {polygon.map((point, index) => {
+          const next = polygon[(index + 1) % polygon.length]!;
+          return <line key={`edge-${index}`} className={active === -1 - index ? "is-active" : undefined} x1={point.x * 1000} y1={point.y * 1000} x2={next.x * 1000} y2={next.y * 1000} vectorEffect="non-scaling-stroke"
+            onPointerDown={(event) => dragEdge(index, event)}><title>{labels.edge ?? labels.point}</title></line>;
+        })}
+      </svg>}
       {polygon.map((point, index) => {
         const next = polygon[(index + 1) % polygon.length]!;
         const mid = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 };

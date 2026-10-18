@@ -37,6 +37,7 @@ import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinPa
 import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
 import { applySiteSummary, massingOptions, proposeFrameFigures, proposeGrz2Default, type SummaryStep, type SummaryStepId } from "./site-summary";
 import { SiteSummaryPanel } from "./site-summary-panel";
+import { TRACED_LINE_PREFIX } from "./plan-lines";
 
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
@@ -438,6 +439,18 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
           onAdopt={adoptParcel}
           references={assessment.references}
           onReferences={setReferences}
+          active={currentStep === "site"}
+          plan={{
+            overlay: assessment.geometry?.planOverlay ?? null,
+            parcel: assessment.geometry?.parcel ?? null,
+            envelopeReviewed: !!assessment.geometry?.envelope?.reviewed,
+            onChange: (planOverlay) => update({ geometry: { ...(assessment.geometry ?? createEmptySiteGeometryInput()), planOverlay } }),
+            onTrace: (traced) => {
+              // Same rule as in Design: a new trace replaces earlier unreviewed traced lines; drawn or reviewed lines stay.
+              const current = assessment.geometry ?? createEmptySiteGeometryInput();
+              update({ geometry: { ...current, envelope: traced.envelope ?? current.envelope, mandatoryLines: [...current.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines] } });
+            },
+          }}
         />
         <SiteReferencesPanel
           projectId={projectId}
@@ -554,6 +567,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             disabled={disabled}
             onChange={(geometry) => update({ geometry })}
             parcelArea={assessment.constraints.parcelArea.value}
+            jurisdiction={assessment.jurisdiction}
             onAdoptParcel={(parcel) => adoptParcel({ value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false }, parcel)}
             contextOverride={geometryContext}
             referenceBuildingIds={assessment.references.flatMap((r) => (r.buildingId ? [r.buildingId] : []))}

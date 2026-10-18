@@ -75,6 +75,7 @@ export function SitePlanAlignment({
   parcel,
   envelopeReviewed,
   onTrace,
+  focusSource,
 }: {
   projectId: string;
   overlay: PlanOverlay | null;
@@ -87,6 +88,8 @@ export function SitePlanAlignment({
   /** A reviewed envelope is never replaced by a trace. */
   envelopeReviewed: boolean;
   onTrace: (traced: TracedLines) => void;
+  /** A source just imported to overlay (e.g. the covering B-Plan): selects it and opens the alignment. */
+  focusSource?: { versionId: string; at: number } | null;
 }) {
   const t = useT(),
     label = (key: string) => t(`sitePlan${key}` as Parameters<typeof t>[0]),
@@ -111,6 +114,18 @@ export function SitePlanAlignment({
     );
   }, []);
   const lastPick = useRef<GeometryPoint | null>(null);
+  const panel = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!focusSource) return;
+    setSourceId(focusSource.versionId);
+    setPage(1);
+    setPoints([]);
+    setImagePoint(null);
+    lastPick.current = pickedSite;
+    setOpen(true);
+    requestAnimationFrame(() => panel.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }, [focusSource?.at]);
   useEffect(() => {
     if (!pickedSite || pickedSite === lastPick.current || !imagePoint) return;
     lastPick.current = pickedSite;
@@ -130,7 +145,7 @@ export function SitePlanAlignment({
     } else setPoints(next);
   }, [pickedSite]);
   return (
-    <details className="site-secondary">
+    <details className="site-secondary" ref={panel} open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="text-ui-sm">{label("Title")}</summary>
       <div className="site-plan-alignment">
         <Callout>{label("Hint")}</Callout>

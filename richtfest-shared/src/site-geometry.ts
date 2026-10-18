@@ -96,6 +96,13 @@ export function proposeStaffel(footprint:Multi,maxShare=2/3,minInset=1.5):Multi{
  if(geometryArea(best)>base*maxShare){for(let n=0;n<24;n++){const mid=(lo+hi)/2,g=inset(mid);if(g.length&&geometryArea(g)<=base*maxShare){best=g;hi=mid;}else if(!g.length)hi=mid;else lo=mid;}}
  return geometryArea(best)>base*maxShare?[]:shift(best,o[0],o[1]);
 }
+/**
+ * Staffelgeschoss rule of the Landesbauordnung: from `threshold` of the floor below (area with at least 2.30 m clear height) a
+ * recessed top storey counts as a Vollgeschoss. Only rules verified for the supported jurisdictions are listed; others stay unknown.
+ */
+export const STAFFEL_RULES:Record<string,{threshold:number;rule:string}>={BE:{threshold:2/3,rule:"BauO Bln § 2 Abs. 12"}};
+/** Suggested Staffel share for a jurisdiction: just below its full-storey threshold (equality already counts), or null when unknown. */
+export function suggestedStaffelShare(jurisdiction:string):{share:number;threshold:number;rule:string}|null{const r=STAFFEL_RULES[jurisdiction];return r?{share:r.threshold-.01,threshold:r.threshold,rule:r.rule}:null;}
 /** Berlin BauO §2(12), current July 2026: equality at 2/3 qualifies; elevation must exceed 1.40m. */
 export function classifyBerlinStorey(input:{areaAbove230:number|null;referenceArea:number;averageTopAboveTerrain:number|null;reviewed:boolean}):"full"|"not_full"|"unresolved" {
  if(!input.reviewed||input.areaAbove230===null||input.averageTopAboveTerrain===null||(!Number.isFinite(input.referenceArea)||input.referenceArea<=0)||input.areaAbove230<0||!Number.isFinite(input.areaAbove230)||!Number.isFinite(input.averageTopAboveTerrain))return "unresolved";
