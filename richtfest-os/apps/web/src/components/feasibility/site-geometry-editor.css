@@ -15,7 +15,8 @@
 }
 .geometry-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(14rem, 19rem);
+  grid-template-columns: minmax(0, min(50dvh, 40rem)) minmax(14rem, 19rem);
+  align-items: start;
   gap: var(--stack);
 }
 .geometry-canvas-wrap {
@@ -25,6 +26,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 1;
+  max-width: min(50dvh, 40rem);
   background: var(--muted);
   overflow: hidden;
 }
@@ -104,7 +106,7 @@
   flex-direction: column;
   gap: var(--stack);
   min-width: 0;
-  max-height: 40rem;
+  max-height: min(50dvh, 40rem);
   overflow-y: auto;
 }
 .geometry-inspector h4 {
