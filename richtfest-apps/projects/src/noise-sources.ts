@@ -47,7 +47,9 @@ const surveyMapped = (survey: EnvironmentSurvey | null) => {
   if (!survey) return null;
   const roads = survey.categories.find(item => item.category === "roads"), rail = survey.categories.find(item => item.category === "rail");
   return { fileId: survey.fileId, connectorVersion: survey.connectorVersion, retrievedAt: survey.retrievedAt, address: survey.site.address,
-    roads: roads?.mapped ?? null, rail: rail?.mapped ?? null, incomplete: !!(roads?.coverage.truncated || rail?.coverage.truncated || roads?.status === "unavailable" || rail?.status === "unavailable") };
+    roads: roads?.mapped ?? null, rail: rail?.mapped ?? null, incomplete: !!(roads?.coverage.truncated || rail?.coverage.truncated || roads?.status === "unavailable" || rail?.status === "unavailable"),
+    // Neither list could be retrieved, e.g. a site outside every connected region; distinct from a survey made before lists were kept.
+    unavailable: roads?.status === "unavailable" && rail?.status === "unavailable" && !roads.mapped && !rail.mapped };
 };
 const currentSurvey = async (d: AppDeps, projectId: string) => readProjectEnvironment(d, projectId).catch(() => null);
 
@@ -73,6 +75,7 @@ export function createNoiseSourcesRouter(getDeps: (req: Request) => AppDeps) {
       ]).parse(req.body);
       if (!(await projectExists(d, projectId))) return notFound(res, "Project not found");
       let values: { kind: NoiseSourceKind; name: string; mappedRef: string | null; mapped: any };
+      let imported: Array<{ key: string; value: number | string }> = [], importedFrom = "";
       if ("mappedRef" in input) {
         const survey = await currentSurvey(d, projectId), mapped = surveyMapped(survey);
         const item = [...(mapped?.roads ?? []), ...(mapped?.rail ?? [])].find((entry: MappedNoiseSource) => entry.ref === input.mappedRef);
@@ -80,11 +83,24 @@ export function createNoiseSourcesRouter(getDeps: (req: Request) => AppDeps) {
         const name = item.kind === "road" ? [item.designation, item.name].filter(Boolean).join(" ") || "Road"
           : [item.routeNumbers.length ? `Strecke ${item.routeNumbers.join(", ")}` : null, item.lines.join(", ") || null, item.name].filter(Boolean).join(" · ") || "Railway";
         values = { kind: item.kind, name: name.slice(0, 300), mappedRef: item.ref, mapped: { ...item, surveyFileId: survey.fileId, connectorVersion: survey.connectorVersion, retrievedAt: survey.retrievedAt } };
+        // Published counts start the inputs as imported values; the basis names the source so they stay distinguishable from entered or confirmed ones.
+        if (item.kind === "road" && item.traffic) {
+          const { dailyTraffic, heavyVehicles, source, year } = item.traffic;
+          importedFrom = source.includes(String(year)) ? source : `${source} (${year})`;
+          imported = [{ key: "dailyTraffic", value: dailyTraffic }, { key: "trafficBasis", value: `${importedFrom}, segment nearest the site, imported from the mapped source` }];
+          if (heavyVehicles !== null && dailyTraffic > 0) imported.push({ key: "heavyVehicleShare", value: Math.round((heavyVehicles / dailyTraffic) * 1000) / 10 });
+        }
       } else values = { kind: input.kind, name: input.name, mappedRef: null, mapped: null };
       const created = await d.db.transaction(async (tx: any) => {
         const [row] = await tx.insert(noiseSources).values({ tenantId: d.tenantId, projectId, ...values, createdBy: d.actorId }).onConflictDoNothing().returning();
         if (!row) return null;
         await d.audit(tx, "projects.noise_source.created", "project_noise_source", row.id, { projectId, kind: row.kind, mappedRef: row.mappedRef });
+        const basis = `Imported: ${importedFrom}`;
+        for (const { key, value } of imported) {
+          if (validateNoiseInput(row.kind, key, value)) continue;
+          await tx.insert(noiseSourceValues).values({ tenantId: d.tenantId, sourceId: row.id, key, version: 1, value, unit: noiseInputUnit(row.kind, key), basis, createdBy: d.actorId });
+          await d.audit(tx, "projects.noise_source.input_set", "project_noise_source", row.id, { projectId, key, version: 1, cleared: false, hasBasis: true, imported: true });
+        }
         return row;
       });
       if (!created) return send(res, 409, { data: null, error: { code: "already_added" }, message: "This road or railway is already a noise source" });

@@ -5,10 +5,11 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, type EnvironmentSurvey } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
-import { groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
+import { berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, inBerlin, groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
 
-/** Sites with an imported location (Rheinland-Pfalz) use the RLP connector; other addresses are resolved in Hessen. */
+/** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
 const CONNECTOR = "rlp-basis-dlm-framap-spatial-v5";
+const BERLIN_CONNECTOR = "be-detailnetz-stratlaerm2022-framap-v1";
 const HESSEN_CONNECTOR = "he-basis-dlm-hako-framap-v1";
 const LIMIT = 500;
 const ROAD_LIMIT = 2000;
@@ -31,7 +32,8 @@ async function scope(d: AppDeps, projectId: string, db = d.db): Promise<Scope> {
   const context = location?.context;
   if (context && location.contextStatus === "ready" && locationMatchesAddress(context, address)) {
     if (!Number.isFinite(context.latitude) || !Number.isFinite(context.longitude)) throw fail("environment_coordinates_required");
-    const cacheKey = hash(JSON.stringify({ connector: CONNECTOR, address, siteId: context.siteId, latitude: context.latitude, longitude: context.longitude }));
+    const connector = inBerlin(context.longitude, context.latitude) ? BERLIN_CONNECTOR : CONNECTOR;
+    const cacheKey = hash(JSON.stringify({ connector, address, siteId: context.siteId, latitude: context.latitude, longitude: context.longitude }));
     return { kind: "location", site: { siteId: context.siteId, address: context.address, latitude: context.latitude, longitude: context.longitude }, revision: location.revision, cacheKey };
   }
   // Without an imported location the site point comes from Hessen's official house coordinates at research time.
@@ -107,6 +109,51 @@ async function rlpCategories(site: { latitude: number; longitude: number }, bbox
     categories.push(item);
   }
   return categories;
+}
+
+/** Berlin: street network from Detailnetz, traffic counts and rail sources from the strategic noise map 2022 (GeoServer WFS, GeoJSON). */
+async function berlinCategories(site: { latitude: number; longitude: number }, bbox: [number, number, number, number], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+  const fetchLayer = async (service: string, layer: string, limit: number) => {
+    const url = `${BERLIN_WFS}/${service}?${new URLSearchParams({ service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: `${service}:${layer}`, outputFormat: "application/json", srsName: "EPSG:4326", count: String(limit), bbox: [...bbox, "EPSG:4326"].join(",") })}`;
+    signal?.throwIfAborted();
+    const body = await boundedResponse(await fetch(url, { signal: timeout(signal, 30000), redirect: "error" }));
+    const json = JSON.parse(body);
+    if (json.type !== "FeatureCollection" || !Array.isArray(json.features)) throw fail("environment_invalid_response");
+    const sha256 = hash(body);
+    rawResponses.push({ url, retrievedAt, sha256, body });
+    const matched = typeof json.numberMatched === "number" ? json.numberMatched : null;
+    return { features: json.features as any[], source: { url, retrievedAt, sha256 }, returned: json.features.length, matched, truncated: matched === null || matched > json.features.length };
+  };
+  const empty = (category: Category["category"], limit: number): Category => ({ category, status: "unavailable", featureCount: 0, observations: [], coverage: { limit, returned: 0, matched: null, truncated: true }, sources: [], limitations: ["Mapped objects are observations only; activity, traffic volume and noise levels are unknown unless stated."] });
+  const finish = (item: Category, axes: MappedAxis[], layers: Array<Awaited<ReturnType<typeof fetchLayer>>>, limit: number) => {
+    const returned = layers.reduce((sum, layer) => sum + layer.returned, 0), truncated = layers.some(layer => layer.truncated);
+    const grouped = groupMappedSources(axes, site);
+    item.mapped = item.category === "roads" ? grouped.roads : grouped.rail;
+    item.featureCount = axes.length;
+    item.observations = axes.slice(0, 50).map(axis => ({ id: axis.id, kind: axis.kind === "road" ? "Detailnetz Straßenabschnitt" : axis.name ?? "Rail", name: axis.name }));
+    item.coverage = { limit, returned, matched: truncated ? null : returned, truncated };
+    item.sources = layers.map(layer => layer.source);
+    item.status = axes.length ? "findings" : truncated ? "unavailable" : "no_features_in_query";
+    if (truncated) item.limitations.push("The bounded query is incomplete; missing objects cannot be excluded.");
+  };
+  const roads = empty("roads", ROAD_LIMIT), rail = empty("rail", LIMIT * 2);
+  try {
+    const [network, ...counts] = await Promise.all([
+      fetchLayer("detailnetz", "c_strassenabschnitte", ROAD_LIMIT),
+      ...["da_autobahn2022", "db_bundesstrasse2022", "dc_sonstigestr2022"].map(layer => fetchLayer("ua_stratlaerm_2022", layer, ROAD_LIMIT)),
+    ]);
+    const traffic = berlinTraffic(counts.flatMap(layer => layer.features));
+    finish(roads, network.features.map(feature => berlinRoadAxis(feature, traffic)).filter((axis): axis is MappedAxis => !!axis), [network, ...counts], ROAD_LIMIT);
+    roads.limitations.push("Mapped roads list Detailnetz Berlin carriageways nearest to the address point; distances run from that point to the mapped axis, not from a facade.",
+      "Traffic counts (Kfz/24h, Lkw/24h) are the published values of the segment nearest the site as used for the strategic noise map 2022 (Verkehrsmengenkarte 2019); speeds and surfaces are not part of this data.");
+  } catch { signal?.throwIfAborted(); roads.limitations.push("Official source query unavailable or response exceeded the retrieval bound."); }
+  try {
+    const layers = await Promise.all(["dd_s_und_fernbahn2022", "de_strassen_oberirdischeubahn2022"].map(layer => fetchLayer("ua_stratlaerm_2022", layer, LIMIT)));
+    finish(rail, layers.flatMap(layer => layer.features).map(berlinRailAxis).filter((axis): axis is MappedAxis => !!axis), layers, LIMIT * 2);
+    rail.limitations.push("Rail sources are the strategic noise map 2022's mapped tracks: S- und Fernbahn as one layer without line or route numbers, tram and above-ground U-Bahn by track. Train volumes and speeds are not part of this data.");
+  } catch { signal?.throwIfAborted(); rail.limitations.push("Official source query unavailable or response exceeded the retrieval bound."); }
+  const unchecked = (category: Category["category"]): Category => ({ category, status: "not_checked", featureCount: 0, observations: [], coverage: { limit: 0, returned: 0, matched: null, truncated: false }, sources: [], limitations: ["No Berlin source is connected for this category yet."] });
+  return [roads, rail, unchecked("industry"), unchecked("ground_aviation")];
 }
 
 const atkisUrl = (params: Record<string, string>) => `${HESSEN_ATKIS}?${new URLSearchParams({ SERVICE: "WFS", VERSION: "2.0.0", REQUEST: "GetFeature", ...params })}`;
@@ -261,14 +308,16 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   // This is a bounded planning search rectangle, not an acoustic propagation model.
   const dy = 1000 / 111320, dx = 1000 / (111320 * Math.cos(latitude * Math.PI / 180));
   const bbox: [number, number, number, number] = [longitude - dx, latitude - dy, longitude + dx, latitude + dy];
-  const categories = scoped.kind === "location"
+  const berlin = scoped.kind === "location" && inBerlin(longitude, latitude);
+  const categories = berlin ? await berlinCategories(site, bbox, retrievedAt, rawResponses, options.signal)
+    : scoped.kind === "location"
     ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
     : await hessenCategories(site, bbox, retrievedAt, rawResponses, options.signal);
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
-  const connector = scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
+  const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
   const fileId = randomUUID(), versionId = randomUUID();
-  const receipt = environmentSurveySchema.parse({ id: randomUUID(), fileId, versionId, projectId, connectorVersion: connector, cacheKey: scoped.cacheKey, retrievedAt, downloadUrl: `/api/projects/${projectId}/files/${fileId}/versions/1/download`, site: { siteId: site.siteId, address: site.address, latitude, longitude, revision: scoped.revision }, scope: { radiusMeters: 1000, bbox, purpose: "planning_context" }, categories, engineeringApproval: false, noiseMetrics: "unknown", limitations: ["ATKIS Basis-DLM is topographic context, not an exhaustive inventory of noise sources or an acoustic assessment.", "Search radius is a planning default; relevant sources may lie outside the query.",
-    ...(scoped.kind === "location" ? ["©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0; data retrieved as recorded per source."] : ["Site point: official house coordinate (Hauskoordinaten Hessen), not a surveyed setting-out point.", `${hessenAttribution} Data retrieved as recorded per source.`])] });
+  const receipt = environmentSurveySchema.parse({ id: randomUUID(), fileId, versionId, projectId, connectorVersion: connector, cacheKey: scoped.cacheKey, retrievedAt, downloadUrl: `/api/projects/${projectId}/files/${fileId}/versions/1/download`, site: { siteId: site.siteId, address: site.address, latitude, longitude, revision: scoped.revision }, scope: { radiusMeters: 1000, bbox, purpose: "planning_context" }, categories, engineeringApproval: false, noiseMetrics: "unknown", limitations: [berlin ? "Detailnetz and the strategic noise map's source layers are planning context, not an exhaustive inventory of noise sources or an acoustic assessment." : "ATKIS Basis-DLM is topographic context, not an exhaustive inventory of noise sources or an acoustic assessment.", "Search radius is a planning default; relevant sources may lie outside the query.",
+    ...(berlin ? [`${berlinAttribution} Data retrieved as recorded per source.`] : scoped.kind === "location" ? ["©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0; data retrieved as recorded per source."] : ["Site point: official house coordinate (Hauskoordinaten Hessen), not a surveyed setting-out point.", `${hessenAttribution} Data retrieved as recorded per source.`])] });
   const payload = JSON.stringify({ format: "richtfest-environment-receipt-v1", receipt, rawResponses });
   const storageKey = `${d.tenantId}/${projectId}/${fileId}/${versionId}`;
   const saved = await d.fileStorage.saveStream(storageKey, Readable.from([payload]), "application/json");
@@ -280,7 +329,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
       const current = await scope(d, projectId, tx);
       if (current.cacheKey !== scoped.cacheKey || current.revision !== scoped.revision) throw fail("environment_location_changed");
       if (!options.refresh) { const prior = await cached(d, projectId, scoped.cacheKey, tx); if (prior) { await d.fileStorage.remove(storageKey); return prior; } }
-      await tx.insert(files).values({ id: fileId, tenantId: d.tenantId, projectId, name: `Environment survey ${retrievedAt.slice(0, 10)}.json`, sourceType: "environment_research", purpose: "project_evidence", sourceRef: scoped.kind === "location" ? BASE : HESSEN_ATKIS, createdBy: d.actorId });
+      await tx.insert(files).values({ id: fileId, tenantId: d.tenantId, projectId, name: `Environment survey ${retrievedAt.slice(0, 10)}.json`, sourceType: "environment_research", purpose: "project_evidence", sourceRef: berlin ? BERLIN_WFS : scoped.kind === "location" ? BASE : HESSEN_ATKIS, createdBy: d.actorId });
       await tx.insert(fileVersions).values({ id: versionId, tenantId: d.tenantId, fileId, version: 1, status: "ready", sourceMetadata: { environmentCacheKey: scoped.cacheKey, environmentSurvey: receipt }, checksum: saved.checksum, storageKey, sizeBytes: saved.sizeBytes, mimeType: "application/json", createdBy: d.actorId });
       await d.audit(tx, "projects.environment.researched", "file", fileId, { projectId, versionId, cacheKey: scoped.cacheKey, connectorVersion: connector });
       return receipt;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { distanceToPolylineMeters, fromUtm32, groupMappedSources, keptAxes, hessenMappedAxis, readGmlFeatures, rlpMappedAxis, type MappedAxis } from "./noise-geodata";
+import { berlinRailAxis, berlinRoadAxis, berlinTraffic, distanceToPolylineMeters, fromUtm32, groupMappedSources, keptAxes, hessenMappedAxis, readGmlFeatures, rlpMappedAxis, type MappedAxis } from "./noise-geodata";
 import { toUtm } from "./location-context";
 
 // Trimmed from a real HVBG ATKIS response (EPSG:4326, latitude first).
@@ -71,6 +71,32 @@ test("Rheinland-Pfalz flattened attributes map to the same source shape", () => 
   expect(rlpMappedAxis({ properties: { objart_txt: "AX_Strassenachse", objid: "A2", brf: -9998 }, geometry: null })!.widthM).toBeNull();
   const rail = rlpMappedAxis({ properties: { objart_txt: "AX_Bahnstrecke", objid: "R1", bkt: "1100#1102#1104", elk: 1000, gls: 2000, nrb: "3510#3522" }, geometry: { type: "LineString", coordinates: [] } });
   expect(rail).toMatchObject({ categories: ["1100", "1102", "1104"], routeNumbers: ["3510", "3522"], group: "route:3510+3522", tracks: "2000", electrified: true });
+});
+
+test("Berlin: Detailnetz streets carry the noise map count of the segment nearest the site; footpaths and parking are not sources", () => {
+  const site = { longitude: 13.5, latitude: 52.55 };
+  // The noise map keys a link by start_end connection point; Detailnetz may run the same link the other way round.
+  const traffic = berlinTraffic([
+    { properties: { link_id: "2_1", kfz: 21620, lkw: 1080, quelle_kfz: "Verkehrsmengenkarte 2019" } },
+    { properties: { link_id: "3_4", kfz: 9000, lkw: null, quelle_kfz: "Verkehrsmengenkarte 2019" } },
+  ]);
+  const street = (element: string, from: string, to: string, lat: number, extra: object = {}) => ({ properties: { element_nr: element, strassenschluessel: "41588", strassenname: "Hansastraße", strassenklasse: "G", strassenklasse2: "STRA", str_bez: null, beginnt_bei_vp: from, endet_bei_vp: to, ...extra },
+    geometry: { type: "MultiLineString", coordinates: [[[13.49, lat], [13.51, lat]]] } });
+  const near = berlinRoadAxis(street("1_2.01", "1", "2", 52.5505), traffic)!, far = berlinRoadAxis(street("3_4.01", "3", "4", 52.56), traffic)!;
+  expect(near.traffic).toEqual({ dailyTraffic: 21620, heavyVehicles: 1080, year: 2019, source: "Verkehrsmengenkarte 2019" });
+  expect(berlinRoadAxis(street("5_6.01", "5", "6", 52.55, { strassenklasse2: "FUWE" }), traffic)).toBeNull();
+  // Grouped as one road, the count comes from the nearer segment even when the farther one is listed first.
+  const [road] = groupMappedSources([far, near], site).roads;
+  expect(road).toMatchObject({ name: "Hansastraße", dedication: "1307", segments: 2, traffic: { dailyTraffic: 21620 } });
+  expect(road!.distanceMeters).toBeLessThan(80);
+});
+
+test("Berlin: noise map rail layers group into S- und Fernbahn, tram and U-Bahn sources", () => {
+  const line = (properties: object, id: string) => ({ id, properties, geometry: { type: "MultiLineString", coordinates: [[[13.49, 52.55], [13.51, 52.55]]] } });
+  const axes = [line({ typ: "S- und Fernbahn" }, "s1"), line({ name: "Track_0140", gruppe_txt: "Tram" }, "t1"), line({ name: "Track_0141", gruppe_txt: "Tram" }, "t2"), line({ gruppe_txt: "U-Bahn" }, "u1"), line({ gruppe_txt: "Bus" }, "b1")].map(berlinRailAxis);
+  expect(axes[4]).toBeNull();
+  const rail = groupMappedSources(axes.filter((axis): axis is MappedAxis => !!axis), { longitude: 13.5, latitude: 52.551 }).rail;
+  expect(rail.map(item => [item.name, item.categories, item.segments]).sort()).toEqual([["S- und Fernbahn", ["1100", "1104"], 1], ["Straßenbahn", ["1201"], 2], ["U-Bahn (oberirdisch)", ["1202"], 1]]);
 });
 
 test("keeps simplified [longitude, latitude] axes near the site and drops distant parts", () => {

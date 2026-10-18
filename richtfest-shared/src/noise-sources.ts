@@ -64,6 +64,8 @@ export const mappedRoadSchema = z.object({
   designation: z.string().nullable(),
   lanes: z.number().nullable(),
   carriagewayWidthM: z.number().nullable(),
+  /** Published traffic count of the mapped segment nearest the site (Berlin: Verkehrsmengenkarte, as used by the strategic noise map). Absent where the source has none. */
+  traffic: z.object({ dailyTraffic: z.number().int().nonnegative(), heavyVehicles: z.number().int().nonnegative().nullable(), year: z.number().int(), source: z.string().max(200) }).strict().nullable().optional(),
   distanceMeters: z.number().nullable(),
   segments: z.number().int(),
   axes: mappedAxesSchema,

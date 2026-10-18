@@ -23,6 +23,8 @@ export type MappedAxis = {
   lines: string[];
   tracks: string | null;
   electrified: boolean | null;
+  /** Published traffic count of this segment, where the source has one. */
+  traffic?: MappedRoad["traffic"];
   /** Polyline parts as [longitude, latitude]. */
   parts: Array<Array<[number, number]>>;
 };
@@ -80,8 +82,11 @@ export function groupMappedSources(axes: MappedAxis[], site: { longitude: number
     const max = (values: Array<number | null>) => { const present = values.filter((value): value is number => value !== null); return present.length ? Math.max(...present) : null; };
     const pick = (values: Array<string | null>) => values.find(Boolean) ?? null;
     const axes = keptAxes(site, items.flatMap(item => item.parts));
+    // A road's count varies along it; the segment nearest the site is the one that matters for its facades.
+    const counted = items.filter(item => item.traffic).map(item => ({ traffic: item.traffic!, distance: distanceToPolylineMeters(site, item.parts) ?? Infinity })).sort((a, b) => a.distance - b.distance)[0];
     if (first.kind === "road") roads.push({ kind: "road", ref: key, name: pick(items.map(item => item.name)), dedication: pick(items.map(item => item.dedication)),
-      designation: pick(items.map(item => item.designation)), lanes: max(items.map(item => item.lanes)), carriagewayWidthM: max(items.map(item => item.widthM)), distanceMeters, segments: items.length, axes });
+      designation: pick(items.map(item => item.designation)), lanes: max(items.map(item => item.lanes)), carriagewayWidthM: max(items.map(item => item.widthM)),
+      ...(counted ? { traffic: counted.traffic } : {}), distanceMeters, segments: items.length, axes });
     else {
       const electrified = items.map(item => item.electrified).filter((value): value is boolean => value !== null);
       rail.push({ kind: "rail", ref: key, name: pick(items.map(item => item.name)), categories: unique(items.flatMap(item => item.categories)), routeNumbers: unique(items.flatMap(item => item.routeNumbers)),
@@ -119,6 +124,58 @@ export function rlpMappedAxis(feature: any): MappedAxis | null {
       categories, routeNumbers, lines, tracks: code(p.gls), electrified: p.elk === 1000 ? true : p.elk === 2000 ? false : null, parts: lineParts(feature.geometry) };
   }
   return null;
+}
+
+// --- Berlin: Geoportal Berlin, open under dl-de/zero-2-0 ---
+
+export const BERLIN_WFS = "https://gdi.berlin.de/services/wfs";
+export const berlinAttribution = "Geoportal Berlin / Detailnetz Berlin and Strategische Lärmkarten 2022 (Senatsverwaltung für Mobilität, Verkehr, Klimaschutz und Umwelt), dl-de/zero-2-0; selected, grouped and measured by Richtfest.";
+/** Berlin's envelope with a small margin; sites outside fall back to the other connectors. */
+export const inBerlin = (longitude: number, latitude: number) => longitude >= 13.05 && longitude <= 13.8 && latitude >= 52.3 && latitude <= 52.7;
+
+/** Detailnetz Straßenklasse (B Bundesstraße, G Gemeindestraße, P private) as AdV dedication codes. */
+const berlinDedication: Record<string, string> = { A: "1301", B: "1303", G: "1307", P: "9997" };
+/** Detailnetz carries the Berlin street network; only carriageways and private streets are traffic sources (not footpaths, parking, squares or allotment paths). */
+const BERLIN_ROAD_TYPES = new Set(["STRA", "PSTR"]);
+export type BerlinTraffic = Map<string, NonNullable<MappedRoad["traffic"]>>;
+
+/** Traffic counts of the strategic noise map's road layers, keyed by Detailnetz link (start_end connection point) in both directions. */
+export function berlinTraffic(features: any[]): BerlinTraffic {
+  const traffic: BerlinTraffic = new Map();
+  for (const feature of features) {
+    const p = feature?.properties ?? {};
+    const daily = Number(p.kfz), heavy = Number(p.lkw);
+    if (typeof p.link_id !== "string" || !Number.isInteger(daily) || daily < 0) continue;
+    const year = Number(/(\d{4})/.exec(String(p.quelle_kfz ?? ""))?.[1] ?? 0);
+    const value = { dailyTraffic: daily, heavyVehicles: Number.isInteger(heavy) && heavy >= 0 ? heavy : null, year: year || 2019, source: String(p.quelle_kfz || "Verkehrsmengenkarte").slice(0, 200) };
+    const [a, b] = p.link_id.split("_");
+    traffic.set(p.link_id, value);
+    if (a && b) traffic.set(`${b}_${a}`, value);
+  }
+  return traffic;
+}
+
+/** Detailnetz Straßenabschnitt -> road axis (WGS84 GeoJSON), with the noise map's count where its link matches. */
+export function berlinRoadAxis(feature: any, traffic: BerlinTraffic): MappedAxis | null {
+  const p = feature?.properties ?? {};
+  const id = String(p.element_nr ?? feature?.id ?? "");
+  if (!id || !BERLIN_ROAD_TYPES.has(p.strassenklasse2)) return null;
+  const count = traffic.get(`${p.beginnt_bei_vp}_${p.endet_bei_vp}`);
+  return { id, kind: "road", group: typeof p.strassenschluessel === "string" ? p.strassenschluessel : null, name: typeof p.strassenname === "string" ? p.strassenname.slice(0, 300) : null,
+    dedication: berlinDedication[p.strassenklasse] ?? null, designation: typeof p.str_bez === "string" && p.str_bez.trim() ? p.str_bez.trim().slice(0, 80) : null,
+    lanes: null, widthM: null, categories: [], routeNumbers: [], lines: [], tracks: null, electrified: null, ...(count ? { traffic: count } : {}), parts: lineParts(feature.geometry) };
+}
+
+/** Rail sources of the strategic noise map: S- und Fernbahn (one layer, not split by line) and tram / above-ground U-Bahn tracks. */
+export function berlinRailAxis(feature: any): MappedAxis | null {
+  const p = feature?.properties ?? {};
+  const id = String(feature?.id ?? p.importid ?? "");
+  if (!id) return null;
+  const kind = p.typ === "S- und Fernbahn" ? "sfern" : p.gruppe_txt === "Tram" ? "tram" : /u-?bahn/i.test(String(p.gruppe_txt ?? "")) ? "ubahn" : null;
+  if (!kind) return null;
+  const categories = kind === "sfern" ? ["1100", "1104"] : kind === "tram" ? ["1201"] : ["1202"];
+  const name = kind === "sfern" ? "S- und Fernbahn" : kind === "tram" ? "Straßenbahn" : "U-Bahn (oberirdisch)";
+  return { id, kind: "rail", group: `berlin:${kind}`, name, dedication: null, designation: null, lanes: null, widthM: null, categories, routeNumbers: [], lines: [], tracks: null, electrified: null, parts: lineParts(feature.geometry) };
 }
 
 // --- Hessen: HVBG geodata, open under dl-de/zero-2-0 (§ 18, § 24 HVGG) ---

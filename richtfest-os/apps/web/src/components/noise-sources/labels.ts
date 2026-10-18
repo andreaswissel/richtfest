@@ -9,7 +9,9 @@ export const roadClass = (code: string | null, t: T) => code ? (dedicationKeys[c
 export const railClass = (codes: string[], t: T) => codes.length ? codes.map((code) => railKeys[code] ? t(railKeys[code]!) : code).join(", ") : "—";
 export const mappedClass = (item: MappedNoiseSource, t: T) => item.kind === "road" ? roadClass(item.dedication, t) : railClass(item.categories, t);
 export const mappedDetails = (item: MappedNoiseSource, t: T) => item.kind === "road"
-  ? [item.lanes ? t("noiseLanes").replace("{count}", String(item.lanes)) : null, item.carriagewayWidthM ? `${item.carriagewayWidthM} m` : null].filter(Boolean).join(" · ")
+  ? [item.traffic ? t("noiseTraffic").replace("{daily}", item.traffic.dailyTraffic.toLocaleString()).replace("{year}", String(item.traffic.year))
+      + (item.traffic.heavyVehicles !== null && item.traffic.dailyTraffic > 0 ? ` · ${t("noiseHeavyShare").replace("{share}", (Math.round(item.traffic.heavyVehicles / item.traffic.dailyTraffic * 1000) / 10).toLocaleString())}` : "") : null,
+    item.lanes ? t("noiseLanes").replace("{count}", String(item.lanes)) : null, item.carriagewayWidthM ? `${item.carriagewayWidthM} m` : null].filter(Boolean).join(" · ")
   : [item.name && item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : null, item.lines.join(", ") || null,
     item.tracks === "2000" ? t("noiseTracksDouble") : item.tracks === "1000" ? t("noiseTracksSingle") : null,
     item.electrified === true ? t("noiseElectrified") : item.electrified === false ? t("noiseNotElectrified") : null].filter(Boolean).join(" · ");

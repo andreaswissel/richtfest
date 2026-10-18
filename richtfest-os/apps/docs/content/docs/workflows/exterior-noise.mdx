@@ -7,12 +7,16 @@ Open **Exterior noise** in the project bar. It lists the project's noise sources
 
 ## Mapped roads and railways
 
-**Look up roads and railways** runs the [environmental survey](/docs/workflows/project-onboarding#environmental-survey) and lists what the official topographic model (ATKIS Basis-DLM) maps within about 1 km, nearest first:
+**Look up roads and railways** runs the [environmental survey](/docs/workflows/project-onboarding#environmental-survey) and lists what the official sources map within about 1 km, nearest first (ATKIS Basis-DLM in Hessen and Rheinland-Pfalz; in Berlin the Detailnetz street network and the source layers of the strategic noise map 2022):
 
 - **Roads**: name, class (Bundesautobahn, Bundesstraße, Landes-, Kreis- or Gemeindestraße, non-public), number such as B 43, lanes and carriageway width. ATKIS splits a street into several objects; named streets of one class are shown once.
 - **Railways**: VzG route number (what DB InfraGO answers train volume requests by), category (passenger, freight, S-Bahn, tram, U-Bahn), lines, single or double track and electrification.
 
-The distance runs from the address point to the nearest mapped axis, not from a facade. Coverage: Hessen addresses (house coordinates and ATKIS from HVBG, dl-de/zero-2-0) and Rheinland-Pfalz sites with an imported location. Traffic counts are not part of ATKIS and are not open data in Hessen (Hessen Mobil publishes only an interactive map), so they are entered or requested.
+The distance runs from the address point to the nearest mapped axis, not from a facade. Coverage: Hessen addresses (house coordinates and ATKIS from HVBG, dl-de/zero-2-0), and Berlin and Rheinland-Pfalz sites with an imported location. Elsewhere the lookup says that no list is available; add sources by hand.
+
+In **Berlin** (Geoportal Berlin, dl-de/zero-2-0), roads come from Detailnetz with the strategic noise map's published traffic count of the segment nearest the site (Kfz/24h and Lkw/24h, usually Verkehrsmengenkarte 2019). Railways are the noise map's mapped tracks: **S- und Fernbahn** as one source without route or line numbers, **Straßenbahn** and **U-Bahn (oberirdisch)**; train volumes and speeds are not published there. Adding a Berlin road with a count fills **daily traffic**, **heavy vehicle share** and **traffic basis** as imported values with the source as their basis; check and overwrite them like any other value.
+
+Traffic counts are not part of ATKIS and are not open data in Hessen (Hessen Mobil publishes only an interactive map), so outside Berlin they are entered or requested.
 
 Choose **Add** to make a mapped road or railway a noise source; Richtfest keeps a snapshot of what was mapped. **Add road** and **Add railway** add a source by hand.
 
