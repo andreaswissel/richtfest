@@ -126,5 +126,37 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(replaced.body.data).toMatchObject({revision:6, context:null, scene:input.scene, contextJob:{status:"queued"}, lidarJob:{status:"idle"}});
     expect((await request("/lidar")).status).toBe(409);
     expect((await request("", "PUT", {revision:4,scene:input.scene})).status).toBe(409);
+    // General measurements round-trip in the scene without creating domain records.
+    const reference = { siteId: context.siteId, origin: context.origin, crs: "EPSG:25833", importedAt: "2026-10-18T08:00:00Z" };
+    await pool.query("update projects_locations set context=$1,context_status='ready'", [JSON.stringify({ ...context, ...reference })]);
+    const measurement = { id: crypto.randomUUID(), description: "Neighbor, not the road", purpose: "neighbor", points: [[-4, 3, 7], [8, 8, -2]], context: reference };
+    const measuredScene = { ...input.scene, measurements: [measurement] };
+    expect((await request("", "PUT", { revision:6, scene:measuredScene }, {"x-test-access":"read"})).status).toBe(403);
+    expect((await request("", "PUT", { revision:6, scene:measuredScene }, {"x-test-tenant":"other"})).status).toBe(404);
+    expect((await request("", "PUT", { revision:6, scene:measuredScene })).status).toBe(200);
+    expect((await request()).body.data.scene).toEqual(measuredScene);
+    expect((await request("/import", "POST", {revision:7})).body.error.code).toBe("location_has_objects");
+    // An older client can save notes without silently erasing measurements.
+    expect((await request("", "PUT", {revision:7,scene:input.scene})).body.data.scene.measurements).toEqual([measurement]);
+    for (const measurements of [
+      [measurement, measurement],
+      [{ ...measurement, purpose:"inferred_noise" }],
+      [{ ...measurement, points:[[0,0], [1,2,3]] }],
+    ]) expect((await request("", "PUT", {revision:8,scene:{...input.scene,measurements}})).status).toBe(400);
+    const wrongFrame = { ...measurement, id:crypto.randomUUID(), context:{...reference, origin:[1,2]} };
+    expect((await request("", "PUT", {revision:8,scene:{...input.scene,measurements:[wrongFrame]}})).body.error.code).toBe("measurement_context_changed");
+    const concurrent = await Promise.all([
+      request("", "PUT", {revision:8,scene:measuredScene}),
+      request("", "PUT", {revision:8,scene:{...measuredScene,planningNotes:"Concurrent writer"}}),
+    ]);
+    expect(concurrent.map(result => result.status).sort()).toEqual([200,409]);
+    // A refresh preserves the historical measurement reference, not a claim to newer source data.
+    await pool.query("update projects_locations set context=$1", [JSON.stringify({ ...context, ...reference, importedAt:"2026-10-19T08:00:00Z" })]);
+    expect((await request("", "PUT", {revision:9,scene:measuredScene})).body.data.scene.measurements[0]).toEqual(measurement);
+    const outdated = { ...measurement, id:crypto.randomUUID() };
+    expect((await request("", "PUT", {revision:10,scene:{...input.scene,measurements:[outdated]}})).body.error.code).toBe("measurement_context_changed");
+    expect((await request("", "PUT", {revision:10,scene:{...input.scene,measurements:[]}})).body.data.scene.measurements).toEqual([]);
+    expect((await request()).body.data.scene.measurements).toEqual([]);
+    expect((await request("/import", "POST", {revision:11})).body.data.contextJob.status).toBe("queued");
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`); await admin.pool.end(); }
 }, 30000);

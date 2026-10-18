@@ -35,6 +35,7 @@ import type {
   LocationPointCloud,
   SceneObject,
   SceneVector,
+  SceneMeasurement,
   ProjectAddress,
 } from "@richtfest/shared";
 import {
@@ -55,7 +56,8 @@ import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
 import { EnvironmentSurveyButton } from "./environment-survey";
 import { PublicDataStatus } from "./public-data";
-import { MeasurementActions, useSiteWorkbench } from "./site-workbench";
+import { useSiteWorkbench } from "./site-workbench";
+import { MeasurementPanel } from "./measurement-panel";
 import "./location.css";
 
 const busy = (status?: string) => status === "queued" || status === "running";
@@ -148,6 +150,9 @@ export function LocationEditor({
     aerial: true,
   });
   const [measurement, setMeasurement] = useState<SceneVector[]>([]);
+  const [measurementId, setMeasurementId] = useState<string | null>(null);
+  const savedMeasurement = scene.measurements?.find(item => item.id === measurementId);
+  const [snapMeasurement, setSnapMeasurement] = useState(true);
   const [clipHeight, setClipHeight] = useState(50);
   const [models, setModels] = useState<Record<string, IfcGeometry>>({});
   const [modelErrors, setModelErrors] = useState<Record<string, string>>({});
@@ -172,13 +177,13 @@ export function LocationEditor({
     window.addEventListener("beforeunload", before);
     return () => window.removeEventListener("beforeunload", before);
   }, [!!draft]);
-  const change = (next: LocationScene) => {
+  const change = (next: LocationScene, revision?: number) => {
     const previous = sceneRef.current;
     setPast((p) => [...p.slice(-39), previous]);
     setFuture([]);
     setDraft((d) => ({
       scene: next,
-      revision: d?.revision ?? state.data?.revision ?? 0,
+      revision: revision ?? d?.revision ?? state.data?.revision ?? 0,
     }));
   };
   const patchObject = (id: string, patch: Partial<SceneObject>) =>
@@ -210,6 +215,15 @@ export function LocationEditor({
       );
     },
   });
+  const saveMeasurement = async (item: SceneMeasurement | null, id: string, revision: number) => {
+    const measurements = (sceneRef.current.measurements ?? []).filter(value => value.id !== id);
+    const next = { ...sceneRef.current, measurements: item ? [...measurements, item] : measurements };
+    change(next, revision);
+    const result = await save.mutateAsync({ scene: next, revision });
+    setMeasurementId(item?.id ?? null);
+    if (!item) setMeasurement([]);
+    return result.revision;
+  };
   const importContext = useMutation({
     mutationFn: () =>
       api<LocationState>(`${path}/import`, {
@@ -344,9 +358,13 @@ export function LocationEditor({
           ],
         });
     },
-    measure: (point) =>
-      setMeasurement((m) => (m.length === 1 ? [...m, point] : [point])),
+    measure: (point) => {
+      if (save.isPending) return;
+      setMeasurementId(null);
+      setMeasurement((m) => (m.length === 1 ? [...m, point] : [point]));
+    },
     snap: (point) => {
+      if (!snapMeasurement) return point;
       // Snap to the nearest building or plan corner within 1 m, keeping the picked height.
       let best: [number, number] | null = null,
         bestDistance = 1;
@@ -367,7 +385,8 @@ export function LocationEditor({
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (event.defaultPrevented || !viewport.current || target?.closest("[role=dialog], [data-slot=popover-content]")) return;
     if (event.key === "Escape") {
-      if (measurement.length) setMeasurement([]);
+      if (save.isPending) return;
+      if (measurement.length) { setMeasurement([]); setMeasurementId(null); }
       else if (tool !== "select") setTool("select");
       return;
     }
@@ -596,6 +615,9 @@ export function LocationEditor({
                 setDraft(null);
                 setPast([]);
                 setFuture([]);
+                setMeasurement([]);
+                setMeasurementId(null);
+                setTool("select");
                 save.reset();
                 void state.refetch();
               }}
@@ -635,6 +657,7 @@ export function LocationEditor({
                 disabled={
                   !!draft ||
                   scene.objects.length > 0 ||
+                  (scene.measurements?.length ?? 0) > 0 ||
                   importContext.isPending ||
                   busy(state.data?.contextJob.status) ||
                   busy(state.data?.lidarJob.status)
@@ -802,6 +825,18 @@ export function LocationEditor({
                 {state.data!.context!.address}
                 <small>{state.data!.context!.radius} m</small>
               </p>
+              <div className="location-layer-section" aria-label={t("locationMeasurements")}>
+                <h2><Ruler className="size-icon-sm" />{t("locationMeasurements")}</h2>
+                {!scene.measurements?.length && <p className="text-ui-xs muted">{t("locationMeasurementsEmpty")}</p>}
+                {scene.measurements?.map(item => (
+                  <button key={item.id} data-measurement-id={item.id} className="location-object-row" aria-pressed={measurementId === item.id}
+                    disabled={save.isPending}
+                    onClick={() => { setMeasurementId(item.id); setMeasurement(item.points); setTool("select"); }}>
+                    <Ruler className="size-icon-sm" />
+                    <span>{item.description || t("locationMeasurementUnnamed")} · {Math.hypot(...item.points[0].map((n, i) => n - item.points[1][i])).toFixed(2)} m</span>
+                  </button>
+                ))}
+              </div>
               <div className="location-layer-section">
                 {layer(
                   "buildings",
@@ -1022,13 +1057,34 @@ export function LocationEditor({
               </div>
             </div>
             <div className="location-canvas-column">
-              <div
-                className="location-viewport"
-                ref={host}
-                data-ready={viewportReady}
-                role="region"
-                aria-label={t("locationEditor")}
-              />
+              <div className="location-view-surface">
+                <div
+                  className="location-viewport"
+                  ref={host}
+                  data-ready={viewportReady}
+                  role="region"
+                  aria-label={t("locationEditor")}
+                />
+                {(tool === "measure" || measurement.length === 2) && (
+                  <MeasurementPanel
+                    key={measurementId ?? measurement.flat().join(",")}
+                    projectId={projectId}
+                    context={state.data!.context!}
+                    points={measurement}
+                    saved={savedMeasurement}
+                    persisted={!!savedMeasurement && state.data?.scene.measurements?.some(item => item.id === savedMeasurement.id && JSON.stringify(item) === JSON.stringify(savedMeasurement)) === true}
+                    sceneDirty={!!draft}
+                    baseRevision={draft?.revision ?? state.data?.revision ?? 0}
+                    busy={save.isPending || busy(state.data?.contextJob.status)}
+                    snap={snapMeasurement}
+                    onSnap={setSnapMeasurement}
+                    onClose={() => { setMeasurement([]); setMeasurementId(null); setTool("select"); }}
+                    onAgain={() => { setMeasurement([]); setMeasurementId(null); setTool("measure"); }}
+                    onSave={(item, revision) => saveMeasurement(item, item.id, revision)}
+                    onDelete={(id, revision) => saveMeasurement(null, id, revision)}
+                  />
+                )}
+              </div>
               {viewportError && (
                 <div className="location-view-message">
                   <Callout tone="error">{t("locationWebgl")}</Callout>
@@ -1039,33 +1095,9 @@ export function LocationEditor({
                   {t("locationLoading")}
                 </div>
               )}
-              {(tool === "place" || tool === "measure") && (
+              {tool === "place" && (
                 <div className="location-canvas-caption" role="status">
-                  {t(
-                    tool === "place"
-                      ? "locationPlaceHint"
-                      : "locationMeasureHint",
-                  )}
-                </div>
-              )}
-              {measurement.length === 2 && (
-                <div className="location-measurement" role="status">
-                  {t("locationDistance")}:{" "}
-                  <strong>
-                    {Math.hypot(
-                      ...measurement[0].map((n, i) => n - measurement[1][i]),
-                    ).toFixed(2)}{" "}
-                    m
-                  </strong>{" "}
-                  · {t("locationVertical")}:{" "}
-                  {Math.abs(measurement[0][1] - measurement[1][1]).toFixed(2)} m
-                  <MeasurementActions
-                    key={measurement.flat().join(",")}
-                    projectId={projectId}
-                    context={state.data!.context!}
-                    points={[measurement[0], measurement[1]]}
-                    onDone={() => setMeasurement([])}
-                  />
+                  {t("locationPlaceHint")}
                 </div>
               )}
             </div>

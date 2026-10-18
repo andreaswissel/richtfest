@@ -270,3 +270,113 @@ export async function testConstruction() {
     host.remove();
   }
 }
+
+/** Run on a loaded project location route. Exercises the real editor without saving project data. */
+export async function testMeasurementOverlay() {
+  const host = document.querySelector<HTMLElement>(
+    '.location-viewport[data-ready="true"]',
+  );
+  if (!host) throw new Error("Open a project with loaded 3D location first");
+  const canvas = host.querySelector("canvas")!;
+  const check = (condition: unknown, message: string) => {
+    if (!condition) throw new Error(message);
+  };
+  const settle = () =>
+    new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  const key = async (value: string) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: value }));
+    await settle();
+  };
+  const bounds = () => JSON.stringify(host.getBoundingClientRect().toJSON());
+  const click = async (x: number, y: number) => {
+    const rect = host.getBoundingClientRect();
+    const pointer = {
+      clientX: rect.x + rect.width * x,
+      clientY: rect.y + rect.height * y,
+      button: 0,
+    };
+    canvas.dispatchEvent(new PointerEvent("pointerdown", pointer));
+    canvas.dispatchEvent(new PointerEvent("pointerup", pointer));
+    await settle();
+  };
+  await key("Escape");
+  await key("Escape");
+  const before = bounds();
+  try {
+    await key("m");
+    check(
+      bounds() === before,
+      "Entering measurement must not resize or shift the viewport",
+    );
+    await click(0.2, 0.2);
+    check(bounds() === before, "First point must not resize the viewport");
+    await click(0.5, 0.3);
+    check(
+      bounds() === before,
+      "Completed measurement must not resize the viewport",
+    );
+    const panel = document.querySelector<HTMLElement>(".location-measurement")!;
+    check(
+      panel.querySelectorAll("dd").length === 3,
+      "Show spatial, horizontal and vertical distances without a source choice",
+    );
+    const rect = panel.getBoundingClientRect(),
+      view = host.getBoundingClientRect();
+    check(
+      rect.left >= view.left &&
+        rect.right <= view.right &&
+        rect.top >= view.top &&
+        rect.bottom <= view.bottom,
+      "Result floats inside the viewport",
+    );
+    const metrics = panel.querySelector("dl")!.textContent;
+    panel.querySelector<HTMLButtonElement>('[role="switch"]')!.click();
+    await settle();
+    check(
+      panel.querySelector("dl")!.textContent === metrics,
+      "Changing snap must not remeasure finished endpoints",
+    );
+    check(
+      !panel.querySelector(".measurement-noise"),
+      "A general measurement must not offer noise assessment",
+    );
+    const description = panel.querySelector<HTMLInputElement>("input")!;
+    const purpose = panel.querySelector<HTMLSelectElement>("select")!;
+    if (!description.disabled) {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(description, "Neighbor, not the road");
+      description.dispatchEvent(new Event("input", { bubbles: true }));
+      await settle();
+      check(
+        purpose.value === "general" &&
+          !panel.querySelector(".measurement-noise"),
+        "Description keywords must not infer a domain",
+      );
+      purpose.value = "rail";
+      purpose.dispatchEvent(new Event("change", { bubbles: true }));
+      await settle();
+      check(
+        !panel.querySelector(".measurement-noise"),
+        "Domain follow-up requires a saved purpose, not an unsaved selection",
+      );
+    }
+    check(
+      bounds() === before && panel.querySelector("dl")!.textContent === metrics,
+      "Describing a measurement must not move the map or change its values",
+    );
+    await key("Escape");
+    check(
+      !document.querySelector(".location-measurement dl"),
+      "Escape clears the result",
+    );
+    check(bounds() === before, "Clearing must not resize the viewport");
+    return "PASS: stable canvas and three metrics; general default; no keyword inference; no domain action before saving intent";
+  } finally {
+    await key("Escape");
+    await key("Escape");
+  }
+}

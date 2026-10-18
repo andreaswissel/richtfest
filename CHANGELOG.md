@@ -24,6 +24,8 @@
 
 ## 2026-10-18
 
+- 3D location measurements float over the map without shifting the model. Save and reopen distances to any surface with an optional description and purpose; exterior-noise actions appear only after saving a road or railway purpose. Corner snapping can be switched off for free picking.
+
 - 3D location now fills the project window and shares the building model's compact tool rail, visible shortcuts and narrow-window panels. Aerial imagery and rail-noise overlays stay visible when returning to the editor instead of turning into black rectangles.
 
 - Project navigation stays in place as the project name, customer and status badge load, and when switching to Project details.

@@ -55,6 +55,13 @@
   flex-basis: 100%;
   color: var(--destructive);
 }
+.measurement-noise {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.measurement-noise summary {
+  cursor: pointer;
+}
 .measurement-actions {
   display: flex;
   flex-wrap: wrap;
@@ -62,10 +69,15 @@
   gap: 0.4rem 0.6rem;
   margin-top: 0.4rem;
 }
-.measurement-actions select,
+.measurement-actions [data-slot="native-select-wrapper"],
 .measurement-actions input {
-  width: auto;
-  max-width: 18rem;
+  width: 100%;
+  min-width: 0;
+}
+.measurement-actions button {
+  height: auto;
+  min-height: var(--control-sm);
+  white-space: normal;
 }
 .measurement-actions .noise-input-error {
   flex-basis: 100%;

@@ -39,9 +39,19 @@ export type SceneObject = {
   note: string;
   source?: { fileId: string; version: number };
 };
+/** User-described model observation, not an approved calculation input or survey. */
+export type SceneMeasurement = {
+  id: string;
+  description: string;
+  purpose: "general" | "neighbor" | "access" | "road" | "rail";
+  points: [SceneVector, SceneVector];
+  context: Pick<LocationContext, "siteId" | "origin" | "importedAt"> & { crs: "EPSG:25832" | "EPSG:25833" };
+};
 export type LocationScene = {
   objects: SceneObject[];
   planningNotes: string;
+  /** Absent on scenes saved before general measurements were introduced. */
+  measurements?: SceneMeasurement[];
 };
 export type LocationBuilding = {
   id: string;

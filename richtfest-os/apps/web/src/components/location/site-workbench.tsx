@@ -12,6 +12,7 @@ import {
   twoPointPlacement,
   type LocationContext,
   type NoiseSource,
+  type SceneMeasurement,
   type Point2,
 } from "@richtfest/shared";
 import { api } from "../../api";
@@ -117,22 +118,18 @@ const mappedLabel = (item: MappedNoiseSource, t: T) => item.kind === "road"
   ? [item.designation, item.name].filter(Boolean).join(" ") || t("noiseUnnamedRoad")
   : item.name || (item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : t("noiseUnnamedRail"));
 
-/**
- * What to do with a finished measurement in the 3D viewer: today, take it as a
- * noise source's distance to the facade (an existing source or a new one),
- * with a basis naming both measured points.
- */
-export function MeasurementActions({ projectId, context, points, onDone }: {
+/** Offered only after the user saves explicit road/rail intent; never inferred from description keywords. */
+export function MeasurementNoiseAction({ projectId, context, measurement }: {
   projectId: string;
   context: LocationContext;
-  points: [[number, number, number], [number, number, number]];
-  onDone: () => void;
+  measurement: SceneMeasurement;
 }) {
   const t = useT();
   const session = useApi("/auth/me");
   const canWrite = (session.data?.permissions || session.data?.user?.permissions || []).includes("projects:write");
   const noise = useApi(`/projects/${projectId}/noise-sources`);
-  const sources = ((noise.data as { sources?: NoiseSource[] } | undefined)?.sources ?? []);
+  const points = measurement.points;
+  const sources = ((noise.data as { sources?: NoiseSource[] } | undefined)?.sources ?? []).filter(source => source.kind === measurement.purpose);
   // Noise distances are horizontal; the vertical difference stays in the readout.
   const horizontal = Math.round(Math.hypot(points[0][0] - points[1][0], points[0][2] - points[1][2]) * 10) / 10;
   const ends = points.map(([x, , z]) => fromLocal(context, [x, z]));
@@ -150,7 +147,7 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
   const addedRefs = new Set(sources.map((source) => source.mapped?.ref).filter(Boolean));
   // Mapped roads and railways passing within 40 m of either measured point, not yet noise sources.
   const nearby = useMemo(() => [...(survey?.roads ?? []), ...(survey?.rail ?? [])]
-    .filter((item) => !addedRefs.has(item.ref))
+    .filter((item) => item.kind === measurement.purpose && !addedRefs.has(item.ref))
     .map((item) => ({ item, distance: axisDistance(item.axes) }))
     .filter((entry) => entry.distance <= 40)
     .sort((a, b) => a.distance - b.distance)
@@ -160,7 +157,7 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
       ...sources.map((source) => ({ id: source.id, distance: axisDistance(source.mapped?.axes) })),
       ...nearby.map((entry) => ({ id: `mapped:${entry.item.ref}`, distance: entry.distance })),
     ].filter((entry) => entry.distance <= 40).sort((a, b) => a.distance - b.distance);
-    return ranked[0]?.id ?? sources[0]?.id ?? "_new_road";
+    return ranked[0]?.id ?? sources[0]?.id ?? `_new_${measurement.purpose}`;
   }, [sources, nearby, points]);
   const [choice, setChoice] = useState<string | null>(null);
   const target = choice ?? nearest;
@@ -177,7 +174,7 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
         source = { id: created.id, inputs: {} } as NoiseSource;
       }
       const crs = context.crs ?? "EPSG:25833";
-      const basis = t("siteMeasureBasis")
+      const basis = `${t("locationMeasurementUnnamed")} ${measurement.id}${measurement.description ? ` · ${measurement.description}` : ""}: ` + t("siteMeasureBasis")
         .replace("{from}", ends[0].map((v) => v.toFixed(1)).join(" / "))
         .replace("{to}", ends[1].map((v) => v.toFixed(1)).join(" / "))
         .replace("{crs}", crs);
@@ -187,44 +184,84 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
     // A new source becomes the selection, so the link and a repeat save point at it.
     onSuccess: async (sourceId) => { setChoice(sourceId); await invalidate(projectId); },
   });
-  if (!canWrite) return null;
+  if (!canWrite || (measurement.purpose !== "road" && measurement.purpose !== "rail")) return null;
   return (
-    <div className="measurement-actions">
-      <span className="text-ui-xs muted">{t("siteMeasureUseAs").replace("{distance}", horizontal.toFixed(1))}</span>
-      <NativeSelect aria-label={t("siteMeasureSource")} value={target} onChange={(event) => { setChoice(event.target.value); apply.reset(); }}>
-        {sources.length > 0 && (
-          <optgroup label={t("siteMeasureSources")}>
-            {sources.map((source) => (
-              <option key={source.id} value={source.id}>{`${source.name} · ${t(source.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
-            ))}
+    <details className="measurement-noise">
+      <summary>{t("siteMeasureNoise")}</summary>
+      <div className="measurement-actions">
+        <span className="text-ui-xs muted">
+          {t("siteMeasureUseAs").replace("{distance}", horizontal.toFixed(1))}
+        </span>
+        <NativeSelect
+          aria-label={t("siteMeasureSource")}
+          value={target}
+          onChange={(event) => {
+            setChoice(event.target.value);
+            apply.reset();
+          }}
+        >
+          {sources.length > 0 && (
+            <optgroup label={t("siteMeasureSources")}>
+              {sources.map((source) => (
+                <option
+                  key={source.id}
+                  value={source.id}
+                >{`${source.name} · ${t(source.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
+              ))}
+            </optgroup>
+          )}
+          {nearby.length > 0 && (
+            <optgroup label={t("siteMeasureNearby")}>
+              {nearby.map(({ item }) => (
+                <option
+                  key={item.ref}
+                  value={`mapped:${item.ref}`}
+                >{`${mappedLabel(item, t)} · ${t(item.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label={t("siteMeasureNew")}>
+            <option value={`_new_${measurement.purpose}`}>{t(measurement.purpose === "road" ? "siteMeasureNewRoad" : "siteMeasureNewRail")}</option>
           </optgroup>
+        </NativeSelect>
+        {target.startsWith("_new") && (
+          <Input
+            aria-label={t("siteMeasureNewName")}
+            placeholder={t(
+              target === "_new_rail" ? "siteNewRailName" : "siteNewRoadName",
+            )}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
         )}
-        {nearby.length > 0 && (
-          <optgroup label={t("siteMeasureNearby")}>
-            {nearby.map(({ item }) => (
-              <option key={item.ref} value={`mapped:${item.ref}`}>{`${mappedLabel(item, t)} · ${t(item.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
-            ))}
-          </optgroup>
+        {apply.isSuccess ? (
+          <>
+            <Badge variant="outline">{t("siteMeasureSaved")}</Badge>
+            <Link
+              className="text-ui-xs underline underline-offset-2"
+              to={`/projects/${projectId}?view=noise&source=${apply.data}`}
+            >
+              {t("buildingExteriorNoiseOpen")}
+            </Link>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            disabled={apply.isPending}
+            onClick={() => apply.mutate()}
+          >
+            {t("siteMeasureApply")}
+          </Button>
         )}
-        <optgroup label={t("siteMeasureNew")}>
-          <option value="_new_road">{t("siteMeasureNewRoad")}</option>
-          <option value="_new_rail">{t("siteMeasureNewRail")}</option>
-        </optgroup>
-      </NativeSelect>
-      {target.startsWith("_new") && (
-        <Input aria-label={t("siteMeasureNewName")} placeholder={t(target === "_new_rail" ? "siteNewRailName" : "siteNewRoadName")} value={name} onChange={(event) => setName(event.target.value)} />
-      )}
-      {apply.isSuccess ? (
-        <>
-          <Badge variant="outline">{t("siteMeasureSaved")}</Badge>
-          <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise&source=${apply.data}`}>{t("buildingExteriorNoiseOpen")}</Link>
-        </>
-      ) : (
-        <Button size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>{t("siteMeasureApply")}</Button>
-      )}
-      <Button size="sm" variant="ghost" onClick={onDone}>{t("siteMeasureDiscard")}</Button>
-      {apply.isError && <small className="noise-input-error">{apply.error instanceof Error ? apply.error.message : String(apply.error)}</small>}
-    </div>
+        {apply.isError && (
+          <small className="noise-input-error">
+            {apply.error instanceof Error
+              ? apply.error.message
+              : String(apply.error)}
+          </small>
+        )}
+      </div>
+    </details>
   );
 }
 

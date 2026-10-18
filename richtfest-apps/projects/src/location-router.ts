@@ -38,6 +38,15 @@ const sceneInput = z.object({
     source: z.object({ fileId: z.string().uuid(), version: z.number().int().positive() }).strict().optional(),
   }).strict().refine(item => (item.kind === "ifc") === Boolean(item.source), "IFC objects must reference a project source version")).max(1000).refine(items => new Set(items.map(i => i.id)).size === items.length, "Duplicate object IDs"),
   planningNotes: z.string().max(50000),
+  measurements: z.array(z.object({
+    id: z.string().uuid(), description: z.string().trim().max(500),
+    purpose: z.enum(["general", "neighbor", "access", "road", "rail"]),
+    points: z.tuple([vector, vector]),
+    context: z.object({
+      siteId: z.string().min(1).max(200), crs: z.enum(["EPSG:25832", "EPSG:25833"]),
+      origin: z.tuple([z.number().finite(), z.number().finite()]), importedAt: z.string().min(1).max(100),
+    }).strict(),
+  }).strict()).max(1000).refine(items => new Set(items.map(i => i.id)).size === items.length, "Duplicate measurement IDs").optional(),
 }).strict();
 const failure = (message: string, status: number, code: string) => Object.assign(new Error(message), { status, code });
 const { cloud: _cloud, ...stateColumns } = getTableColumns(locations);
@@ -126,9 +135,18 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
         await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
         const [current] = await tx.select(stateColumns).from(locations).where(where).for("update");
         if (["queued", "running"].includes(current.contextStatus)) throw failure("Wait for the site import before saving scene changes", 409, "location_import_busy");
-        const [saved] = await tx.update(locations).set({ scene: input.scene, revision: sql`${locations.revision} + 1`, updatedAt: new Date() }).where(and(where, eq(locations.revision, input.revision))).returning(stateColumns);
+        // Older clients omit measurements; only an explicit array may replace them.
+        const scene = { ...input.scene, ...(input.scene.measurements === undefined && current.scene.measurements ? { measurements: current.scene.measurements } : {}) };
+        for (const measurement of scene.measurements ?? []) {
+          const previous = current.scene.measurements?.find((item: { id: string }) => item.id === measurement.id);
+          const reference = previous?.context ?? current.context;
+          if (!reference || measurement.context.siteId !== reference.siteId || measurement.context.crs !== (reference.crs ?? "EPSG:25833") || measurement.context.importedAt !== reference.importedAt || measurement.context.origin.some((v: number, i: number) => v !== reference.origin[i])) {
+            throw failure("Measurement reference changed; remeasure on the loaded site", 409, "measurement_context_changed");
+          }
+        }
+        const [saved] = await tx.update(locations).set({ scene, revision: sql`${locations.revision} + 1`, updatedAt: new Date() }).where(and(where, eq(locations.revision, input.revision))).returning(stateColumns);
         if (!saved) throw failure("Location revision changed; reload before saving", 409, "revision_conflict");
-        await d.audit(tx, "projects.location.saved", "project", projectId, { revision: saved.revision });
+        await d.audit(tx, "projects.location.saved", "project", projectId, { revision: saved.revision, measurementIds: (scene.measurements ?? []).map((item: { id: string }) => item.id) });
         return saved;
       });
       res.json(ok(locationState(row)));
@@ -158,7 +176,7 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
             if (current.revision !== (input as { revision: number }).revision) throw failure("Location revision changed; reload before importing", 409, "revision_conflict");
             if (refresh) {
               if (!current.context?.publicReleases?.length || !locationMatchesAddress(current.context, address)) throw failure("Refresh requires a pinned context matching the saved project address", 409, "location_address_changed");
-            } else if (current.scene.objects.length) throw failure("Existing objects are anchored to the imported site. Remove objects and save before loading a different address", 409, "location_has_objects");
+            } else if (current.scene.objects.length || current.scene.measurements?.length) throw failure("Existing objects and measurements are anchored to the imported site. Remove them and save before loading a different address", 409, "location_has_objects");
             if (["queued", "running"].includes(current.lidarStatus)) throw failure("Wait for the LiDAR import before changing sites", 409, "location_import_busy");
           }
           const [queued] = await tx.update(locations).set(kind === "context" ? refresh ? {
