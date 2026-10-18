@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { Line2 } from "three/addons/lines/Line2.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type {
@@ -37,6 +39,8 @@ export type ViewportState = {
   clipHeight: number;
   dark: boolean;
   constructionLabel: string;
+  siteFootprintLabel: string;
+  siteAddressLabel: string;
 };
 export function createViewport(
   host: HTMLElement,
@@ -121,6 +125,7 @@ export function createViewport(
     dimensions: new THREE.Group(),
     aerial: new THREE.Group(),
     construction: new THREE.Group(),
+    buildingSelection: new THREE.Group(),
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
@@ -151,6 +156,7 @@ export function createViewport(
   const selection = new THREE.Box3Helper(new THREE.Box3(), 0x7279d7);
   selection.visible = false;
   scene.add(selection);
+  let outlinedBuilding: THREE.Object3D | undefined;
   const slice = new THREE.Plane(new THREE.Vector3(0, -1, 0), 50);
   const constructionBounds = new THREE.Box3();
   let current: ViewportState | undefined;
@@ -184,7 +190,7 @@ export function createViewport(
     renderer.setSize(width, height);
     scene.traverse((node) => {
       if (node instanceof THREE.Sprite && node.userData.screen) screenSized(node, node.userData.screen.px, node.userData.screen.aspect);
-      if (node instanceof Line2) (node.material as LineMaterial).resolution.set(renderer.domElement.width, renderer.domElement.height);
+      if (node instanceof LineSegments2) (node.material as LineMaterial).resolution.set(renderer.domElement.width, renderer.domElement.height);
     });
     if (initialFrame) {
       initialFrame = false;
@@ -691,10 +697,12 @@ export function createViewport(
     for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
       groups[key].visible = next.layers[key];
     if (
+      previous?.context !== next.context || previous?.layers.buildings !== next.layers.buildings ||
       previous?.objects !== next.objects || previous?.models !== next.models ||
       previous?.site.plan !== next.site.plan ||
       previous?.layers.objects !== next.layers.objects || previous?.layers.plan !== next.layers.plan ||
-      previous?.constructionLabel !== next.constructionLabel
+      previous?.constructionLabel !== next.constructionLabel ||
+      previous?.siteFootprintLabel !== next.siteFootprintLabel || previous?.siteAddressLabel !== next.siteAddressLabel
     ) {
       disposeGroup(groups.construction);
       constructionBounds.makeEmpty();
@@ -717,13 +725,39 @@ export function createViewport(
           new THREE.Vector3(min.x, min.y + 0.08, min.z),
         ], 0x0f766e, 3));
       }
-      if (!constructionBounds.isEmpty()) {
-        const tag = label(next.constructionLabel, "#0f766e");
+      let locatorLabel = next.constructionLabel;
+      if (constructionBounds.isEmpty()) {
+        // The address is a reference, not evidence of proposed geometry. Never pick a nearest neighbour.
+        const containsOrigin = (ring: Point2[]) => {
+          let inside = false;
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [x, z] = ring[i], [previousX, previousZ] = ring[j];
+            if ((z > 0) !== (previousZ > 0) && 0 < x - z * (previousX - x) / (previousZ - z)) inside = !inside;
+          }
+          return inside;
+        };
+        const footprint = next.layers.buildings ? next.context.buildings.find((building) =>
+          building.polygons.some(([outer, ...holes]) => outer && containsOrigin(outer) && !holes.some(containsOrigin))) : undefined;
+        const node = footprint && groups.buildings.children.find((node) => node.userData.id === `building:${footprint.id}`);
+        locatorLabel = next.siteAddressLabel;
+        if (node && footprint) {
+          constructionBounds.setFromObject(node);
+          locatorLabel = next.siteFootprintLabel;
+          for (const polygon of footprint.polygons) for (const ring of polygon) {
+            if (ring.length < 3) continue;
+            groups.construction.add(fatLine([...ring, ring[0]].map(([x, z]) =>
+              new THREE.Vector3(x, constructionBounds.max.y + 0.08, z)), 0x0f766e, 3));
+          }
+        }
+      }
+      const tag = label(locatorLabel, "#0f766e");
+      if (constructionBounds.isEmpty()) tag.position.set(0, 1, 0);
+      else {
         tag.position.copy(constructionBounds.getCenter(new THREE.Vector3()));
         tag.position.y = constructionBounds.max.y + 1;
-        tag.center.set(0.5, 0);
-        groups.construction.add(tag);
       }
+      tag.center.set(0.5, 0);
+      groups.construction.add(tag);
     }
     grid.visible = !(next.layers.aerial && groups.aerial.children.length);
     if (next.measurement.length !== 1 || next.tool !== "measure") preview = null;
@@ -733,8 +767,27 @@ export function createViewport(
       .find(
         (node) => node.userData.id === next.selected && node.parent?.visible,
       );
-    selection.visible = !!selected;
-    if (selected) {
+    const building = selected?.parent === groups.buildings ? selected : undefined;
+    if (building !== outlinedBuilding) {
+      disposeGroup(groups.buildingSelection);
+      outlinedBuilding = building;
+      building?.updateWorldMatrix(true, true);
+      building?.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        // Outline the rendered footprint extrusion, including concavities and holes, not its world-axis box.
+        const edges = new THREE.EdgesGeometry(node.geometry, 25).applyMatrix4(node.matrixWorld);
+        const geometry = new LineSegmentsGeometry().setPositions(edges.getAttribute("position").array as Float32Array);
+        edges.dispose();
+        const material = new LineMaterial({ color: 0x7279d7, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
+          polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, toneMapped: false });
+        material.resolution.set(renderer.domElement.width, renderer.domElement.height);
+        const outline = new LineSegments2(geometry, material);
+        outline.renderOrder = 13;
+        groups.buildingSelection.add(outline);
+      });
+    }
+    selection.visible = !!selected && !building;
+    if (selected && !building) {
       selected.updateWorldMatrix(true, true);
       selection.box.setFromObject(selected);
       selection.updateMatrixWorld(true);
@@ -872,9 +925,9 @@ export function createViewport(
       render();
     },
     focus(id?: string | null) {
-      const node = Object.values(groups)
+      const node = id ? Object.values(groups)
         .flatMap((group) => group.children)
-        .find((node) => node.userData.id === id);
+        .find((node) => node.userData.id === id) : undefined;
       frame(node ? new THREE.Box3().setFromObject(node) : undefined);
       render();
     },

@@ -57,6 +57,8 @@ export async function testTrees() {
     clipHeight: 50,
     dark: false,
     constructionLabel: "Planned construction",
+    siteFootprintLabel: "Project site · existing footprint",
+    siteAddressLabel: "Project address",
   };
   try {
     await new Promise<void>((resolve) =>
@@ -147,6 +149,8 @@ export async function testConstruction() {
     site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
     selected: "vehicle", tool: "select", treeStyle: "schematic", measurement: [], clipHeight: 50, dark: false,
     constructionLabel: "Planned construction",
+    siteFootprintLabel: "Project site · existing footprint",
+    siteAddressLabel: "Project address",
   };
   const canvas = host.querySelector("canvas")!;
   const clickCentre = () => {
@@ -197,7 +201,70 @@ export async function testConstruction() {
     assert(canvas.toDataURL() === expectedIfc, "Loaded IFC geometry must be framed at its placed bounds");
     clickCentre();
     assert(selected === "ifc", "IFC must remain selectable through its locator");
-    return { checks: "translated/rotated construction, selected vehicle excluded, wide and narrow framing, picking through locator, hidden and empty fallback, placed plan, loaded IFC" };
+    const footprint = { id: "site", label: "Site", sourceId: "fixture", roof: null, height: 12,
+      polygons: [[[[-7, -4], [3, -4], [3, 8], [-7, 8], [-7, -4]]]] as [number, number][][][] };
+    const context: ViewportState["context"] = { ...state.context, buildings: [
+      { ...footprint, id: "courtyard", polygons: [[
+        [[-100, -100], [100, -100], [100, 100], [-100, 100]],
+        [[-10, -10], [10, -10], [10, 10], [-10, 10]],
+      ]] },
+      footprint,
+    ] };
+    viewport.update({ ...state, context });
+    viewport.focus("build");
+    const plannedOverSite = canvas.toDataURL();
+    viewport.fitConstruction();
+    assert(canvas.toDataURL() === plannedOverSite, "Visible planning geometry must take precedence over the address footprint");
+    const siteState = { ...state, context, objects: [], selected: null };
+    viewport.update(siteState);
+    viewport.focus("building:site");
+    const expectedSite = canvas.toDataURL();
+    viewport.view("area");
+    viewport.fitConstruction();
+    assert(canvas.toDataURL() === expectedSite, "A context-only site must fit the containing footprint, not a courtyard or all context buildings");
+    clickCentre();
+    assert(selected === "building:site", "The site outline must not intercept building selection");
+    const image = document.createElement("canvas");
+    image.width = canvas.width; image.height = canvas.height;
+    const pixels = image.getContext("2d")!;
+    viewport.fitConstruction();
+    pixels.drawImage(canvas, 0, 0);
+    const rgba = pixels.getImageData(0, 0, image.width, image.height).data;
+    let tealPixels = 0;
+    for (let i = 0; i < rgba.length; i += 4)
+      if (rgba[i + 1] > 60 && rgba[i + 1] > rgba[i] * 2 && rgba[i + 2] > rgba[i] * 1.5) tealPixels++;
+    assert(tealPixels > 100, "A site without planning geometry must have a visible teal locator");
+    viewport.update({ ...siteState, layers: { ...state.layers, buildings: false } });
+    viewport.focus();
+    const addressOnly = canvas.toDataURL();
+    viewport.fitConstruction();
+    assert(canvas.toDataURL() === addressOnly, "Hidden context must fall back to the address, not frame the hidden footprint");
+    viewport.update({ ...siteState, context: { ...context, buildings: [context.buildings[0]] } });
+    viewport.focus();
+    const courtyard = canvas.toDataURL();
+    viewport.fitConstruction();
+    assert(canvas.toDataURL() === courtyard, "An address in a polygon hole must not identify that building as the site");
+    const concave = { ...footprint, polygons: [[[[-20, -20], [20, -20], [20, -5], [0, -5], [0, 20], [-20, 20], [-20, -20]]]] as [number, number][][][] };
+    viewport.update({ ...siteState, context: { ...context, buildings: [concave] }, selected: "building:site" });
+    viewport.focus();
+    viewport.view("top");
+    pixels.clearRect(0, 0, image.width, image.height);
+    pixels.drawImage(canvas, 0, 0);
+    // Top camera is 150 m above the home target (y=5); this roof is at y=12.
+    const scale = canvas.height / (2 * Math.tan(17.5 * Math.PI / 180) * 143);
+    const selectionAt = (x: number, z: number) => {
+      const data = pixels.getImageData(Math.round(canvas.width / 2 + x * scale) - 6, Math.round(canvas.height / 2 + z * scale) - 6, 13, 13).data;
+      for (let i = 0; i < data.length; i += 4)
+        if (data[i] > 70 && data[i + 2] > data[i] * 1.35 && data[i + 2] > data[i + 1] * 1.35) return true;
+      return false;
+    };
+    assert(selectionAt(0, 10), "Selection must follow the concave building's inset edge");
+    assert(!selectionAt(20, 10), "Selection must not draw the bounding box across empty space beside the inset");
+    viewport.update({ ...siteState, context: { ...context, buildings: [concave] }, selected: null });
+    pixels.clearRect(0, 0, image.width, image.height);
+    pixels.drawImage(canvas, 0, 0);
+    assert(!selectionAt(0, 10), "Deselecting must remove the precise building outline");
+    return { checks: "translated/rotated construction, selected vehicle excluded, wide and narrow framing, picking through locator, hidden and empty fallback, placed plan, loaded IFC, visible context-only locator, courtyard exclusion, hidden context fallback, concave building selection" };
   } finally {
     viewport.dispose();
     host.remove();

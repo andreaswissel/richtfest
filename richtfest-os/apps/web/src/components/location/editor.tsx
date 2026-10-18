@@ -103,6 +103,8 @@ export function LocationEditor({
     theme = usePreferences((s) => s.theme);
   const addressLabel = formatProjectAddress(address);
   const constructionLabel = t("locationConstruction");
+  const siteFootprintLabel = t("locationSiteFootprint");
+  const siteAddressLabel = t("locationSiteAddress");
   const hasAddress = !!address.street && !!address.city;
   const path = `/projects/${projectId}/location`;
   const state = useQuery({
@@ -435,6 +437,8 @@ export function LocationEditor({
         clipHeight,
         dark: theme === "dark",
         constructionLabel,
+        siteFootprintLabel,
+        siteAddressLabel,
       });
   }, [
     site.overlay,
@@ -451,6 +455,8 @@ export function LocationEditor({
     clipHeight,
     theme,
     constructionLabel,
+    siteFootprintLabel,
+    siteAddressLabel,
   ]);
   const envelopeCount = useMemo(
     () =>
