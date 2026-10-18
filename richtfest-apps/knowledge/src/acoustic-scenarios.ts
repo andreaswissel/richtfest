@@ -20,11 +20,15 @@ export function acousticScenariosRouter(getDeps: (req: Request) => AppDeps) {
       if (!d.calculateAcoustics) throw conflict("Deterministic calculator is unavailable");
       const calculate = d.calculateAcoustics;
       const result = await d.db.transaction(async (tx: any) => {
+        const [scope] = await tx.select({ projectId: artifacts.projectId }).from(artifacts).where(and(
+          eq(artifacts.id, artifactId), eq(artifacts.tenantId, d.tenantId),
+        ));
+        if (!scope || !(await d.validateProject(scope.projectId, tx))) throw missing();
         // The same lock as revision writes and approval: a stale approval cannot slip through.
         const [base] = await tx.select().from(artifacts).where(and(
           eq(artifacts.id, artifactId), eq(artifacts.tenantId, d.tenantId),
         )).for("update");
-        if (!base || !(await d.validateProject(base.projectId))) throw missing();
+        if (!base) throw missing();
         const [revision] = await tx.select().from(artifactRevisions).where(and(
           eq(artifactRevisions.artifactId, base.id), eq(artifactRevisions.tenantId, d.tenantId),
         )).orderBy(desc(artifactRevisions.version)).limit(1);

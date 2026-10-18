@@ -20,9 +20,10 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
     requirePermission: key => { if (!actor.permissions.has(key)) throw new HttpError(403, "forbidden", `Permission ${key} is required`); },
     can: key => actor.permissions.has(key),
     audit: (tx, action, type, id, metadata) => recordAudit(tx, actor.id, actor.tenantId, action, type, id, metadata),
-    project: async projectId => {
-      const [row] = await db.select({ id: projects.id, name: projects.name, street: projects.street, postalCode: projects.postalCode, city: projects.city, country: projects.country })
+    project: async (projectId, tx) => {
+      const query = (tx ?? db).select({ id: projects.id, name: projects.name, street: projects.street, postalCode: projects.postalCode, city: projects.city, country: projects.country })
         .from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, actor.tenantId))).limit(1);
+      const [row] = await (tx ? query.for("key share") : query);
       return row ? { id: row.id, name: row.name, address: formatProjectAddress(row) || null } : null;
     },
     resolveBerlinSite: async (projectId, signal) => {

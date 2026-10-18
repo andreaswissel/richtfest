@@ -46,6 +46,8 @@ export type AppDeps = {
     entityId: string,
     metadata?: unknown,
   ) => Promise<void>;
+  /** Delete linked app records in the supplied transaction; return private object keys. */
+  deleteLinkedProjectData?: (tx: any, projectId: string, sourceIds: string[]) => Promise<string[]>;
   validateCustomer: (customerId: string) => Promise<boolean>;
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;

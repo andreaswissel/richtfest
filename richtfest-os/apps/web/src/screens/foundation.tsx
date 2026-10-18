@@ -20,6 +20,7 @@ import { useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
 import { Page, PageHeader, Section } from "../components/layout";
 import { Input, Textarea } from "../components/ui/input";
+import { AddressSelect } from "../components/address-select";
 import {
   Badge,
   Callout,
@@ -31,6 +32,13 @@ import {
   Table,
 } from "../components/ui/primitives";
 const values = (f: FormData) => Object.fromEntries(f.entries());
+const projectValues = (f: FormData) => {
+  const result = values(f);
+  return {
+    ...result,
+    addressReference: JSON.parse(String(result.addressReference || "null")),
+  };
+};
 export function LoadState({ query }: { query: ReturnType<typeof useApi> }) {
   const t = useT();
   if (query.isError)
@@ -201,7 +209,7 @@ export function Projects() {
             label={t("newProject")}
             pending={write.isPending}
             error={write.error}
-            onSubmit={(f) => write.mutate(values(f))}
+            onSubmit={(f) => write.mutate(projectValues(f))}
           >
             <Field label={t("name")}>
               <Input autoFocus required name="name" />
@@ -218,6 +226,16 @@ export function Projects() {
                 ))}
               </NativeSelect>
             </Field>
+            <AddressSelect
+              defaultValue={{
+                street: null,
+                postalCode: null,
+                city: null,
+                country: null,
+                addressReference: null,
+              }}
+              disabled={write.isPending}
+            />
             {!list(customers.data, "customers").length && (
               <Callout>
                 <Link to="/customers">{t("newCustomer")} ↗</Link>

@@ -3,6 +3,18 @@ title: Project onboarding
 description: Build a shared, reviewable project record from customer information and source material.
 ---
 
+## Create a project
+
+Open **Projects → New project**, enter the name and customer, and optionally add the site address before creating the project. Use address search to select a matching address, or enter the street, postal code, city and country manually. You can update the address later in **Project details**.
+
+## Delete a project
+
+Users with project write access can choose **Delete project** in **Project details**. Review the confirmation before deleting: deletion permanently removes the project and its linked files, conversations, tasks and assessments. Audit history remains available. Cancel leaves the project unchanged; successful deletion returns you to the project list.
+
+Deletion is blocked while uploads, agents or background processing are active. Finish or stop that work, then retry. Sources still referenced by other projects or company knowledge must be unlinked before deletion. Deleting a project does not delete its customer.
+
+Records are removed together in one database transaction. Private file cleanup runs afterward from a durable queue and retries storage failures, so a partial storage outage cannot restore a project with missing files. Migration 0053 adds only this cleanup queue; it does not alter existing project records.
+
 ## Environmental survey
 
 Open **Environment check** from the project **Sources** toolbar or the 3D location sidebar, or **Look up roads and railways** in [Exterior noise](/docs/workflows/exterior-noise). Sites with an imported location (Rheinland-Pfalz) use that location; any other address is looked up in Hessen's official house coordinates (Hauskoordinaten, HVBG) when the check runs. Project readers can inspect the saved survey; project writers can choose **Run environmental check** or explicitly **Refresh environmental check**. Merely opening the view does not contact the external data services.

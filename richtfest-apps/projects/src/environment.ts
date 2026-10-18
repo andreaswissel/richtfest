@@ -1,3 +1,4 @@
+import { lockProject } from "./project-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -274,7 +275,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   try {
     return await d.db.transaction(async (tx: any) => {
       // Serialize receipt creation against the project and recheck the current pin after network I/O.
-      await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).for("update");
+      await lockProject(tx, d.tenantId, projectId);
       await tx.select({ id: projectLocations.projectId }).from(projectLocations).where(and(eq(projectLocations.projectId, projectId), eq(projectLocations.tenantId, d.tenantId))).for("update");
       const current = await scope(d, projectId, tx);
       if (current.cacheKey !== scoped.cacheKey || current.revision !== scoped.revision) throw fail("environment_location_changed");

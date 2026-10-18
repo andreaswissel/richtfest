@@ -7,7 +7,8 @@
     ".": "./src/router.ts",
     "./deps": "./src/deps.ts",
     "./schema": "./src/schema.ts",
-    "./evidence": "./src/evidence.ts"
+    "./evidence": "./src/evidence.ts",
+    "./project-deletion": "./src/project-deletion.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

@@ -192,12 +192,15 @@ export function createRouter(getDeps: GetDeps) {
       const d = getDeps(req);
       d.requirePermission("knowledge:write");
       const input = conversationInput.parse(req.body);
-      if (input.projectId && !(await d.validateProject(input.projectId)))
-        throw Object.assign(new Error("Project not found"), {
-          status: 404,
-          code: "not_found",
-        });
       const row = await d.db.transaction(async (tx: any) => {
+        if (
+          input.projectId &&
+          !(await d.validateProject(input.projectId, tx))
+        )
+          throw Object.assign(new Error("Project not found"), {
+            status: 404,
+            code: "not_found",
+          });
         const [created] = await tx
           .insert(conversations)
           .values({ ...input, tenantId: d.tenantId, createdBy: d.actorId })
@@ -235,11 +238,6 @@ export function createRouter(getDeps: GetDeps) {
       d.requirePermission("knowledge:write");
       const input = taskInput.parse(req.body);
       const projectId = input.projectId;
-      if (projectId && !(await d.validateProject(projectId)))
-        throw Object.assign(new Error("Project not found"), {
-          status: 404,
-          code: "not_found",
-        });
       if (input.conversationId) {
         const thread = await conversation(d, input.conversationId, projectId);
         input.projectId = thread.projectId ?? undefined;
@@ -254,6 +252,14 @@ export function createRouter(getDeps: GetDeps) {
           code: "not_found",
         });
       const row = await d.db.transaction(async (tx: any) => {
+        if (
+          input.projectId &&
+          !(await d.validateProject(input.projectId, tx))
+        )
+          throw Object.assign(new Error("Project not found"), {
+            status: 404,
+            code: "not_found",
+          });
         const [created] = await tx
           .insert(tasks)
           .values({
@@ -334,11 +340,6 @@ export function createRouter(getDeps: GetDeps) {
       const d = getDeps(req);
       d.requirePermission("knowledge:write");
       const input = draftInput.parse(req.body);
-      if (input.projectId && !(await d.validateProject(input.projectId)))
-        throw Object.assign(new Error("Project not found"), {
-          status: 404,
-          code: "not_found",
-        });
       if (!input.projectId && input.sourceRefs.length)
         throw Object.assign(new Error("Source references require a project"), {
           status: 400,
@@ -352,6 +353,14 @@ export function createRouter(getDeps: GetDeps) {
               code: "not_found",
             });
       const row = await d.db.transaction(async (tx: any) => {
+        if (
+          input.projectId &&
+          !(await d.validateProject(input.projectId, tx))
+        )
+          throw Object.assign(new Error("Project not found"), {
+            status: 404,
+            code: "not_found",
+          });
         const [created] = await tx
           .insert(drafts)
           .values({ ...input, tenantId: d.tenantId, createdBy: d.actorId })

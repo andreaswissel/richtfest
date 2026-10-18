@@ -1,3 +1,4 @@
+import { lockProject } from "./project-lock";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import type { AppDeps } from "./deps";
@@ -30,6 +31,7 @@ export async function storeProjectFileBytes(d: Pick<AppDeps, "tenantId" | "fileS
 
 export async function registerStoredFile(tx: any, d: Pick<AppDeps, "tenantId" | "actorId" | "audit">, projectId: string,
   stored: Awaited<ReturnType<typeof storeProjectFileBytes>>, source: { sourceType: string; sourceRef?: string | null; sourceMetadata?: Record<string, unknown> }) {
+  await lockProject(tx, d.tenantId, projectId);
   const { file, saved } = stored;
   await tx.insert(files).values({ id: file.fileId, tenantId: d.tenantId, projectId, name: file.name, sourceType: source.sourceType, purpose: "project_evidence", sourceRef: source.sourceRef ?? null, createdBy: d.actorId });
   await tx.insert(fileVersions).values({ id: file.versionId, tenantId: d.tenantId, fileId: file.fileId, version: 1, status: "ready", sourceMetadata: source.sourceMetadata ?? {},

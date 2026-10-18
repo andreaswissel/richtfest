@@ -659,3 +659,14 @@ export const noiseSourceValues = pgTable("projects_noise_source_values", {
 }, table => ({
   version: uniqueIndex("projects_noise_source_values_version").on(table.sourceId, table.key, table.version),
 }));
+
+/** Durable private-object cleanup after a project deletion commits. No FK to the deleted project. */
+export const deletedProjectObjects = pgTable("projects_deleted_objects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull(),
+  storageKey: text("storage_key").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  retryAt: timestamp("retry_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ pending: index("projects_deleted_objects_pending").on(table.retryAt) }));

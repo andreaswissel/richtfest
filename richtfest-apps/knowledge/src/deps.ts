@@ -221,7 +221,7 @@ export type AppDeps = {
     entityId: string,
     metadata?: unknown,
   ) => Promise<void>;
-  validateProject: (projectId: string) => Promise<boolean>;
+  validateProject: (projectId: string, tx?: any) => Promise<boolean>;
   validateSource: (projectId: string, sourceId: string) => Promise<boolean>;
   validateSourceVersion: (
     projectId: string,

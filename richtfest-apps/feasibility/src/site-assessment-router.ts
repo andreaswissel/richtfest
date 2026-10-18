@@ -37,6 +37,7 @@ export function createSiteAssessmentRouter(getDeps: (req: Request) => AppDeps) {
       const result = calculateSiteAssessment(input);
       const design = await designResult(input);
       const saved = await d.db.transaction(async (tx: any) => {
+        if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
         const [current] = await tx.select().from(siteAssessments).where(and(eq(siteAssessments.tenantId, d.tenantId), eq(siteAssessments.projectId, projectId))).for("update").limit(1);
         if ((current?.revision ?? 0) !== baseRevision) throw conflict();
         const values = { input: snapshot, updatedBy: d.actorId, updatedAt: new Date() };

@@ -35,6 +35,17 @@ export function reviewsRouter(getDeps: GetDeps) {
         d.requirePermission("knowledge:approve");
         const input = reviewInput.parse(req.body);
         const result = await d.db.transaction(async (tx: any) => {
+          const [scope] = await tx
+            .select({ projectId: artifacts.projectId })
+            .from(artifacts)
+            .where(
+              and(
+                eq(artifacts.id, String(req.params.artifactId)),
+                eq(artifacts.tenantId, d.tenantId),
+              ),
+            );
+          if (!scope || !(await d.validateProject(scope.projectId, tx)))
+            throw missing();
           const [artifact] = await tx
             .select()
             .from(artifacts)

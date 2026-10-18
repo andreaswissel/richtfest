@@ -3,6 +3,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
   ) {
     super(message);
   }
@@ -23,6 +24,7 @@ export async function api<T = RecordData>(
     throw new ApiError(
       response.status,
       result.message || "The request could not be completed.",
+      result.error?.code,
     );
   return result.data as T;
 }

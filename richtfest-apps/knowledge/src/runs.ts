@@ -205,6 +205,8 @@ async function event(
 }
 async function active(d: AppDeps, run: any, fn: (tx: any) => Promise<unknown>) {
   return d.db.transaction(async (tx: any) => {
+    if (!(await d.validateProject(run.projectId, tx)))
+      throw missing("Project not found");
     const current = await getRun(d, run.id, tx, true);
     if (current.status !== "running" || current.generation !== (run.generation ?? 0)) throw conflict("Run is no longer active");
     return fn(tx);
@@ -897,8 +899,6 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
     modelPolicyOverride?: unknown,
     deferExecution = false,
   ) {
-    if (!(await d.validateProject(input.projectId)))
-      throw missing("Project not found");
     d.requirePermission("knowledge:read");
     d.requirePermission("projects:read");
     if (input.conversationId)
@@ -980,6 +980,8 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
       throw conflict("Supervisor model policy unavailable");
     const { workflow: _workflow, budget: _budget, ...runValues } = input;
     const row = await d.db.transaction(async (tx: any) => {
+      if (!(await d.validateProject(input.projectId, tx)))
+        throw missing("Project not found");
       const [created] = await tx
         .insert(agentRuns)
         .values({

@@ -22,7 +22,8 @@
     "./automatic-building-model": "./src/automatic-building-model.ts",
     "./environment": "./src/environment.ts",
     "./noise-sources": "./src/noise-sources.ts",
-    "./project-files": "./src/project-files.ts"
+    "./project-files": "./src/project-files.ts",
+    "./project-deletion-worker": "./src/project-deletion-worker.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

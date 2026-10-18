@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/router.ts",
     "./deps": "./src/deps.ts",
-    "./schema": "./src/schema.ts"
+    "./schema": "./src/schema.ts",
+    "./project-deletion": "./src/project-deletion.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

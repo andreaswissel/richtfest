@@ -1,3 +1,4 @@
+import { lockProject } from "./project-lock";
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -623,6 +624,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const project = await d.db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).limit(1);
       if (!project[0]) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Project not found" });
       const result = await modelTransaction(d.db, async (tx: any) => {
+        await lockProject(tx, d.tenantId, projectId);
         let model = (await tx.select().from(buildingModels).where(and(eq(buildingModels.projectId, projectId), eq(buildingModels.tenantId, d.tenantId))).limit(1))[0];
         if (!model) {
           model = (await tx.insert(buildingModels).values({ tenantId: d.tenantId, projectId, createdBy: d.actorId, revision: 1 }).returning())[0];

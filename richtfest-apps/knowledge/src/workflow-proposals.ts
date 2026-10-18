@@ -57,6 +57,7 @@ export function workflowProposalsRouter(getDeps: (req: Request) => AppDeps, crea
       ]).parse(req.body) : null;
       let directRun: any;
       const result = await d.db.transaction(async (tx: any) => {
+        if (!(await d.validateProject(chat.projectId!, tx))) throw missing();
         // Serializes proposals, confirmations and archive actions in this conversation.
         const [lockedChat] = await tx.select().from(conversations).where(and(
           eq(conversations.id, conversationId), eq(conversations.tenantId, d.tenantId))).for("update");

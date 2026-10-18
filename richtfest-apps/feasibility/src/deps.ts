@@ -10,7 +10,7 @@ export type AppDeps = {
   can: (key: PermissionKey) => boolean;
   audit: (tx: any, action: string, entityType: string, entityId: string, metadata?: unknown) => Promise<void>;
   /** The project's name and address in this tenant, or null when it does not exist here. */
-  project: (projectId: string) => Promise<{ id: string; name: string; address: string | null } | null>;
+  project: (projectId: string, tx?: any) => Promise<{ id: string; name: string; address: string | null } | null>;
   /** Approved parcel area, Bebauungsplan GRZ/GFZ and existing Geschossfläche from the project's building model. */
   /** Exact Berlin address resolution, supplied by the host. No project geometry is changed. */
   resolveBerlinSite?: (projectId: string, signal: AbortSignal) => Promise<{ address: string; origin: [number, number]; sources: { label: string; url: string }[] }>;

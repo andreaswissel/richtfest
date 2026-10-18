@@ -19,7 +19,7 @@ import {
   artifacts,
 } from "./schema";
 import { snapshotAgentProfiles, defaultProfiles, type ProfileSnapshot } from "./agent-profiles";
-import { conflict, sources, createArtifact, artifactReviewContext } from "./workspace";
+import { conflict, missing, sources, createArtifact, artifactReviewContext } from "./workspace";
 import { executeTrackedProvider, interruptProviderAttempts } from "./usage";
 import { AGENT_MESSAGING_CONTEXT_BYTES, agentMessagingContext, deliverAgentMessage, validateAgentMessageTargets } from "./agent-messages";
 import { resolveRunSource, resolveCompleteRunSource, sourceEvidencePackets, compactDocumentPackets, compactDocumentLayers, documentPacketDensityBytes, batchPreparedSourcePages } from "./source-evidence";
@@ -284,6 +284,8 @@ async function commit(
   fn: (tx: any, state: any) => Promise<void>,
 ) {
   return d.db.transaction(async (tx: any) => {
+    if (!(await d.validateProject(run.projectId, tx)))
+      throw missing("Project not found");
     const [parent] = await tx
       .select()
       .from(agentRuns)

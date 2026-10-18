@@ -70,6 +70,7 @@ export function acousticInputReviewRouter(getDeps: (req: Request) => AppDeps) {
       if (!chat.projectId || !(await d.validateProject(chat.projectId))) throw missing();
       if (method === "post" && chat.archivedAt) throw conflict("Conversation is archived");
       const result = await d.db.transaction(async (tx: any) => {
+        if (!(await d.validateProject(chat.projectId!, tx))) throw missing();
         let query = tx.select().from(artifacts).where(and(eq(artifacts.id, artifactId),
           eq(artifacts.tenantId, d.tenantId), eq(artifacts.projectId, chat.projectId!)));
         if (method === "post") query = query.for("update");

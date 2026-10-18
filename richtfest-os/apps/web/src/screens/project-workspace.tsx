@@ -5,10 +5,11 @@ import {
   useOutletContext,
   useParams,
   useSearchParams,
+  useNavigate,
 } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { formatProjectAddress } from "@richtfest/shared";
-import { api, list } from "../api";
+import { api, ApiError, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
 import { Page } from "../components/layout";
@@ -16,6 +17,15 @@ import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import { Badge, Callout, Field } from "../components/ui/primitives";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog";
 import { ThreadRail } from "../components/project-workspace/thread-rail";
 import { LoadState, Sources, Knowledge } from "./foundation";
 import { Transcript } from "../components/project-workspace/transcript";
@@ -104,6 +114,7 @@ export function ProjectWorkspace() {
   const { id } = useParams(),
     t = useT(),
     [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const perspective =
     params.get("perspective") === "coordinator"
       ? "coordinator"
@@ -198,6 +209,38 @@ export function ProjectWorkspace() {
   });
   const me = useApi("/auth/me");
   const meUser = me.isError ? undefined : me.data?.user || me.data;
+  const canWrite = (
+    me.data?.permissions ||
+    me.data?.user?.permissions ||
+    []
+  ).includes("projects:write");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteProject = useMutation({
+    mutationFn: () => api(`/projects/${id}`, undefined, "DELETE"),
+    onSuccess: async () => {
+      setDeleteOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["/projects"] });
+      await queryClient.invalidateQueries({ queryKey: ["/dashboard"] });
+      const projectCacheFragments = [
+        `/projects/${id}`,
+        `/knowledge/workspaces/${id}`,
+        `projectId=${id}`,
+        `/feasibility/projects/${id}`,
+      ];
+      await queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey[0];
+          return (
+            typeof key === "string" &&
+            projectCacheFragments.some((fragment) => key.includes(fragment))
+          );
+        },
+        refetchType: "none",
+      });
+      queryClient.removeQueries({ queryKey: [`/projects/${id}`] });
+      navigate("/projects", { replace: true });
+    },
+  });
   const [width, setWidth] = useState(38);
   const details = project.data?.project || project.data || {};
   const title = details.name || t("project");
@@ -694,29 +737,99 @@ export function ProjectWorkspace() {
               </div>
             </form>
           ) : (
-            <dl className="project-details">
-              <dt>{t("name")}</dt>
-              <dd>{title}</dd>
-              <dt>{t("address")}</dt>
-              <dd>
-                {formatProjectAddress(details) || "—"}
-                {details.addressReference && (
-                  <p className="text-ui-xs text-muted-foreground">
-                    <a
-                      href="https://www.geoapify.com/"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {details.addressReference.attribution}
-                    </a>
-                  </p>
-                )}
-              </dd>
-              <dt>{t("customer")}</dt>
-              <dd>{project.data?.customerName || t("noCustomer")}</dd>
-              <dt>{t("status")}</dt>
-              <dd>{projectStatusLabel(details.status, t)}</dd>
-            </dl>
+            <>
+              <dl className="project-details">
+                <dt>{t("name")}</dt>
+                <dd>{title}</dd>
+                <dt>{t("address")}</dt>
+                <dd>
+                  {formatProjectAddress(details) || "—"}
+                  {details.addressReference && (
+                    <p className="text-ui-xs text-muted-foreground">
+                      <a
+                        href="https://www.geoapify.com/"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {details.addressReference.attribution}
+                      </a>
+                    </p>
+                  )}
+                </dd>
+                <dt>{t("customer")}</dt>
+                <dd>{project.data?.customerName || t("noCustomer")}</dd>
+                <dt>{t("status")}</dt>
+                <dd>{projectStatusLabel(details.status, t)}</dd>
+              </dl>
+              {project.isSuccess && canWrite && (
+                <div className="grid gap-stack border-t pt-3">
+                  <div>
+                    <strong className="text-ui-sm">{t("deleteProject")}</strong>
+                    <p className="muted text-ui-sm">{t("deleteProjectHint")}</p>
+                  </div>
+                  <Dialog
+                    open={deleteOpen}
+                    onOpenChange={(next) => {
+                      if (!deleteProject.isPending) {
+                        setDeleteOpen(next);
+                        if (!next) deleteProject.reset();
+                      }
+                    }}
+                  >
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="w-fit"
+                        aria-label={`${t("deleteProject")}: ${title}`}
+                      >
+                        {t("deleteProject")}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent showCloseButton={!deleteProject.isPending}>
+                      <DialogHeader>
+                        <DialogTitle>{t("deleteProject")}</DialogTitle>
+                        <DialogDescription className="break-words">
+                          {title}
+                        </DialogDescription>
+                      </DialogHeader>
+                      <p className="text-ui-sm">{t("deleteProjectWarning")}</p>
+                      {deleteProject.error && (
+                        <Callout tone="error">
+                          {deleteProject.error instanceof ApiError &&
+                          deleteProject.error.code === "project_busy"
+                            ? t("deleteProjectBusy")
+                            : deleteProject.error instanceof ApiError &&
+                                deleteProject.error.code ===
+                                  "project_sources_in_use"
+                              ? t("deleteProjectSourcesInUse")
+                              : deleteProject.error.message}
+                        </Callout>
+                      )}
+                      <DialogFooter>
+                        <Button
+                          variant="outline"
+                          autoFocus
+                          disabled={deleteProject.isPending}
+                          onClick={() => setDeleteOpen(false)}
+                        >
+                          {t("cancel")}
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          disabled={deleteProject.isPending}
+                          onClick={() => deleteProject.mutate()}
+                        >
+                          {deleteProject.isPending
+                            ? t("deletingProject")
+                            : t("deleteProject")}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+              )}
+            </>
           ))}
         {view === "sources" && (
           <Sources projectId={id!} initial={project.data || {}} />

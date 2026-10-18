@@ -1,3 +1,5 @@
+import { deleteProjectKnowledge } from "@richtfest/knowledge/project-deletion";
+import { deleteProjectFeasibility } from "@richtfest/feasibility/project-deletion";
 import type { Request } from "express";
 import { Readable } from "node:stream";
 import { sql } from "drizzle-orm";
@@ -73,11 +75,11 @@ const base = (db: Database, req: Request) => {
       ).rows as Array<{ id: string; name: string }>;
       return Object.fromEntries(rows.map((row) => [row.id, row.name]));
     },
-    validateProject: async (projectId: string) =>
+    validateProject: async (projectId: string, tx?: any) =>
       Boolean(
         (
-          await db.execute(
-            sql`select id from projects_projects where id = ${projectId} and tenant_id = ${actor.tenantId} limit 1`,
+          await (tx ?? db).execute(
+            sql`select id from projects_projects where id = ${projectId} and tenant_id = ${actor.tenantId} limit 1 ${tx ? sql`for key share` : sql``}`,
           )
         ).rows?.length,
       ),
@@ -118,6 +120,11 @@ const base = (db: Database, req: Request) => {
 export const crmDeps = (db: Database, req: Request) => base(db, req) as CrmDeps;
 export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   ...base(db, req),
+  deleteLinkedProjectData: async (tx, projectId, sourceIds) => {
+    const keys = await deleteProjectKnowledge(tx, actorFrom(req).tenantId, projectId, sourceIds);
+    await deleteProjectFeasibility(tx, actorFrom(req).tenantId, projectId);
+    return keys;
+  },
   geoapifyApiKey: env.GEOAPIFY_API_KEY,
   inboundEmailDomain: inboundEmailConfigured() ? env.INBOUND_EMAIL_DOMAIN : null,
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),

@@ -36,6 +36,7 @@ export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
     const input=evidenceRequestSchema.parse(req.body);
     if(!(await host.listSources(projectId)).some(s=>s.versionId===input.versionId))throw error(404,"not_found","PDF revision not found in project");
     const proposal=await d.db.transaction(async(tx:any)=>{
+        if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
       const [row]=await tx.insert(siteEvidenceProposals).values({tenantId:d.tenantId,projectId,versionId:input.versionId,provider:input.provider,status:"running",request:input,createdBy:d.actorId}).returning();
       await d.audit(tx,"feasibility.evidence.started","site_evidence_proposal",row.id,{projectId,versionId:input.versionId,provider:input.provider,pages:input.pages});return row;
     });
@@ -43,6 +44,7 @@ export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
     try { const result=await host.interpret(projectId,input); values=result.status==="completed"?{status:result.status,payload:result.output,model:result.model}:{status:"unconfigured",error:"Connect a personal or workspace credential for the selected provider"}; }
     catch { values={status:"failed",error:"Source interpretation failed. Check page availability and provider connection, then retry. No values were applied."}; }
     const saved=await d.db.transaction(async(tx:any)=>{
+        if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
       const [row]=await tx.update(siteEvidenceProposals).set(values).where(and(eq(siteEvidenceProposals.id,proposal.id),eq(siteEvidenceProposals.tenantId,d.tenantId))).returning();
       await d.audit(tx,"feasibility.evidence.completed","site_evidence_proposal",row.id,{projectId,status:row.status});return row;
     });res.json(ok(saved));
@@ -51,6 +53,7 @@ export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
     const {d,projectId}=await deps(req,true);const proposalId=uuid.parse(req.params.proposalId);
     const input=z.object({index:z.number().int().min(0).max(19),collection:z.enum(["constraints","planningFacts"]).default("constraints"),decision:z.enum(["adopted","rejected"])}).strict().parse(req.body);
     const saved=await d.db.transaction(async(tx:any)=>{
+        if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
       const [row]=await tx.select().from(siteEvidenceProposals).where(and(eq(siteEvidenceProposals.id,proposalId),eq(siteEvidenceProposals.tenantId,d.tenantId),eq(siteEvidenceProposals.projectId,projectId))).for("update");
       if(!row||row.status!=="completed"||!row.payload?.[input.collection]?.[input.index])throw error(404,"not_found","Proposal not found");
       const dispositions={...row.dispositions,[`${input.collection}:${input.index}`]:{decision:input.decision,actorId:d.actorId,at:new Date().toISOString()}};

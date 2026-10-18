@@ -1,3 +1,4 @@
+import { startProjectDeletionWorker } from "@richtfest/projects/project-deletion-worker";
 import { createServer } from "./server";
 import { env } from "./env";
 import { backgroundKnowledgeDeps, startSupervisorWorker } from "./supervisor-worker";
@@ -16,6 +17,7 @@ import { withProviderCredential } from "./ai-connections";
 import { callDecisionModel } from "./decision-runtime";
 const { app, db, pool } = await createServer();
 const server = app.listen(env.PORT, () => console.log(`Richtfest API listening on ${env.PORT}`));
+const deletionWorker = startProjectDeletionWorker({ db, fileStorage, reportError: () => console.error("Project object cleanup failed; will retry") });
 const worker = await startSupervisorWorker(db, pool);
 const pdfWorker = startArtifactPdfWorker({
   db, resolveDeps: (tenantId, actorId) => backgroundKnowledgeDeps(db, tenantId, actorId),
@@ -56,6 +58,7 @@ const modelWorker = startSourceModelWorker({
 });
 async function shutdown() {
   server.close();
+  await deletionWorker.stop();
   await pdfWorker.stop();
   await modelWorker.stop();
   await extractionWorker.stop();

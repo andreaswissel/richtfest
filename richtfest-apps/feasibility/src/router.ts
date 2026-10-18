@@ -62,6 +62,7 @@ export function createRouter(getDeps: (req: Request) => AppDeps) {
       const input = feasibilityStudyInput.parse(req.body);
       if (!(await d.project(projectId))) throw error(404, "not_found", "Project not found");
       await d.db.transaction(async (tx: any) => {
+        if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
         const [current] = await tx.select().from(feasibilityStudies).where(and(eq(feasibilityStudies.tenantId, d.tenantId), eq(feasibilityStudies.projectId, projectId))).for("update").limit(1);
         if ((current?.revision ?? 0) !== input.baseRevision) throw error(409, "revision_conflict", "The study changed since it was loaded; reload before saving");
         const values = { site: input.site, scenarios: input.scenarios, notes: input.notes, updatedBy: d.actorId, updatedAt: new Date() };

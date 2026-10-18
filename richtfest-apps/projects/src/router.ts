@@ -1,3 +1,5 @@
+import { lockProject } from "./project-lock";
+import { deleteProject } from "./project-deletion";
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { Readable } from "node:stream";
@@ -157,6 +159,16 @@ export function createRouter(getDeps: GetDeps) {
     } catch (e) {
       return next(e);
     }
+  });
+  router.delete("/projects/:projectId", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      if (!await deleteProject(d, projectId))
+        return send(res, 404, { data: null, error: { code: "not_found" }, message: "Project not found" });
+      return send(res, 200, ok({ deleted: true }, "Project deleted"));
+    } catch (e) { return next(e); }
   });
   router.patch("/projects/:projectId", async (req, res, next) => {
     try {
@@ -508,6 +520,7 @@ export function createRouter(getDeps: GetDeps) {
       const versionId = crypto.randomUUID();
       const storageKey = `${d.tenantId}/${projectId}/${fileId}/${versionId}`;
       await d.db.transaction(async (tx: any) => {
+        await lockProject(tx, d.tenantId, projectId);
         await tx.insert(files).values({
           id: fileId,
           tenantId: d.tenantId,

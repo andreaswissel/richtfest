@@ -110,6 +110,8 @@ export async function createArtifact(
   runId?: string,
   acousticDataset?: AcousticDataset,
 ) {
+  if (!(await d.validateProject(input.projectId, tx)))
+    throw missing("Project not found");
   const [artifact] = await tx
     .insert(artifacts)
     .values({
@@ -720,8 +722,6 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
   );
   route("post", "/artifacts", "knowledge:write", async (d, req) => {
     const input = artifactInput.parse(req.body);
-    if (!(await d.validateProject(input.projectId)))
-      throw missing("Project not found");
     await sources(d, input.projectId, input.sourceVersionIds);
     return d.db.transaction((tx: any) => createArtifact(d, tx, input));
   });

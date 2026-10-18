@@ -1,3 +1,4 @@
+import { lockProject } from "./project-lock";
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
@@ -147,6 +148,7 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       const { d, projectId, where } = await scope(req, true);
       const input = z.object({ revision: z.number().int().nonnegative().max(2147483646), scene: sceneInput }).strict().parse(req.body);
       const row = await d.db.transaction(async (tx: any) => {
+        await lockProject(tx, d.tenantId, projectId);
         for (const object of input.scene.objects) {
           if (!object.source) continue;
           const [source] = await tx.select({ id: files.id }).from(files)
@@ -202,6 +204,7 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
           catch (error) { throw failure((error as Error).message, 422, "location_address_invalid"); }
         }
         const row = await d.db.transaction(async (tx: any) => {
+        await lockProject(tx, d.tenantId, projectId);
           await tx.insert(locations).values({ projectId, tenantId: d.tenantId }).onConflictDoNothing();
           const [current] = await tx.select(stateColumns).from(locations).where(where).for("update");
           if (kind === "lidar" && !current.context) throw failure("Import location context first", 409, "context_required");
