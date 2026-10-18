@@ -35,8 +35,9 @@ import { BerlinContext } from "./berlin-context";
 import { BuildingCodePanel } from "./building-code-panel";
 import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
 import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinParcel } from "./site-lookups";
-import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
-import { applySiteSummary, massingOptions, proposeFrameFigures, proposeGrz2Default, type SummaryStep, type SummaryStepId } from "./site-summary";
+import { extractPlanFigures, planToRead, type PlanExtraction, type PlanProvider } from "./plan-extraction";
+import { PlanningBasisSuggestion } from "./planning-basis-suggestion";
+import { applySiteSummary, massingOptions, mergePlanExtraction, proposeRegime, type suggestPlanningBasis, proposeFrameFigures, proposeGrz2Default, type SummaryStep, type SummaryStepId } from "./site-summary";
 import { SiteSummaryPanel } from "./site-summary-panel";
 import { applyTrace } from "./plan-lines";
 import { PlanRegimePanel } from "./plan-regime-panel";
@@ -50,6 +51,7 @@ const parcelCentre = (geometry: [number, number][][][] | undefined): [number, nu
 };
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
+type BasisSuggestion = NonNullable<ReturnType<typeof suggestPlanningBasis>>;
 type Step = "site" | "limits" | "design" | "result";
 const STEPS: Step[] = ["site", "limits", "design", "result"];
 /** Required constraints with the optional GRZ 2 next to GRZ, in reading order. */
@@ -277,6 +279,26 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
     proposeGrz2Default(constraints, proposals);
     update({ references, constraints });
   };
+  /** A changed basis reopens its check; under § 34 the unreviewed frame figures follow the chosen references. */
+  const setPlanningBasis = (planningBasis: Assessment["planningBasis"], suggestion?: BasisSuggestion) => {
+    const constraints = { ...assessment.constraints };
+    // A suggested B-Plan or Baunutzungsplan also proposes its regime from the register, as the summary does.
+    const planRegime = planningBasis === "b_plan" && suggestion && proposals ? proposeRegime(suggestion.law, suggestion.adopted, assessment.planRegime, proposals.siteProposalMethod) : null;
+    if (planningBasis === "section34" && proposals && assessment.references.length) {
+      proposeFrameFigures(constraints, assessment.references, proposals);
+      proposeGrz2Default(constraints, proposals);
+    }
+    update({ planningBasis, constraints, ...(planRegime ? { planRegime } : {}), checks: { ...assessment.checks, planningBasis: { ...assessment.checks.planningBasis, status: "unresolved" } } });
+  };
+  /** Plan figures and rules fill only fields that are still empty in the latest draft, edited while the plan was read. */
+  const applyPlanReading = (plan: PlanExtraction) =>
+    setDraft((current) => {
+      const base = current ?? loaded;
+      if (!base) return current;
+      const next = mergePlanExtraction(base, plan).draft;
+      if (proposals) { const constraints = { ...next.constraints }; proposeGrz2Default(constraints, proposals, next.planningBasis === "b_plan" ? next.planRegime : null); return { ...next, constraints }; }
+      return next;
+    });
   const area = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "–" : `${n.toLocaleString(locale, { maximumFractionDigits: 2 })} m²`);
   const invalidKeys = new Set(validation && !validation.success ? validation.error.issues.flatMap((issue) => issue.path.map(String)) : []);
   const hasParcel = !!assessment.geometry?.parcel;
@@ -488,8 +510,17 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
         <Section title={label("PlanningBasis")}>
           <Segmented
             value={assessment.planningBasis}
-            onChange={(planningBasis) => update({ planningBasis: planningBasis as Assessment["planningBasis"], checks: { ...assessment.checks, planningBasis: { ...assessment.checks.planningBasis, status: "unresolved" } } })}
+            onChange={(planningBasis) => setPlanningBasis(planningBasis as Assessment["planningBasis"])}
             items={["b_plan", "section34", "section35", "unresolved"].map((value) => ({ value, label: label(value), disabled }))}
+          />
+          <PlanningBasisSuggestion
+            projectId={projectId}
+            draft={assessment}
+            disabled={disabled}
+            provider={planProvider}
+            onProvider={setPlanProvider}
+            onBasis={(suggestion) => setPlanningBasis(suggestion.basis!, suggestion)}
+            onPlan={applyPlanReading}
           />
           {assessment.planningBasis === "b_plan" && (
             <PlanRegimePanel

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createEmptySiteAssessmentInput } from "@richtfest/shared";
 import * as engine from "@richtfest/shared/site-proposals";
-import { applySiteSummary, correctReferenceStoreys, parcelReference, proposeFrameFigures, storeysFromHeight } from "../src/components/feasibility/site-summary";
+import { applySiteSummary, correctReferenceStoreys, mergePlanExtraction, suggestPlanningBasis, parcelReference, proposeFrameFigures, storeysFromHeight } from "../src/components/feasibility/site-summary";
 import { planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "../src/components/feasibility/site-lookups";
 
 const X = 397000, Y = 5824000;
@@ -89,6 +89,21 @@ describe("one-click site summary", () => {
     const { draft, steps } = applySiteSummary(empty, { context: context(undefined, [plan]), discovery: discovery([]), plan: { plan: "IV-2c", status: "unconfigured", constraints: [], facts: [] } }, engine, "2026-10-18");
     expect(steps.find((s) => s.id === "frame")).toMatchObject({ status: "needs_input", detail: "FramePlanUnconfigured" });
     expect(draft.constraints.grz.value).toBeNull();
+  });
+  test("a plan read on the Planning limits step fills only empty figures and rules, and the register suggests the basis without a parcel", () => {
+    const cited = (key: string, value: number | string) => ({ key, value: { value, source: `page 1 · ${key}`, sourceDate: null, kind: "assessment" as const, reviewed: false as const } });
+    const entered = { ...empty, planningBasis: "b_plan" as const, constraints: { ...empty.constraints, grz: { value: 0.3, source: "entered", sourceDate: null, kind: "official" as const, reviewed: false } } };
+    const { draft, filled } = mergePlanExtraction(entered, { plan: "IV-2c", status: "extracted", constraints: [cited("grz", 0.4), cited("gfz", 1.2)], facts: [cited("roofForm", "Satteldach")] });
+    expect(draft.constraints.grz.value).toBe(0.3);
+    expect(draft.constraints.gfz).toMatchObject({ value: 1.2, reviewed: false });
+    expect(draft.planningFacts?.roofForm?.value).toBe("Satteldach");
+    expect(filled).toEqual(["gfz"]);
+    expect(entered.constraints.gfz.value).toBeNull();
+    const plan = { id: "IV-2c", name: "IV-2c", status: "in_progress", sourceUrl: "s", documentUrl: null, explanationUrl: null, effectiveDate: null, containsAddress: true };
+    // Two parcels contain the address, so the summary stops; the basis suggestion still reads the register.
+    expect(suggestPlanningBasis(context([parcel("a", 0, true), parcel("b", 20, true)], [plan]))).toMatchObject({ basis: null, detail: "BasisInProgress" });
+    expect(suggestPlanningBasis(context([parcel("a", 0, true), parcel("b", 20, true)], [{ ...plan, status: "adopted" }]))).toMatchObject({ basis: "b_plan", values: { plan: "IV-2c" } });
+    expect(suggestPlanningBasis({ ...context(), planStatus: "unavailable" })).toBeNull();
   });
   test("open land in the land-use plan stops at a likely § 35 instead of assuming § 34", () => {
     const forest = { id: "f", label: "Wald", purpose: null, category: "open" as const, sourceUrl: "fnp", polygons: [[ring(-100, -100, 300, 300)]], containsAddress: true };

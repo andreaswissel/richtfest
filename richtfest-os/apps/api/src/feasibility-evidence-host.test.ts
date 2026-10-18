@@ -37,3 +37,11 @@ const local=url&&["localhost","127.0.0.1"].includes(new URL(url).hostname)&&new 
   await pool.query("DELETE FROM os_ai_connections WHERE user_id=$1",[actorId]);output={constraints:[],planningFacts:[],limitations:[]};await host.interpret(projectId,input);expect(headers!.get("x-api-key")).toBe("workspace-secret");
  }finally{env.AI_CONNECTION_ENCRYPTION_KEY=oldEncryption;await pool.end();await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`);await admin.pool.end();}
 });
+test("official plan import accepts only the Berlin and named district plan hosts",async()=>{
+ const host=createFeasibilityEvidenceHost({} as never,{} as AppDeps);
+ for(const url of ["https://gis-broker.de/bplaene/a.pdf","https://evil.gis-broker.de/bplaene/a.pdf","https://mitte.gis-broker.de.evil.example/a.pdf","http://mitte.gis-broker.de/bplaene/a.pdf"])
+  await expect(host.importOfficialPdf("p",url)).rejects.toThrow("approved official Berlin hosts");
+ // An allowed host passes the host check and fails only at the (stubbed) download.
+ const original=globalThis.fetch;globalThis.fetch=(async()=>new Response(null,{status:404})) as unknown as typeof fetch;
+ try{await expect(host.importOfficialPdf("p","https://mitte.gis-broker.de/bplaene/0100062a.pdf")).rejects.toThrow("unavailable");}finally{globalThis.fetch=original;}
+});

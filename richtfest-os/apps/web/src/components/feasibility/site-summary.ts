@@ -119,6 +119,41 @@ export function proposeBuildingClassFigures(c: Constraints, buildingClass: keyof
 }
 
 /**
+ * Planning basis the official registers point to at the address, with the summary text explaining it. An adopted
+ * B-Plan decides; otherwise the land-use plan suggests § 35 for open land, the Baunutzungsplan applies in former West
+ * Berlin and § 34 elsewhere, as in the summary. A plan in progress
+ * leaves the basis to a person (basis null). Null when the register was unavailable. Always a proposal for review.
+ */
+export function suggestPlanningBasis(context: BerlinSiteContext): { basis: "b_plan" | "section34" | "section35" | null; law: PlanningLaw; adopted?: BerlinPlan; detail: string; values?: Record<string, string> } | null {
+  if (context.planStatus !== "available") return null;
+  const law = planningLawAt(context, context.origin);
+  const adopted = law.plans.find((p) => p.status === "adopted");
+  if (adopted) return { basis: "b_plan", law, adopted, detail: invalidated(adopted.courtReview) ? "BasisBPlanCourtReview" : "BasisBPlanFound", values: { plan: adopted.name, review: adopted.courtReview ?? "" } };
+  if (law.kind === "in_progress") return { basis: null, law, detail: "BasisInProgress", values: { plan: law.plans[0]!.name } };
+  if (law.kind === "section35") return { basis: "section35", law, detail: "BasisSection35", values: { landUse: law.landUse!.label } };
+  if (law.kind === "baunutzungsplan") return { basis: "b_plan", law, detail: "BasisBaunutzungsplan", values: { locality: context.locality?.name ?? "" } };
+  return { basis: "section34", law, ...(law.landUse ? { detail: "BasisSection34Fnp", values: { landUse: law.landUse.label } } : { detail: "BasisSection34" }) };
+}
+
+/**
+ * Figures and plan rules read from the plan sheet, merged into the draft's empty fields only (cited, unreviewed).
+ * Returns the new draft and the listed figures it filled.
+ */
+export function mergePlanExtraction<T extends Draft>(draft: T, plan: PlanExtraction | null | undefined): { draft: T; filled: string[] } {
+  const c = { ...draft.constraints }, filled: string[] = [];
+  for (const { key, value } of plan?.constraints ?? []) {
+    const k = key as keyof typeof c;
+    if (!CONSTRAINT_KEYS.includes(k) || (c[k]?.value ?? null) !== null || typeof value.value !== "number") continue;
+    c[k] = { ...value, value: value.value };
+    if ((PLAN_LISTED as readonly string[]).includes(k)) filled.push(k === "maxFullStoreys" ? "storeys" : k);
+  }
+  let next: T = { ...draft, constraints: c };
+  const facts = (plan?.facts ?? []).filter((f) => !next.planningFacts?.[f.key as keyof NonNullable<Draft["planningFacts"]>]?.value);
+  if (facts.length) next = { ...next, planningFacts: { ...next.planningFacts, ...Object.fromEntries(facts.map((f) => [f.key, { ...f.value, value: String(f.value.value) }])) } };
+  return { draft: next, filled };
+}
+
+/**
  * "Address in, frame out": fills what the public lookups and the deterministic proposals can supply, in task
  * order. Everything it adds is an unreviewed proposal in the draft; reviewed or entered values are never replaced.
  * A step that needs a person (an ambiguous parcel, missing plan figures) is reported instead of guessed.
@@ -192,7 +227,7 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   }
 
   // 4. Figures: § 34 proposes the upper end of the reference frame; a B-Plan needs its figures from the plan.
-  const c = next.constraints;
+  let c = next.constraints;
   if (next.planningBasis === "section34") {
     const filled = proposeFrameFigures(c, next.references, engine);
     step("frame", filled.length ? "done" : c.grz.value !== null && c.gfz.value !== null && c.maxFullStoreys.value !== null ? "kept" : "needs_input", filled.length ? "FrameFilled" : "FrameMissing", { items: filled.join(", ") });
@@ -206,15 +241,9 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     }
   } else if (next.planningBasis === "b_plan") {
     // A B-Plan sets the figures: take what was read from the plan sheet (cited, unreviewed), never neighbours.
-    const plan = sources.plan, filled: string[] = [];
-    for (const { key, value } of plan?.constraints ?? []) {
-      const k = key as keyof typeof c;
-      if (!CONSTRAINT_KEYS.includes(k) || (c[k]?.value ?? null) !== null || typeof value.value !== "number") continue;
-      c[k] = { ...value, value: value.value };
-      if ((PLAN_LISTED as readonly string[]).includes(k)) filled.push(k === "maxFullStoreys" ? "storeys" : k);
-    }
-    const facts = (plan?.facts ?? []).filter((f) => !next.planningFacts?.[f.key as keyof NonNullable<Draft["planningFacts"]>]?.value);
-    if (facts.length) next = { ...next, planningFacts: { ...next.planningFacts, ...Object.fromEntries(facts.map((f) => [f.key, { ...f.value, value: String(f.value.value) }])) } };
+    const plan = sources.plan, merged = mergePlanExtraction(next, plan), filled = merged.filled;
+    next = merged.draft;
+    c = next.constraints;
     const missing = PLAN_FIGURES.filter((k) => c[k].value === null);
     if (filled.length) step("frame", missing.length ? "needs_input" : "done", "FramePlanExtracted", { items: filled.join(", "), plan: plan!.plan });
     else if (!missing.length) step("frame", "kept", "FrameKept");

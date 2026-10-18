@@ -10,6 +10,8 @@ import { resolveAgentPreset } from "./agent-presets";
 import { withProviderCredential } from "./ai-connections";
 import { HttpError } from "./middleware/auth";
 
+const DISTRICT_PLAN_HOSTS=new Set(["mitte.gis-broker.de","tk.gis-broker.de"]);
+
 export function createFeasibilityEvidenceHost(db: Database, d: ProjectDeps, providerFetch?: ProviderFetch): EvidenceHost {
   async function source(projectId:string,versionId:string){
     const [row]=await db.select({file:files,version:fileVersions}).from(files).innerJoin(fileVersions,and(eq(fileVersions.fileId,files.id),eq(fileVersions.tenantId,d.tenantId))).where(and(eq(files.projectId,projectId),eq(files.tenantId,d.tenantId),eq(fileVersions.id,versionId),eq(fileVersions.status,"ready"),eq(fileVersions.mimeType,"application/pdf"))).limit(1);
@@ -23,7 +25,8 @@ export function createFeasibilityEvidenceHost(db: Database, d: ProjectDeps, prov
     listSources,
     importOfficialPdf:async(projectId,rawUrl)=>{
       const url=new URL(rawUrl);
-      if(url.protocol!=="https:"||url.username||url.password||url.port||!(url.hostname==="berlin.de"||url.hostname.endsWith(".berlin.de")||url.hostname==="fbinter.stadt-berlin.de"))throw new HttpError(422,"unsupported_document_host","Only HTTPS documents on approved official Berlin hosts can be imported");
+      // Mitte and Treptow-Köpenick publish their plan scans on district GIS hosts named by the Berlin register itself.
+      if(url.protocol!=="https:"||url.username||url.password||url.port||!(url.hostname==="berlin.de"||url.hostname.endsWith(".berlin.de")||url.hostname==="fbinter.stadt-berlin.de"||DISTRICT_PLAN_HOSTS.has(url.hostname)))throw new HttpError(422,"unsupported_document_host","Only HTTPS documents on approved official Berlin hosts can be imported");
       // The caller additionally verifies membership in this project's fresh official plan lookup.
       const response=await fetch(url,{redirect:"error",signal:AbortSignal.timeout(60000)});
       if(!response.ok||!response.body)throw new HttpError(502,"document_unavailable","Official plan PDF is unavailable");

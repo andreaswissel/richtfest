@@ -550,3 +550,7 @@
 .site-regime-map figcaption { margin-top: 4px; }
 .site-map-parcel[data-law="baunutzungsplan"] { fill: rgb(20 184 166 / .18); }
 .site-map-legend i[data-law="baunutzungsplan"] { background: rgb(20 184 166 / .45); }
+.site-basis-suggestions { display: flex; flex-direction: column; gap: var(--stack); margin: var(--stack) 0; }
+.site-basis-suggestions:empty { display: none; }
+.site-basis-suggestion { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--stack); }
+.site-basis-suggestion .muted { white-space: normal; }
