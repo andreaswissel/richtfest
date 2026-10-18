@@ -484,11 +484,13 @@ export async function readFeasibilitySiteFigures(d: AppDeps, projectId: string):
   const limits = zoningLimits(siteStates);
   const approvedNumber = (states: Record<string, any>, key: string) => states[key]?.reviewStatus === "approved" && typeof states[key].value === "number" ? states[key].value as number : null;
   const existing = new Set((data.buildings as any[]).filter(building => building.constructionState === "existing" || building.constructionState === "retained").map(building => building.id));
-  const fullStoreys = (data.storeys as any[]).filter(storey => existing.has(storey.buildingId)).map(storey => statesOf(data, "storey", storey.id))
-    .filter(states => states.fullStorey?.reviewStatus === "approved" && states.fullStorey.value === "full");
-  const areas = fullStoreys.map(states => approvedNumber(states, "grossFloorArea"));
+  // Reuse the same completeness gate as zoning: never silently drop undecided floors.
+  const existingCheck = zoningChecks({ limits, site: site ? { id: site.id, properties: siteStates } : null,
+    buildings: (data.buildings as any[]).filter(building => existing.has(building.id)).map(building => ({ id: building.id, properties: statesOf(data, "building", building.id) })),
+    storeys: (data.storeys as any[]).filter(storey => existing.has(storey.buildingId)).map(storey => ({ id: storey.id, buildingId: storey.buildingId, properties: statesOf(data, "storey", storey.id) }))
+  }).find(check => check.key === "gfz")!;
   return { parcelArea: approvedNumber(siteStates, "parcelArea"), grz: limits.grz, gfz: limits.gfz,
-    existingGrossFloorArea: areas.length && areas.every(area => area !== null) ? areas.reduce((sum: number, area) => sum + area!, 0) : null };
+    existingGrossFloorArea: existingCheck.actual === null ? null : existingCheck.actual * approvedNumber(siteStates, "parcelArea")! };
 }
 
 /** Create an inspectable proposal without mutating the reviewed model. */

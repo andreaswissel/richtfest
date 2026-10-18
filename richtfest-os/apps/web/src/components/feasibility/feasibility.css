@@ -1,14 +1,34 @@
-/* Feasibility: a dense input matrix, one column per scenario, results last. */
+/* Compare three scenarios; edit one small group at a time. */
 .feasibility { display: flex; flex-direction: column; gap: var(--section); }
-.feasibility-site { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 16px; }
-.feasibility-site-field { display: flex; flex-direction: column; gap: 2px; }
-.feasibility-table { table-layout: fixed; width: 100%; min-width: 640px; }
-.feasibility-table td, .feasibility-table th { vertical-align: top; padding-block: 4px; }
-.feasibility-table col.feasibility-label-col { width: 28%; }
-.feasibility-scenario-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
-.feasibility-group { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); font-size: var(--ui-2xs); }
-.feasibility-cell { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
-.feasibility-cell input { text-align: right; min-width: 0; font-variant-numeric: tabular-nums; }
-.feasibility-proposal { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.feasibility .section-heading { flex-wrap: wrap; }
+.feasibility .section-heading .inline-actions { flex-wrap: wrap; gap: var(--stack); margin-top: 0; }
+.feasibility-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--stack); padding-block: var(--stack); }
+.feasibility-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.feasibility-field input { font-variant-numeric: tabular-nums; }
+.feasibility-field [aria-invalid="true"] { border-color: var(--destructive); }
+.feasibility-proposal { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .feasibility-proposal label { display: inline-flex; align-items: center; gap: 4px; }
 .feasibility-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.feasibility-mode { margin-inline-start: 8px; }
+.feasibility-summary { width: 100%; table-layout: fixed; }
+.feasibility .feasibility-summary th, .feasibility .feasibility-summary td { white-space: normal; }
+.feasibility-summary th:first-child { width: 40%; }
+.feasibility-summary button { white-space: normal; height: auto; text-align: left; justify-content: flex-start; }
+.feasibility-summary [data-slot="badge"] { white-space: normal; height: auto; max-width: 100%; overflow-wrap: anywhere; }
+.feasibility-disclosure { border-top: 1px solid var(--border); padding-top: var(--stack); }
+.feasibility-disclosure summary { cursor: pointer; }
+.feasibility-disclosure summary > span { float: right; margin-left: 8px; }
+.feasibility-results { margin-block: var(--stack); font-size: var(--ui-xs); }
+.feasibility-results > div { display: flex; justify-content: space-between; gap: 16px; padding-block: 4px; }
+.feasibility-results dd { margin: 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .feasibility .section-heading { flex-direction: column; gap: var(--stack); }
+  .feasibility .section-heading .inline-actions > span { flex-basis: 100%; }
+  .feasibility-fields { grid-template-columns: 1fr; }
+  .feasibility-mode { display: block; margin-inline-start: 8px; }
+  .feasibility-summary { font-size: var(--ui-xs); overflow-wrap: anywhere; }
+  .feasibility-summary th:first-child { width: 36%; }
+  .feasibility-summary button { padding-inline: 0; }
+  .feasibility-summary td, .feasibility-summary th { padding-inline: 4px; }
+  .feasibility-disclosure summary > span { float: none; display: block; margin: 4px 0 0; }
+}

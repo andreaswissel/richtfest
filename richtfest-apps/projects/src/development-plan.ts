@@ -138,7 +138,7 @@ const storeyNumber = String.raw`(?:\d{1,2}|X|IX|VIII|VII|VI|IV|V|III|II|I|${["ei
 const storeyQualifier = String.raw`(${["h(?:ö|oe)chstens", "maximal", "max\\.", "bis\\s+zu", "zwingend", "mindestens"].map(word).join("|")})`;
 const storeyRegex = new RegExp(String.raw`(?:${storeyQualifier}\s+)?\b(${storeyNumber})(?:\s*(?:-|–|bis)\s*(${storeyNumber}))?\s+(?:zul(?:ä|ae)ssige\w*\s+)?Vollgeschoss`, "g");
 const storeyAfterRegex = new RegExp(String.raw`Vollgeschosse?\w*\s*(?::|betr(?:ä|ae)gt|von|wird\s+auf)?\s*(?:${storeyQualifier}\s+)?\b(${storeyNumber})\b(?:\s*(?:-|–|bis)\s*(${storeyNumber})\b)?(?:\s*\((H(?:ö|oe)chstma(?:ß|ss)|zwingend|Mindestma(?:ß|ss))\))?`, "g");
-const heightRegex = /(Geb(?:ä|ae)udeh(?:ö|oe)he|Firsth(?:ö|oe)he|Traufh(?:ö|oe)he|Wandh(?:ö|oe)he|Oberkante)([^\n;]{0,70}?)(\d{1,3}(?:,\d{1,2})?)\s*m\b(\s*(?:ü(?:ber|\.)\s*(?:NHN|NN)))?/gi;
+const heightRegex = /(Geb(?:ä|ae)udeh(?:ö|oe)he|Firsth(?:ö|oe)he|Traufh(?:ö|oe)he|Wandh(?:ö|oe)he|Oberkante)([^\n;\d]{0,70}?)(\d{1,3}(?:[,.]\d{1,2})?)\s*m\b(\s*(?:ü(?:ber|\.)\s*(?:NHN|NN|dem\s+[^;.]+|der\s+[^;.]+)))?/gi;
 const bauweiseRegex = /\b(offene|geschlossene|abweichende)[nr]?\s+Bauweise|\bnur\s+(Einzel-\s*und\s+Doppelh(?:ä|ae)user|Einzelh(?:ä|ae)user|Doppelh(?:ä|ae)user|Hausgruppen)/gi;
 
 const romanValue = (value: string) => { const index = roman.indexOf(value.toUpperCase()); return index >= 0 ? index + 1 : value.toUpperCase() === "VIII" ? 8 : value.toUpperCase() === "IX" ? 9 : value.toUpperCase() === "X" ? 10 : null; };
@@ -182,14 +182,22 @@ export function readDevelopmentPlanZoning(pages: Array<{ page: number; text: str
       }
     }
     const exceeds = /(?:ü|ue)berschrit|(?:Ü|Ue)berschreitung/i.test(sentence);
+    const valueArea = (index: number, value: string) => {
+      // Bind only within the value's own conjunction clause, never to the previous value's zone.
+      const start = Math.max(sentence.lastIndexOf(" und ", index), sentence.lastIndexOf(";", index));
+      const next = sentence.slice(index + value.length).search(/\s+und\s+|;/);
+      const clause = sentence.slice(start < 0 ? 0 : start, next < 0 ? sentence.length : index + value.length + next);
+      const areas = unique([...clause.matchAll(areaCodeRegex)].map(match => match[2] ? `${match[1]} ${match[2]}` : match[1]));
+      return areas.length === 1 ? areas[0] : null;
+    };
     for (const { value, index } of valuesAfter(sentence, grzRegex, grzValue)) {
-      const stated = withArea(exceeds ? `bis ${value} bei Überschreitung nach § 19 Abs. 4 BauNVO` : value, areaBefore(sentence, index));
+      const stated = withArea(exceeds ? `bis ${value} bei Überschreitung nach § 19 Abs. 4 BauNVO` : value, valueArea(index, value));
       result.grz.push(stated); labels.set(`GRZ ${stated}`, "bebauungsplanGrz");
     }
     for (const { value, index } of valuesAfter(sentence, gfzRegex, gfzValue)) {
-      const stated = withArea(value, areaBefore(sentence, index)); result.gfz.push(stated); labels.set(`GFZ ${stated}`, "bebauungsplanGfz");
+      const stated = withArea(value, valueArea(index, value)); result.gfz.push(stated); labels.set(`GFZ ${stated}`, "bebauungsplanGfz");
     }
-    const storeyMatches = [...sentence.matchAll(storeyRegex)].map(match => ({ qualifier: match[1], from: match[2], to: match[3], index: match.index! }));
+    const storeyMatches = [...sentence.matchAll(storeyRegex)].map(match => ({ qualifier: match[1] ?? sentence.slice(match.index! + match[0].length).match(/^e?\s+\(?((?:zwingend|mindestens|höchstens|maximal))\b/i)?.[1], from: match[2], to: match[3], index: match.index! }));
     if (!storeyMatches.length) for (const match of sentence.matchAll(storeyAfterRegex)) storeyMatches.push({ qualifier: match[1] ?? match[4], from: match[2], to: match[3], index: match.index! });
     for (const match of storeyMatches) {
       const from = storeyCount(match.from), to = match.to ? storeyCount(match.to) : null;
@@ -203,7 +211,7 @@ export function readDevelopmentPlanZoning(pages: Array<{ page: number; text: str
       const between = sentence.slice(Math.max(0, match.index! - 20), match.index!) + match[2];
       const qualifier = /mindest/i.test(between) ? "min." : /h(?:ö|oe)chst|max|zul(?:ä|ae)ssig|bis/i.test(between) ? "max." : null;
       const kind = capitalize(match[1].replace(/oe/g, "ö").replace(/ae/g, "ä").toLowerCase());
-      const stated = withArea(`${kind}${qualifier ? ` ${qualifier}` : ""} ${match[3]} m${match[4] ? " ü. NHN" : ""}`, areaBefore(sentence, match.index!));
+      const stated = withArea(`${kind}${qualifier ? ` ${qualifier}` : ""} ${match[3]} m${match[4] ?? ""}`, areaBefore(sentence, match.index!));
       result.heights.push(stated); labels.set(stated, "bebauungsplanHeight");
     }
     for (const match of sentence.matchAll(bauweiseRegex)) {

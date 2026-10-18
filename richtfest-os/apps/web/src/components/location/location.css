@@ -318,4 +318,6 @@
 }
 
 /* Site export: a labeled row of format downloads. */
-.location-export { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.location-export { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.location-export > span,
+.location-export > p { flex-basis: 100%; }

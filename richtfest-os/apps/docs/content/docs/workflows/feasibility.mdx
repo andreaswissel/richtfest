@@ -11,7 +11,7 @@ Enter the **parcel area**, the **asking price** (optional) and the **acquisition
 
 ## Scenarios
 
-The table has one column per scenario. Choose **Sale** (units sold) or **Rental** (net rent capitalised) for each one. Rows run in task order: areas, costs, revenue and profit, then the result.
+The compact comparison shows each scenario's residual land value and its own completeness/review status. Select a scenario to edit it, then choose **Areas**, **Costs** or **Revenue and profit**. Only that input group is shown; additional costs and subsidies are collapsed until needed. Choose **Sale** (units sold) or **Rental** (net rent capitalised) per scenario. Expand **Result** for the selected scenario's full breakdown, and **Site** for shared inputs.
 
 | Scenario | Uses |
 | --- | --- |
@@ -19,14 +19,16 @@ The table has one column per scenario. Choose **Sale** (units sold) or **Rental*
 | Densify & renovate | Existing living area and renovation cost, plus new floor area, living area ratio, construction cost and contingency |
 | New build | New floor area, living area ratio, construction cost, contingency and demolition |
 
-All scenarios use other costs, financing (percent of costs), marketing (percent of revenue), subsidies and developer profit (percent of revenue). Inputs a scenario does not use show "—". Demolition, other costs and subsidies may stay empty; any other missing input makes the scenario **incomplete** and names what is missing.
+All scenarios use other costs, financing (a lump-sum percent of construction/renovation and other costs, not an annual interest rate or land financing), marketing (percent of revenue), subsidies and developer profit (percent of revenue). Only relevant inputs appear. Demolition, other costs and subsidies are labelled optional and may stay empty; any other missing input makes the scenario **incomplete** and names what is missing.
+
+Numbers follow the selected app language: `1,000.75` in English, `1.000,75` in German. Malformed grouping stays visible with an error instead of silently changing the amount. Parcel area and capitalisation rate must be greater than zero; the living-area factor must be greater than zero and at most one. Acquisition, operating, capitalisation, marketing and profit percentages cannot exceed 100. Invalid inputs suppress the affected results and prevent saving; missing inputs may be saved as an incomplete study.
 
 **Where values come from.** A new study starts with:
 
-- **Model**: new floor area for a new build as GFZ × parcel area, and for densification that maximum minus the approved Geschossfläche of existing or retained buildings. Only approved building-model values are used.
+- **Model**: new floor area for a new build as GFZ × parcel area, and for densification that maximum minus the approved countable Geschossfläche of existing or retained buildings. This is a numerical starting assumption, not a confirmation of buildability. Densification defaults require a reviewed complete storey inventory, GFZ counting basis, classifications and relevant areas; unknown floors are not silently excluded.
 - **Standard**: construction cost KG 300–700 (3,000 €/m² living area), contingency 20 % and capitalisation rate 3.8 %, from Richtfest's calculation standards (May 2026). These are experience values to check for each project.
 
-Both carry a badge and stay unreviewed until you tick **reviewed**. A value you type is yours and counts as reviewed. The result line says how many inputs used are still unreviewed.
+Both carry a badge, visible source note and review checkbox. A value you type is yours and counts as reviewed. Review counts belong to each scenario, including the shared site inputs it uses. No preferred scenario is announced while comparisons are incomplete or unreviewed.
 
 ## Result
 
@@ -34,11 +36,11 @@ For each scenario: living area, revenue, total costs excluding land, developer p
 
 The calculation (`residual_land_value_v1`) is deterministic: revenue is living area × sale price, or living area × monthly rent × 12 × (1 − operating costs) ÷ capitalisation rate. Costs are renovation and construction per m² living area (contingency on construction only), demolition and other costs, financing on those and marketing on revenue, less subsidies. Residual land value = (revenue − costs − profit) ÷ (1 + acquisition costs). The table recalculates as you type.
 
-**Save study** stores the inputs. Every save is kept as an immutable revision and recorded in the audit log with each scenario's result. If someone else saved in the meantime, reload instead of overwriting.
+**Save study** stores the inputs. Every save is kept as an immutable revision and recorded in the audit log with each scenario's result. Navigation asks before discarding unsaved changes; closing/reloading the tab uses the browser warning. Background updates do not replace your draft or its starting revision. If someone else saved in the meantime, your save is rejected without losing your draft: copy anything you need, then discard your changes and reload rather than overwrite the newer revision.
 
 ## Report
 
-**Download report** creates a PDF of the saved study: the scenario comparison, missing inputs, the approved planning-law figures, every input with its source and review state, notes and a disclaimer on each page. Unsaved changes are not in the report; save first. The file name carries the revision.
+**Download report** creates a PDF in the selected app language from the saved study: scenario comparison, missing/invalid inputs, per-scenario review warnings, every saved input with its source and review state, notes and a disclaimer on each page. Today's planning-law figures are not mixed into an older study revision; model-derived input notes record the basis used when the study began. Unsaved changes are not in the report; save first. The file name carries the revision. Incomplete studies can be exported for review, but are explicitly marked and are not bank valuations.
 
 ## Access and API
 

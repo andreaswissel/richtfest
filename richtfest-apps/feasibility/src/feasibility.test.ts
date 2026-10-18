@@ -30,7 +30,7 @@ describe("feasibility report", () => {
     const results = study.scenarios.map(scenario => calculateFeasibility(study.site, scenario));
     expect(results[2]!.status).toBe("complete");
     const pdf = await studyReportPdf({ project: { name: "Giersstraße 20", address: "Giersstraße 20, 14193 Berlin" }, study, results,
-      figures: { parcelArea: 1000, grz: 0.4, gfz: 1.2, existingGrossFloorArea: null }, method: feasibilityMethod, language: "de" });
+      method: feasibilityMethod, language: "de" });
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(5000);
   });

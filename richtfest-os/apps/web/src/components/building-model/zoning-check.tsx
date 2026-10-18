@@ -47,14 +47,17 @@ export function ZoningCheck({ model, storeyLabel, t, pending, onSaveBuilding, on
   return <>
     <dl className="building-model-component-rows">
       {row("parcelArea", site.componentProperties.parcelArea, (save) => onSaveBuilding(site.id, save))}
+      {row("gfzCountingBasis", site.componentProperties.gfzCountingBasis, (save) => onSaveBuilding(site.id, save))}
       {buildings.map((building) => <Fragment key={building.id}>
         {buildings.length > 1 && <><dt className="building-model-request-group">{building.name}</dt><dd /></>}
         {row("footprintArea", building.componentProperties.footprintArea, (save) => onSaveBuilding(building.id, save))}
+        {row("storeyInventory", building.componentProperties.storeyInventory, (save) => onSaveBuilding(building.id, save))}
       </Fragment>)}
       {storeys.map((storey) => <Fragment key={storey.id}>
         <dt className="building-model-request-group">{storeyLabel(storey.id)}</dt><dd />
         {row("fullStorey", storey.componentProperties?.fullStorey, (save) => onSaveStorey(storey.id, save))}
         {storey.componentProperties?.fullStorey?.value === "full" && row("grossFloorArea", storey.componentProperties?.grossFloorArea, (save) => onSaveStorey(storey.id, save))}
+        {storey.componentProperties?.fullStorey?.value === "not_full" && site.componentProperties.gfzCountingBasis?.value === "include_other_storeys" && row("countableFloorArea", storey.componentProperties?.countableFloorArea, (save) => onSaveStorey(storey.id, save))}
       </Fragment>)}
     </dl>
     <p className="muted text-ui-2xs">{t("buildingZoningHintCheck")}</p>

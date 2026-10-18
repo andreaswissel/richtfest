@@ -23,7 +23,7 @@ export function initialStudy(figures: FeasibilitySiteFigures): Omit<FeasibilityS
   const scenario = (kind: FeasibilityScenarioKind): FeasibilityScenario => {
     const values: FeasibilityScenario["values"] = {};
     if (kind !== "existing") Object.assign(values, { constructionCost: calculationStandards.constructionCost, contingencyRate: calculationStandards.contingencyRate });
-    if (kind === "new_build" && maxFloorArea !== null) values.newGrossFloorArea = fromModel(maxFloorArea, `${maxNote} (zulässig nach Bebauungsplan)`);
+    if (kind === "new_build" && maxFloorArea !== null) values.newGrossFloorArea = fromModel(maxFloorArea, `${maxNote} (rechnerische Obergrenze; Bebaubarkeit gesondert prüfen)`);
     if (kind === "densify" && maxFloorArea !== null && figures.existingGrossFloorArea !== null && maxFloorArea > figures.existingGrossFloorArea)
       values.newGrossFloorArea = fromModel(maxFloorArea - figures.existingGrossFloorArea, `${maxNote} − ${decimal(figures.existingGrossFloorArea)} m² Bestand`);
     values.capitalizationRate = calculationStandards.capitalizationRate;

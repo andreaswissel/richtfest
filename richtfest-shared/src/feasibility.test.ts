@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { calculateFeasibility, type FeasibilityScenario, type FeasibilityValue } from "./feasibility";
+import { calculateFeasibility, feasibilityScenarioSchema, feasibilityStudyInput, type FeasibilityScenario, type FeasibilityValue } from "./feasibility";
 
 const v = (value: number, reviewed = true): FeasibilityValue => ({ value, source: "entered", note: null, reviewed });
 const site = { parcelArea: v(1000), acquisitionCostRate: v(8), askingPrice: v(1_000_000) };
@@ -32,6 +32,26 @@ describe("calculateFeasibility", () => {
     expect(result.livingArea).toBe(600);
     expect(result.revenue!).toBeCloseTo(600 * 14 * 12 * 0.85 / 0.038, 6);
     expect(result.constructionCosts).toBe(480_000);
+    for (const [key, value] of [["capitalizationRate", 0], ["operatingCostRate", 101]] as const) {
+      const invalid = { ...rent, values: { ...rent.values, [key]: v(value) } };
+      expect(feasibilityScenarioSchema.safeParse(invalid).success).toBe(false);
+      expect(calculateFeasibility(site, invalid)).toMatchObject({ status: "incomplete", invalid: [key], residualLandValue: null, revenue: null });
+    }
+    const breakEven = { ...rent, values: { ...rent.values, operatingCostRate: v(100) } };
+    expect(feasibilityScenarioSchema.safeParse(breakEven).success).toBe(true);
+    expect(calculateFeasibility(site, breakEven).revenue).toBe(0);
+  });
+
+  test("invalid ratios and parcel areas never become complete calculations or saved inputs", () => {
+    for (const ratio of [0, 1.01, 75]) {
+      const invalid = { ...newBuild, values: { ...newBuild.values, livingAreaRatio: v(ratio) } };
+      expect(feasibilityScenarioSchema.safeParse(invalid).success).toBe(false);
+      expect(calculateFeasibility(site, invalid)).toMatchObject({ status: "incomplete", invalid: ["livingAreaRatio"], residualLandValue: null });
+    }
+    expect(calculateFeasibility(site, { ...newBuild, values: { ...newBuild.values, livingAreaRatio: v(1) } }).livingArea).toBe(1200);
+    const zeroSite = { ...site, parcelArea: v(0) };
+    expect(calculateFeasibility(zeroSite, newBuild)).toMatchObject({ status: "incomplete", invalid: ["parcelArea"], residualLandValue: null });
+    expect(feasibilityStudyInput.safeParse({ baseRevision: 0, site: zeroSite, scenarios: [newBuild, { ...newBuild, kind: "existing" }, { ...newBuild, kind: "densify" }] }).success).toBe(false);
   });
 
   test("names missing inputs and unreviewed ones instead of assuming them", () => {

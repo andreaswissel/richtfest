@@ -1204,11 +1204,20 @@ export function LocationEditor({
               <EnvironmentSurveyButton projectId={projectId} />
               <div className="location-export" role="group" aria-label={t("locationExport")}>
                 <span className="text-ui-xs font-medium">{t("locationExport")}</span>
+                <p className="text-ui-xs muted">{t("locationExportHint")}</p>
+                {(draft || save.isPending || importIfc.isPending) && (
+                  <p className="text-ui-xs muted" role="status">{t("locationExportSaveFirst")}</p>
+                )}
                 {(["dxf", "geojson"] as const).map((format) => (
-                  <Button key={format} asChild variant="outline" size="xs">
+                  draft || save.isPending || importIfc.isPending ? (
+                    <Button key={format} disabled variant="outline" size="xs" title={t("locationExportSaveFirst")}>
+                      <Download aria-hidden="true" />
+                      {t(format === "dxf" ? "locationExportDxf" : "locationExportGeoJson")}
+                    </Button>
+                  ) : <Button key={format} asChild variant="outline" size="xs">
                     <a href={`/api/projects/${projectId}/location/export?format=${format}`} download title={t("locationExportHint")}>
                       <Download aria-hidden="true" />
-                      {format === "dxf" ? "DXF" : "GeoJSON"}
+                      {t(format === "dxf" ? "locationExportDxf" : "locationExportGeoJson")}
                     </a>
                   </Button>
                 ))}

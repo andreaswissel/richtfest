@@ -271,11 +271,38 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     expect(planNoise.bebauungsplanNoise).toEqual({ value: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", reviewStatus: "unreviewed" });
     expect(planNoise.bebauungsplan).toEqual({ value: "applies", reviewStatus: "unreviewed" });
     // Zoning values are proposals too: unreviewed, so no limit is usable and nothing is checked.
-    expect(planNoise.developmentPlanZoning).toEqual({ bebauungsplanGrz: { value: "0,4", reviewStatus: "unreviewed" }, limits: { grz: null, gfz: null, maxFullStoreys: null },
-      compliance: { available: false, reason: expect.any(String) } });
+    expect(planNoise.developmentPlanZoning).toMatchObject({ bebauungsplanGrz: { value: "0,4", reviewStatus: "unreviewed" }, limits: { grz: null, gfz: null, maxFullStoreys: null },
+      compliance: { method: "zoning_check_v1", checks: [
+        { key: "grz", actual: null, status: "incomplete" }, { key: "gfz", actual: null, status: "incomplete" }, { key: "fullStoreys", actual: null, status: "incomplete" },
+      ] } });
     const noiseEvidence = (await pool.query(`select v.evidence, v.provenance from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.property_key='bebauungsplanNoise'`)).rows;
     expect(noiseEvidence).toEqual([{ provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: planVersion, page: 2, quote: "6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989)." }] }]);
     expect((await post("/regulatory-sources", { baseRevision: await revision(), sourceVersionId: planVersion })).body.data.summary.proposals).toBe(0);
     expect(audits).toContain("projects.building.regulatory.bebauungsplan_read");
+
+    const checks = async () => (await (await fetch(base + "/agent-context")).json()).data.soundInsulation.regulatoryBasis.developmentPlanZoning.compliance.checks;
+    const approve = async (entityId: string, key: string) => {
+      expect((await post("/properties/review", { baseRevision: await revision(), decision: "approved", items: [await latestVersion(entityId, key)] })).status).toBe(200);
+    };
+    for (const [entityType, entityId, key, value, unit] of [
+      ["building", building, "parcelArea", 1000, "m²"], ["building", building, "footprintArea", 420, "m²"],
+      ["building", building, "bebauungsplanGfz", "0,8", null], ["building", building, "bebauungsplanStoreys", "höchstens II", null],
+      ["storey", storey, "fullStorey", "full", null], ["storey", storey, "grossFloorArea", 600, "m²"],
+    ] as const) {
+      expect((await post("/properties", { baseRevision: await revision(), entityType, entityId, propertyKey: key, value, unit, provenance: "manual", evidence })).status).toBe(201);
+      await approve(entityId, key);
+    }
+    await approve(building, "bebauungsplanGrz");
+    expect(await checks()).toMatchObject([
+      { key: "grz", actual: 0.42, status: "exceeds" }, { key: "gfz", actual: null, status: "incomplete" }, { key: "fullStoreys", actual: null, status: "incomplete" },
+    ]);
+    // Entering the new declarations is insufficient; a person must approve them.
+    for (const [key, value] of [["storeyInventory", "complete"], ["gfzCountingBasis", "full_storeys_only"]] as const)
+      expect((await post("/properties", { baseRevision: await revision(), entityType: "building", entityId: building, propertyKey: key, value, provenance: "manual", evidence })).status).toBe(201);
+    expect((await checks())[1]).toMatchObject({ actual: null, status: "incomplete" });
+    await approve(building, "storeyInventory"); await approve(building, "gfzCountingBasis");
+    expect(await checks()).toMatchObject([
+      { key: "grz", actual: 0.42, status: "exceeds" }, { key: "gfz", actual: 0.6, status: "within" }, { key: "fullStoreys", actual: 1, status: "within" },
+    ]);
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);

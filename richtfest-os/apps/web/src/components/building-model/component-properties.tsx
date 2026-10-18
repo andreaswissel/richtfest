@@ -18,8 +18,9 @@ const enumOptions: Record<string, readonly string[]> = {
   componentType: componentTypeSchema.options, construction: componentConstructionSchema.options,
   wallRole: wallRoleSchema.options, spaceType: spaceTypeSchema.options, soundInsulationLevel: soundInsulationLevelSchema.options,
   federalState: federalStateSchema.options, bebauungsplan: bebauungsplanSchema.options, fullStorey: fullStoreySchema.options,
+  storeyInventory: ["complete", "incomplete"], gfzCountingBasis: ["full_storeys_only", "include_other_storeys"],
 };
-const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²" };
+const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const roomKeys = ["apartmentUnit", "spaceType"];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
@@ -67,7 +68,7 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
     const trimmed = raw.trim();
     if (trimmed === text) return;
     const value = !trimmed ? null : unit ? Number(trimmed.replace(",", ".")) : trimmed;
-    if (typeof value === "number" && !(Number.isFinite(value) && value > 0)) { setDraft(text); return; }
+    if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" ? value >= 0 : value > 0))) { setDraft(text); return; }
     onSave({ key: propertyKey, value, unit: value === null ? null : unit });
   };
   return <>

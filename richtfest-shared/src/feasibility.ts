@@ -39,19 +39,39 @@ export const feasibilityUnits: Record<FeasibilitySiteKey | FeasibilityScenarioKe
   financingRate: "%", marketingRate: "%", subsidies: "€", profitRate: "%",
 };
 
+/** Shared input bounds for editing, API validation and previously saved studies. */
+export function feasibilityValueError(key: string, value: number | null | undefined): "number" | "positive" | "ratio" | "percentage" | null {
+  if (value == null) return null;
+  if (!Number.isFinite(value) || value < 0 || value > 1e12) return "number";
+  if (["parcelArea", "capitalizationRate"].includes(key) && value === 0) return "positive";
+  if (key === "livingAreaRatio" && (value <= 0 || value > 1)) return "ratio";
+  if (["acquisitionCostRate", "operatingCostRate", "capitalizationRate", "marketingRate", "profitRate"].includes(key) && value > 100) return "percentage";
+  return null;
+}
+
 const valueMap = <K extends string>(keys: readonly K[]) => z.object(Object.fromEntries(keys.map(key => [key, feasibilityValueSchema.optional()])) as Record<K, z.ZodOptional<typeof feasibilityValueSchema>>).strict();
 export const feasibilityScenarioSchema = z.object({
   kind: z.enum(feasibilityScenarioKinds),
   /** Sale of units, or rental held and valued by capitalised net rent. */
   revenueMode: z.enum(["sale", "rent"]),
   values: valueMap(feasibilityScenarioKeys),
-}).strict();
+}).strict().superRefine((scenario, ctx) => {
+  for (const key of feasibilityScenarioInputs(scenario.kind, scenario.revenueMode)) {
+    const error = feasibilityValueError(key, scenario.values[key]?.value);
+    if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["values", key, "value"], message: `Invalid ${key}: ${error}` });
+  }
+});
 export const feasibilityStudyInput = z.object({
   baseRevision: z.number().int().min(0),
   site: valueMap(feasibilitySiteKeys),
   scenarios: z.array(feasibilityScenarioSchema).length(3).refine(items => feasibilityScenarioKinds.every(kind => items.filter(item => item.kind === kind).length === 1), "One scenario per kind"),
   notes: z.string().max(5000).default(""),
-}).strict();
+}).strict().superRefine((study, ctx) => {
+  for (const key of feasibilitySiteKeys) {
+    const error = feasibilityValueError(key, study.site[key]?.value);
+    if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["site", key, "value"], message: `Invalid ${key}: ${error}` });
+  }
+});
 export type FeasibilityScenario = z.infer<typeof feasibilityScenarioSchema>;
 export type FeasibilityStudyInput = z.infer<typeof feasibilityStudyInput>;
 export type FeasibilityStudy = Omit<FeasibilityStudyInput, "baseRevision"> & { revision: number; updatedAt: string | null };
@@ -65,12 +85,13 @@ export function feasibilityScenarioInputs(kind: FeasibilityScenarioKind, revenue
   return [...areas, "otherCost", ...revenue, "financingRate", "marketingRate", "subsidies", "profitRate"];
 }
 /** Inputs that may stay empty and count as zero. */
-const optionalInputs = new Set<string>(["otherCost", "subsidies", "demolitionCost", "askingPrice"]);
+export const feasibilityOptionalInputs = new Set<string>(["otherCost", "subsidies", "demolitionCost", "askingPrice"]);
 
 export type FeasibilityResult = {
   kind: FeasibilityScenarioKind;
   status: "complete" | "incomplete";
   missing: string[];
+  invalid: string[];
   /** Inputs that are used but not reviewed: the result is indicative until they are. */
   unreviewed: string[];
   livingArea: number | null;
@@ -97,17 +118,18 @@ export function calculateFeasibility(site: FeasibilityStudyInput["site"], scenar
   const used = feasibilityScenarioInputs(scenario.kind, scenario.revenueMode);
   const states: Record<string, FeasibilityValue | undefined> = { ...scenario.values, parcelArea: site.parcelArea, acquisitionCostRate: site.acquisitionCostRate, askingPrice: site.askingPrice };
   const required = ["parcelArea", "acquisitionCostRate", ...used];
-  const missing = required.filter(key => !optionalInputs.has(key) && (states[key]?.value === null || states[key]?.value === undefined));
+  const missing = required.filter(key => !feasibilityOptionalInputs.has(key) && (states[key]?.value === null || states[key]?.value === undefined));
+  const invalid = [...required, "askingPrice"].filter(key => feasibilityValueError(key, states[key]?.value));
   const unreviewed = [...required, "askingPrice"].filter(key => states[key] && states[key]!.value !== null && !states[key]!.reviewed);
   const v = (key: string) => states[key]?.value ?? 0;
   const pct = (key: string) => v(key) / 100;
   const empty = { livingArea: null, revenue: null, constructionCosts: null, financing: null, marketing: null, profit: null, totalCosts: null, residualLandValue: null, residualPerParcelArea: null, headroom: null };
-  if (missing.length) return { kind: scenario.kind, status: "incomplete", missing, unreviewed, ...empty };
+  if (missing.length || invalid.length) return { kind: scenario.kind, status: "incomplete", missing, invalid, unreviewed, ...empty };
   const existing = used.includes("existingLivingArea") ? v("existingLivingArea") : 0;
   const newLiving = used.includes("newGrossFloorArea") ? v("newGrossFloorArea") * v("livingAreaRatio") : 0;
   const livingArea = existing + newLiving;
   const revenue = scenario.revenueMode === "sale" ? livingArea * v("salePrice")
-    : pct("capitalizationRate") > 0 ? livingArea * v("monthlyRent") * 12 * (1 - pct("operatingCostRate")) / pct("capitalizationRate") : 0;
+    : livingArea * v("monthlyRent") * 12 * (1 - pct("operatingCostRate")) / pct("capitalizationRate");
   const build = newLiving * v("constructionCost");
   const constructionCosts = existing * v("renovationCost") + build * (1 + (used.includes("contingencyRate") ? pct("contingencyRate") : 0))
     + (used.includes("demolitionCost") ? v("demolitionCost") : 0) + v("otherCost");
@@ -117,7 +139,7 @@ export function calculateFeasibility(site: FeasibilityStudyInput["site"], scenar
   const totalCosts = constructionCosts + financing + marketing - v("subsidies");
   const residualLandValue = (revenue - totalCosts - profit) / (1 + pct("acquisitionCostRate"));
   const parcel = v("parcelArea");
-  return { kind: scenario.kind, status: "complete", missing, unreviewed, livingArea, revenue, constructionCosts, financing, marketing, profit, totalCosts, residualLandValue,
+  return { kind: scenario.kind, status: "complete", missing, invalid, unreviewed, livingArea, revenue, constructionCosts, financing, marketing, profit, totalCosts, residualLandValue,
     residualPerParcelArea: parcel > 0 ? residualLandValue / parcel : null,
     headroom: site.askingPrice?.value === null || site.askingPrice?.value === undefined ? null : residualLandValue - site.askingPrice.value };
 }

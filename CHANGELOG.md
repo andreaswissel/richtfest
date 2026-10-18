@@ -24,6 +24,8 @@
 
 ## 2026-10-18
 
+- Feasibility now compares scenarios in a compact summary with one input group at a time, clearer review status and validation, protected unsaved edits, and reports in the selected language. Zoning checks require a confirmed storey inventory and GFZ counting basis; Bebauungsplan suggestions retain height references and mandatory storey qualifiers. Site downloads are explicitly 2D, use interoperable GeoJSON and Unicode-safe DXF, and wait for location edits to be saved.
+
 - **Feasibility**: a new project view compares keeping the building, densifying it or building new by residual land value, with sale or rental per scenario. Floor areas start from the approved GFZ and parcel area, cost standards are marked until reviewed, missing inputs are named, and **Download report** creates a PDF of the saved study for banks or investors. Includes database migration 0048.
 
 - Building model: a **zoning check** compares GRZ, GFZ and Vollgeschosse with the approved Bebauungsplan limits once parcel area, Grundfläche and Geschossfläche per Vollgeschoss are entered and approved.

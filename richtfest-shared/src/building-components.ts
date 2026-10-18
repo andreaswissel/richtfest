@@ -61,6 +61,8 @@ export const buildingComponentProperties = {
     // Zoning check inputs: the parcel (Grundstück) area on the site building, each building's Grundfläche.
     parcelArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
     footprintArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
+    storeyInventory: { value: z.enum(["complete", "incomplete"]), unit: null },
+    gfzCountingBasis: { value: z.enum(["full_storeys_only", "include_other_storeys"]), unit: null },
   },
   /** 0 is the ground floor; upper storeys count up, basements down. */
   storey: {
@@ -68,6 +70,7 @@ export const buildingComponentProperties = {
     // Vollgeschoss per Landesbauordnung, decided by a person; its Geschossfläche counts towards the GFZ.
     fullStorey: { value: fullStoreySchema, unit: null },
     grossFloorArea: { value: z.number().positive().max(1_000_000), unit: "m²" },
+    countableFloorArea: { value: z.number().nonnegative().max(1_000_000), unit: "m²" },
   },
   room: {
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
@@ -251,8 +254,8 @@ export function zoningLimits(properties: Record<string, ComponentPropertyState |
 }
 
 /** Inputs the zoning check needs, as reviewed building-model values. Areas are entered from the Lageplan or calculation, not derived from room outlines. */
-export const zoningCheckBuildingKeys = ["parcelArea", "footprintArea"] as const;
-export const zoningCheckStoreyKeys = ["fullStorey", "grossFloorArea"] as const;
+export const zoningCheckBuildingKeys = ["parcelArea", "footprintArea", "storeyInventory", "gfzCountingBasis"] as const;
+export const zoningCheckStoreyKeys = ["fullStorey", "grossFloorArea", "countableFloorArea"] as const;
 export const zoningCheckMethod = "zoning_check_v1";
 export type ZoningCheckKey = "grz" | "gfz" | "fullStoreys";
 export type ZoningInputGap = { field: string; entityType: "building" | "storey"; entityId: string; status: "missing" | "unreviewed" };
@@ -270,8 +273,9 @@ export type ZoningCheckInput = {
  * GRZ, GFZ and Vollgeschosse of the planned buildings against the approved
  * Bebauungsplan limits. Deterministic arithmetic on approved inputs only:
  * GRZ = Grundfläche (§ 19 Abs. 2 BauNVO, main buildings) / parcel area; GFZ =
- * Geschossfläche of the Vollgeschosse (§ 20 Abs. 3 BauNVO, outer dimensions) /
- * parcel area. Vollgeschosse are counted per building and the highest count
+ * Geschossfläche of the Vollgeschosse plus other countable areas when the
+ * reviewed site counting basis requires them / parcel area. Each building's
+ * storey inventory must be confirmed complete. Vollgeschosse are counted per building and the highest count
  * is checked. Whether a storey is a Vollgeschoss follows the Landesbauordnung
  * and is a person's decision. Any missing or unreviewed input makes a check
  * incomplete instead of guessing; § 19 Abs. 4 overruns (garages, access) are not assessed.
@@ -280,7 +284,12 @@ export function zoningChecks(input: ZoningCheckInput): ZoningCheck[] {
   const gapOf = (entityType: "building" | "storey", entityId: string, properties: Record<string, ComponentPropertyState>, field: string): ZoningInputGap | null => {
     const state = properties[field];
     if (!state || state.value === null || state.value === undefined || state.reviewStatus === "rejected") return { field, entityType, entityId, status: "missing" };
-    return state.reviewStatus === "approved" ? null : { field, entityType, entityId, status: "unreviewed" };
+    if (state.reviewStatus !== "approved") return { field, entityType, entityId, status: "unreviewed" };
+    const invalid = field === "storeyInventory" ? state.value !== "complete"
+      : field === "gfzCountingBasis" ? !["full_storeys_only", "include_other_storeys"].includes(String(state.value))
+      : field === "fullStorey" ? !["full", "not_full"].includes(String(state.value))
+      : typeof state.value !== "number" || !Number.isFinite(state.value) || (field === "countableFloorArea" ? state.value < 0 : state.value <= 0);
+    return invalid ? { field, entityType, entityId, status: "missing" } : null;
   };
   const number = (properties: Record<string, ComponentPropertyState>, field: string) => typeof properties[field]?.value === "number" ? properties[field]!.value as number : 0;
   const parcelGap = input.site ? gapOf("building", input.site.id, input.site.properties, "parcelArea") : null;
@@ -291,16 +300,27 @@ export function zoningChecks(input: ZoningCheckInput): ZoningCheck[] {
 
   const footprintGaps = [...(parcelGap ? [parcelGap] : []), ...input.buildings.flatMap(building => gapOf("building", building.id, building.properties, "footprintArea") ?? [])];
   const footprint = input.buildings.reduce((sum, building) => sum + number(building.properties, "footprintArea"), 0);
-  const storeyStatusGaps = input.storeys.flatMap(storey => gapOf("storey", storey.id, storey.properties, "fullStorey") ?? []);
+  const inventoryGaps = input.buildings.flatMap((building): ZoningInputGap[] => {
+    const gap = gapOf("building", building.id, building.properties, "storeyInventory");
+    if (gap) return [gap];
+    const hasStoreys = input.storeys.some(storey => storey.buildingId === building.id || (!storey.buildingId && input.buildings.length === 1));
+    return hasStoreys ? [] : [{ field: "storeyInventory", entityType: "building", entityId: building.id, status: "missing" }];
+  });
+  const storeyStatusGaps = [...inventoryGaps, ...input.storeys.flatMap(storey => gapOf("storey", storey.id, storey.properties, "fullStorey") ?? [])];
+  const basisGap = input.site ? gapOf("building", input.site.id, input.site.properties, "gfzCountingBasis") : null;
+  const other = input.site?.properties.gfzCountingBasis?.value === "include_other_storeys"
+    ? input.storeys.filter(storey => storey.properties.fullStorey?.value === "not_full") : [];
   const full = input.storeys.filter(storey => storey.properties.fullStorey?.reviewStatus === "approved" && storey.properties.fullStorey.value === "full");
-  const floorGaps = [...(parcelGap ? [parcelGap] : []), ...storeyStatusGaps, ...full.flatMap(storey => gapOf("storey", storey.id, storey.properties, "grossFloorArea") ?? [])];
-  const floorArea = full.reduce((sum, storey) => sum + number(storey.properties, "grossFloorArea"), 0);
+  const floorGaps = [...(parcelGap ? [parcelGap] : []), ...(basisGap ? [basisGap] : []), ...storeyStatusGaps, ...full.flatMap(storey => gapOf("storey", storey.id, storey.properties, "grossFloorArea") ?? []),
+    ...other.flatMap(storey => gapOf("storey", storey.id, storey.properties, "countableFloorArea") ?? [])];
+  const floorArea = full.reduce((sum, storey) => sum + number(storey.properties, "grossFloorArea"), 0)
+    + other.reduce((sum, storey) => sum + number(storey.properties, "countableFloorArea"), 0);
   const perBuilding = new Map<string, number>();
   for (const storey of full) perBuilding.set(storey.buildingId ?? "", (perBuilding.get(storey.buildingId ?? "") ?? 0) + 1);
   const mostFullStoreys = Math.max(0, ...perBuilding.values());
   return [
     result("grz", input.limits.grz, ratio(footprint, footprintGaps), footprintGaps),
-    result("gfz", input.limits.gfz, ratio(floorArea, floorGaps), floorGaps),
+    result("gfz", input.limits.gfz, input.site && input.buildings.length ? ratio(floorArea, floorGaps) : null, floorGaps),
     result("fullStoreys", input.limits.maxFullStoreys, storeyStatusGaps.length || !input.storeys.length ? null : mostFullStoreys, storeyStatusGaps),
   ];
 }

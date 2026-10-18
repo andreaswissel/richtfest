@@ -1,179 +1,190 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useId, useState } from "react";
+import { Link, useBlocker } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import {
-  calculateFeasibility, feasibilityScenarioInputs, feasibilityScenarioKinds, feasibilityUnits,
-  type FeasibilityResult, type FeasibilityScenario, type FeasibilityScenarioKey, type FeasibilitySiteFigures, type FeasibilitySiteKey, type FeasibilityStudy, type FeasibilityValue,
+  calculateFeasibility, feasibilityOptionalInputs, feasibilityScenarioInputs, feasibilityScenarioKinds, feasibilitySiteKeys, feasibilityUnits, feasibilityValueError,
+  type FeasibilityResult, type FeasibilityScenario, type FeasibilityScenarioKey, type FeasibilityScenarioKind, type FeasibilitySiteFigures, type FeasibilitySiteKey, type FeasibilityStudy, type FeasibilityValue,
 } from "@richtfest/shared";
 import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
+import { usePreferences } from "../../store";
 import { Section } from "../layout";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input, Textarea } from "../ui/input";
-import { Badge, Callout, Segmented } from "../ui/primitives";
+import { Badge, Callout, Modal, Segmented } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import "./feasibility.css";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
-type StudyResponse = { study: FeasibilityStudy; results: FeasibilityResult[]; figures: FeasibilitySiteFigures; method: string };
-type Draft = Pick<FeasibilityStudy, "site" | "scenarios" | "notes">;
-
+type StudyResponse = { study: FeasibilityStudy; results: FeasibilityResult[]; figures: FeasibilitySiteFigures; method: string; canWrite: boolean };
+type InputKey = FeasibilitySiteKey | FeasibilityScenarioKey;
 const camel = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 const inputLabel = (key: string, t: T) => t(`feasibilityInput${camel(key)}` as Key);
 const scenarioLabel = (kind: string, t: T) => t(`feasibilityScenario${camel(kind.replace(/_(\w)/, (_, c: string) => c.toUpperCase()))}` as Key);
-/** Rows in task order: what is built, what it costs, what it earns, then the decision. */
 const groups: Array<{ title: Key; keys: FeasibilityScenarioKey[] }> = [
   { title: "feasibilityGroupAreas", keys: ["existingLivingArea", "newGrossFloorArea", "livingAreaRatio"] },
-  { title: "feasibilityGroupCosts", keys: ["renovationCost", "constructionCost", "contingencyRate", "demolitionCost", "otherCost", "financingRate", "marketingRate", "subsidies"] },
-  { title: "feasibilityGroupRevenue", keys: ["salePrice", "monthlyRent", "operatingCostRate", "capitalizationRate", "profitRate"] },
+  { title: "feasibilityGroupCosts", keys: ["renovationCost", "constructionCost", "contingencyRate", "financingRate", "demolitionCost", "otherCost", "subsidies"] },
+  { title: "feasibilityGroupRevenue", keys: ["salePrice", "monthlyRent", "operatingCostRate", "capitalizationRate", "marketingRate", "profitRate"] },
 ];
-const resultRows: Array<{ key: keyof FeasibilityResult; label: Key; perArea?: boolean; strong?: boolean }> = [
-  { key: "livingArea", label: "feasibilityResultLivingArea" },
-  { key: "revenue", label: "feasibilityResultRevenue" },
-  { key: "totalCosts", label: "feasibilityResultTotalCosts" },
-  { key: "profit", label: "feasibilityResultProfit" },
-  { key: "residualLandValue", label: "feasibilityResultResidual", strong: true },
-  { key: "residualPerParcelArea", label: "feasibilityResultPerParcel", perArea: true },
-  { key: "headroom", label: "feasibilityResultHeadroom", strong: true },
+const hints: Partial<Record<InputKey, Key>> = {
+  acquisitionCostRate: "feasibilityHintAcquisition", livingAreaRatio: "feasibilityHintRatio", financingRate: "feasibilityHintFinancing",
+  contingencyRate: "feasibilityHintContingency", marketingRate: "feasibilityHintRevenueRate", profitRate: "feasibilityHintRevenueRate",
+  operatingCostRate: "feasibilityHintOperating", capitalizationRate: "feasibilityHintCapitalization", newGrossFloorArea: "feasibilityHintFloorArea",
+};
+const resultRows: Array<{ key: "livingArea" | "revenue" | "totalCosts" | "profit" | "residualLandValue" | "residualPerParcelArea" | "headroom"; label: Key }> = [
+  { key: "livingArea", label: "feasibilityResultLivingArea" }, { key: "revenue", label: "feasibilityResultRevenue" },
+  { key: "totalCosts", label: "feasibilityResultTotalCosts" }, { key: "profit", label: "feasibilityResultProfit" },
+  { key: "residualLandValue", label: "feasibilityResultResidual" }, { key: "residualPerParcelArea", label: "feasibilityResultPerParcel" },
+  { key: "headroom", label: "feasibilityResultHeadroom" },
 ];
-const euro = (value: number) => `${Math.round(value).toLocaleString()} €`;
-/** Accepts German ("1.500.000", "0,75") and English ("1,500,000", "0.75") input; a single dot or comma is a decimal separator. */
-const parse = (text: string) => { const trimmed = text.trim().replace(/[\s€%]/g, ""); if (!trimmed) return null;
-  const grouped = (separator: string) => trimmed.split(separator).length > 2;
-  const normal = grouped(".") ? trimmed.replace(/\./g, "").replace(",", ".") : grouped(",") ? trimmed.replace(/,/g, "")
-    : trimmed.includes(",") && trimmed.includes(".") ? (trimmed.lastIndexOf(",") > trimmed.lastIndexOf(".") ? trimmed.replace(/\./g, "").replace(",", ".") : trimmed.replace(/,/g, ""))
-    : trimmed.replace(",", ".");
-  const value = Number(normal); return Number.isFinite(value) && value >= 0 ? value : undefined; };
 
-/** One editable value with where it came from. Typing a value makes it yours and reviewed; proposals need a tick. */
-function ValueCell({ state, label, unit, disabled, t, onChange }: { state?: FeasibilityValue; label: string; unit: string; disabled: boolean; t: T; onChange: (state: FeasibilityValue | undefined) => void }) {
-  const text = state?.value === null || state?.value === undefined ? "" : state.value.toLocaleString(undefined, { maximumFractionDigits: 2, useGrouping: false });
-  const [draft, setDraft] = useState(text);
-  useEffect(() => setDraft(text), [text]);
-  const commit = () => {
-    const value = parse(draft);
-    if (value === undefined) { setDraft(text); return; }
-    if (value === (state?.value ?? null)) return;
-    onChange(value === null ? undefined : { value, source: "entered", note: null, reviewed: true });
-  };
-  const proposed = state && state.source !== "entered";
-  return <div className="feasibility-cell">
-    <Input aria-label={label} inputMode="decimal" value={draft} disabled={disabled} placeholder="–" title={state?.note ?? unit}
-      onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") commit(); }} />
-    {proposed && <span className="feasibility-proposal text-ui-2xs" title={state.note ?? undefined}>
+/** Separators follow the selected language; malformed grouping is rejected, never guessed. */
+const parse = (text: string, language: "en" | "de") => {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const pattern = language === "de" ? /^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?$/ : /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/;
+  if (!pattern.test(trimmed)) return undefined;
+  const value = Number(language === "de" ? trimmed.replace(/\./g, "").replace(",", ".") : trimmed.replace(/,/g, ""));
+  return Number.isFinite(value) ? value : undefined;
+};
+
+/** Raw drafts live in the editor so switching input groups never drops invalid text. */
+function ValueField({ state, field, label, disabled, language, raw, onRaw, onChange }: {
+  state?: FeasibilityValue; field: InputKey; label: string; disabled: boolean; language: "en" | "de";
+  raw?: string; onRaw: (text: string | undefined) => void; onChange: (state: FeasibilityValue | undefined) => void;
+}) {
+  const t = useT(), id = useId();
+  const locale = language === "de" ? "de-DE" : "en-GB";
+  const text = raw ?? (state?.value == null ? "" : state.value.toLocaleString(locale, { useGrouping: true, maximumFractionDigits: 10 }));
+  const value = parse(text, language);
+  const error = value === undefined ? "number" : feasibilityValueError(field, value);
+  const optional = feasibilityOptionalInputs.has(field);
+  const missing = value === null && !optional;
+  const hint = hints[field];
+  return <div className="feasibility-field">
+    <label className="text-ui-xs" htmlFor={id}>{label} <span className="muted">({feasibilityUnits[field]}){optional ? ` · ${t("optional")}` : ""}</span></label>
+    <Input id={id} aria-label={label} aria-invalid={!!error} aria-describedby={`${id}-help`} inputMode="decimal" disabled={disabled} value={text} placeholder="–"
+      onChange={event => {
+        const next = event.target.value;
+        onRaw(next);
+        const parsed = parse(next, language);
+        // Invalid drafts suppress the result, rather than leaving the last valid number visible as a calculation.
+        if (parsed === undefined) onChange({ value: NaN, source: "entered", note: null, reviewed: true });
+        else if (parsed !== (state?.value ?? null)) onChange(parsed === null ? undefined : { value: parsed, source: "entered", note: null, reviewed: true });
+      }}
+      onBlur={() => { if (!error) onRaw(undefined); }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+    <div id={`${id}-help`} className="text-ui-2xs muted">
+      {error ? <span role="alert">{t(`feasibilityError${camel(error)}` as Key)}</span> : missing ? t("feasibilityRequired") : hint ? t(hint) : optional ? t("feasibilityOptionalZero") : null}
+    </div>
+    {state && state.source !== "entered" && <div className="feasibility-proposal text-ui-2xs">
       <Badge variant="outline">{state.source === "standard" ? t("feasibilitySourceStandard") : t("feasibilitySourceModel")}</Badge>
-      <label className="muted">
-        <Checkbox aria-label={`${label}: ${t("feasibilityReviewed")}`} checked={state.reviewed} disabled={disabled} onCheckedChange={(checked) => onChange({ ...state, reviewed: checked === true })} />
-        {t("feasibilityReviewed")}
-      </label>
-    </span>}
+      <label><Checkbox aria-label={`${label}: ${t("feasibilityReviewed")}`} checked={state.reviewed} disabled={disabled}
+        onCheckedChange={checked => onChange({ ...state, reviewed: checked === true })} />{t("feasibilityReviewed")}</label>
+      {state.note && <span className="muted">{state.note}</span>}
+    </div>}
   </div>;
 }
 
-/**
- * Feasibility: keep, densify or build new, compared by residual land value.
- * Values from the building model and company standards are proposals until
- * ticked; the comparison recalculates live and the decision sits last.
- */
 export function Feasibility({ projectId }: { projectId: string }) {
-  const t = useT();
+  const t = useT(), language = usePreferences(s => s.language);
+  const locale = language === "de" ? "de-DE" : "en-GB";
+  const euro = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : `${Math.round(value).toLocaleString(locale)} €`;
   const path = `/feasibility/projects/${projectId}/study`;
   const query = useApi(path);
   const data = query.data as StudyResponse | undefined;
-  const session = useApi("/auth/me");
-  const [draft, setDraft] = useState<Draft>();
-  const [conflict, setConflict] = useState<string>();
-  useEffect(() => { if (data) setDraft({ site: data.study.site, scenarios: data.study.scenarios, notes: data.study.notes }); }, [data]);
-  const results = useMemo(() => draft ? draft.scenarios.map((scenario) => calculateFeasibility(draft.site, scenario)) : [], [draft]);
-  const dirty = Boolean(data && draft && JSON.stringify({ site: data.study.site, scenarios: data.study.scenarios, notes: data.study.notes }) !== JSON.stringify(draft));
+  // Capture the revision at the first edit. Background refetches cannot replace this draft or its base revision.
+  const [draft, setDraft] = useState<FeasibilityStudy>();
+  const [raw, setRaw] = useState<Record<string, string>>({});
+  const [selected, setSelected] = useState<FeasibilityScenarioKind>("existing");
+  const [group, setGroup] = useState("0");
+  const [siteOpen, setSiteOpen] = useState<boolean>();
+  const study = draft ?? data?.study;
+  const dirty = !!draft || Object.keys(raw).length > 0;
+  const results = study?.scenarios.map(scenario => calculateFeasibility(study.site, scenario)) ?? [];
+  const invalidText = Object.values(raw).some(text => parse(text, language) === undefined);
+  const invalid = invalidText || results.some(result => result.invalid.length > 0);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
+  useEffect(() => {
+    if (!dirty) return;
+    const before = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", before);
+    return () => window.removeEventListener("beforeunload", before);
+  }, [dirty]);
+  useEffect(() => { setDraft(undefined); setRaw({}); }, [projectId]);
   const save = useMutation({
-    mutationFn: () => api<StudyResponse>(path, { baseRevision: data!.study.revision, ...draft }, "PUT"),
-    onMutate: () => setConflict(undefined),
-    onSuccess: (response) => queryClient.setQueryData([path], response),
-    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("feasibilityConflict") : error.message),
+    mutationFn: () => api<StudyResponse>(path, { baseRevision: study!.revision, site: study!.site, scenarios: study!.scenarios, notes: study!.notes }, "PUT"),
+    onSuccess: response => { queryClient.setQueryData([path], response); setDraft(undefined); setRaw({}); },
   });
   if (query.isError) return <Callout tone="error">{(query.error as Error).message}</Callout>;
-  if (!data || !draft) return null;
-  const canWrite = (session.data?.permissions || session.data?.user?.permissions || []).includes("projects:write");
-  const setSite = (key: FeasibilitySiteKey, state: FeasibilityValue | undefined) => setDraft((current) => current && ({ ...current, site: { ...current.site, [key]: state } }));
-  const setScenario = (kind: FeasibilityScenario["kind"], change: (scenario: FeasibilityScenario) => FeasibilityScenario) =>
-    setDraft((current) => current && ({ ...current, scenarios: current.scenarios.map((scenario) => scenario.kind === kind ? change(scenario) : scenario) }));
-  const ordered = feasibilityScenarioKinds.map((kind) => draft.scenarios.find((scenario) => scenario.kind === kind)!);
-  const unreviewed = new Set(results.flatMap((result) => result.unreviewed)).size;
-  const best = results.filter((result) => result.status === "complete").sort((a, b) => b.residualLandValue! - a.residualLandValue!)[0];
+  if (!data || !study) return null;
+  const disabled = !data.canWrite || save.isPending;
+  const scenario = study.scenarios.find(s => s.kind === selected)!;
+  const result = results.find(r => r.kind === selected)!;
+  const used = feasibilityScenarioInputs(selected, scenario.revenueMode);
+  const setScenario = (change: Partial<FeasibilityScenario>) => setDraft({ ...study, scenarios: study.scenarios.map(s => s.kind === selected ? { ...s, ...change } : s) });
+  const field = (key: InputKey, site = false) => {
+    const rawKey = `${site ? "site" : selected}:${key}`;
+    return <ValueField key={rawKey} field={key} label={inputLabel(key, t)} state={site ? study.site[key as FeasibilitySiteKey] : scenario.values[key as FeasibilityScenarioKey]}
+      disabled={disabled} language={language} raw={raw[rawKey]} onRaw={text => setRaw(current => { const next = { ...current }; if (text === undefined) delete next[rawKey]; else next[rawKey] = text; return next; })}
+      onChange={state => site ? setDraft({ ...study, site: { ...study.site, [key]: state } }) : setScenario({ values: { ...scenario.values, [key]: state } })} />;
+  };
+  const status = (r: FeasibilityResult) => [
+    r.invalid.length ? t("feasibilityInvalid").replace("{count}", String(r.invalid.length)) : null,
+    r.missing.length ? t("feasibilityMissing").replace("{count}", String(r.missing.length)) : null,
+    r.unreviewed.length ? t("feasibilityUnreviewed").replace("{count}", String(r.unreviewed.length)) : null,
+  ].filter(Boolean).join(" · ") || t("feasibilityReady");
+  const canReport = !!data.study.revision && !dirty && !invalid && !save.isPending;
   return <div className="feasibility">
-    <Section title={t("feasibilitySite")}>
-      <Callout>{t("feasibilityScopeHint")}</Callout>
-      <div className="feasibility-site">
-        {(["parcelArea", "askingPrice", "acquisitionCostRate"] as const).map((key) => <label key={key} className="feasibility-site-field">
-          <span className="text-ui-xs">{inputLabel(key, t)} <span className="muted">({feasibilityUnits[key]})</span></span>
-          <ValueCell state={draft.site[key]} label={inputLabel(key, t)} unit={feasibilityUnits[key]} disabled={!canWrite} t={t} onChange={(state) => setSite(key, state)} />
-        </label>)}
+    {blocker.state === "blocked" && <Modal title={t("feasibilityUnsaved")} onClose={() => blocker.reset()}>
+      <p>{t("feasibilityUnsavedHint")}</p><div className="inline-actions">
+        <Button variant="outline" onClick={() => blocker.proceed()}>{t("locationLeave")}</Button>
+        <Button onClick={() => blocker.reset()}>{t("locationStay")}</Button>
       </div>
-      {(data.figures.gfz !== null || data.figures.grz !== null) && <p className="muted text-ui-2xs">
-        {t("feasibilityZoning").replace("{grz}", data.figures.grz?.toLocaleString() ?? "–").replace("{gfz}", data.figures.gfz?.toLocaleString() ?? "–")}{" "}
-        <Link className="underline underline-offset-2" to={`/projects/${projectId}?view=building-model`}>{t("feasibilityOpenModel")}</Link>
-      </p>}
-    </Section>
+    </Modal>}
     <Section title={t("feasibilityScenarios")} meta={<div className="inline-actions">
-      <Button asChild variant="outline" size="sm" disabled={!data.study.revision || dirty}>
-        <a href={`/api${path}/report.pdf`} download aria-disabled={!data.study.revision || dirty} onClick={(event) => { if (!data.study.revision || dirty) event.preventDefault(); }}
-          title={!data.study.revision || dirty ? t("feasibilityReportSaveFirst") : t("feasibilityReportHint")}>
-          <Download aria-hidden="true" />{t("feasibilityReport")}
-        </a>
-      </Button>
-      {canWrite && <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t("feasibilitySave")}</Button>}
+      <span className="muted text-ui-2xs">{dirty ? t("feasibilityUnsaved") : data.study.revision ? `r${data.study.revision} · ${t("feasibilitySaved")}` : t("feasibilityNew")}</span>
+      <Button variant="outline" size="sm" disabled={!canReport} title={canReport ? t("feasibilityReportHint") : t("feasibilityReportSaveFirst")}
+        onClick={() => { const a = document.createElement("a"); a.href = `/api${path}/report.pdf?lang=${language}`; a.download = ""; a.click(); }}><Download aria-hidden="true" />{t("feasibilityReport")}</Button>
+      {data.canWrite && <Button size="sm" disabled={!dirty || invalid || save.isPending} onClick={() => save.mutate()}>{save.isPending ? t("saving") : t("feasibilitySave")}</Button>}
     </div>}>
-      {conflict && <Callout tone="error">{conflict}</Callout>}
-      <Table className="feasibility-table">
-        <colgroup><col className="feasibility-label-col" /><col /><col /><col /></colgroup>
-        <TableHeader>
-          <TableRow>
-            <TableHead />
-            {ordered.map((scenario) => <TableHead key={scenario.kind}>
-              <div className="feasibility-scenario-head">
-                <span>{scenarioLabel(scenario.kind, t)}</span>
-                <Segmented value={scenario.revenueMode} onChange={(mode) => canWrite && setScenario(scenario.kind, (current) => ({ ...current, revenueMode: mode as FeasibilityScenario["revenueMode"] }))}
-                  items={[{ value: "sale", label: t("feasibilityModeSale"), disabled: !canWrite }, { value: "rent", label: t("feasibilityModeRent"), disabled: !canWrite }]} />
-              </div>
-            </TableHead>)}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {groups.map((group) => <Fragment key={group.title}>
-            <TableRow><TableCell colSpan={4} className="feasibility-group">{t(group.title)}</TableCell></TableRow>
-            {group.keys.map((key) => <TableRow key={key}>
-              <TableCell className="text-ui-xs">{inputLabel(key, t)} <span className="muted">({feasibilityUnits[key]})</span></TableCell>
-              {ordered.map((scenario) => <TableCell key={scenario.kind}>
-                {feasibilityScenarioInputs(scenario.kind, scenario.revenueMode).includes(key)
-                  ? <ValueCell state={scenario.values[key]} label={`${inputLabel(key, t)} · ${scenarioLabel(scenario.kind, t)}`} unit={feasibilityUnits[key]} disabled={!canWrite} t={t}
-                      onChange={(state) => setScenario(scenario.kind, (current) => ({ ...current, values: { ...current.values, [key]: state } }))} />
-                  : <span className="muted text-ui-xs">—</span>}
-              </TableCell>)}
-            </TableRow>)}
-          </Fragment>)}
-          <TableRow><TableCell colSpan={4} className="feasibility-group">{t("feasibilityGroupResult")}</TableCell></TableRow>
-          {resultRows.filter((row) => row.key !== "headroom" || draft.site.askingPrice?.value != null).map((row) => <TableRow key={row.key}>
-            <TableCell className={`text-ui-xs${row.strong ? " font-medium" : ""}`}>{t(row.label)}</TableCell>
-            {feasibilityScenarioKinds.map((kind) => { const result = results.find((item) => item.kind === kind)!; const value = result[row.key] as number | null;
-              return <TableCell key={kind} className={`feasibility-number${row.strong ? " font-medium" : ""}`}>
-                {result.status === "incomplete" ? (row.key === "residualLandValue" ? <span className="muted text-ui-2xs" title={result.missing.map((key) => inputLabel(key, t)).join(", ")}>{t("feasibilityMissing").replace("{count}", String(result.missing.length))}</span> : "–")
-                  : value === null ? "–" : row.key === "livingArea" ? `${Math.round(value).toLocaleString()} m²` : row.perArea ? `${euro(value)}/m²` : euro(value)}
-              </TableCell>; })}
-          </TableRow>)}
-        </TableBody>
+      {save.error && <Callout tone="error">{save.error instanceof ApiError && save.error.status === 409 ? t("feasibilityConflict") : save.error.message}</Callout>}
+      {dirty && data.study.revision !== study.revision && <Callout>{t("feasibilityConflict")}</Callout>}
+      {invalid && <Callout tone="error">{t("feasibilityFixInputs")}</Callout>}
+      <Table className="feasibility-summary">
+        <TableHeader><TableRow><TableHead>{t("feasibilityScenario")}</TableHead><TableHead>{t("feasibilityResultResidual")}</TableHead><TableHead>{t("status")}</TableHead></TableRow></TableHeader>
+        <TableBody>{feasibilityScenarioKinds.map(kind => {
+          const r = results.find(item => item.kind === kind)!;
+          const s = study.scenarios.find(item => item.kind === kind)!;
+          return <TableRow key={kind} data-state={kind === selected ? "selected" : undefined}>
+            <TableCell><Button variant="ghost" size="sm" aria-pressed={kind === selected} onClick={() => setSelected(kind)}>{scenarioLabel(kind, t)}</Button><span className="muted text-ui-2xs feasibility-mode">{t(s.revenueMode === "sale" ? "feasibilityModeSale" : "feasibilityModeRent")}</span></TableCell>
+            <TableCell className="feasibility-number">{euro(r.residualLandValue)}</TableCell><TableCell><Badge variant="outline">{status(r)}</Badge></TableCell>
+          </TableRow>;
+        })}</TableBody>
       </Table>
-      <p className="muted text-ui-2xs" role="status">
-        {[best ? t("feasibilityBest").replace("{scenario}", scenarioLabel(best.kind, t)) : t("feasibilityNoneComplete"),
-          unreviewed ? t("feasibilityUnreviewed").replace("{count}", String(unreviewed)) : null, t("feasibilityDisclaimer")].filter(Boolean).join(" · ")}
-      </p>
+      <p className="muted text-ui-2xs">{t("feasibilityScopeHint")}</p>
     </Section>
-    <Section title={t("feasibilityNotes")}>
-      <Textarea aria-label={t("feasibilityNotes")} rows={3} value={draft.notes} disabled={!canWrite} onChange={(event) => setDraft((current) => current && ({ ...current, notes: event.target.value }))} />
+    <details className="feasibility-disclosure" open={siteOpen ?? (study.site.parcelArea?.value == null || study.site.acquisitionCostRate?.value == null)} onToggle={event => setSiteOpen(event.currentTarget.open)}>
+      <summary className="text-ui-sm">{t("feasibilitySite")}<span className="muted text-ui-xs">{Number.isFinite(study.site.parcelArea?.value) ? study.site.parcelArea!.value!.toLocaleString(locale) : "–"} m² · {euro(study.site.askingPrice?.value ?? null)}</span></summary>
+      <div className="feasibility-fields">{feasibilitySiteKeys.map(key => field(key, true))}</div>
+      {(data.figures.gfz !== null || data.figures.grz !== null) && <p className="muted text-ui-2xs">{t("feasibilityZoning").replace("{grz}", data.figures.grz?.toLocaleString(locale) ?? "–").replace("{gfz}", data.figures.gfz?.toLocaleString(locale) ?? "–")}{" "}<Link className="underline" to={`/projects/${projectId}?view=building-model`}>{t("feasibilityOpenModel")}</Link></p>}
+    </details>
+    <Section title={scenarioLabel(selected, t)} meta={<Segmented value={scenario.revenueMode} onChange={mode => setScenario({ revenueMode: mode as FeasibilityScenario["revenueMode"] })}
+      items={[{ value: "sale", label: t("feasibilityModeSale"), disabled }, { value: "rent", label: t("feasibilityModeRent"), disabled }]} />}>
+      <Segmented value={group} onChange={setGroup} items={groups.map((g, i) => {
+        const count = g.keys.filter(key => result.missing.includes(key) || result.invalid.includes(key)).length;
+        return { value: String(i), label: `${t(g.title)}${count ? ` · ${count}` : ""}` };
+      })} />
+      <div className="feasibility-fields">{groups[Number(group)]!.keys.filter(key => used.includes(key) && !feasibilityOptionalInputs.has(key)).map(key => field(key))}</div>
+      {group === "1" && <details className="feasibility-disclosure"><summary className="text-ui-xs">{t("feasibilityAdditionalCosts")}</summary><div className="feasibility-fields">{groups[1]!.keys.filter(key => used.includes(key) && feasibilityOptionalInputs.has(key)).map(key => field(key))}</div></details>}
+      <p className="muted text-ui-2xs" role="status">{status(result)}{result.missing.length ? `: ${result.missing.map(key => inputLabel(key, t)).join(", ")}` : ""}</p>
     </Section>
+    <details className="feasibility-disclosure"><summary className="text-ui-sm">{t("feasibilityGroupResult")} · {scenarioLabel(selected, t)}<span className="feasibility-number">{euro(result.residualLandValue)}</span></summary>
+      <dl className="feasibility-results">{resultRows.filter(row => row.key !== "headroom" || study.site.askingPrice?.value != null).map(row => <div key={row.key}><dt>{t(row.label)}</dt><dd>{row.key === "livingArea" ? result.livingArea === null ? "–" : `${result.livingArea.toLocaleString(locale)} m²` : euro(result[row.key])}</dd></div>)}</dl>
+    </details>
+    <details className="feasibility-disclosure"><summary className="text-ui-sm">{t("feasibilityNotes")}</summary><Textarea aria-label={t("feasibilityNotes")} maxLength={5000} rows={3} value={study.notes} disabled={disabled} onChange={event => setDraft({ ...study, notes: event.target.value })} /></details>
   </div>;
 }
