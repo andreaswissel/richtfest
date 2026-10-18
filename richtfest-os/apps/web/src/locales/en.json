@@ -2009,6 +2009,8 @@
   "noiseLookupUnavailable": "Roads and railways could not be retrieved for this site. Automatic lists are available in Berlin, Rheinland-Pfalz and Hessen; elsewhere, add sources by hand.",
   "noiseTraffic": "{daily} Kfz/24h ({year})",
   "noiseHeavyShare": "Lkw {share} %",
+  "noiseTrains": "{daily} trains/24h ({year})",
+  "noiseTrainsNight": "{night} at night (22–06)",
   "noiseAttributionRlp": "©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0",
   "noiseDistanceHint": "Distance from the address point to the mapped axis, not from a facade.",
   "noiseClass": "Class",

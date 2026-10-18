@@ -5,6 +5,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, type EnvironmentSurvey } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
+import { overlayNationalCounts } from "./noise-counts";
 import { berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, inBerlin, groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
 
 /** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
@@ -313,6 +314,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
     : scoped.kind === "location"
     ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
     : await hessenCategories(site, bbox, retrievedAt, rawResponses, options.signal);
+  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal).catch(() => options.signal?.throwIfAborted());
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
   const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
   const fileId = randomUUID(), versionId = randomUUID();
