@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- **Berlin site assessment:** Review parcel and plan evidence, compare nearby buildings, edit buildable envelopes and massing in 2D/3D, and see which constraints limit the selected design. Keep exception scenarios separate and export source-linked assessments for preliminary authority discussions.
-
 ## 2026-10-18
+
+- **Berlin site assessment:** Review parcel and plan evidence, compare nearby buildings, edit buildable envelopes and massing in 2D/3D, and see which constraints limit the selected design. Keep exception scenarios separate and export source-linked assessments for preliminary authority discussions. Includes database migrations 0050 and 0051.
 
 - Location imagery is saved server-side and reused across viewers and deployments, reducing requests to official map services. Aerial and rail-noise layers retain their last good image during provider outages or rate limits, without reusing images from another location. Includes database migration 0049.
 
