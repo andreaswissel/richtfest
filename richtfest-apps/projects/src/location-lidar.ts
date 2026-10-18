@@ -1,10 +1,15 @@
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createInflateRaw } from "node:zlib";
-import type { LocationContext, LocationPointCloud } from "@richtfest/shared";
+import type { LocationContext, LocationPointCloud, LocationTreeDetection } from "@richtfest/shared";
 import { boundedBody } from "./location-context";
+import { CanopyGrid, detectTrees, TREE_DETECTION_METHOD } from "./location-trees";
 
-export const LIDAR_ARCHIVE = "https://gdi.berlin.de/data/a_als/atom/Mitte.zip";
+const LIDAR_ATOM = "https://gdi.berlin.de/data/a_als/atom";
+export const LIDAR_ARCHIVE = `${LIDAR_ATOM}/Mitte.zip`;
+/** All district packages of the Berlin ALS 2021 ATOM feed, 1 km LAS tiles each; Mitte first. */
+export const LIDAR_ARCHIVES = ["Mitte", "Nord", "Nordost", "Nordwest", "Ost", "Sued", "Suedost", "Suedwest", "West"].map(name => `${LIDAR_ATOM}/${name}.zip`);
+const LIDAR_SURVEYED_AT = "2021-02-24/2021-03-02";
 const MAX_COMPRESSED = 350_000_000, MAX_EXPANDED = 900_000_000;
 const safe64 = (b: Buffer, offset: number) => {
   const n = Number(b.readBigUInt64LE(offset));
@@ -46,33 +51,34 @@ export async function rangeResponse(url: string, start: number, end: number, tot
   }
   return response;
 }
-async function readRange(start: number, length: number, total: number, signal: AbortSignal) {
-  const b = await boundedBody(await rangeResponse(LIDAR_ARCHIVE, start, start + length - 1, total, signal), length);
+async function readRange(archive: string, start: number, length: number, total: number, signal: AbortSignal) {
+  const b = await boundedBody(await rangeResponse(archive, start, start + length - 1, total, signal), length);
   if (b.length !== length) throw new Error("Truncated LiDAR range response");
   return b;
 }
-async function directory(signal: AbortSignal) {
-  const head = await fetch(LIDAR_ARCHIVE, { method: "HEAD", signal });
+async function directory(archive: string, signal: AbortSignal) {
+  const head = await fetch(archive, { method: "HEAD", signal });
   const total = Number(head.headers.get("content-length"));
   if (!head.ok || !Number.isSafeInteger(total) || total < 65536) throw new Error("Berlin LiDAR archive unavailable; retry later");
-  const tail = await readRange(total - 65536, 65536, total, signal);
+  const tail = await readRange(archive, total - 65536, 65536, total, signal);
   const end = tail.lastIndexOf(Buffer.from("504b0506", "hex"));
   if (end < 0 || end + 22 > tail.length || end + 22 + tail.readUInt16LE(end + 20) !== tail.length) throw new Error("Missing ZIP end record");
   let size = tail.readUInt32LE(end + 12), offset = tail.readUInt32LE(end + 16);
   if (size === 0xffffffff || offset === 0xffffffff) {
     const locator = end - 20;
     if (locator < 0 || tail.readUInt32LE(locator) !== 0x07064b50) throw new Error("Missing ZIP64 locator");
-    const record = await readRange(safe64(tail, locator + 8), 56, total, signal);
+    const record = await readRange(archive, safe64(tail, locator + 8), 56, total, signal);
     if (record.readUInt32LE(0) !== 0x06064b50) throw new Error("Invalid ZIP64 end record");
     size = safe64(record, 40); offset = safe64(record, 48);
   }
   if (size > 4_000_000 || offset + size > total) throw new Error("ZIP directory exceeds bounded budget");
-  return { entries: zipDirectory(await readRange(offset, size, total, signal)), total };
+  return { entries: zipDirectory(await readRange(archive, offset, size, total, signal)), total };
 }
 
 type Point = [number, number, number, number];
 /** Stream LAS, crop before deterministic reservoir sampling. Classes 3/4/5
- * remain source labels, NOT a tree/building classifier. Ground uses class 2. */
+ * remain source labels, NOT a tree/building classifier. Ground uses class 2.
+ * Every cropped point (not just the sample) also feeds the canopy grid for tree detection. */
 export class LasCrop {
   private buffer = Buffer.alloc(0);
   private offset = 0;
@@ -83,7 +89,10 @@ export class LasCrop {
   private groundSeen = 0;
   readonly points: Point[] = [];
   sourcePointCount = 0;
-  constructor(private origin: [number, number], private radius: number, private limit = 200000) {}
+  readonly canopy: CanopyGrid;
+  constructor(private origin: [number, number], private radius: number, private limit = 200000, private sourceUrl = LIDAR_ARCHIVE) {
+    this.canopy = new CanopyGrid(radius);
+  }
   private rand() { this.random ^= this.random << 13; this.random ^= this.random >>> 17; this.random ^= this.random << 5; return (this.random >>> 0) / 4294967296; }
   push(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -111,6 +120,7 @@ export class LasCrop {
       if (x * x + z * z <= this.radius ** 2 && Number.isFinite(y)) {
         const point: Point = [x, y, z, classification];
         this.sourcePointCount++;
+        this.canopy.add(x, z, y, classification);
         if (this.points.length < this.limit) this.points.push(point);
         else { const index = Math.floor(this.rand() * this.sourcePointCount); if (index < this.limit) this.points[index] = point; }
         if (classification === 2) {
@@ -130,40 +140,46 @@ export class LasCrop {
     if (!this.ground.length || !this.points.length) throw new Error("No ground-class points within site crop; cannot normalize honestly");
     this.ground.sort((a,b) => a-b);
     const groundElevation = this.ground[Math.floor(this.ground.length / 2)]!;
-    return { positions: this.points.flatMap(([x,y,z]) => [Math.round(x*1000)/1000, Math.round((y-groundElevation)*1000)/1000, Math.round(z*1000)/1000]), classifications: this.points.map(p => p[3]), groundElevation, sourcePointCount: this.sourcePointCount, sampled: this.sourcePointCount > this.points.length, surveyedAt: "2021-02-24/2021-03-02", sourceUrl: LIDAR_ARCHIVE };
+    return { positions: this.points.flatMap(([x,y,z]) => [Math.round(x*1000)/1000, Math.round((y-groundElevation)*1000)/1000, Math.round(z*1000)/1000]), classifications: this.points.map(p => p[3]), groundElevation, sourcePointCount: this.sourcePointCount, sampled: this.sourcePointCount > this.points.length, surveyedAt: LIDAR_SURVEYED_AT, sourceUrl: this.sourceUrl };
   }
 }
 const crcTable = Array.from({ length: 256 }, (_, n) => { for (let k=0;k<8;k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1; return n >>> 0; });
-export async function fetchLocationLidar(context: LocationContext, signal: AbortSignal): Promise<LocationPointCloud> {
+/** The site crop must sit in one 1 km tile; district packages are searched by their ZIP directories. */
+async function locateTile(context: LocationContext, signal: AbortSignal) {
+  const [e, n] = context.origin, r = context.radius;
+  const xs = [Math.floor((e - r) / 1000), Math.floor((e + r) / 1000)], ys = [Math.floor((n - r) / 1000), Math.floor((n + r) / 1000)];
+  if (xs[0] !== xs[1] || ys[0] !== ys[1]) throw new Error("Site crop spans multiple tiles; bounded single-site importer requires review");
+  const name = `3dm_33_${xs[0]}_${ys[0]}_1_be.las`;
+  for (const archive of LIDAR_ARCHIVES) {
+    const { entries, total } = await directory(archive, signal);
+    const tile = entries.find(t => t.name === name);
+    if (tile) return { archive, tile, total };
+  }
+  throw new Error("Site LAS tile absent from the Berlin ALS district archives; no substitute data imported");
+}
+export type LidarImport = { cloud: LocationPointCloud; treeDetection: LocationTreeDetection };
+export async function fetchLocationLidar(context: LocationContext, signal: AbortSignal): Promise<LidarImport> {
   if (context.crs === "EPSG:25832") throw new Error("Site LiDAR is not available for Rheinland-Pfalz; no substitute data imported");
-  const { entries, total } = await directory(signal), [e,n] = context.origin, r = context.radius;
-  const tiles: ZipEntry[] = [];
-  for (let x = Math.floor((e-r)/1000); x <= Math.floor((e+r)/1000); x++) for (let y = Math.floor((n-r)/1000); y <= Math.floor((n+r)/1000); y++) {
-    const tile = entries.find(t => t.name === `3dm_33_${x}_${y}_1_be.las`);
-    if (!tile) throw new Error("Site LAS tile absent from verified Mitte archive; no substitute data imported");
-    tiles.push(tile);
-  }
-  if (tiles.length !== 1) throw new Error("Site crop spans multiple tiles; bounded single-site importer requires review");
-  const crop = new LasCrop(context.origin, r);
-  for (const tile of tiles) {
-    if (![0,8].includes(tile.method) || tile.compressed > MAX_COMPRESSED || tile.expanded > MAX_EXPANDED) throw new Error("LAS tile exceeds bounded resource budget");
-    const local = await readRange(tile.offset, 30, total, signal);
-    if (local.readUInt32LE(0) !== 0x04034b50 || local.readUInt16LE(8) !== tile.method) throw new Error("Invalid ZIP local header");
-    const start = tile.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
-    const response = await rangeResponse(LIDAR_ARCHIVE, start, start + tile.compressed - 1, total, signal);
-    let compressed = 0, expanded = 0, crc = 0xffffffff;
-    const bound = new Transform({ transform(chunk, _encoding, cb) { compressed += chunk.length; cb(compressed > tile.compressed ? new Error("Oversized ZIP range") : null, chunk); } });
-    const consume = async (source: AsyncIterable<Buffer>) => {
-      for await (const chunk of source) {
-        expanded += chunk.length;
-        if (expanded > tile.expanded || expanded > MAX_EXPANDED) throw new Error("Oversized expanded LAS tile");
-        for (const byte of chunk) crc = crcTable[(crc ^ byte) & 255]! ^ (crc >>> 8);
-        crop.push(chunk);
-      }
-    };
-    if (tile.method === 8) await pipeline(Readable.fromWeb(response.body as any), bound, createInflateRaw(), consume, { signal });
-    else await pipeline(Readable.fromWeb(response.body as any), bound, consume, { signal });
-    if (compressed !== tile.compressed || expanded !== tile.expanded || ((crc ^ 0xffffffff) >>> 0) !== tile.crc) throw new Error("LAS ZIP size or checksum mismatch");
-  }
-  return crop.finish();
+  const { archive, tile, total } = await locateTile(context, signal);
+  const crop = new LasCrop(context.origin, context.radius, 200000, archive);
+  if (![0,8].includes(tile.method) || tile.compressed > MAX_COMPRESSED || tile.expanded > MAX_EXPANDED) throw new Error("LAS tile exceeds bounded resource budget");
+  const local = await readRange(archive, tile.offset, 30, total, signal);
+  if (local.readUInt32LE(0) !== 0x04034b50 || local.readUInt16LE(8) !== tile.method) throw new Error("Invalid ZIP local header");
+  const start = tile.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+  const response = await rangeResponse(archive, start, start + tile.compressed - 1, total, signal);
+  let compressed = 0, expanded = 0, crc = 0xffffffff;
+  const bound = new Transform({ transform(chunk, _encoding, cb) { compressed += chunk.length; cb(compressed > tile.compressed ? new Error("Oversized ZIP range") : null, chunk); } });
+  const consume = async (source: AsyncIterable<Buffer>) => {
+    for await (const chunk of source) {
+      expanded += chunk.length;
+      if (expanded > tile.expanded || expanded > MAX_EXPANDED) throw new Error("Oversized expanded LAS tile");
+      for (const byte of chunk) crc = crcTable[(crc ^ byte) & 255]! ^ (crc >>> 8);
+      crop.push(chunk);
+    }
+  };
+  if (tile.method === 8) await pipeline(Readable.fromWeb(response.body as any), bound, createInflateRaw(), consume, { signal });
+  else await pipeline(Readable.fromWeb(response.body as any), bound, consume, { signal });
+  if (compressed !== tile.compressed || expanded !== tile.expanded || ((crc ^ 0xffffffff) >>> 0) !== tile.crc) throw new Error("LAS ZIP size or checksum mismatch");
+  const cloud = crop.finish();
+  return { cloud, treeDetection: { method: TREE_DETECTION_METHOD, sourceUrl: archive, surveyedAt: cloud.surveyedAt, detectedAt: new Date().toISOString(), trees: detectTrees(crop.canopy, context) } };
 }

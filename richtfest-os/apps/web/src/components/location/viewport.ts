@@ -8,6 +8,7 @@ import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type {
   LocationContext,
+  LocationTree,
   LocationScene,
   LocationPointCloud,
   SceneObject,
@@ -28,6 +29,8 @@ export type ViewportState = {
   layers: {
     buildings: boolean;
     trees: boolean;
+    /** Trees inferred from LiDAR, unreviewed; drawn apart from cadastre trees. */
+    detectedTrees: boolean;
     objects: boolean;
     lidar: boolean;
     roads: boolean;
@@ -148,6 +151,7 @@ export function createViewport(
   const groups = {
     buildings: new THREE.Group(),
     trees: new THREE.Group(),
+    detectedTrees: new THREE.Group(),
     objects: new THREE.Group(),
     lidar: new THREE.Group(),
     measure: new THREE.Group(),
@@ -277,6 +281,109 @@ export function createViewport(
     render();
   });
   resize.observe(host);
+  // Cadastre trees keep the established palette; LiDAR-detected (inferred, unreviewed) trees use the
+  // same shapes in ochre so imported and inferred records stay distinguishable at a glance.
+  const cadastreTree = { leaves: 0x6e8956, trunk: 0x78624c, ring: 0x708875, pole: 0x7c8c7e, disc: 0x8aa68f };
+  const detectedTree = { leaves: 0xa39a5c, trunk: 0x7d6a52, ring: 0xa8874a, pole: 0xa39778, disc: 0xc9ab6e };
+  const treeModel = (tree: LocationTree, id: string, state: ViewportState, palette: typeof cadastreTree) => {
+    const group = new THREE.Group();
+    group.userData.id = id;
+    group.position.set(tree.position[0], 0, tree.position[1]);
+    // Decorative crowns are never measurement targets. Unknown dimensions
+    // keep their schematic markers rather than inventing a full-sized tree.
+    if (
+      state.treeStyle === "illustrative" &&
+      state.tool !== "measure" &&
+      tree.height &&
+      tree.crownDiameter
+    ) {
+      const clusters = [
+        [0, 0.65, 0, 0.36],
+        [-0.23, 0.53, 0.04, 0.27],
+        [0.22, 0.57, -0.1, 0.28],
+        [0.06, 0.5, 0.22, 0.27],
+        [-0.08, 0.8, -0.12, 0.25],
+      ].map(([x, y, z, radius]) => {
+        const geometry = new THREE.IcosahedronGeometry(radius, 1);
+        geometry.translate(x, y, z);
+        return geometry;
+      });
+      const crown = mergeGeometries(clusters)!;
+      clusters.forEach((geometry) => geometry.dispose());
+      crown.computeBoundingBox();
+      const bounds = crown.boundingBox!;
+      const centre = bounds.getCenter(new THREE.Vector3());
+      const size = bounds.getSize(new THREE.Vector3());
+      crown.translate(-centre.x, -bounds.min.y, -centre.z);
+      crown.scale(
+        tree.crownDiameter / size.x,
+        (tree.height * 0.55) / size.y,
+        tree.crownDiameter / size.z,
+      );
+      crown.translate(0, tree.height * 0.45, 0);
+      const leaves = new THREE.Mesh(
+        crown,
+        new THREE.MeshStandardMaterial({
+          color: palette.leaves,
+          roughness: 0.95,
+          flatShading: true,
+        }),
+      );
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          tree.crownDiameter * 0.016,
+          tree.crownDiameter * 0.025,
+          tree.height * 0.65,
+          8,
+        ),
+        new THREE.MeshStandardMaterial({ color: palette.trunk, roughness: 1 }),
+      );
+      trunk.position.y = tree.height * 0.325;
+      leaves.castShadow = trunk.castShadow = true;
+      leaves.receiveShadow = trunk.receiveShadow = true;
+      group.add(leaves, trunk);
+      return group;
+    }
+    // Crown discs + height poles deliberately avoid inventing crown undersides.
+    const radius = (tree.crownDiameter ?? 1) / 2;
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(Math.max(0.05, radius - 0.08), radius, 48),
+      new THREE.MeshBasicMaterial({
+        color: palette.ring,
+        side: THREE.DoubleSide,
+      }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.08;
+    group.add(ring);
+    if (tree.height) {
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.07, tree.height, 6),
+        new THREE.MeshBasicMaterial({ color: palette.pole }),
+      );
+      pole.position.y = tree.height / 2;
+      group.add(pole);
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(radius, 32),
+        new THREE.MeshBasicMaterial({
+          color: palette.disc,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.32,
+          depthWrite: false,
+        }),
+      );
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.y = tree.height;
+      group.add(disc);
+      const rim = ring.clone();
+      rim.geometry = ring.geometry.clone();
+      rim.material = ring.material.clone();
+      rim.position.y = tree.height;
+      group.add(rim);
+    }
+    return group;
+  };
   const disposeGroup = (group: THREE.Group) => {
     group.traverse((node) => {
       if (
@@ -496,6 +603,7 @@ export function createViewport(
       previous?.layers.buildings !== next.layers.buildings ||
       previous?.layers.objects !== next.layers.objects ||
       previous?.layers.trees !== next.layers.trees ||
+      previous?.layers.detectedTrees !== next.layers.detectedTrees ||
       previous?.treeStyle !== next.treeStyle ||
       (previous?.tool === "measure") !== (next.tool === "measure")
     )
@@ -547,106 +655,11 @@ export function createViewport(
       (previous?.tool === "measure") !== (next.tool === "measure")
     ) {
       disposeGroup(groups.trees);
-      for (const tree of next.context.trees) {
-        const group = new THREE.Group();
-        group.userData.id = `tree:${tree.id}`;
-        group.position.set(tree.position[0], 0, tree.position[1]);
-        // Decorative crowns are never measurement targets. Unknown dimensions
-        // keep their schematic markers rather than inventing a full-sized tree.
-        if (
-          next.treeStyle === "illustrative" &&
-          next.tool !== "measure" &&
-          tree.height &&
-          tree.crownDiameter
-        ) {
-          const clusters = [
-            [0, 0.65, 0, 0.36],
-            [-0.23, 0.53, 0.04, 0.27],
-            [0.22, 0.57, -0.1, 0.28],
-            [0.06, 0.5, 0.22, 0.27],
-            [-0.08, 0.8, -0.12, 0.25],
-          ].map(([x, y, z, radius]) => {
-            const geometry = new THREE.IcosahedronGeometry(radius, 1);
-            geometry.translate(x, y, z);
-            return geometry;
-          });
-          const crown = mergeGeometries(clusters)!;
-          clusters.forEach((geometry) => geometry.dispose());
-          crown.computeBoundingBox();
-          const bounds = crown.boundingBox!;
-          const centre = bounds.getCenter(new THREE.Vector3());
-          const size = bounds.getSize(new THREE.Vector3());
-          crown.translate(-centre.x, -bounds.min.y, -centre.z);
-          crown.scale(
-            tree.crownDiameter / size.x,
-            (tree.height * 0.55) / size.y,
-            tree.crownDiameter / size.z,
-          );
-          crown.translate(0, tree.height * 0.45, 0);
-          const leaves = new THREE.Mesh(
-            crown,
-            new THREE.MeshStandardMaterial({
-              color: 0x6e8956,
-              roughness: 0.95,
-              flatShading: true,
-            }),
-          );
-          const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(
-              tree.crownDiameter * 0.016,
-              tree.crownDiameter * 0.025,
-              tree.height * 0.65,
-              8,
-            ),
-            new THREE.MeshStandardMaterial({ color: 0x78624c, roughness: 1 }),
-          );
-          trunk.position.y = tree.height * 0.325;
-          leaves.castShadow = trunk.castShadow = true;
-          leaves.receiveShadow = trunk.receiveShadow = true;
-          group.add(leaves, trunk);
-          groups.trees.add(group);
-          continue;
-        }
-        // Crown discs + height poles deliberately avoid inventing crown undersides.
-        const radius = (tree.crownDiameter ?? 1) / 2;
-        const ring = new THREE.Mesh(
-          new THREE.RingGeometry(Math.max(0.05, radius - 0.08), radius, 48),
-          new THREE.MeshBasicMaterial({
-            color: 0x708875,
-            side: THREE.DoubleSide,
-          }),
-        );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.08;
-        group.add(ring);
-        if (tree.height) {
-          const pole = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.07, 0.07, tree.height, 6),
-            new THREE.MeshBasicMaterial({ color: 0x7c8c7e }),
-          );
-          pole.position.y = tree.height / 2;
-          group.add(pole);
-          const disc = new THREE.Mesh(
-            new THREE.CircleGeometry(radius, 32),
-            new THREE.MeshBasicMaterial({
-              color: 0x8aa68f,
-              side: THREE.DoubleSide,
-              transparent: true,
-              opacity: 0.32,
-              depthWrite: false,
-            }),
-          );
-          disc.rotation.x = -Math.PI / 2;
-          disc.position.y = tree.height;
-          group.add(disc);
-          const rim = ring.clone();
-          rim.geometry = ring.geometry.clone();
-          rim.material = ring.material.clone();
-          rim.position.y = tree.height;
-          group.add(rim);
-        }
-        groups.trees.add(group);
-      }
+      disposeGroup(groups.detectedTrees);
+      for (const tree of next.context.trees)
+        groups.trees.add(treeModel(tree, `tree:${tree.id}`, next, cadastreTree));
+      for (const tree of next.context.treeDetection?.trees ?? [])
+        groups.detectedTrees.add(treeModel(tree, `detected-tree:${tree.id}`, next, detectedTree));
     }
     if (
       previous?.objects !== next.objects ||
@@ -829,7 +842,7 @@ export function createViewport(
       }
     }
     slice.constant = next.clipHeight;
-    for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
+    for (const key of ["buildings", "trees", "detectedTrees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
       groups[key].visible = next.layers[key];
     if (
       previous?.context !== next.context || previous?.layers.buildings !== next.layers.buildings ||
@@ -1004,6 +1017,7 @@ export function createViewport(
     const targets = [
       groups.buildings,
       groups.trees,
+      groups.detectedTrees,
       groups.objects,
       groups.assessment,
       ...(current?.tool === "measure" ? [groups.lidar] : []),

@@ -204,7 +204,8 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
           if (kind === "lidar" && !current.context) throw failure("Import location context first", 409, "context_required");
           const status = kind === "context" ? current.contextStatus : current.lidarStatus;
           if (["queued", "running"].includes(status)) return current;
-          if (status === "ready" && !refresh && (kind === "lidar" || (current.context && locationMatchesAddress(current.context, address)))) return current;
+          // A ready LiDAR import from before tree detection may run once more to detect trees.
+          if (status === "ready" && !refresh && (kind === "lidar" ? !!current.context?.treeDetection : current.context && locationMatchesAddress(current.context, address))) return current;
           if (kind === "context") {
             if (current.revision !== (input as { revision: number }).revision) throw failure("Location revision changed; reload before importing", 409, "revision_conflict");
             if (refresh) {

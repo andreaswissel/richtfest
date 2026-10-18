@@ -81,6 +81,17 @@ export type LocationTree = {
   crownDiameter: number | null;
   species: string;
   sourceId: string;
+  /** Absent: imported from the official tree cadastre. "lidar-detected": inferred from airborne
+   * LiDAR, unreviewed and approximate (position, height and crown diameter). */
+  provenance?: "lidar-detected";
+};
+/** Trees inferred from the site LiDAR crop, kept apart from imported cadastre trees. */
+export type LocationTreeDetection = {
+  method: string;
+  sourceUrl: string;
+  surveyedAt: string;
+  detectedAt: string;
+  trees: LocationTree[];
 };
 export type LocationContext = {
   siteId: string;
@@ -96,6 +107,8 @@ export type LocationContext = {
   radius: number;
   buildings: LocationBuilding[];
   trees: LocationTree[];
+  /** Written by the LiDAR job; absent until trees were detected for this site. */
+  treeDetection?: LocationTreeDetection;
   sources: { label: string; url: string; surveyedAt: string | null }[];
   importedAt: string;
   /** Immutable public catalogue releases used by this project; absent for legacy imports. */
