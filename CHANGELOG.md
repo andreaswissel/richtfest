@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- 3D location: a finished measurement can be taken over as a road or railway's distance to facade in Exterior noise, for an existing source or a new one, with both measured points recorded as its basis.
-
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
@@ -25,6 +23,8 @@
 - Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
 ## 2026-10-18
+
+- 3D location: a finished measurement can be taken over as a road or railway's distance to facade in Exterior noise, for an existing source or a new one, with both measured points recorded as its basis.
 
 - 3D location: official aerial imagery under the scene for Rheinland-Pfalz and Berlin sites, with a wider window loaded when zooming out; keyboard shortcuts for tools and views (V, G, M, H, A, T, 3, S, U, F, Esc), including a pan tool; measurements snap to building and plan corners, follow the pointer with a live distance and draw as bold lines with the value centred on them.
 
