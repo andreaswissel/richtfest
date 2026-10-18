@@ -8,6 +8,7 @@ import {
   createEmptySiteGeometryInput,
   siteGeometryInputSchema,
   type SiteGeometryInput,
+  type BuildingGeometry,
   type GeometryEvidence,
   type GeometryMultiPolygon,
   type GeometryPoint,
@@ -77,6 +78,12 @@ const pathFor = (
         .join(" "),
     )
     .join(" ");
+
+/** Explicit height describes the whole building, including its separate Staffel volumes. */
+export function fullStoreyMeshHeight(building: BuildingGeometry) {
+  const staffelHeight = building.staffel.reduce((sum, storey) => sum + storey.height, 0);
+  return Math.max(building.fullStoreys * building.storeyHeight, (building.height ?? 0) - staffelHeight);
+}
 
 function Geometry3D({
   context,
@@ -148,7 +155,7 @@ function Geometry3D({
       }),
     );
     geometry.buildings.forEach((b) => {
-      const height = b.height ?? b.fullStoreys * b.storeyHeight;
+      const height = fullStoreyMeshHeight(b);
       assessment.push({
         id: b.id,
         polygons: local(b.footprint.geometry),

@@ -8,7 +8,7 @@ import {
   type GeometryEvidence,
 } from "@richtfest/shared/site-geometry-model";
 import { createDefaultSetbacks } from "@richtfest/shared/site-geometry";
-import { SiteGeometryEditor } from "../src/components/feasibility/site-geometry-editor";
+import { SiteGeometryEditor, fullStoreyMeshHeight } from "../src/components/feasibility/site-geometry-editor";
 import { queryClient } from "../src/query";
 import { usePreferences } from "../src/store";
 
@@ -185,7 +185,13 @@ export async function testSiteGeometry() {
         .length === 1,
       "Mandatory line remains visible on map",
     );
-    return { passed: true, checks: 6 };
+    const building = state.buildings[0]!;
+    const edited = { ...building, fullStoreys: 8, storeyHeight: 3, height: 12, staffel: [] };
+    if (fullStoreyMeshHeight(edited) !== 24) throw new Error("3D must grow when floor-derived height exceeds stored height");
+    const withStaffel = { ...edited, height: 30, staffel: [{ footprint: building.footprint, height: 3, countable: false, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }] };
+    if (fullStoreyMeshHeight(withStaffel) + 3 !== 30) throw new Error("Explicit total height must not double-count Staffel");
+    if (fullStoreyMeshHeight({ ...withStaffel, height: 12 }) + 3 !== 27) throw new Error("Computed total height must include Staffel above full storeys");
+    return { passed: true, checks: 9 };
   } finally {
     root.unmount();
     host.remove();
