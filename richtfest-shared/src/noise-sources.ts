@@ -124,3 +124,39 @@ export function noiseRequestProgress(items: NoiseRequestItem[], sources: Array<{
   }
   return { total, answered, outstanding };
 }
+
+/**
+ * Screening radius per mapped class: how far from the building a road or
+ * railway is still worth a look for exterior noise. Richtfest defaults for
+ * proposing sources, not values from DIN 18005, DIN 4109 or RLS-19; the
+ * planner decides which sources the assessment includes.
+ */
+export const noiseScreeningRadiusM = {
+  road: { "1301": 1000, "1303": 500, "1305": 300, "1306": 300, "1307": 100, "9999": 100 } as Record<string, number>,
+  /** Multi-lane municipal roads carry through traffic; screened like district roads. */
+  multiLaneRoad: 300,
+  railMainline: 1000,
+  railUrban: 300,
+};
+
+export type NoiseSuggestion = { item: MappedNoiseSource; distanceMeters: number; radiusMeters: number };
+
+/** Mapped roads and railways within their screening radius, nearest first; private and unclassified-unknown roads are left out. */
+export function suggestNoiseSources(items: MappedNoiseSource[], distanceOf: (item: MappedNoiseSource) => number | null): NoiseSuggestion[] {
+  const suggestions: NoiseSuggestion[] = [];
+  for (const item of items) {
+    const distance = distanceOf(item);
+    if (distance === null || !Number.isFinite(distance)) continue;
+    let radius: number | undefined;
+    if (item.kind === "road") {
+      radius = item.dedication ? noiseScreeningRadiusM.road[item.dedication] : undefined;
+      if (item.dedication === "1307" && (item.lanes ?? 0) >= 4) radius = noiseScreeningRadiusM.multiLaneRoad;
+    } else {
+      const mainline = item.categories.some(code => code.startsWith("11"));
+      const urban = item.categories.some(code => code.startsWith("12"));
+      radius = mainline || !urban ? noiseScreeningRadiusM.railMainline : noiseScreeningRadiusM.railUrban;
+    }
+    if (radius !== undefined && distance <= radius) suggestions.push({ item, distanceMeters: Math.round(distance), radiusMeters: radius });
+  }
+  return suggestions.sort((a, b) => a.distanceMeters - b.distanceMeters);
+}

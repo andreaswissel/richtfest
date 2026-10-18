@@ -45,6 +45,10 @@ export type SiteGeometry = {
   distances: Array<FacadeDistance & { source: NoiseSource }>;
   /** True when no wall is linked as exterior yet and all walls were measured. */
   allWalls: boolean;
+  /** What building distances are measured from: the placed plan, else the official footprint at the address point. */
+  reference: "plan" | "footprint" | null;
+  /** Shortest horizontal distance from that reference to a mapped axis, or null without a reference. */
+  distanceTo: (axes: Array<Array<[number, number]>> | undefined) => number | null;
 };
 
 const crsOf = (context: LocationContext) => context.crs ?? "EPSG:25833";
@@ -91,6 +95,22 @@ export function siteGeometry(
   const withAxes = new Map(sources.filter((source) => source.mapped?.axes?.length).map((source) => [source.id, source]));
   const distances = facadeDistances(measured, [...withAxes.values()].map((source) => ({ id: source.id, parts: siteParts(source.mapped!.axes!) })))
     .map((result) => ({ ...result, source: withAxes.get(result.sourceId)! }));
+  // Reference outline: the stored plan placement, else the official footprint containing the address point.
+  const inside = (ring: Point2[], [x, z]: Point2) => {
+    let hit = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, zi] = ring[i], [xj, zj] = ring[j];
+      if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) hit = !hit;
+    }
+    return hit;
+  };
+  const footprint = context.buildings.find((building) => building.polygons.some((polygon) => polygon[0] && inside(polygon[0], [0, 0])));
+  const reference = stored && measured.length ? "plan" as const : footprint ? "footprint" as const : null;
+  const referenceRings = reference === "plan"
+    ? measured
+    : footprint ? footprint.polygons.map((polygon, index) => ({ id: `footprint:${index}`, ring: polygon[0].map((p) => fromLocal(context, p)) })) : [];
+  const distanceTo = (axes: Array<Array<[number, number]>> | undefined) =>
+    referenceRings.length && axes?.length ? facadeDistances(referenceRings, [{ id: "axis", parts: siteParts(axes) }])[0]?.distance ?? null : null;
   const alignmentStatus = sitePlan?.placement?.alignmentStatus;
   return {
     page,
@@ -101,6 +121,8 @@ export function siteGeometry(
     axes,
     distances,
     allWalls: measured.length > 0 && !exterior.length,
+    reference,
+    distanceTo,
   };
 }
 

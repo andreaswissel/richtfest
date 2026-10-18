@@ -16,6 +16,23 @@ The distance runs from the address point to the nearest mapped axis, not from a 
 
 Choose **Add** to make a mapped road or railway a noise source; Richtfest keeps a snapshot of what was mapped. **Add road** and **Add railway** add a source by hand.
 
+## Suggested sources near the building
+
+Above the mapped list, **Suggested sources near the building** proposes the mapped roads and railways that lie within a class-based screening radius and are not added yet:
+
+| Class | Radius |
+| --- | --- |
+| Motorway (Bundesautobahn) | 1000 m |
+| Federal road | 500 m |
+| State and district road, municipal road with 4+ lanes | 300 m |
+| Municipal and other public road | 100 m |
+| Railway (main line, S-Bahn, freight) | 1000 m |
+| Tram and U-Bahn only | 300 m |
+
+Distances run from the placed plan when one is stored in [3D location](/docs/workflows/project-onboarding#3d-location-editor), else from the official building footprint at the address, else from the address point. A source also qualifies when the address point lies within its radius, so an approximate placement does not drop it; the row then names both distances. Private roads and roads without a class are not suggested.
+
+These radii are Richtfest's screening heuristic for completeness, not a norm rule. Review each suggestion and choose **Add**, or **Add all**.
+
 ## Inputs
 
 Select a source to enter its inputs. Each value has a **Basis**, for example "Hessen Mobil, Verkehrsmengenkarte 2021" or "site visit". Every save is a new version; a value changed by someone else in the meantime is not overwritten.

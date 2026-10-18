@@ -2088,5 +2088,15 @@
   "siteMeasureBasis": "Measured in 3D location from {from} to {to} ({crs}), horizontal, on official imagery and footprints; not surveyed",
   "siteMeasureSources": "Noise sources",
   "siteMeasureNearby": "Mapped nearby (adds a source)",
-  "siteMeasureNew": "New source"
+  "siteMeasureNew": "New source",
+  "noiseSuggested": "Suggested sources near the building",
+  "noiseSuggestedHint": "Richtfest screening proposal: mapped roads and railways within a class-based radius (motorway 1 km, federal 500 m, state and district 300 m, municipal 100 m; mainline rail 1 km, tram and U-Bahn 300 m). Not a norm decision; review before adding.",
+  "noiseSuggestedFromPlan": "Distances from the placed plan.",
+  "noiseSuggestedFromFootprint": "Distances from the official building footprint at the address.",
+  "noiseSuggestedFromAddress": "Distances from the address point.",
+  "noiseSuggestedReason": "Screening",
+  "noiseSuggestedWithin": "within {radius} m",
+  "noiseSuggestedAddAll": "Add all {count}",
+  "noiseSuggestedEmpty": "No further mapped source lies within its screening radius.",
+  "noiseSuggestedByAddress": "address point {distance} m"
 }

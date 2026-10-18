@@ -2088,5 +2088,15 @@
   "siteMeasureBasis": "Im 3D-Standort gemessen von {from} bis {to} ({crs}), horizontal, auf amtlichem Luftbild und Gebäudegrundrissen; keine Vermessung",
   "siteMeasureSources": "Lärmquellen",
   "siteMeasureNearby": "Kartiert in der Nähe (wird hinzugefügt)",
-  "siteMeasureNew": "Neue Quelle"
+  "siteMeasureNew": "Neue Quelle",
+  "noiseSuggested": "Vorgeschlagene Quellen am Gebäude",
+  "noiseSuggestedHint": "Richtfest-Vorauswahl: kartierte Straßen und Schienenwege innerhalb eines klassenabhängigen Radius (Autobahn 1 km, Bundesstraße 500 m, Landes- und Kreisstraße 300 m, Gemeindestraße 100 m; Eisenbahn 1 km, Straßen- und U-Bahn 300 m). Keine normative Festlegung; vor dem Übernehmen prüfen.",
+  "noiseSuggestedFromPlan": "Abstände vom verorteten Plan.",
+  "noiseSuggestedFromFootprint": "Abstände vom amtlichen Gebäudegrundriss an der Adresse.",
+  "noiseSuggestedFromAddress": "Abstände vom Adresspunkt.",
+  "noiseSuggestedReason": "Vorauswahl",
+  "noiseSuggestedWithin": "innerhalb {radius} m",
+  "noiseSuggestedAddAll": "Alle {count} übernehmen",
+  "noiseSuggestedEmpty": "Keine weitere kartierte Quelle liegt innerhalb ihres Radius.",
+  "noiseSuggestedByAddress": "Adresspunkt {distance} m"
 }
