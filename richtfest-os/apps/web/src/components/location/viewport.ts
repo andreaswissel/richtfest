@@ -180,6 +180,7 @@ export function createViewport(
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
     scene.traverse((node) => {
+      if (node instanceof THREE.Sprite && node.userData.screen) screenSized(node, node.userData.screen.px, node.userData.screen.aspect);
       if (node instanceof Line2) (node.material as LineMaterial).resolution.set(renderer.domElement.width, renderer.domElement.height);
     });
     if (initialFrame) {
@@ -272,9 +273,14 @@ export function createViewport(
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, toneMapped: false, sizeAttenuation: false }));
-    const height = 0.03;
-    sprite.scale.set((canvas.width / canvas.height) * height, height, 1);
     sprite.renderOrder = 12;
+    return screenSized(sprite, 20, canvas.width / canvas.height);
+  };
+  /** Fixed CSS-pixel size for non-attenuated sprites, whatever the viewport height. */
+  const screenSized = (sprite: THREE.Sprite, px: number, aspect = 1) => {
+    sprite.userData.screen = { px, aspect };
+    const height = (px / Math.max(1, host.clientHeight)) * 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    sprite.scale.set(height * aspect, height, 1);
     return sprite;
   };
   /** Pixel-wide line with a white halo, drawn over everything: readable on imagery, buildings and ground. */
@@ -309,7 +315,7 @@ export function createViewport(
   })();
   const handle = (p: THREE.Vector3) => {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: pointTexture, depthTest: false, toneMapped: false, sizeAttenuation: false }));
-    sprite.scale.set(0.022, 0.022, 1);
+    screenSized(sprite, 14);
     sprite.position.copy(p);
     sprite.renderOrder = 12;
     return sprite;
