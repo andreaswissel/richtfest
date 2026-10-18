@@ -568,7 +568,7 @@ table[data-slot="table"].supervisor-preset-table th[scope="row"] { color:var(--f
 .project-module-bar .workspace-view-links a { flex-shrink: 0; font-size: var(--ui-xs); font-weight: 500; }
 .project-all-modules { margin-left: auto; }
 @media (max-width: 1100px) { .project-bar-customer { display: none; } }
-@media (max-width: 600px) { .project-bar { gap: 10px; flex-wrap: wrap; padding-block: 8px; } .project-bar-title [data-slot="badge"], .project-bar-back-label { display: none; } .project-bar-title { flex-basis: 32%; } .project-bar > .project-perspectives { order: 4; margin-left: 0; } .project-bar-actions { margin-left: auto; } }
+@media (max-width: 600px) { .project-bar { gap: 10px; flex-wrap: wrap; padding-block: 8px; } .project-bar-title [data-slot="badge"], .project-bar-back-label { display: none; } .project-bar-title { flex-basis: 32%; } .project-bar > .project-perspectives { order: 4; margin-left: 0; } .project-bar-actions { margin-left: auto; } .project-bar-actions .app-update-label { display: none; } }
 
 /* Panel edge resize handle (components/ui/resize-handle.tsx): a thin hit area with a line on hover, focus and drag. */
 .resize-handle { position:absolute; z-index:6; top:0; bottom:0; width:9px; margin-left:-4px; cursor:col-resize; touch-action:none; outline:none; }

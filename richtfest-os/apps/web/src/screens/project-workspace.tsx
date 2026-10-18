@@ -13,6 +13,7 @@ import { api, ApiError, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
 import { Page } from "../components/layout";
+import { AppUpdateButton } from "../components/app-update-button";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
@@ -380,6 +381,7 @@ export function ProjectWorkspace() {
         </div>
         {perspectiveNavigation}
         <div className="project-bar-actions">
+          {meUser?.id && <AppUpdateButton className="h-control-sm" />}
           {meUser?.id && (
             <Link
               to="/settings/security"

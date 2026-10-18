@@ -109,7 +109,7 @@ After the push, watch the Railway deployment for that commit. If the build or de
 
 ### Updates in open tabs
 
-When a different web build is available, signed-in users see **New updates available** at the bottom of the desktop navigation rail, just above their profile. Save any unsaved work, then click the button to reload the current page. The app never reloads automatically on deployment or navigation.
+When a different web build is available, signed-in users see **New updates available** at the bottom of the desktop navigation rail, just above their profile; inside a project, where the rail is hidden, the button sits in the project bar next to the profile (icon only on narrow screens). Save any unsaved work, then click the button to reload the current page. The app never reloads automatically on deployment or navigation.
 
 The web build writes the same asset-filename fingerprint to an HTML meta tag and `version.json`. Open tabs compare their loaded fingerprint with `/version.json` once a minute while visible and whenever the tab becomes active. The API serves the version file and app HTML with `Cache-Control: no-store`; version checks are not persisted in the workspace query cache. Failed or malformed checks do not announce an update. Vite development has no build marker and does not poll.
 

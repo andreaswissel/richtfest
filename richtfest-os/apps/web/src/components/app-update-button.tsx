@@ -4,7 +4,11 @@ import { RefreshCw } from "lucide-react";
 import { useT } from "../i18n";
 import { Button } from "./ui/button";
 
-export function AppUpdateButton() {
+export function AppUpdateButton({
+  className = "mb-3 w-full justify-start",
+}: {
+  className?: string;
+}) {
   const t = useT();
   // Keep the version that this tab loaded, not the first polling response.
   const [loadedVersion] = useState(() =>
@@ -40,12 +44,13 @@ export function AppUpdateButton() {
   return (
     <Button
       variant="outline"
-      className="mb-3 w-full justify-start"
+      className={className}
       title={t("reloadForUpdates")}
+      aria-label={t("newUpdatesAvailable")}
       onClick={() => location.reload()}
     >
       <RefreshCw aria-hidden="true" className="size-icon-sm" />
-      {t("newUpdatesAvailable")}
+      <span className="app-update-label">{t("newUpdatesAvailable")}</span>
     </Button>
   );
 }
