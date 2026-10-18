@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- **Site assessment** is reorganised into four steps (Site, Planning limits, Design, Result) with open-item counts, a header with the key figures, Save and Download report, and an open-items table that jumps to each fix. The geometry editor is now a full-width workbench like 3D location, with layers, a shortcut tool rail, undo/redo, a correctly fitted plan and a full 3D view. Review panels step through items with Previous/Next, explain why review is blocked and accept dates in the app's format. Parcel lookups show the real address error with a link to Project details. Clearer names for buildings, parcel edges and references, headed tables, and a limit comparison that highlights what actually limits the area. The financial study can adopt the parcel area and indicative GF from the saved site assessment.
+
 - Project views: Coordinator and Planner overviews organize saved planning entries, dependencies, decisions and milestones by phase and discipline. Nerd keeps every module tab; both editors stay shared. Viewing a phase does not advance it or approve engineering work. Includes additive database migration 0052.
 
 - Upload PDFs directly in the site assessment without changing tabs. Project sources retain the workflow context and propose document types from their content, with supporting evidence and an explicit unreviewed state.

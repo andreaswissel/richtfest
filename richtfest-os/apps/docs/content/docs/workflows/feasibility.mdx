@@ -7,13 +7,19 @@ The project view **Feasibility** answers the first economic question for a site:
 
 ## Berlin site assessment
 
-Choose **Grundstücksprüfung / Site assessment** beside **Economics** in the project Feasibility view. Existing links still open the financial study. The assessment combines reviewed arithmetic capacity with a visual parcel and building study for Berlin. Both remain planning evidence, not a permission decision.
+Choose **Site assessment** beside **Financial study** in the project Feasibility view. Existing links still open the financial study. The assessment combines reviewed arithmetic capacity with a visual parcel and building study for Berlin. Both remain planning evidence, not a permission decision.
+
+The assessment is organised in four steps: **Site** (parcel, plans and nearby buildings), **Planning limits** (planning basis, constraints, qualitative checks and conditions), **Design** (the geometry editor and design check) and **Result** (capacity, open items, notes). Each step shows how many items are still open. A sticky header keeps the key figures (parcel area, BGF, GF, status, open items) and the decisions (**Download report**, **Save assessment**) in view. A new assessment opens on Site; one with missing constraint values opens on Planning limits; otherwise it opens on Design. The **Open items** table in Result lists every missing value, source, date, review, reference and design check, each with a button that opens the exact place to resolve it.
 
 ### Find and review the site evidence
 
 **Look up parcels and plans** uses the saved complete Berlin project address. It resolves an exact official address and queries the ALKIS parcel service plus the adopted and in-progress B-Plan registers within a 100 m square. The parcel preview uses EPSG:25833, north up, with the address point marked. Nearby candidates and polygons containing the address point are distinguished. Choose the actual parcel deliberately: an address is not proof of the correct development site, and a project may involve several parcels.
 
 **Use parcel area** puts the selected official area and its source reference into the draft, always unreviewed. The source record date is separate from the retrieval timestamp. Inspect and confirm it, then save. Lookup results themselves are a temporary preview; the adopted area, source URL, feature ID and retrieval time are retained in the saved constraint. The selected parcel boundary is available to the geometry editor; it is not automatically a buildable envelope.
+
+If the project address cannot be resolved (for example a wrong postal code), the lookup shows the official address register's message and a link to Project details instead of a generic error. The API answers such cases with 422 `site_address_unresolved`, and an unavailable register with 502.
+
+Candidates appear in a headed table beside a clickable preview; the five most relevant are shown first, with **Show all** for the rest. The adopted parcel stays marked in both.
 
 Plan candidates link to their records and available plan PDFs. Check the coverage, legal status, amendments and relevant Baufeld. Empty results or unavailable services never establish that § 34 applies. Use **Find address candidates** when an exact suffix is unavailable; selecting a nearby address requires explicit confirmation of the intended parcel. Heritage and preservation-area hints retain their official sources; absent or failed lookups do not establish that restrictions are absent.
 
@@ -25,7 +31,9 @@ Use **Upload source PDF** directly in the site assessment, or import a linked of
 
 ### Visual envelope and building study
 
-Use the 2D editor to trace a buildable envelope, exclusions and mandatory building lines over the parcel. Select an edge to review its setback rule and evidence. Berlin setback profiles can derive a distance from a reviewed height; exceptions require their own evidence. The polygon calculation clips the envelope to the parcel, removes exclusions and applies the selected setbacks. The explicit **Use geometry area** action proposes its area for the numeric assessment and revokes numeric review.
+The Design step opens a full-width workbench with the same layout and shortcuts as 3D location and the building model: a **Layers** panel (Site, Planning envelope, Buildings, Context with visibility toggles), a tool rail with visible shortcuts (V select, H pan, E envelope, L building line, X exclusion, B building, S setbacks, R reference, T site plan, 3 3D view, F fit, +/− zoom), the canvas and an **Inspector** with **Properties** and **Checks**. Undo and redo cover geometry edits (⌘Z / ⇧⌘Z). While drawing, a caption shows the vertex count with **Finish outline**, **Undo vertex** and **Cancel drawing**; Enter finishes, Backspace removes the last vertex and Esc cancels. Drawing tools are disabled in 3D. The footer shows the status, quantities and cursor coordinates in EPSG:25833. Below 1100 px the side panels open as overlays. Objects are named for what they are (for example *Building 1*, *Upper storey 1*), and parcel edges by compass direction and length (*East edge · 30 m*).
+
+Trace a buildable envelope, exclusions and mandatory building lines over the parcel. Select an edge to review its setback rule and evidence. Berlin setback profiles can derive a distance from a reviewed height; exceptions require their own evidence. The polygon calculation clips the envelope to the parcel, removes exclusions and applies the selected setbacks. The explicit **Use geometry area** action proposes its area for the numeric assessment and revokes numeric review.
 
 A PDF page can be aligned with three matching control points and shown as an adjustable overlay. This affine alignment is a planning aid, not surveyed georeferencing; check the anchors, coordinate system and source before reviewing it.
 
@@ -33,7 +41,9 @@ Generate up to three distinct feasible massing candidates, select one, then move
 
 ### Reviewed constraints
 
-The main view compares footprint limits and full-floor capacity visually. Select a limit in the comparison or a row in the constraint summary to open its focused review panel. Values, sources and review controls stay in that panel; the overview shows the current values and outstanding reviews. Saving the assessment remains the final action.
+Planning limits lists constraints, qualitative checks and planning conditions in headed tables with a status per row: *Value missing*, *Source missing*, *Source date missing*, *Not reviewed* or *Reviewed*. Select **Edit** to open the side panel for that item. The panel shows the value, source, source date (typed as dd/mm/yyyy or tt.mm.jjjj in the app language), evidence type and the review checkbox; when review is not yet possible it names what is missing. **Previous** and **Next: …** step through all items in order without closing the panel. Changes stay in the draft until you save the assessment.
+
+In Result, the capacity comparison marks the limiting value with a solid bar and states the headroom other limits would leave. Select a limit to open its review panel.
 
 Select the planning basis and enter parcel area, GRZ, GFZ, the reviewed buildable footprint envelope, maximum full storeys, additional gross floor area and additional GFZ-countable area. Enter explicit zero for additional areas when none apply. Each numeric input has a source, source date, provenance kind and review checkbox. Changing its value or source revokes review.
 
@@ -69,7 +79,9 @@ Public-record acceptance fixtures additionally preserve the actual Giersstraße 
 
 ## Site
 
-Enter the **parcel area**, the **asking price** (optional) and the **acquisition costs** in percent (Grunderwerbsteuer, notary, land registry, broker). An approved parcel area from the building model's [zoning check](/docs/workflows/project-onboarding#sound-insulation-preparation) is filled in for a new study. The approved GRZ and GFZ are shown with a link to the building model.
+Enter the **parcel area**, the **asking price** (optional) and the **acquisition costs** in percent (Grunderwerbsteuer, notary, land registry, broker). An approved parcel area from the building model's [zoning check](/docs/workflows/project-onboarding#sound-insulation-preparation) is filled in for a new study; without one, a new study uses the parcel area of the saved site assessment. The approved GRZ and GFZ are shown with a link to the building model.
+
+Below the site inputs, the saved site assessment's revision, status, parcel area and indicative GF are shown. **Use parcel area** and **Use as new-build floor area** copy those figures into the draft as unreviewed proposals labelled *Site assessment*; nothing changes until you choose an action and save. The site assessment's Result step links back to the financial study.
 
 ## Scenarios
 
@@ -88,6 +100,7 @@ Numbers follow the selected app language: `1,000.75` in English, `1.000,75` in G
 **Where values come from.** A new study starts with:
 
 - **Model**: new floor area for a new build as GFZ × parcel area, and for densification that maximum minus the approved countable Geschossfläche of existing or retained buildings. This is a numerical starting assumption, not a confirmation of buildability. Densification defaults require a reviewed complete storey inventory, GFZ counting basis, classifications and relevant areas; unknown floors are not silently excluded.
+- **Site assessment**: the parcel area from the saved site assessment when the building model has none, and figures adopted with the actions under Site.
 - **Standard**: construction cost KG 300–700 (3,000 €/m² living area), contingency 20 % and capitalisation rate 3.8 %, from Richtfest's calculation standards (May 2026). These are experience values to check for each project.
 
 Both carry a badge, visible source note and review checkbox. A value you type is yours and counts as reviewed. Review counts belong to each scenario, including the shared site inputs it uses. No preferred scenario is announced while comparisons are incomplete or unreviewed.
@@ -108,7 +121,7 @@ The calculation (`residual_land_value_v1`) is deterministic: revenue is living a
 
 The view follows project access: project readers can open it and download the report; project writers can edit and save. The app lives in `richtfest-apps/feasibility` and is mounted at `/api/feasibility`:
 
-- `GET /api/feasibility/projects/:id/study` returns the study (or an unsaved starting point with revision 0), the results per scenario, the approved site figures and the method.
+- `GET /api/feasibility/projects/:id/study` returns the study (or an unsaved starting point with revision 0), the results per scenario, the approved site figures, a summary of the saved site assessment (`siteAssessment`: revision, parcel area, indicative GF, status) and the method.
 - `PUT /api/feasibility/projects/:id/study` saves `{ baseRevision, site, scenarios, notes }`.
 - `GET /api/feasibility/projects/:id/study/report.pdf?lang=de|en` returns the PDF.
 

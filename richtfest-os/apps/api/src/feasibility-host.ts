@@ -29,7 +29,14 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
       const [row] = await db.select().from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, actor.tenantId))).limit(1);
       if (!row) throw new HttpError(404, "not_found", "Project not found");
       if (row.city?.trim().toLowerCase() !== "berlin") throw new HttpError(422, "berlin_address_required", "Save a complete Berlin site address in project details first");
-      return resolveLocationAddress(row, signal);
+      try {
+        return await resolveLocationAddress(row, signal);
+      } catch (error) {
+        if (signal.aborted || !(error instanceof Error)) throw error;
+        // Address-register messages tell the user what to fix in project details; keep them instead of a generic 500.
+        if (/unavailable|invalid coordinates|retry/i.test(error.message)) throw new HttpError(502, "site_address_service_unavailable", error.message);
+        throw new HttpError(422, "site_address_unresolved", error.message);
+      }
     },
     siteFigures: projectId => readFeasibilitySiteFigures(projectsDeps(db, req), projectId),
   };

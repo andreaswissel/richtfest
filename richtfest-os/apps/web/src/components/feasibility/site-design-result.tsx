@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
 import type { SiteAssessmentInput } from "@richtfest/shared";
 import type { SiteDesignResult as Result } from "@richtfest/shared/site-design";
 import { useT } from "../../i18n";
+import { displayName } from "./site-geometry-editor";
 import { usePreferences } from "../../store";
 import { Section } from "../layout";
-import { Badge, Callout } from "../ui/primitives";
+import { Badge } from "../ui/primitives";
 import {
   Table,
   TableBody,
@@ -13,18 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from "../ui/table";
-export function SiteDesignResult({ input }: { input: SiteAssessmentInput }) {
+/** Shows a design result computed by the assessment, so the check and the step counts stay in agreement. */
+export function SiteDesignResult({ input, result }: { input: SiteAssessmentInput; result: Result | null }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
     label = (key: string) => t(`siteDesign${key}` as Parameters<typeof t>[0]);
-  const [calculate, setCalculate] =
-    useState<(input: SiteAssessmentInput) => Result>();
-  useEffect(() => {
-    void import("@richtfest/shared/site-design").then((m) =>
-      setCalculate(() => m.calculateSiteDesign),
-    );
-  }, []);
-  const result = useMemo(() => calculate?.(input), [calculate, input]);
   const format = (n: number | null) =>
     n === null
       ? "–"
@@ -32,6 +25,10 @@ export function SiteDesignResult({ input }: { input: SiteAssessmentInput }) {
           maximumFractionDigits: 3,
         });
   if (!input.geometry || !result) return null;
+  const buildingName = (id: string) => {
+    const index = input.geometry!.buildings.findIndex((b) => b.id === id);
+    return index < 0 ? "" : displayName(input.geometry!.buildings[index]!.label, t("siteGeometryObjectBuilding").replace("{n}", String(index + 1)));
+  };
   const issueLabel = (issue: string) => {
     const [prefix, code] = issue.split(":");
     if (prefix === "geometry")
@@ -67,12 +64,19 @@ export function SiteDesignResult({ input }: { input: SiteAssessmentInput }) {
             <TableRow key={`${c.id}:${c.buildingId ?? i}`}>
               <TableCell>
                 {label(c.id)}
-                {c.buildingId
-                  ? ` · ${input.geometry!.buildings.find((b) => b.id === c.buildingId)?.label ?? ""}`
-                  : ""}
+                {c.buildingId ? ` · ${buildingName(c.buildingId)}` : ""}
               </TableCell>
-              <TableCell>{format(c.actual)}</TableCell>
-              <TableCell>{format(c.limit)}</TableCell>
+              {c.id === "placement" ? (
+                <>
+                  <TableCell>{label(c.actual === 0 ? "PlacementFits" : "PlacementConflict")}</TableCell>
+                  <TableCell>{label("PlacementLimit")}</TableCell>
+                </>
+              ) : (
+                <>
+                  <TableCell>{format(c.actual)}</TableCell>
+                  <TableCell>{format(c.limit)}</TableCell>
+                </>
+              )}
               <TableCell>
                 <Badge variant="outline">{label(c.status)}</Badge>
               </TableCell>

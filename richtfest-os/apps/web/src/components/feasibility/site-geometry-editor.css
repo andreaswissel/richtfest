@@ -1,54 +1,196 @@
-.site-geometry-workspace {
+/* Site geometry workbench: same structure as the 3D location workbench (layers · tool rail · canvas · inspector). */
+.geometry-workbench {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  border-block: 1px solid var(--border);
-  padding-block: var(--stack);
+  height: max(30rem, calc(100dvh - 23rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--background);
+}
+.geometry-toolbar,
+.geometry-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .geometry-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--stack);
-  margin-bottom: var(--stack);
+  flex: 0 0 auto;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.geometry-toolbar h3 {
-  margin: 0;
+.geometry-panel-toggle {
+  display: none;
 }
-.geometry-layout {
-  display: grid;
-  grid-template-columns: minmax(0, min(50dvh, 40rem)) minmax(14rem, 19rem);
-  align-items: start;
-  gap: var(--stack);
-}
-.geometry-canvas-wrap {
-  min-width: 0;
-}
-.geometry-plan {
+.geometry-body {
   position: relative;
-  width: 100%;
-  aspect-ratio: 1;
-  max-width: min(50dvh, 40rem);
-  background: var(--muted);
+  display: grid;
+  grid-template-columns: minmax(200px, 14rem) auto minmax(0, 1fr) minmax(260px, 20rem);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
+.geometry-layers,
+.geometry-inspector {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.75rem;
+  background: var(--background);
+}
+.geometry-layers {
+  border-right: 1px solid var(--border);
+}
+.geometry-layers h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: var(--ui-sm);
+  font-weight: 600;
+}
+.geometry-layer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-block: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.geometry-layer-section h3 {
+  margin-bottom: 0.2rem;
+  font-size: var(--ui-xs);
+  font-weight: 600;
+}
+.geometry-layer-meta {
+  padding-inline: 0.4rem;
+}
+.geometry-layer-check {
+  padding: 0.3rem 0.4rem;
+}
+.geometry-object-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: var(--radius);
+  text-align: left;
+  font-size: var(--ui-xs);
+}
+.geometry-object-row.is-child {
+  padding-left: 1.2rem;
+}
+.geometry-object-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.geometry-object-row > small {
+  flex: 0 0 auto;
+  font-size: var(--ui-2xs);
+}
+.geometry-object-row:hover:not(:disabled),
+.geometry-object-row[aria-pressed="true"] {
+  background: var(--muted);
+}
+.geometry-object-row:disabled {
+  opacity: 0.5;
+}
+.geometry-layer-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.2rem 0.4rem;
+}
+.geometry-view-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.geometry-canvas-column {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--muted);
+}
+.geometry-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.geometry-plan,
+.geometry-3d {
+  position: absolute;
+  inset: 0;
+}
+.geometry-plan[data-tool="pan"] {
+  cursor: grab;
+}
+.geometry-plan[data-tool="envelope"],
+.geometry-plan[data-tool="line"],
+.geometry-plan[data-tool="exclusion"],
+.geometry-plan[data-tool="building"],
+.geometry-plan[data-tool="staffel"] {
+  cursor: crosshair;
+}
 .geometry-plan > svg {
+  display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 .geometry-plan path {
   vector-effect: non-scaling-stroke;
   fill-rule: evenodd;
 }
+.geometry-3d canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  touch-action: none;
+}
 .geometry-context-building {
-  fill: var(--border);
-  stroke: var(--muted-foreground);
+  fill: color-mix(in oklch, var(--muted-foreground) 14%, transparent);
+  stroke: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
   stroke-width: 1;
+}
+.geometry-plan[data-tool="reference"] .geometry-context-building {
   cursor: pointer;
 }
-.geometry-parcel {
-  fill: transparent;
+.geometry-plan[data-tool="reference"] .geometry-context-building:hover {
+  fill: color-mix(in oklch, var(--foreground) 20%, transparent);
+}
+.geometry-context-building.is-reference {
   stroke: var(--foreground);
   stroke-width: 2;
-  pointer-events: none;
+  stroke-dasharray: 5 3;
+}
+.geometry-parcel {
+  fill: color-mix(in oklch, var(--background) 70%, transparent);
+  stroke: var(--foreground);
+  stroke-width: 2;
+}
+.geometry-plan[data-tool="select"] .geometry-parcel {
+  cursor: pointer;
+}
+.geometry-parcel.is-selected {
+  stroke-width: 3;
 }
 .geometry-envelope {
   fill: #10b98120;
@@ -69,7 +211,7 @@
   cursor: pointer;
 }
 .geometry-building {
-  fill: #6366f180;
+  fill: #6366f155;
   stroke: #4338ca;
   stroke-width: 2;
   cursor: pointer;
@@ -82,59 +224,201 @@
 }
 .geometry-edge {
   stroke: #f59e0b;
-  stroke-width: 9;
+  stroke-width: 10;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
   cursor: pointer;
-  opacity: 0.6;
+  opacity: 0.45;
+}
+.geometry-edge.is-reviewed {
+  stroke: #059669;
+}
+.geometry-edge:hover,
+.geometry-edge.is-selected {
+  opacity: 0.9;
+}
+.geometry-edge-label {
+  fill: var(--foreground);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: var(--background);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+.geometry-mandatory-line {
+  fill: none;
+  stroke: #b45309;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
 }
 .geometry-drawing {
   fill: none;
   stroke: var(--foreground);
   stroke-width: 2;
+  stroke-dasharray: 6 4;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.geometry-drawing-vertex {
+  fill: var(--background);
+  stroke: var(--foreground);
+  stroke-width: 2;
+  pointer-events: none;
 }
 .geometry-scale {
   position: absolute;
-  bottom: var(--stack);
-  left: var(--stack);
-  background: var(--background);
-  padding: 4px;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in oklch, var(--background) 85%, transparent);
   pointer-events: none;
+}
+.geometry-scale-bar {
+  display: block;
+  height: 5px;
+  border: 1px solid var(--foreground);
+  border-top: 0;
+}
+.geometry-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+}
+.geometry-empty p {
+  max-width: 28rem;
+}
+.geometry-canvas-caption {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 0.75rem;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  background: var(--background);
+  font-size: var(--ui-xs);
+  color: var(--muted-foreground);
+}
+.geometry-caption-actions {
+  display: flex;
+  gap: 0.35rem;
 }
 .geometry-inspector {
   display: flex;
   flex-direction: column;
-  gap: var(--stack);
-  min-width: 0;
-  max-height: min(50dvh, 40rem);
-  overflow-y: auto;
+  gap: 0.75rem;
+  border-left: 1px solid var(--border);
 }
-.geometry-inspector h4 {
+.geometry-inspector h3 {
   margin: 0;
+  font-size: var(--ui-xs);
+  font-weight: 600;
 }
-.geometry-draw-actions,
-.geometry-move,
-.geometry-results {
+.geometry-inspector-heading {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--stack);
   align-items: center;
-  padding-block: var(--stack);
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.geometry-values {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.4rem 0.75rem;
+  font-size: var(--ui-xs);
+}
+.geometry-values dt {
+  color: var(--muted-foreground);
+}
+.geometry-values dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.geometry-review {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+.geometry-review small {
+  font-size: var(--ui-2xs);
+}
+.geometry-move {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.geometry-move > span {
+  margin-right: auto;
+}
+.geometry-remove {
+  align-self: flex-start;
 }
 .geometry-candidate {
   display: flex;
   flex-direction: column;
-  gap: var(--stack);
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: 100%;
+  padding-top: 0.5rem;
   border-top: 1px solid var(--border);
-  padding-top: var(--stack);
 }
-.geometry-3d {
-  height: 100%;
-  min-height: 30rem;
-  position: relative;
+.geometry-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.geometry-3d canvas {
+.geometry-issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.geometry-issue-actions button {
   max-width: 100%;
+  height: auto;
+  min-height: var(--control-sm);
+  white-space: normal;
+  text-align: left;
+}
+.geometry-status {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--ui-2xs);
+  font-variant-numeric: tabular-nums;
 }
 .geometry-plan .building-model-outline-editor {
   position: absolute;
@@ -144,8 +428,6 @@
 .geometry-plan .building-model-outline-editor-shape {
   width: 100%;
   height: 100%;
-  fill: transparent;
-  stroke: var(--foreground);
   pointer-events: none;
 }
 .geometry-plan .building-model-outline-handle,
@@ -166,23 +448,47 @@
   height: 8px;
   opacity: 0.7;
 }
-@media (max-width: 800px) {
-  .geometry-layout {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 1100px) {
+  .geometry-panel-toggle {
+    display: inline-flex;
+  }
+  .geometry-body {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .geometry-layers,
+  .geometry-inspector {
+    position: absolute;
+    z-index: 8;
+    top: 0;
+    bottom: 0;
+    display: none;
+    width: min(320px, 85vw);
+    box-shadow: var(--shadow-lg);
+  }
+  .geometry-layers {
+    left: 0;
   }
   .geometry-inspector {
-    max-height: none;
+    right: 0;
+  }
+  .geometry-body.show-layers .geometry-layers {
+    display: block;
+  }
+  .geometry-body.show-inspector .geometry-inspector {
+    display: flex;
   }
 }
-.geometry-mandatory-line { fill:none; stroke:#b45309; stroke-width:4; vector-effect:non-scaling-stroke; cursor:pointer; }
+@media (max-width: 720px) {
+  .geometry-status > span:last-child {
+    display: none;
+  }
+}
+
 .site-evidence-controls { display:flex; flex-direction:column; gap:var(--stack); max-width:50rem; padding-block:var(--stack); }
 .site-proposal-row { display:flex; flex-direction:column; gap:var(--stack); border-bottom:1px solid var(--border); padding-block:var(--stack); }
 .site-proposal-row blockquote { margin:0; padding-left:var(--stack); border-left:2px solid var(--border); }
 .site-plan-alignment { display:flex; flex-direction:column; gap:var(--stack); padding-block:var(--stack); }
 .site-plan-picker { height:30rem; overflow:hidden; position:relative; }
-.geometry-issue-list { width:100%; display:flex; flex-direction:column; gap:var(--stack); margin:0; padding-left:var(--section); }
-.geometry-issue-actions { display:flex; flex-wrap:wrap; gap:var(--stack); }
-.geometry-view-controls { display:flex; flex-wrap:wrap; gap:var(--stack); }
 .site-design-rules { display:flex; flex-direction:column; gap:var(--stack); max-width:40rem; padding-block:var(--stack); }
 .site-design-table { width:100%; table-layout:fixed; }
 .site-design-table td { white-space:normal; overflow-wrap:anywhere; }

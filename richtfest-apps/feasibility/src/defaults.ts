@@ -17,7 +17,10 @@ export const calculationStandards = {
   capitalizationRate: standard(3.8, "Kalkulations-Standard 05/2026: Liegenschaftszins Marktsicht"),
 } as const;
 
-export function initialStudy(figures: FeasibilitySiteFigures): Omit<FeasibilityStudyInput, "baseRevision"> {
+/** Saved site assessment figures the financial study can adopt; null when no assessment is saved. */
+export type SiteAssessmentSummary = { revision: number; parcelArea: number | null; parcelAreaReviewed: boolean; countableFloorArea: number | null; status: "incomplete" | "indicative" | "reviewed" };
+
+export function initialStudy(figures: FeasibilitySiteFigures, assessment: SiteAssessmentSummary | null = null): Omit<FeasibilityStudyInput, "baseRevision"> {
   const maxFloorArea = figures.gfz !== null && figures.parcelArea !== null ? figures.gfz * figures.parcelArea : null;
   const maxNote = maxFloorArea === null ? "" : `GFZ ${decimal(figures.gfz!)} × ${decimal(figures.parcelArea!)} m² Grundstück`;
   const scenario = (kind: FeasibilityScenarioKind): FeasibilityScenario => {
@@ -30,7 +33,8 @@ export function initialStudy(figures: FeasibilitySiteFigures): Omit<FeasibilityS
     return { kind, revenueMode: "sale", values };
   };
   return {
-    site: figures.parcelArea === null ? {} : { parcelArea: fromModel(figures.parcelArea, "Grundstücksfläche aus dem Gebäudemodell") },
+    site: figures.parcelArea !== null ? { parcelArea: fromModel(figures.parcelArea, "Grundstücksfläche aus dem Gebäudemodell") }
+      : assessment?.parcelArea != null ? { parcelArea: { value: assessment.parcelArea, source: "site_assessment", note: `Grundstücksprüfung r${assessment.revision}`, reviewed: false } } : {},
     scenarios: [scenario("existing"), scenario("densify"), scenario("new_build")],
     notes: "",
   };

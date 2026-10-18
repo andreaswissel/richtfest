@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {toUtm} from '@richtfest/shared';
-import {displayLonLat,referenceDimensions,discoverSiteReferences,boundaryClearance} from './site-references';
+import {displayLonLat,referenceDimensions,discoverSiteReferences,boundaryClearance,referenceLabel} from './site-references';
 const polygon=[[[[0,0],[20,0],[20,10],[0,10],[0,0]]]] as [number,number][][][];
 test('display inverse projection and measured dimensions',()=>{const p=displayLonLat(toUtm(13.442,52.553,33));expect(p[0]).toBeCloseTo(13.442,7);expect(p[1]).toBeCloseTo(52.553,7);expect(referenceDimensions(polygon)).toEqual({area:200,depth:10,frontage:20});});
 test('discovery computes parcel coverage without double-counting parts, never invents eave height',async()=>{
@@ -32,3 +32,4 @@ test('skipped invalid building geometry cannot produce complete parcel ratios',a
  }) as unknown as typeof fetch;
  try{const result=await discoverSiteReferences({address:'test',origin:[0,0],sources:[]},new AbortController().signal);expect(result.references).toHaveLength(1);expect(result.status[0]).toBe('unavailable');expect(result.references[0]?.metrics?.grz?.value).toBeNull();expect(result.references[0]?.metrics?.ridgeHeight?.sourceDate).toBeNull();}finally{globalThis.fetch=original;}
 });
+test('reference labels do not repeat a house number already in the street name',()=>{expect(referenceLabel('Giersstraße 20','20')).toBe('Giersstraße 20');expect(referenceLabel('Giersstraße','20')).toBe('Giersstraße 20');expect(referenceLabel('Giersstraße 120','20')).toBe('Giersstraße 120 20');expect(referenceLabel('Hauptstraße 4a','4A')).toBe('Hauptstraße 4a');});

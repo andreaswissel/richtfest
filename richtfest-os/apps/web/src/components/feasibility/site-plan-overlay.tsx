@@ -7,6 +7,7 @@ import { useApi } from "../../query";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { DateInput } from "../ui/date-input";
 import { NativeSelect } from "../ui/native-select";
 import { Checkbox } from "../ui/checkbox";
 import { Callout, Field } from "../ui/primitives";
@@ -216,16 +217,11 @@ export function SitePlanAlignment({
               />
             </Field>
             <Field label={label("Date")}>
-              <Input
-                type="date"
+              <DateInput
                 disabled={disabled}
-                value={overlay.sourceDate ?? ""}
-                onChange={(e) =>
-                  onChange({
-                    ...overlay,
-                    sourceDate: e.target.value || null,
-                    reviewed: false,
-                  })
+                value={overlay.sourceDate}
+                onValueChange={(sourceDate) =>
+                  onChange({ ...overlay, sourceDate, reviewed: false })
                 }
               />
             </Field>

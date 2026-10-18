@@ -19,6 +19,13 @@ describe("feasibility defaults", () => {
     expect(study.site.parcelArea).toBeUndefined();
     expect(study.scenarios.every(scenario => !scenario.values.newGrossFloorArea)).toBe(true);
   });
+
+  test("fall back to the saved site assessment parcel area, unreviewed, and prefer the building model", () => {
+    const assessment = { revision: 2, parcelArea: 995, parcelAreaReviewed: true, countableFloorArea: 1592, status: "indicative" as const };
+    const empty = { parcelArea: null, grz: null, gfz: null, existingGrossFloorArea: null };
+    expect(initialStudy(empty, assessment).site.parcelArea).toEqual({ value: 995, source: "site_assessment", note: "Grundstücksprüfung r2", reviewed: false });
+    expect(initialStudy({ ...empty, parcelArea: 1000 }, assessment).site.parcelArea?.source).toBe("building_model");
+  });
 });
 
 describe("feasibility report", () => {

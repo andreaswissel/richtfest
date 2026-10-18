@@ -11,7 +11,7 @@ import { z } from "zod";
 export const feasibilityMethod = "residual_land_value_v1";
 export const feasibilityScenarioKinds = ["existing", "densify", "new_build"] as const;
 export type FeasibilityScenarioKind = typeof feasibilityScenarioKinds[number];
-export const feasibilitySources = ["entered", "standard", "building_model"] as const;
+export const feasibilitySources = ["entered", "standard", "building_model", "site_assessment"] as const;
 
 export const feasibilityValueSchema = z.object({
   value: z.number().finite().min(0).max(1e12).nullable(),

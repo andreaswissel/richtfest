@@ -32,3 +32,4 @@
   .feasibility-summary td, .feasibility-summary th { padding-inline: 4px; }
   .feasibility-disclosure summary > span { float: none; display: block; margin: 4px 0 0; }
 }
+.feasibility-site-link { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--stack); margin-top: var(--stack); padding-top: var(--stack); border-top: 1px solid var(--border); }

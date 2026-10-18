@@ -1,4 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowLeftRight,
+  Ban,
+  BookmarkPlus,
+  Box,
+  Building2,
+  CircleHelp,
+  Eye,
+  EyeOff,
+  Hand,
+  Layers,
+  Map as MapIcon,
+  MousePointer2,
+  PanelLeft,
+  PanelRight,
+  PenLine,
+  Redo2,
+  Scan,
+  SquareDashed,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import type {
   LocationContext,
   LocationState,
@@ -21,9 +44,12 @@ import { useT } from "../../i18n";
 import { usePreferences } from "../../store";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import { DateInput } from "../ui/date-input";
 import { Input } from "../ui/input";
 import { Badge, Callout, Field, Segmented } from "../ui/primitives";
 import { NativeSelect } from "../ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { WorkbenchTool } from "../ui/workbench-tool";
 import { OutlineEditorLayer } from "../building-model/outline-editor";
 import { fromLocal, toLocal } from "../location/site-geometry";
 import type { createViewport, ViewportState } from "../location/viewport";
@@ -31,27 +57,14 @@ import "./site-geometry-editor.css";
 import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
 
 type Engine = typeof import("@richtfest/shared/site-geometry");
-type Selection = {
-  kind:
-    | "parcel"
-    | "line"
-    | "envelope"
-    | "exclusion"
-    | "building"
-    | "staffel"
-    | "edge";
-  id: string;
-} | null;
-type Tool =
-  | "pan"
-  | "select"
-  | "line"
-  | "envelope"
-  | "exclusion"
-  | "building"
-  | "staffel"
-  | "edge"
-  | "reference";
+type SelectionKind = "parcel" | "line" | "envelope" | "exclusion" | "building" | "staffel" | "edge";
+type Selection = { kind: SelectionKind; id: string } | null;
+type Tool = "pan" | "select" | "line" | "envelope" | "exclusion" | "building" | "staffel" | "edge" | "reference";
+type T = ReturnType<typeof useT>;
+type Key = Parameters<T>[0];
+const DRAW_TOOLS: Tool[] = ["envelope", "line", "exclusion", "building", "staffel"];
+const HISTORY_LIMIT = 50;
+
 const evidence = (label: string, ring: GeometryPoint[]): GeometryEvidence => ({
   id: crypto.randomUUID(),
   label,
@@ -60,24 +73,46 @@ const evidence = (label: string, ring: GeometryPoint[]): GeometryEvidence => ({
   sourceDate: null,
   reviewed: false,
 });
-const closeRing = (points: GeometryPoint[]) =>
-  [...points, points[0]!] as GeometryPoint[];
-const pathFor = (
-  geometry: GeometryMultiPolygon,
-  project: (p: GeometryPoint) => GeometryPoint,
-) =>
+const closeRing = (points: GeometryPoint[]) => [...points, points[0]!] as GeometryPoint[];
+const pathFor = (geometry: GeometryMultiPolygon, project: (p: GeometryPoint) => GeometryPoint) =>
   geometry
-    .map((polygon) =>
-      polygon
-        .map(
-          (ring) =>
-            ring
-              .map((p, i) => `${i ? "L" : "M"}${project(p).join(",")}`)
-              .join(" ") + "Z",
-        )
-        .join(" "),
-    )
+    .map((polygon) => polygon.map((ring) => ring.map((p, i) => `${i ? "L" : "M"}${project(p).join(",")}`).join(" ") + "Z").join(" "))
     .join(" ");
+
+/** Tool names that earlier drafts stored as object names; shown as numbered object names instead. */
+const LEGACY_TOOL_LABELS = new Set([
+  "", "Place building", "Gebäude platzieren", "Trace envelope", "Baufenster zeichnen", "Trace exclusion", "Ausschlussfläche zeichnen",
+  "Trace upper storey", "Staffelgeschoss zeichnen", "Trace mandatory building line", "Baulinie zeichnen",
+]);
+export const displayName = (label: string | undefined, fallback: string) =>
+  !label || LEGACY_TOOL_LABELS.has(label.trim()) ? fallback : label;
+
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
+/** Parcel edges are named by the direction they face and their length, so issues and setbacks stay recognisable. */
+export function parcelEdgeNames(parcel: GeometryEvidence | null, t: T, format: (n: number) => string) {
+  const names = new Map<string, string>();
+  if (!parcel) return names;
+  const raw: { key: string; direction: string; length: string }[] = [];
+  parcel.geometry.forEach((polygon, pi) =>
+    polygon.forEach((ring, ri) => {
+      const vertices = ring.slice(0, -1);
+      const cx = vertices.reduce((s, p) => s + p[0], 0) / vertices.length;
+      const cy = vertices.reduce((s, p) => s + p[1], 0) / vertices.length;
+      vertices.forEach((p, ei) => {
+        const q = ring[ei + 1]!;
+        const angle = Math.atan2((p[0] + q[0]) / 2 - cx, (p[1] + q[1]) / 2 - cy);
+        const direction = COMPASS[(Math.round(angle / (Math.PI / 4)) + 8) % 8]!;
+        raw.push({ key: `${pi}-${ri}-${ei}`, direction, length: format(Math.hypot(q[0] - p[0], q[1] - p[1])) });
+      });
+    }),
+  );
+  for (const edge of raw) {
+    const same = raw.filter((e) => e.direction === edge.direction);
+    const suffix = same.length > 1 ? ` ${same.indexOf(edge) + 1}` : "";
+    names.set(edge.key, t("siteGeometryEdgeName").replace("{direction}", t(`siteGeometryDir${edge.direction}` as Key) + suffix).replace("{length}", edge.length));
+  }
+  return names;
+}
 
 /** Explicit height describes the whole building, including its separate Staffel volumes. */
 export function fullStoreyMeshHeight(building: BuildingGeometry) {
@@ -85,15 +120,30 @@ export function fullStoreyMeshHeight(building: BuildingGeometry) {
   return Math.max(building.fullStoreys * building.storeyHeight, (building.height ?? 0) - staffelHeight);
 }
 
-function Geometry3D({
-  context,
-  geometry,
-  onSelect,
-}: {
-  context: LocationContext;
-  geometry: SiteGeometryInput;
-  onSelect: (id: string | null) => void;
-}) {
+/** A round scale-bar length of roughly a fifth of the visible width. */
+const scaleBar = (metresPerPixel: number, width: number) => {
+  const target = (metresPerPixel * width) / 5;
+  const power = 10 ** Math.floor(Math.log10(Math.max(target, 0.01)));
+  const metres = [1, 2, 5, 10].map((m) => m * power).find((m) => m >= target * 0.7) ?? power * 10;
+  return { metres, pixels: metres / metresPerPixel };
+};
+
+function useElementSize<E extends HTMLElement>() {
+  const ref = useRef<E>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => setSize({ width: element.clientWidth, height: element.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
+
+function Geometry3D({ context, geometry, onSelect }: { context: LocationContext; geometry: SiteGeometryInput; onSelect: (id: string | null) => void }) {
   const t = useT();
   const host = useRef<HTMLDivElement>(null),
     viewport = useRef<ReturnType<typeof createViewport> | null>(null),
@@ -126,52 +176,17 @@ function Geometry3D({
   }, []);
   useEffect(() => {
     if (!ready || !viewport.current) return;
-    const local = (g: GeometryMultiPolygon) =>
-      g.map((p) => p.map((r) => r.map((point) => toLocal(context, point))));
+    const local = (g: GeometryMultiPolygon) => g.map((p) => p.map((r) => r.map((point) => toLocal(context, point))));
     const assessment: NonNullable<ViewportState["assessment"]> = [];
-    if (geometry.parcel)
-      assessment.push({
-        id: "parcel",
-        polygons: local(geometry.parcel.geometry),
-        base: 0.05,
-        height: 0,
-        color: 0x64748b,
-      });
-    if (geometry.envelope)
-      assessment.push({
-        id: "envelope",
-        polygons: local(geometry.envelope.geometry),
-        base: 0.1,
-        height: 0,
-        color: 0x10b981,
-      });
-    geometry.exclusions.forEach((x) =>
-      assessment.push({
-        id: x.id,
-        polygons: local(x.geometry),
-        base: 0.15,
-        height: 0,
-        color: 0xef4444,
-      }),
-    );
+    if (geometry.parcel) assessment.push({ id: "parcel", polygons: local(geometry.parcel.geometry), base: 0.05, height: 0, color: 0x64748b });
+    if (geometry.envelope) assessment.push({ id: "envelope", polygons: local(geometry.envelope.geometry), base: 0.1, height: 0, color: 0x10b981 });
+    geometry.exclusions.forEach((x) => assessment.push({ id: x.id, polygons: local(x.geometry), base: 0.15, height: 0, color: 0xef4444 }));
     geometry.buildings.forEach((b) => {
       const height = fullStoreyMeshHeight(b);
-      assessment.push({
-        id: b.id,
-        polygons: local(b.footprint.geometry),
-        base: 0.2,
-        height,
-        color: 0x6366f1,
-      });
+      assessment.push({ id: b.id, polygons: local(b.footprint.geometry), base: 0.2, height, color: 0x6366f1 });
       let base = height + 0.2;
       b.staffel.forEach((s) => {
-        assessment.push({
-          id: s.footprint.id,
-          polygons: local(s.footprint.geometry),
-          base,
-          height: s.height,
-          color: 0x818cf8,
-        });
+        assessment.push({ id: s.footprint.id, polygons: local(s.footprint.geometry), base, height: s.height, color: 0x818cf8 });
         base += s.height;
       });
     });
@@ -180,25 +195,8 @@ function Geometry3D({
       assessment,
       objects: [],
       models: {},
-      layers: {
-        buildings: true,
-        trees: false,
-        objects: true,
-        lidar: false,
-        roads: false,
-        railNoise: false,
-        plan: false,
-        aerial: false,
-      },
-      site: {
-        axes: [],
-        plan: null,
-        distances: [],
-        railNoise: null,
-        aerial: { near: null, far: null },
-        picks: [],
-        snaps: [],
-      },
+      layers: { buildings: true, trees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
+      site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
       selected: null,
       tool: "select",
       treeStyle: "schematic",
@@ -211,7 +209,7 @@ function Geometry3D({
     });
   }, [context, geometry, ready, dark]);
   return (
-    <div className="geometry-3d" ref={host}>
+    <div className="geometry-3d" ref={host} role="region" aria-label={t("siteGeometry3D")}>
       {error && <Callout>{t("siteGeometryWebGLUnavailable")}</Callout>}
     </div>
   );
@@ -226,6 +224,8 @@ export function SiteGeometryEditor({
   onReference,
   onUseArea,
   contextOverride,
+  referenceBuildingIds = [],
+  emptyAction,
 }: {
   projectId: string;
   value: SiteGeometryInput | null;
@@ -235,30 +235,25 @@ export function SiteGeometryEditor({
   onReference?: (building: LocationBuilding, context: LocationContext) => void;
   contextOverride?: LocationContext | null;
   onUseArea?: (area: number) => void;
+  /** Building ids already chosen as § 34 references, outlined on the plan. */
+  referenceBuildingIds?: string[];
+  /** Shown on the empty canvas before a parcel exists, e.g. a link to the parcel lookup. */
+  emptyAction?: ReactNode;
 }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
-    label = (key: string) => t(`siteGeometry${key}` as Parameters<typeof t>[0]);
+    label = (key: string) => t(`siteGeometry${key}` as Key);
   const location = useApi(`/projects/${projectId}/location`),
-    context =
-      contextOverride ?? (location.data as LocationState | undefined)?.context;
+    context = contextOverride ?? (location.data as LocationState | undefined)?.context;
   const geometry = useMemo(() => {
     const parsed = siteGeometryInputSchema.safeParse(value);
     return parsed.success
       ? parsed.data
-      : {
-          ...createEmptySiteGeometryInput(),
-          ...value,
-          mandatoryLines: value?.mandatoryLines ?? [],
-          planOverlay: value?.planOverlay ?? null,
-        };
+      : { ...createEmptySiteGeometryInput(), ...value, mandatoryLines: value?.mandatoryLines ?? [], planOverlay: value?.planOverlay ?? null };
   }, [value]);
+  const [canvasRef, size] = useElementSize<HTMLDivElement>();
   const [frame, setFrame] = useState({ zoom: 1, x: 0, y: 0 });
-  const panStart = useRef<{
-    clientX: number;
-    clientY: number;
-    frame: typeof frame;
-  } | null>(null);
+  const panStart = useRef<{ clientX: number; clientY: number; frame: typeof frame } | null>(null);
   const planImage = usePlanRaster(projectId, geometry.planOverlay);
   const [pickingAlignment, setPickingAlignment] = useState(false),
     [pickedSite, setPickedSite] = useState<GeometryPoint | null>(null);
@@ -268,38 +263,32 @@ export function SiteGeometryEditor({
     [selected, setSelected] = useState<Selection>(null),
     [tool, setTool] = useState<Tool>("select"),
     [points, setPoints] = useState<GeometryPoint[]>([]),
-    [view, setView] = useState("2d");
-  const selectedBuilding = geometry.buildings.find(
-    (b) =>
-      b.id === selected?.id ||
-      b.staffel.some((s) => s.footprint.id === selected?.id),
-  );
+    [hover, setHover] = useState<GeometryPoint | null>(null),
+    [view, setView] = useState("2d"),
+    [tab, setTab] = useState("properties"),
+    [panel, setPanel] = useState<"layers" | "inspector" | null>(null),
+    [layers, setLayers] = useState({ context: true, plan: true }),
+    [past, setPast] = useState<SiteGeometryInput[]>([]),
+    [future, setFuture] = useState<SiteGeometryInput[]>([]);
+  const format = (n: number, digits = 2) => n.toLocaleString(language === "de" ? "de-DE" : "en-GB", { maximumFractionDigits: digits });
+  const edgeNames = useMemo(() => parcelEdgeNames(geometry.parcel, t, (n) => format(n, 1)), [geometry.parcel, language]);
+  const edgeName = (pi: number, ri: number, ei: number) => edgeNames.get(`${pi}-${ri}-${ei}`) ?? `${label("edge")} ${ei + 1}`;
+  const buildingName = (b: BuildingGeometry, index: number) => displayName(b.label, label("ObjectBuilding").replace("{n}", String(index + 1)));
+  const staffelName = (s: BuildingGeometry["staffel"][number], index: number) => displayName(s.footprint.label, label("ObjectStaffel").replace("{n}", String(index + 1)));
+  const exclusionName = (e: GeometryEvidence, index: number) => displayName(e.label, label("ObjectExclusion").replace("{n}", String(index + 1)));
+  const lineName = (l: { label: string }, index: number) => displayName(l.label, label("ObjectLine").replace("{n}", String(index + 1)));
+
+  const selectedBuilding = geometry.buildings.find((b) => b.id === selected?.id || b.staffel.some((s) => s.footprint.id === selected?.id));
   const selectedEvidence =
-    selected?.kind === "parcel"
-      ? geometry.parcel
-      : selected?.kind === "envelope"
-        ? geometry.envelope
-        : selected?.kind === "exclusion"
-          ? geometry.exclusions.find((e) => e.id === selected.id)
-          : selected?.kind === "building"
-            ? selectedBuilding?.footprint
-            : selected?.kind === "staffel"
-              ? selectedBuilding?.staffel.find(
-                  (s) => s.footprint.id === selected.id,
-                )?.footprint
+    selected?.kind === "parcel" ? geometry.parcel
+      : selected?.kind === "envelope" ? geometry.envelope
+        : selected?.kind === "exclusion" ? geometry.exclusions.find((e) => e.id === selected.id)
+          : selected?.kind === "building" ? selectedBuilding?.footprint
+            : selected?.kind === "staffel" ? selectedBuilding?.staffel.find((s) => s.footprint.id === selected.id)?.footprint
               : null;
-  const selectedLine =
-    selected?.kind === "line"
-      ? geometry.mandatoryLines.find((l) => l.id === selected.id)
-      : null;
-  const selectedStaffel =
-    selected?.kind === "staffel"
-      ? selectedBuilding?.staffel.find((s) => s.footprint.id === selected.id)
-      : null;
-  const selectedEdge =
-    selected?.kind === "edge"
-      ? geometry.setbacks.find((e) => e.id === selected.id)
-      : null;
+  const selectedLine = selected?.kind === "line" ? geometry.mandatoryLines.find((l) => l.id === selected.id) : null;
+  const selectedStaffel = selected?.kind === "staffel" ? selectedBuilding?.staffel.find((s) => s.footprint.id === selected.id) : null;
+  const selectedEdge = selected?.kind === "edge" ? geometry.setbacks.find((e) => e.id === selected.id) : null;
   useEffect(() => {
     void import("@richtfest/shared/site-geometry").then(setEngine);
   }, []);
@@ -313,77 +302,90 @@ export function SiteGeometryEditor({
     }
     setCandidates([]);
   }, [engine, value]);
-  const update = (patch: Partial<SiteGeometryInput>) =>
-    onChange({ ...geometry, ...patch });
-  const updateEvidence = (next: GeometryEvidence) => {
-    if (selected?.kind === "parcel")
-      update({
-        parcel: next,
-        ...(next.geometry !== geometry.parcel?.geometry
-          ? { setbacks: [] }
-          : {}),
-      });
-    if (selected?.kind === "envelope") update({ envelope: next });
-    if (selected?.kind === "exclusion")
-      update({
-        exclusions: geometry.exclusions.map((e) =>
-          e.id === next.id ? next : e,
-        ),
-        exclusionsReviewed: false,
-      });
-    if (selected?.kind === "building" || selected?.kind === "staffel")
-      update({
-        buildings: geometry.buildings.map((b) =>
-          b.id !== selectedBuilding?.id
-            ? b
-            : selected.kind === "building"
-              ? { ...b, footprint: next, storeysReviewed: false }
-              : {
-                  ...b,
-                  staffel: b.staffel.map((s) =>
-                    s.footprint.id === next.id
-                      ? { ...s, footprint: next, classificationReviewed: false }
-                      : s,
-                  ),
-                },
-        ),
-      });
+  useEffect(() => {
+    setPast([]);
+    setFuture([]);
+  }, [projectId]);
+  /** Every edit records undo history, like the 3D location workbench. */
+  const commit = (next: SiteGeometryInput) => {
+    setPast((p) => [...p.slice(-HISTORY_LIMIT + 1), geometry]);
+    setFuture([]);
+    onChange(next);
   };
-  const baseBounds = useMemo(() => {
+  const undo = (redo: boolean) => {
+    const from = redo ? future : past;
+    const target = from.at(-1);
+    if (!target || disabled) return;
+    if (redo) {
+      setFuture(future.slice(0, -1));
+      setPast((p) => [...p, geometry]);
+    } else {
+      setPast(past.slice(0, -1));
+      setFuture((f) => [...f, geometry]);
+    }
+    setSelected(null);
+    onChange(target);
+  };
+  const update = (patch: Partial<SiteGeometryInput>) => commit({ ...geometry, ...patch });
+  const patchBuilding = (id: string, patch: (b: BuildingGeometry) => BuildingGeometry) =>
+    update({ buildings: geometry.buildings.map((b) => (b.id === id ? patch(b) : b)) });
+  const updateEvidence = (next: GeometryEvidence) => {
+    if (selected?.kind === "parcel") update({ parcel: next, ...(next.geometry !== geometry.parcel?.geometry ? { setbacks: [] } : {}) });
+    if (selected?.kind === "envelope") update({ envelope: next });
+    if (selected?.kind === "exclusion") update({ exclusions: geometry.exclusions.map((e) => (e.id === next.id ? next : e)), exclusionsReviewed: false });
+    if ((selected?.kind === "building" || selected?.kind === "staffel") && selectedBuilding)
+      patchBuilding(selectedBuilding.id, (b) =>
+        selected.kind === "building"
+          ? { ...b, footprint: next, storeysReviewed: false }
+          : { ...b, staffel: b.staffel.map((s) => (s.footprint.id === next.id ? { ...s, footprint: next, classificationReviewed: false } : s)) },
+      );
+  };
+
+  // Plan projection: metres to canvas pixels, north up, with a uniform scale so shapes are never distorted.
+  const width = Math.max(size.width, 1),
+    height = Math.max(size.height, 1);
+  const extent = useMemo(() => {
     const pts =
       geometry.parcel?.geometry.flat(2) ??
-      context?.buildings.flatMap((b) =>
-        b.polygons.flat(2).map((p) => fromLocal(context, p)),
-      ) ??
+      context?.buildings.flatMap((b) => b.polygons.flat(2).map((p) => fromLocal(context, p))) ??
       [];
-    if (!pts.length) return { x: 0, y: 0, size: 100 };
+    if (!pts.length) return { cx: 0, cy: 0, w: 100, h: 100 };
     const xs = pts.map((p) => p[0]),
       ys = pts.map((p) => p[1]);
-    const x = Math.min(...xs),
-      y = Math.min(...ys),
-      size = Math.max(10, Math.max(...xs) - x, Math.max(...ys) - y) * 1.2;
-    return { x: x - size * 0.08, y: y - size * 0.08, size };
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: Math.max(10, maxX - minX), h: Math.max(10, maxY - minY) };
   }, [geometry.parcel, context]);
-  const bounds = {
-    x: baseBounds.x + (baseBounds.size * (1 - 1 / frame.zoom)) / 2 + frame.x,
-    y: baseBounds.y + (baseBounds.size * (1 - 1 / frame.zoom)) / 2 + frame.y,
-    size: baseBounds.size / frame.zoom,
-  };
-  const affine =
-    geometry.planOverlay &&
-    engine?.affineFromControlPoints(geometry.planOverlay.controlPoints);
+  const fitScale = Math.max(extent.w / (width * 0.8), extent.h / (height * 0.8));
+  const metresPerPixel = fitScale / frame.zoom;
+  const cx = extent.cx + frame.x,
+    cy = extent.cy + frame.y;
+  const project = (p: GeometryPoint): GeometryPoint => [width / 2 + (p[0] - cx) / metresPerPixel, height / 2 - (p[1] - cy) / metresPerPixel];
+  const unproject = (p: { x: number; y: number }): GeometryPoint => [cx + (p.x * width - width / 2) * metresPerPixel, cy - (p.y * height - height / 2) * metresPerPixel];
+  const affine = geometry.planOverlay && engine?.affineFromControlPoints(geometry.planOverlay.controlPoints);
   const overlayMatrix = affine
-    ? `matrix(${(1000 * affine[0]) / bounds.size},${(-1000 * affine[3]) / bounds.size},${(1000 * affine[1]) / bounds.size},${(-1000 * affine[4]) / bounds.size},${(1000 * (affine[2] - bounds.x)) / bounds.size},${1000 - (1000 * (affine[5] - bounds.y)) / bounds.size})`
+    ? `matrix(${affine[0] / metresPerPixel},${-affine[3] / metresPerPixel},${affine[1] / metresPerPixel},${-affine[4] / metresPerPixel},${width / 2 + (affine[2] - cx) / metresPerPixel},${height / 2 - (affine[5] - cy) / metresPerPixel})`
     : undefined;
-  const project = (p: GeometryPoint): GeometryPoint => [
-    ((p[0] - bounds.x) / bounds.size) * 1000,
-    1000 - ((p[1] - bounds.y) / bounds.size) * 1000,
-  ];
-  const unproject = (p: { x: number; y: number }): GeometryPoint => [
-    bounds.x + p.x * bounds.size,
-    bounds.y + (1 - p.y) * bounds.size,
-  ];
+  const pointerSite = (event: { clientX: number; clientY: number; currentTarget: Element }) => {
+    const r = event.currentTarget.getBoundingClientRect();
+    return unproject({ x: (event.clientX - r.left) / r.width, y: (event.clientY - r.top) / r.height });
+  };
+  const zoomBy = (factor: number) => setFrame((f) => ({ ...f, zoom: Math.min(16, Math.max(0.25, f.zoom * factor)) }));
+  const fit = () => setFrame({ zoom: 1, x: 0, y: 0 });
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    // Wheel zoom stays on the canvas instead of scrolling the page.
+    const wheel = (event: WheelEvent) => {
+      if (view !== "2d") return;
+      event.preventDefault();
+      zoomBy(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, [view]);
+
   const selectId = (id: string | null) => {
+    setTab("properties");
     if (!id) return setSelected(null);
     if (id.startsWith("building:") && context) {
       const b = context.buildings.find((b) => `building:${b.id}` === id);
@@ -391,36 +393,23 @@ export function SiteGeometryEditor({
       return;
     }
     if (id === "parcel") setSelected({ kind: "parcel", id });
-    else if (geometry.mandatoryLines.some((l) => l.id === id))
-      setSelected({ kind: "line", id });
+    else if (geometry.mandatoryLines.some((l) => l.id === id)) setSelected({ kind: "line", id });
     else if (id === "envelope") setSelected({ kind: "envelope", id });
-    else if (geometry.exclusions.some((e) => e.id === id))
-      setSelected({ kind: "exclusion", id });
-    else if (geometry.buildings.some((b) => b.id === id))
-      setSelected({ kind: "building", id });
-    else if (
-      geometry.buildings.some((b) =>
-        b.staffel.some((s) => s.footprint.id === id),
-      )
-    )
-      setSelected({ kind: "staffel", id });
+    else if (geometry.exclusions.some((e) => e.id === id)) setSelected({ kind: "exclusion", id });
+    else if (geometry.buildings.some((b) => b.id === id)) setSelected({ kind: "building", id });
+    else if (geometry.buildings.some((b) => b.staffel.some((s) => s.footprint.id === id))) setSelected({ kind: "staffel", id });
+    else if (geometry.setbacks.some((e) => e.id === id)) setSelected({ kind: "edge", id });
   };
+  const canDraw = !disabled && !!geometry.parcel && view === "2d";
   const start = (next: Tool) => {
-    setView("2d");
     setTool(next);
     setPoints([]);
+    if (next === "edge") setTab("properties");
   };
   const finish = () => {
     if (tool === "line") {
       if (points.length < 2) return;
-      const line = {
-        id: crypto.randomUUID(),
-        label: label("line"),
-        line: points,
-        source: "",
-        sourceDate: null,
-        reviewed: false,
-      };
+      const line = { id: crypto.randomUUID(), label: label("ObjectLine").replace("{n}", String(geometry.mandatoryLines.length + 1)), line: points, source: "", sourceDate: null, reviewed: false };
       update({ mandatoryLines: [...geometry.mandatoryLines, line] });
       setSelected({ kind: "line", id: line.id });
       setTool("select");
@@ -428,23 +417,23 @@ export function SiteGeometryEditor({
       return;
     }
     if (points.length < 3) return;
-    const e = evidence(label(tool), closeRing(points));
+    const ring = closeRing(points);
     if (tool === "envelope") {
+      const e = evidence(label("ObjectEnvelope"), ring);
       update({ envelope: e });
-      setSelected({ kind: "envelope", id: e.id });
+      setSelected({ kind: "envelope", id: "envelope" });
     }
     if (tool === "exclusion") {
-      update({
-        exclusions: [...geometry.exclusions, e],
-        exclusionsReviewed: false,
-      });
+      const e = evidence(label("ObjectExclusion").replace("{n}", String(geometry.exclusions.length + 1)), ring);
+      update({ exclusions: [...geometry.exclusions, e], exclusionsReviewed: false });
       setSelected({ kind: "exclusion", id: e.id });
     }
     if (tool === "building") {
-      const b = {
+      const name = label("ObjectBuilding").replace("{n}", String(geometry.buildings.length + 1));
+      const b: BuildingGeometry = {
         id: crypto.randomUUID(),
-        label: label("building"),
-        footprint: e,
+        label: name,
+        footprint: evidence(name, ring),
         fullStoreys: options?.maxFullStoreys ?? 1,
         storeyHeight: 3,
         height: null,
@@ -456,26 +445,11 @@ export function SiteGeometryEditor({
       setSelected({ kind: "building", id: b.id });
     }
     if (tool === "staffel" && selectedBuilding) {
-      update({
-        buildings: geometry.buildings.map((b) =>
-          b.id === selectedBuilding.id
-            ? {
-                ...b,
-                staffel: [
-                  ...b.staffel,
-                  {
-                    footprint: e,
-                    countable: true,
-                    height: 3,
-                    areaAbove230: null,
-                    averageTopAboveTerrain: null,
-                    classificationReviewed: false,
-                  },
-                ],
-              }
-            : b,
-        ),
-      });
+      const e = evidence(label("ObjectStaffel").replace("{n}", String(selectedBuilding.staffel.length + 1)), ring);
+      patchBuilding(selectedBuilding.id, (b) => ({
+        ...b,
+        staffel: [...b.staffel, { footprint: e, countable: true, height: 3, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }],
+      }));
       setSelected({ kind: "staffel", id: e.id });
     }
     setTool("select");
@@ -483,1107 +457,821 @@ export function SiteGeometryEditor({
   };
   const shift = (dx: number, dy: number) =>
     selectedEvidence &&
-    updateEvidence({
-      ...selectedEvidence,
-      reviewed: false,
-      geometry: selectedEvidence.geometry.map((p) =>
-        p.map((r) => r.map(([x, y]) => [x + dx, y + dy])),
-      ),
-    });
-  const format = (n: number) =>
-    n.toLocaleString(language === "de" ? "de-DE" : "en-GB", {
-      maximumFractionDigits: 2,
-    });
+    updateEvidence({ ...selectedEvidence, reviewed: false, geometry: selectedEvidence.geometry.map((p) => p.map((r) => r.map(([x, y]) => [x + dx, y + dy]))) });
+  const removeSelected = () => {
+    if (!selected) return;
+    if (selected.kind === "line") update({ mandatoryLines: geometry.mandatoryLines.filter((l) => l.id !== selected.id) });
+    if (selected.kind === "parcel") update({ parcel: null, setbacks: [] });
+    if (selected.kind === "envelope") update({ envelope: null });
+    if (selected.kind === "exclusion") update({ exclusions: geometry.exclusions.filter((e) => e.id !== selected.id), exclusionsReviewed: false });
+    if (selected.kind === "building") update({ buildings: geometry.buildings.filter((b) => b.id !== selected.id) });
+    if (selected.kind === "staffel") update({ buildings: geometry.buildings.map((b) => ({ ...b, staffel: b.staffel.filter((s) => s.footprint.id !== selected.id) })) });
+    if (selected.kind === "edge") update({ setbacks: geometry.setbacks.filter((e) => e.id !== selected.id) });
+    setSelected(null);
+  };
+  const openEdge = (pi: number, ri: number, ei: number) => {
+    let edge = geometry.setbacks.find((e) => e.polygonIndex === pi && e.ringIndex === ri && e.edgeIndex === ei);
+    if (!edge) {
+      edge = { id: crypto.randomUUID(), polygonIndex: pi, ringIndex: ri, edgeIndex: ei, distance: null, profile: "manual", heightSource: "manual", assessmentHeight: null, reviewedHeight: null, source: "", sourceDate: null, reviewed: false };
+      update({ setbacks: [...geometry.setbacks, edge] });
+    }
+    setTab("properties");
+    setSelected({ kind: "edge", id: edge.id });
+  };
+
+  const keys = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  keys.current = (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (event.defaultPrevented || target?.closest("[role=dialog], [data-slot=popover-content]")) return;
+    const typing = !!target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+    if (event.key === "Escape") {
+      if (points.length || tool !== "select") start("select");
+      else if (selected && !typing) setSelected(null);
+      return;
+    }
+    if (typing) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      undo(event.shiftKey);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    if (points.length && event.key === "Enter") {
+      event.preventDefault();
+      finish();
+      return;
+    }
+    if (points.length && event.key === "Backspace") {
+      event.preventDefault();
+      setPoints((p) => p.slice(0, -1));
+      return;
+    }
+    const key = event.key.toLowerCase();
+    const tools: Record<string, Tool> = { v: "select", h: "pan", e: "envelope", l: "line", x: "exclusion", b: "building", s: "edge", r: "reference" };
+    if (tools[key]) {
+      const next = tools[key]!;
+      if (next !== "select" && next !== "pan" && !canDraw) return;
+      if (next === "reference" && !onReference) return;
+      event.preventDefault();
+      start(next);
+    } else if (key === "t") setView("2d");
+    else if (key === "3" && context) setView("3d");
+    else if (key === "f") fit();
+    else if (key === "+" || key === "=") zoomBy(1.5);
+    else if (key === "-") zoomBy(1 / 1.5);
+  };
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => keys.current(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
   const selectedRing = selectedEvidence?.geometry[0]?.[0];
+  const pendingIssues = result?.issues ?? [];
+  const reviewState = (reviewed: boolean) => <Badge variant="outline">{t(reviewed ? "siteAssessmentReviewed" : "siteAssessmentUnreviewed")}</Badge>;
+  const reviewHint = (missing: string[]) =>
+    missing.length ? <small className="muted">{t("siteAssessmentReviewNeeds").replace("{items}", missing.join(", "))}</small> : null;
+  const evidenceMissing = (item: { source: string; sourceDate: string | null }) =>
+    [!item.source.trim() && label("Source"), !item.sourceDate && label("Date")].filter(Boolean) as string[];
+  const evidenceFields = (item: { source: string; sourceDate: string | null; reviewed: boolean }, change: (patch: { source?: string; sourceDate?: string | null; reviewed?: boolean }) => void, extraMissing: string[] = []) => {
+    const missing = [...evidenceMissing(item), ...extraMissing];
+    return (
+      <>
+        <Field label={label("Source")}>
+          <Input value={item.source} disabled={disabled} maxLength={2000} onChange={(e) => change({ source: e.target.value, reviewed: false })} />
+        </Field>
+        <Field label={label("Date")}>
+          <DateInput value={item.sourceDate} disabled={disabled} onValueChange={(sourceDate) => change({ sourceDate, reviewed: false })} />
+        </Field>
+        <div className="geometry-review">
+          <label className="site-review text-ui-xs">
+            <Checkbox checked={item.reviewed} disabled={disabled || missing.length > 0} onCheckedChange={(v) => change({ reviewed: v === true })} />
+            {label("Reviewed")}
+          </label>
+          {!item.reviewed && reviewHint(missing)}
+        </div>
+      </>
+    );
+  };
+  const numberField = (fieldLabel: string, current: number | null, change: (n: number | null) => void, opts: { min?: number; step?: number; integer?: boolean } = {}) => (
+    <Field label={fieldLabel}>
+      <Input
+        type="number"
+        min={opts.min ?? 0}
+        step={opts.step ?? 0.1}
+        disabled={disabled}
+        value={current ?? ""}
+        onChange={(e) => {
+          const n = e.target.valueAsNumber;
+          if (!Number.isFinite(n)) return change(null);
+          if (opts.integer && !Number.isInteger(n)) return;
+          change(n);
+        }}
+      />
+    </Field>
+  );
+
+  const issueTarget = (id?: string) => {
+    if (!id) return null;
+    const edge = geometry.setbacks.find((e) => e.id === id);
+    if (edge) return { name: edgeName(edge.polygonIndex, edge.ringIndex, edge.edgeIndex), edge: [edge.polygonIndex, edge.ringIndex, edge.edgeIndex] as const };
+    const match = id.match(/^edge-(\d+)-(\d+)-(\d+)$/);
+    if (match) {
+      const [pi, ri, ei] = match.slice(1).map(Number) as [number, number, number];
+      return { name: edgeName(pi, ri, ei), edge: [pi, ri, ei] as const };
+    }
+    const bIndex = geometry.buildings.findIndex((b) => b.id === id || b.footprint.id === id);
+    if (bIndex >= 0) return { name: buildingName(geometry.buildings[bIndex]!, bIndex), select: { kind: "building" as const, id: geometry.buildings[bIndex]!.id } };
+    for (const b of geometry.buildings) {
+      const sIndex = b.staffel.findIndex((s) => s.footprint.id === id);
+      if (sIndex >= 0) return { name: staffelName(b.staffel[sIndex]!, sIndex), select: { kind: "staffel" as const, id } };
+    }
+    const xIndex = geometry.exclusions.findIndex((e) => e.id === id);
+    if (xIndex >= 0) return { name: exclusionName(geometry.exclusions[xIndex]!, xIndex), select: { kind: "exclusion" as const, id } };
+    const lIndex = geometry.mandatoryLines.findIndex((l) => l.id === id);
+    if (lIndex >= 0) return { name: lineName(geometry.mandatoryLines[lIndex]!, lIndex), select: { kind: "line" as const, id } };
+    if (id === geometry.parcel?.id) return { name: label("Parcel"), select: { kind: "parcel" as const, id: "parcel" } };
+    if (id === geometry.envelope?.id) return { name: label("ObjectEnvelope"), select: { kind: "envelope" as const, id: "envelope" } };
+    return null;
+  };
+  const reviewIssue = (code: string, id?: string) => {
+    if (code === "missing_envelope") return start("envelope");
+    if (code === "exclusions_unreviewed") {
+      // The confirmation lives with the exclusions in the layer list.
+      setSelected(null);
+      setPanel("layers");
+      document.querySelector<HTMLElement>(".geometry-layer-check button")?.focus();
+      return;
+    }
+    const target = issueTarget(id);
+    if (target?.edge) {
+      const [pi, ri, ei] = target.edge;
+      const edge = geometry.setbacks.find((e) => e.polygonIndex === pi && e.ringIndex === ri && e.edgeIndex === ei) ?? engine?.createDefaultSetbacks(geometry.parcel!).find((e) => e.polygonIndex === pi && e.ringIndex === ri && e.edgeIndex === ei);
+      if (edge) {
+        if (!geometry.setbacks.some((e) => e.id === edge.id)) update({ setbacks: [...geometry.setbacks, edge] });
+        setTool("edge");
+        setTab("properties");
+        setSelected({ kind: "edge", id: edge.id });
+      }
+      return;
+    }
+    if (target?.select) {
+      setTab("properties");
+      setSelected(target.select);
+    }
+  };
+  const groupedIssues = Object.entries(
+    pendingIssues.reduce<Record<string, typeof pendingIssues>>((groups, issue) => {
+      (groups[issue.code] ??= []).push(issue);
+      return groups;
+    }, {}),
+  );
+
+  const toolItems: [Tool, typeof MousePointer2, Key, string][] = [
+    ["select", MousePointer2, "siteGeometryselect", "V"],
+    ["pan", Hand, "siteGeometrypan", "H"],
+    ["envelope", SquareDashed, "siteGeometryenvelope", "E"],
+    ["line", PenLine, "siteGeometryline", "L"],
+    ["exclusion", Ban, "siteGeometryexclusion", "X"],
+    ["building", Building2, "siteGeometrybuilding", "B"],
+    ["edge", ArrowLeftRight, "siteGeometryedge", "S"],
+    ["reference", BookmarkPlus, "siteGeometryreference", "R"],
+  ];
+  const drawing = DRAW_TOOLS.includes(tool);
+  const bar = scaleBar(metresPerPixel, width);
+  const edgeDecisions = geometry.parcel ? geometry.parcel.geometry.flat().reduce((n, ring) => n + ring.length - 1, 0) : 0;
+  const objectRow = (key: string, name: string, kind: SelectionKind, id: string, status?: ReactNode, indent = false) => (
+    <button key={key} type="button" className={`geometry-object-row${indent ? " is-child" : ""}`} aria-pressed={selected?.kind === kind && selected.id === id} onClick={() => selectId(id)}>
+      <span>{name}</span>
+      {status}
+    </button>
+  );
+  const smallStatus = (reviewed: boolean) => <small className="muted">{t(reviewed ? "siteAssessmentReviewedShort" : "siteAssessmentUnreviewed")}</small>;
+
   return (
-    <section className="site-geometry-workspace" aria-label={label("Title")}>
-      <div className="geometry-toolbar">
-        <h3 className="text-ui-sm font-medium">{label("Title")}</h3>
-        <Segmented
-          value={view}
-          onChange={setView}
-          items={[
-            { value: "2d", label: label("Plan") },
-            { value: "3d", label: "3D", disabled: !context },
-          ]}
-        />
-        {(
-          [
-            "select",
-            "pan",
-            "envelope",
-            "line",
-            "exclusion",
-            "building",
-            "edge",
-            "reference",
-          ] as Tool[]
-        ).map((mode) => (
-          <Button
-            key={mode}
-            size="sm"
-            variant="outline"
-            aria-pressed={tool === mode}
-            disabled={
-              (!["select", "pan"].includes(mode) && (disabled || !geometry.parcel)) ||
-              (mode === "reference" && !onReference)
-            }
-            onClick={() => start(mode)}
-          >
-            {label(mode)}
-          </Button>
-        ))}
-      </div>
-      <div className="geometry-view-controls">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            setFrame((f) => ({ ...f, zoom: Math.min(8, f.zoom * 1.5) }))
-          }
-        >
-          {label("ZoomIn")}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            setFrame((f) => ({ ...f, zoom: Math.max(0.5, f.zoom / 1.5) }))
-          }
-        >
-          {label("ZoomOut")}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setFrame({ zoom: 1, x: 0, y: 0 })}
-        >
-          {label("Fit")}
-        </Button>
-      </div>
-      <NativeSelect
-        aria-label={label("Selection")}
-        value={
-          selected?.kind === "envelope"
-            ? "envelope"
-            : selected?.kind === "parcel"
-              ? "parcel"
-              : (selected?.id ?? "_none")
-        }
-        onChange={(event) =>
-          selectId(event.target.value === "_none" ? null : event.target.value)
-        }
-      >
-        <option value="_none">{label("Selection")}</option>
-        {geometry.parcel && <option value="parcel">{label("Parcel")}</option>}
-        {geometry.envelope && (
-          <option value="envelope">{label("envelope")}</option>
-        )}
-        {geometry.exclusions.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.label}
-          </option>
-        ))}
-        {geometry.mandatoryLines.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.label}
-          </option>
-        ))}
-        {geometry.buildings.map((b) => (
-          <optgroup key={b.id} label={b.label}>
-            <option value={b.id}>{b.label}</option>
-            {b.staffel.map((s) => (
-              <option key={s.footprint.id} value={s.footprint.id}>
-                {s.footprint.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </NativeSelect>
-      {!geometry.parcel && <Callout>{label("NeedParcel")}</Callout>}
-      <div className="geometry-layout">
-        <div className="geometry-canvas-wrap">
-          {view === "3d" && context ? (
-            <Geometry3D
-              context={context}
-              geometry={geometry}
-              onSelect={selectId}
-            />
-          ) : (
-            <div
-              className="geometry-plan"
-              onPointerDown={(e) => {
-                if (tool !== "pan") return;
-                panStart.current = {
-                  clientX: e.clientX,
-                  clientY: e.clientY,
-                  frame,
-                };
-                e.currentTarget.setPointerCapture(e.pointerId);
-              }}
-              onPointerMove={(e) => {
-                if (!panStart.current) return;
-                const r = e.currentTarget.getBoundingClientRect(),
-                  start = panStart.current;
-                setFrame({
-                  ...start.frame,
-                  x:
-                    start.frame.x -
-                    (((e.clientX - start.clientX) / r.width) *
-                      baseBounds.size) /
-                      start.frame.zoom,
-                  y:
-                    start.frame.y +
-                    (((e.clientY - start.clientY) / r.height) *
-                      baseBounds.size) /
-                      start.frame.zoom,
-                });
-              }}
-              onPointerUp={(e) => {
-                panStart.current = null;
-                if (e.currentTarget.hasPointerCapture(e.pointerId))
-                  e.currentTarget.releasePointerCapture(e.pointerId);
-              }}
-              onClickCapture={(event) => {
-                if (!pickingAlignment) return;
-                event.stopPropagation();
-                const r = event.currentTarget.getBoundingClientRect();
-                setPickedSite(
-                  unproject({
-                    x: (event.clientX - r.left) / r.width,
-                    y: (event.clientY - r.top) / r.height,
-                  }),
-                );
-                setPickingAlignment(false);
-              }}
-              onClick={(event) => {
-                if (pickingAlignment) {
-                  const r = event.currentTarget.getBoundingClientRect();
-                  setPickedSite(
-                    unproject({
-                      x: (event.clientX - r.left) / r.width,
-                      y: (event.clientY - r.top) / r.height,
-                    }),
-                  );
-                  setPickingAlignment(false);
-                  return;
-                }
-                if (
-                  ![
-                    "envelope",
-                    "line",
-                    "exclusion",
-                    "building",
-                    "staffel",
-                  ].includes(tool) ||
-                  disabled
-                )
-                  return;
-                const r = event.currentTarget.getBoundingClientRect();
-                const next = unproject({
-                  x: (event.clientX - r.left) / r.width,
-                  y: (event.clientY - r.top) / r.height,
-                });
-                const vertices = geometry.parcel?.geometry.flat(2) ?? [];
-                const nearest = vertices.reduce<GeometryPoint | undefined>(
-                  (best, p) =>
-                    Math.hypot(p[0] - next[0], p[1] - next[1]) <
-                      (bounds.size * 8) / r.width &&
-                    (!best ||
-                      Math.hypot(p[0] - next[0], p[1] - next[1]) <
-                        Math.hypot(best[0] - next[0], best[1] - next[1]))
-                      ? p
-                      : best,
-                  undefined,
-                );
-                setPoints((p) => [...p, nearest ?? next]);
-              }}
-            >
-              <svg
-                viewBox="0 0 1000 1000"
-                preserveAspectRatio="none"
-                aria-label={label("Plan")}
+    <>
+      <section className="geometry-workbench" aria-label={label("Title")}>
+        <div className="geometry-toolbar" role="toolbar" aria-label={label("Actions")}>
+          <div className="geometry-toolbar-group">
+            <Button variant="ghost" size="icon-sm" className="geometry-panel-toggle" aria-label={label("Layers")} title={label("Layers")} aria-pressed={panel === "layers"} onClick={() => setPanel(panel === "layers" ? null : "layers")}>
+              <PanelLeft className="size-icon-sm" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" className="geometry-panel-toggle" aria-label={label("Inspector")} title={label("Inspector")} aria-pressed={panel === "inspector"} onClick={() => setPanel(panel === "inspector" ? null : "inspector")}>
+              <PanelRight className="size-icon-sm" />
+            </Button>
+            <Segmented value={view} onChange={setView} items={[{ value: "2d", label: label("Plan") }, { value: "3d", label: "3D", disabled: !context }]} />
+            {!context && <span className="text-ui-2xs muted">{label("3DNeedsContext")}</span>}
+          </div>
+          <div className="geometry-toolbar-group">
+            <Button variant="ghost" size="icon-sm" aria-label={t("locationUndo")} title={`${t("locationUndo")} (⌘Z)`} disabled={!past.length || disabled} onClick={() => undo(false)}>
+              <Undo2 className="size-icon-sm" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" aria-label={t("locationRedo")} title={`${t("locationRedo")} (⇧⌘Z)`} disabled={!future.length || disabled} onClick={() => undo(true)}>
+              <Redo2 className="size-icon-sm" />
+            </Button>
+          </div>
+        </div>
+        <div className={`geometry-body${panel ? ` show-${panel}` : ""}`}>
+          <aside className="geometry-layers" aria-label={label("Layers")}>
+            <h2><Layers className="size-icon-sm" aria-hidden="true" />{label("Layers")}</h2>
+            <div className="geometry-layer-section">
+              <h3>{label("GroupSite")}</h3>
+              {geometry.parcel ? objectRow("parcel", label("Parcel"), "parcel", "parcel", smallStatus(geometry.parcel.reviewed)) : <p className="text-ui-2xs muted">{label("NeedParcel")}</p>}
+              {result && geometry.parcel && <p className="geometry-layer-meta text-ui-2xs muted">{label("Usable")}: {format(result.usableArea)} m²</p>}
+            </div>
+            <div className="geometry-layer-section">
+              <h3>{label("GroupPlanning")}</h3>
+              {geometry.envelope ? objectRow("envelope", label("ObjectEnvelope"), "envelope", "envelope", smallStatus(geometry.envelope.reviewed)) : <p className="text-ui-2xs muted">{label("NoEnvelope")}</p>}
+              {geometry.mandatoryLines.map((l, i) => objectRow(l.id, lineName(l, i), "line", l.id, smallStatus(l.reviewed)))}
+              {geometry.exclusions.map((e, i) => objectRow(e.id, exclusionName(e, i), "exclusion", e.id, smallStatus(e.reviewed)))}
+              <label className="site-review text-ui-xs geometry-layer-check">
+                <Checkbox disabled={disabled} checked={geometry.exclusionsReviewed} onCheckedChange={(v) => update({ exclusionsReviewed: v === true })} />
+                {label("ExclusionsReviewed")}
+              </label>
+              {geometry.parcel && (
+                <button type="button" className="geometry-object-row" aria-pressed={tool === "edge"} disabled={!canDraw} onClick={() => start("edge")}>
+                  <span>{label("edge")}</span>
+                  <small className="muted">{label("EdgesDecided").replace("{done}", String(geometry.setbacks.filter((e) => e.reviewed).length)).replace("{total}", String(edgeDecisions))}</small>
+                </button>
+              )}
+            </div>
+            <div className="geometry-layer-section">
+              <h3>{label("GroupDesign")}</h3>
+              {geometry.buildings.length === 0 && <p className="text-ui-2xs muted">{label("NoBuildings")}</p>}
+              {geometry.buildings.map((b, i) => (
+                <div key={b.id}>
+                  {objectRow(b.id, buildingName(b, i), "building", b.id, smallStatus(b.footprint.reviewed && b.storeysReviewed))}
+                  {b.staffel.map((s, si) => objectRow(s.footprint.id, staffelName(s, si), "staffel", s.footprint.id, smallStatus(s.footprint.reviewed && s.classificationReviewed), true))}
+                </div>
+              ))}
+            </div>
+            <div className="geometry-layer-section">
+              <h3>{label("GroupContext")}</h3>
+              <div className="geometry-layer-toggle text-ui-xs">
+                <span>{label("ContextBuildings")} <small className="muted">{context?.buildings.length ?? 0}</small></span>
+                <Button variant="ghost" size="icon-xs" aria-label={label(layers.context ? "HideLayer" : "ShowLayer")} aria-pressed={layers.context} disabled={!context} onClick={() => setLayers((l) => ({ ...l, context: !l.context }))}>
+                  {layers.context ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
+                </Button>
+              </div>
+              {referenceBuildingIds.length > 0 && <p className="text-ui-2xs muted">{label("ReferencesOutlined").replace("{count}", String(referenceBuildingIds.length))}</p>}
+              <div className="geometry-layer-toggle text-ui-xs">
+                <span>{label("SourcePlan")} <small className="muted">{geometry.planOverlay ? t(geometry.planOverlay.reviewed ? "siteAssessmentReviewedShort" : "siteAssessmentUnreviewed") : label("NotAligned")}</small></span>
+                <Button variant="ghost" size="icon-xs" aria-label={label(layers.plan ? "HideLayer" : "ShowLayer")} aria-pressed={layers.plan} disabled={!geometry.planOverlay} onClick={() => setLayers((l) => ({ ...l, plan: !l.plan }))}>
+                  {layers.plan ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
+                </Button>
+              </div>
+              {!context && <p className="text-ui-2xs muted">{label("ContextHint")}</p>}
+            </div>
+          </aside>
+          <div className="workbench-tool-rail" role="toolbar" aria-orientation="vertical" aria-label={label("Tools")}>
+            {toolItems.map(([value, Icon, key, shortcut]) => (
+              <WorkbenchTool
+                key={value}
+                label={t(key)}
+                shortcut={shortcut}
+                aria-pressed={tool === value}
+                title={value !== "select" && value !== "pan" && view !== "2d" ? `${t(key)} · ${label("SwitchToPlan")}` : undefined}
+                disabled={(value !== "select" && value !== "pan" && !canDraw) || (value === "reference" && !onReference)}
+                onClick={() => start(value)}
               >
-                {planImage && overlayMatrix && (
-                  <image
-                    href={planImage}
-                    width={1}
-                    height={1}
-                    preserveAspectRatio="none"
-                    transform={overlayMatrix}
-                    opacity={geometry.planOverlay?.opacity ?? 0.55}
-                    style={{ pointerEvents: "none" }}
-                  />
-                )}
-                {context?.buildings.map((b) => (
-                  <path
-                    key={b.id}
-                    className="geometry-context-building"
-                    d={pathFor(
-                      b.polygons.map((p) =>
-                        p.map((r) => r.map((p) => fromLocal(context, p))),
-                      ),
-                      project,
+                <Icon className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+            ))}
+            <div className="geometry-view-tools" role="group" aria-label={label("Views")}>
+              <WorkbenchTool label={label("Plan")} shortcut="T" aria-pressed={view === "2d"} onClick={() => setView("2d")}>
+                <MapIcon className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+              <WorkbenchTool label="3D" shortcut="3" aria-pressed={view === "3d"} disabled={!context} onClick={() => setView("3d")}>
+                <Box className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+              <WorkbenchTool label={label("ZoomIn")} shortcut="+" disabled={view !== "2d"} onClick={() => zoomBy(1.5)}>
+                <ZoomIn className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+              <WorkbenchTool label={label("ZoomOut")} shortcut="−" aria-keyshortcuts="-" disabled={view !== "2d"} onClick={() => zoomBy(1 / 1.5)}>
+                <ZoomOut className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+              <WorkbenchTool label={label("Fit")} shortcut="F" disabled={view !== "2d"} onClick={fit}>
+                <Scan className="size-icon" aria-hidden="true" />
+              </WorkbenchTool>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <WorkbenchTool label={label("Help")}>
+                    <CircleHelp className="size-icon" aria-hidden="true" />
+                  </WorkbenchTool>
+                </PopoverTrigger>
+                <PopoverContent side="right" align="end" className="text-ui-xs">
+                  {label("HelpText")}
+                </PopoverContent>
+              </Popover>
+            </div>
+          </div>
+          <div className="geometry-canvas-column">
+            <div className="geometry-canvas" ref={canvasRef}>
+              {view === "3d" && context ? (
+                <Geometry3D context={context} geometry={geometry} onSelect={selectId} />
+              ) : (
+                <div
+                  className="geometry-plan"
+                  data-tool={tool}
+                  onPointerDown={(e) => {
+                    if (tool !== "pan" && e.button !== 1) return;
+                    e.preventDefault();
+                    panStart.current = { clientX: e.clientX, clientY: e.clientY, frame };
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    setHover(pointerSite(e));
+                    if (!panStart.current) return;
+                    const begin = panStart.current;
+                    setFrame({ ...begin.frame, x: begin.frame.x - (e.clientX - begin.clientX) * metresPerPixel, y: begin.frame.y + (e.clientY - begin.clientY) * metresPerPixel });
+                  }}
+                  onPointerLeave={() => setHover(null)}
+                  onPointerUp={(e) => {
+                    panStart.current = null;
+                    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+                  }}
+                  onClick={(event) => {
+                    if (pickingAlignment) {
+                      setPickedSite(pointerSite(event));
+                      setPickingAlignment(false);
+                      return;
+                    }
+                    if (tool === "select" && event.target === event.currentTarget.querySelector("svg")) return setSelected(null);
+                    if (!drawing || disabled) return;
+                    const next = pointerSite(event);
+                    const vertices = geometry.parcel?.geometry.flat(2) ?? [];
+                    const tolerance = metresPerPixel * 8;
+                    const nearest = vertices.reduce<GeometryPoint | undefined>(
+                      (best, p) =>
+                        Math.hypot(p[0] - next[0], p[1] - next[1]) < tolerance && (!best || Math.hypot(p[0] - next[0], p[1] - next[1]) < Math.hypot(best[0] - next[0], best[1] - next[1])) ? p : best,
+                      undefined,
+                    );
+                    setPoints((p) => [...p, nearest ?? next]);
+                  }}
+                >
+                  <svg viewBox={`0 0 ${width} ${height}`} aria-label={label("Plan")}>
+                    {planImage && overlayMatrix && layers.plan && (
+                      <image href={planImage} width={1} height={1} preserveAspectRatio="none" transform={overlayMatrix} opacity={geometry.planOverlay?.opacity ?? 0.55} style={{ pointerEvents: "none" }} />
                     )}
-                    onClick={(event) => {
-                      if (tool === "reference") {
-                        event.stopPropagation();
-                        onReference?.(b, context);
-                      }
-                    }}
-                  >
-                    <title>{b.label}</title>
-                  </path>
-                ))}
-                {geometry.parcel && (
-                  <path
-                    className="geometry-parcel"
-                    d={pathFor(geometry.parcel.geometry, project)}
-                  />
-                )}
-                {geometry.envelope && (
-                  <path
-                    className="geometry-envelope"
-                    d={pathFor(geometry.envelope.geometry, project)}
-                    onClick={(event) => {
-                      if (tool === "select") {
-                        event.stopPropagation();
-                        selectId("envelope");
-                      }
-                    }}
-                  />
-                )}
-                {result?.usableGeometry.length ? (
-                  <path
-                    className="geometry-usable"
-                    d={pathFor(result.usableGeometry, project)}
-                  />
-                ) : null}
-                {geometry.exclusions.map((e) => (
-                  <path
-                    key={e.id}
-                    className="geometry-exclusion"
-                    d={pathFor(e.geometry, project)}
-                    onClick={(event) => {
-                      if (tool === "select") {
-                        event.stopPropagation();
-                        selectId(e.id);
-                      }
-                    }}
-                  />
-                ))}
-                {geometry.buildings.map((b) => (
-                  <g key={b.id}>
-                    <path
-                      className="geometry-building"
-                      d={pathFor(b.footprint.geometry, project)}
-                      onClick={(event) => {
-                        if (tool === "select") {
-                          event.stopPropagation();
-                          selectId(b.id);
-                        }
-                      }}
-                    />
-                    {b.staffel.map((s) => (
+                    {layers.context &&
+                      context?.buildings.map((b) => (
+                        <path
+                          key={b.id}
+                          className={`geometry-context-building${referenceBuildingIds.includes(b.id) ? " is-reference" : ""}`}
+                          d={pathFor(b.polygons.map((p) => p.map((r) => r.map((p) => fromLocal(context, p)))), project)}
+                          onClick={(event) => {
+                            if (tool === "reference") {
+                              event.stopPropagation();
+                              onReference?.(b, context);
+                            }
+                          }}
+                        >
+                          <title>{b.label}</title>
+                        </path>
+                      ))}
+                    {geometry.parcel && (
                       <path
-                        key={s.footprint.id}
-                        className="geometry-staffel"
-                        d={pathFor(s.footprint.geometry, project)}
+                        className={`geometry-parcel${selected?.kind === "parcel" ? " is-selected" : ""}`}
+                        d={pathFor(geometry.parcel.geometry, project)}
                         onClick={(event) => {
                           if (tool === "select") {
                             event.stopPropagation();
-                            selectId(s.footprint.id);
+                            selectId("parcel");
+                          }
+                        }}
+                      />
+                    )}
+                    {geometry.envelope && (
+                      <path
+                        className="geometry-envelope"
+                        d={pathFor(geometry.envelope.geometry, project)}
+                        onClick={(event) => {
+                          if (tool === "select") {
+                            event.stopPropagation();
+                            selectId("envelope");
+                          }
+                        }}
+                      />
+                    )}
+                    {result?.usableGeometry.length ? <path className="geometry-usable" d={pathFor(result.usableGeometry, project)} /> : null}
+                    {geometry.exclusions.map((e) => (
+                      <path
+                        key={e.id}
+                        className="geometry-exclusion"
+                        d={pathFor(e.geometry, project)}
+                        onClick={(event) => {
+                          if (tool === "select") {
+                            event.stopPropagation();
+                            selectId(e.id);
                           }
                         }}
                       />
                     ))}
-                  </g>
-                ))}
-                {tool === "edge" &&
-                  geometry.parcel?.geometry.map((polygon, pi) =>
-                    polygon.map((ring, ri) =>
-                      ring.slice(0, -1).map((p, ei) => {
-                        const q = ring[ei + 1]!;
-                        return (
-                          <line
-                            key={`${pi}-${ri}-${ei}`}
-                            className="geometry-edge"
-                            x1={project(p)[0]}
-                            y1={project(p)[1]}
-                            x2={project(q)[0]}
-                            y2={project(q)[1]}
-                            onClick={(event) => {
+                    {geometry.buildings.map((b) => (
+                      <g key={b.id}>
+                        <path
+                          className="geometry-building"
+                          d={pathFor(b.footprint.geometry, project)}
+                          onClick={(event) => {
+                            if (tool === "select") {
                               event.stopPropagation();
-                              let edge = geometry.setbacks.find(
-                                (e) =>
-                                  e.polygonIndex === pi &&
-                                  e.ringIndex === ri &&
-                                  e.edgeIndex === ei,
-                              );
-                              if (!edge) {
-                                edge = {
-                                  id: crypto.randomUUID(),
-                                  polygonIndex: pi,
-                                  ringIndex: ri,
-                                  edgeIndex: ei,
-                                  distance: null,
-                                  profile: "manual",
-                                  heightSource: "manual",
-                                  assessmentHeight: null,
-                                  reviewedHeight: null,
-                                  source: "",
-                                  sourceDate: null,
-                                  reviewed: false,
-                                };
-                                update({
-                                  setbacks: [...geometry.setbacks, edge],
-                                });
+                              selectId(b.id);
+                            }
+                          }}
+                        />
+                        {b.staffel.map((s) => (
+                          <path
+                            key={s.footprint.id}
+                            className="geometry-staffel"
+                            d={pathFor(s.footprint.geometry, project)}
+                            onClick={(event) => {
+                              if (tool === "select") {
+                                event.stopPropagation();
+                                selectId(s.footprint.id);
                               }
-                              setSelected({ kind: "edge", id: edge.id });
                             }}
                           />
-                        );
-                      }),
-                    ),
-                  )}
-                {geometry.mandatoryLines.map((line) => (
-                  <polyline
-                    key={line.id}
-                    className="geometry-mandatory-line"
-                    points={line.line
-                      .map((p) => project(p).join(","))
-                      .join(" ")}
-                    onClick={(event) => {
-                      if (tool === "select") {
-                        event.stopPropagation();
-                        selectId(line.id);
-                      }
-                    }}
-                  />
-                ))}
-                {points.length > 0 && (
-                  <polyline
-                    className="geometry-drawing"
-                    points={points.map((p) => project(p).join(",")).join(" ")}
-                  />
-                )}
-              </svg>
-              {tool === "select" && selectedRing && !disabled && (
-                <OutlineEditorLayer
-                  draft={{
-                    polygon: selectedRing.slice(0, -1).map((p) => {
-                      const [x, y] = project(p);
-                      return { x: x / 1000, y: y / 1000 };
-                    }),
-                    holes: [],
-                  }}
-                  labels={{
-                    point: label("Point"),
-                    addPoint: label("AddPoint"),
-                  }}
-                  onBegin={() => {}}
-                  onChange={(draft) =>
-                    updateEvidence({
-                      ...selectedEvidence!,
-                      reviewed: false,
-                      geometry: [
-                        [
-                          closeRing(draft.polygon.map(unproject)),
-                          ...selectedEvidence!.geometry[0]!.slice(1),
-                        ],
-                        ...selectedEvidence!.geometry.slice(1),
-                      ],
-                    })
-                  }
-                />
-              )}
-              <span className="geometry-scale text-ui-2xs">
-                N ↑ · EPSG:25833 · {format(bounds.size)} m
-              </span>
-            </div>
-          )}
-          {points.length > 0 && (
-            <div className="geometry-draw-actions">
-              <span className="text-ui-xs">
-                {points.length} {label("Points")}
-              </span>
-              <Button
-                size="sm"
-                disabled={points.length < (tool === "line" ? 2 : 3)}
-                onClick={finish}
-              >
-                {label("Finish")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setPoints((p) => p.slice(0, -1))}
-              >
-                {label("UndoPoint")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => start("select")}>
-                {label("Cancel")}
-              </Button>
-            </div>
-          )}
-          <p className="text-ui-2xs muted">{label("MapHint")}</p>
-        </div>
-        <aside className="geometry-inspector">
-          {!selected && (
-            <p className="text-ui-xs muted">{label("SelectHint")}</p>
-          )}
-          {selectedEvidence && (
-            <>
-              <h4 className="text-ui-sm font-medium">
-                {selectedEvidence.label}
-              </h4>
-              <Field label={label("Source")}>
-                <Input
-                  value={selectedEvidence.source}
-                  disabled={disabled}
-                  onChange={(e) =>
-                    updateEvidence({
-                      ...selectedEvidence,
-                      source: e.target.value,
-                      reviewed: false,
-                    })
-                  }
-                />
-              </Field>
-              <Field label={label("Date")}>
-                <Input
-                  type="date"
-                  value={selectedEvidence.sourceDate ?? ""}
-                  disabled={disabled}
-                  onChange={(e) =>
-                    updateEvidence({
-                      ...selectedEvidence,
-                      sourceDate: e.target.value || null,
-                      reviewed: false,
-                    })
-                  }
-                />
-              </Field>
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  checked={selectedEvidence.reviewed}
-                  disabled={
-                    disabled ||
-                    !selectedEvidence.source ||
-                    !selectedEvidence.sourceDate
-                  }
-                  onCheckedChange={(v) =>
-                    updateEvidence({
-                      ...selectedEvidence,
-                      reviewed: v === true,
-                    })
-                  }
-                />
-                {label("Reviewed")}
-              </label>
-              <div className="geometry-move">
-                <span className="text-ui-xs">{label("Move")}</span>
-                {(
-                  [
-                    [0, 1, "↑"],
-                    [0, -1, "↓"],
-                    [-1, 0, "←"],
-                    [1, 0, "→"],
-                  ] as const
-                ).map(([x, y, s]) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant="outline"
-                    disabled={disabled}
-                    aria-label={`${label("Move")} ${s}`}
-                    onClick={() => shift(x, y)}
-                  >
-                    {s}
-                  </Button>
-                ))}
-              </div>
-            </>
-          )}
-          {selectedBuilding && (
-            <>
-              <Field label={label("FullStoreys")}>
-                <Input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={selectedBuilding.fullStoreys}
-                  disabled={disabled}
-                  onChange={(e) => {
-                    const n = e.target.valueAsNumber;
-                    if (Number.isInteger(n) && n > 0)
-                      update({
-                        buildings: geometry.buildings.map((b) =>
-                          b.id === selectedBuilding.id
-                            ? { ...b, fullStoreys: n, storeysReviewed: false }
-                            : b,
+                        ))}
+                      </g>
+                    ))}
+                    {(tool === "edge" || selected?.kind === "edge") &&
+                      geometry.parcel?.geometry.map((polygon, pi) =>
+                        polygon.map((ring, ri) =>
+                          ring.slice(0, -1).map((p, ei) => {
+                            const q = ring[ei + 1]!;
+                            const [x1, y1] = project(p), [x2, y2] = project(q);
+                            const setback = geometry.setbacks.find((e) => e.polygonIndex === pi && e.ringIndex === ri && e.edgeIndex === ei);
+                            const active = selectedEdge?.polygonIndex === pi && selectedEdge.ringIndex === ri && selectedEdge.edgeIndex === ei;
+                            return (
+                              <g key={`${pi}-${ri}-${ei}`}>
+                                <line
+                                  className={`geometry-edge${active ? " is-selected" : ""}${setback?.reviewed ? " is-reviewed" : ""}`}
+                                  x1={x1}
+                                  y1={y1}
+                                  x2={x2}
+                                  y2={y2}
+                                  onClick={(event) => {
+                                    if (tool !== "edge" && tool !== "select") return;
+                                    event.stopPropagation();
+                                    openEdge(pi, ri, ei);
+                                  }}
+                                >
+                                  <title>{edgeName(pi, ri, ei)}</title>
+                                </line>
+                                {tool === "edge" && <text className="geometry-edge-label" x={(x1 + x2) / 2} y={(y1 + y2) / 2}>{edgeName(pi, ri, ei).split(" · ")[0]}</text>}
+                              </g>
+                            );
+                          }),
                         ),
-                      });
-                  }}
-                />
-              </Field>
-              <Field label={label("StoreyHeight")}>
-                <Input
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  value={selectedBuilding.storeyHeight}
-                  disabled={disabled}
-                  onChange={(e) => {
-                    const n = e.target.valueAsNumber;
-                    if (Number.isFinite(n) && n > 0)
-                      update({
-                        buildings: geometry.buildings.map((b) =>
-                          b.id === selectedBuilding.id
-                            ? { ...b, storeyHeight: n, storeysReviewed: false }
-                            : b,
-                        ),
-                      });
-                  }}
-                />
-              </Field>
-              <Field label={label("StoreysSource")}>
-                <Input
-                  value={selectedBuilding.storeysSource}
-                  disabled={disabled}
-                  onChange={(e) =>
-                    update({
-                      buildings: geometry.buildings.map((b) =>
-                        b.id === selectedBuilding.id
-                          ? {
-                              ...b,
-                              storeysSource: e.target.value,
-                              storeysReviewed: false,
-                            }
-                          : b,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  checked={selectedBuilding.storeysReviewed}
-                  disabled={disabled || !selectedBuilding.storeysSource}
-                  onCheckedChange={(v) =>
-                    update({
-                      buildings: geometry.buildings.map((b) =>
-                        b.id === selectedBuilding.id
-                          ? { ...b, storeysReviewed: v === true }
-                          : b,
-                      ),
-                    })
-                  }
-                />
-                {label("StoreysReviewed")}
-              </label>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disabled}
-                onClick={() => start("staffel")}
-              >
-                {label("staffel")}
-              </Button>
-            </>
-          )}
-          {selectedStaffel && selectedBuilding && (
-            <>
-              <Field label={label("StaffelHeight")}>
-                <Input
-                  type="number"
-                  step={0.1}
-                  min={0.1}
-                  value={selectedStaffel.height}
-                  disabled={disabled}
-                  onChange={(e) => {
-                    const n = e.target.valueAsNumber;
-                    if (n > 0)
-                      update({
-                        buildings: geometry.buildings.map((b) =>
-                          b.id === selectedBuilding.id
-                            ? {
-                                ...b,
-                                staffel: b.staffel.map((x) =>
-                                  x === selectedStaffel
-                                    ? {
-                                        ...x,
-                                        height: n,
-                                        classificationReviewed: false,
-                                      }
-                                    : x,
-                                ),
-                              }
-                            : b,
-                        ),
-                      });
-                  }}
-                />
-              </Field>
-              {(["areaAbove230", "averageTopAboveTerrain"] as const).map(
-                (key) => (
-                  <Field key={key} label={label(key)}>
-                    <Input
-                      type="number"
-                      step={0.1}
-                      disabled={disabled}
-                      value={selectedStaffel[key] ?? ""}
-                      onChange={(e) =>
-                        update({
-                          buildings: geometry.buildings.map((b) =>
-                            b.id === selectedBuilding.id
-                              ? {
-                                  ...b,
-                                  staffel: b.staffel.map((x) =>
-                                    x === selectedStaffel
-                                      ? {
-                                          ...x,
-                                          [key]: Number.isFinite(
-                                            e.target.valueAsNumber,
-                                          )
-                                            ? e.target.valueAsNumber
-                                            : null,
-                                          classificationReviewed: false,
-                                        }
-                                      : x,
-                                  ),
-                                }
-                              : b,
-                          ),
+                      )}
+                    {geometry.mandatoryLines.map((line) => (
+                      <polyline
+                        key={line.id}
+                        className="geometry-mandatory-line"
+                        points={line.line.map((p) => project(p).join(",")).join(" ")}
+                        onClick={(event) => {
+                          if (tool === "select") {
+                            event.stopPropagation();
+                            selectId(line.id);
+                          }
+                        }}
+                      />
+                    ))}
+                    {points.length > 0 && (
+                      <>
+                        <polyline className="geometry-drawing" points={[...points, ...(hover ? [hover] : [])].map((p) => project(p).join(",")).join(" ")} />
+                        {points.map((p, i) => {
+                          const [x, y] = project(p);
+                          return <circle key={i} className="geometry-drawing-vertex" cx={x} cy={y} r={i === 0 ? 5 : 4} />;
+                        })}
+                      </>
+                    )}
+                  </svg>
+                  {tool === "select" && selectedRing && !disabled && (
+                    <OutlineEditorLayer
+                      draft={{
+                        polygon: selectedRing.slice(0, -1).map((p) => {
+                          const [x, y] = project(p);
+                          return { x: x / width, y: y / height };
+                        }),
+                        holes: [],
+                      }}
+                      labels={{ point: label("Point"), addPoint: label("AddPoint") }}
+                      onBegin={() => {}}
+                      onChange={(draft) =>
+                        updateEvidence({
+                          ...selectedEvidence!,
+                          reviewed: false,
+                          geometry: [[closeRing(draft.polygon.map(unproject)), ...selectedEvidence!.geometry[0]!.slice(1)], ...selectedEvidence!.geometry.slice(1)],
                         })
                       }
                     />
-                  </Field>
-                ),
+                  )}
+                  <div className="geometry-scale text-ui-2xs" aria-hidden="true">
+                    <span>N ↑</span>
+                    <span className="geometry-scale-bar" style={{ width: bar.pixels }} />
+                    <span>{format(bar.metres)} m</span>
+                  </div>
+                </div>
               )}
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  checked={selectedStaffel.countable}
-                  disabled={disabled}
-                  onCheckedChange={(v) =>
-                    update({
-                      buildings: geometry.buildings.map((b) =>
-                        b.id === selectedBuilding.id
-                          ? {
-                              ...b,
-                              staffel: b.staffel.map((x) =>
-                                x === selectedStaffel
-                                  ? {
-                                      ...x,
-                                      countable: v === true,
-                                      classificationReviewed: false,
-                                    }
-                                  : x,
-                              ),
-                            }
-                          : b,
-                      ),
-                    })
-                  }
-                />
-                {label("Countable")}
-              </label>
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  checked={selectedStaffel.classificationReviewed}
-                  disabled={
-                    disabled ||
-                    selectedStaffel.areaAbove230 === null ||
-                    selectedStaffel.averageTopAboveTerrain === null ||
-                    !selectedStaffel.footprint.reviewed
-                  }
-                  onCheckedChange={(v) =>
-                    update({
-                      buildings: geometry.buildings.map((b) =>
-                        b.id === selectedBuilding.id
-                          ? {
-                              ...b,
-                              staffel: b.staffel.map((x) =>
-                                x === selectedStaffel
-                                  ? { ...x, classificationReviewed: v === true }
-                                  : x,
-                              ),
-                            }
-                          : b,
-                      ),
-                    })
-                  }
-                />
-                {label("ClassificationReviewed")}
-              </label>
-            </>
-          )}
-          {selectedLine && (
-            <>
-              <h4 className="text-ui-sm">{label("line")}</h4>
-              <Field label={label("Source")}>
-                <Input
-                  disabled={disabled}
-                  value={selectedLine.source}
-                  onChange={(e) =>
-                    update({
-                      mandatoryLines: geometry.mandatoryLines.map((l) =>
-                        l.id === selectedLine.id
-                          ? { ...l, source: e.target.value, reviewed: false }
-                          : l,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <Field label={label("Date")}>
-                <Input
-                  type="date"
-                  disabled={disabled}
-                  value={selectedLine.sourceDate ?? ""}
-                  onChange={(e) =>
-                    update({
-                      mandatoryLines: geometry.mandatoryLines.map((l) =>
-                        l.id === selectedLine.id
-                          ? {
-                              ...l,
-                              sourceDate: e.target.value || null,
-                              reviewed: false,
-                            }
-                          : l,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  disabled={
-                    disabled || !selectedLine.source || !selectedLine.sourceDate
-                  }
-                  checked={selectedLine.reviewed}
-                  onCheckedChange={(v) =>
-                    update({
-                      mandatoryLines: geometry.mandatoryLines.map((l) =>
-                        l.id === selectedLine.id
-                          ? { ...l, reviewed: v === true }
-                          : l,
-                      ),
-                    })
-                  }
-                />
-                {label("Reviewed")}
-              </label>
-            </>
-          )}
-          {selectedEdge && (
-            <>
-              <h4 className="text-ui-sm">
-                {label("edge")} {selectedEdge.edgeIndex + 1}
-              </h4>
-              <Field label={label("Profile")}>
-                <NativeSelect
-                  disabled={disabled}
-                  value={selectedEdge.profile}
-                  onChange={(e) =>
-                    update({
-                      setbacks: geometry.setbacks.map((x) =>
-                        x.id === selectedEdge.id
-                          ? {
-                              ...x,
-                              profile: e.target.value as typeof x.profile,
-                              reviewed: false,
-                              reviewedHeight: null,
-                            }
-                          : x,
-                      ),
-                    })
-                  }
-                >
-                  {[
-                    "manual",
-                    "standard",
-                    "commercial",
-                    "low_class",
-                    "boundary_exception",
-                  ].map((v) => (
-                    <option key={v} value={v}>
-                      {label(v)}
-                    </option>
+              {!geometry.parcel && (
+                <div className="geometry-empty">
+                  <p className="text-ui-sm">{label("EmptyTitle")}</p>
+                  <p className="text-ui-xs muted">{label("NeedParcel")}</p>
+                  {emptyAction}
+                </div>
+              )}
+              {(drawing || pickingAlignment || tool === "edge" || tool === "reference") && (
+                <div className="geometry-canvas-caption" role="status">
+                  <span>
+                    {pickingAlignment
+                      ? t("sitePlanPickMap")
+                      : drawing
+                        ? label("DrawHint").replace("{tool}", t(`siteGeometry${tool}` as Key)).replace("{count}", String(points.length))
+                        : label(tool === "edge" ? "EdgeHint" : "ReferenceHint")}
+                  </span>
+                  {drawing && (
+                    <span className="geometry-caption-actions">
+                      <Button size="sm" disabled={points.length < (tool === "line" ? 2 : 3)} onClick={finish}>{label("Finish")}</Button>
+                      <Button size="sm" variant="outline" disabled={!points.length} onClick={() => setPoints((p) => p.slice(0, -1))}>{label("UndoPoint")}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => start("select")}>{label("Cancel")}</Button>
+                    </span>
+                  )}
+                  {!drawing && !pickingAlignment && <Button size="sm" variant="ghost" onClick={() => start("select")}>{label("Done")}</Button>}
+                </div>
+              )}
+            </div>
+          </div>
+          <aside className="geometry-inspector" aria-label={label("Inspector")}>
+            <Segmented
+              value={tab}
+              onChange={setTab}
+              items={[
+                { value: "properties", label: label("Properties") },
+                { value: "checks", label: groupedIssues.length ? `${label("Checks")} · ${pendingIssues.length}` : label("Checks") },
+              ]}
+            />
+            {tab === "checks" ? (
+              groupedIssues.length === 0 ? (
+                <p className="text-ui-xs muted">{result ? label("NoIssues") : label("NeedParcel")}</p>
+              ) : (
+                <ul className="geometry-issue-list">
+                  {groupedIssues.map(([code, issues]) => (
+                    <li key={code}>
+                      <strong className="text-ui-xs">{t(`siteGeometry${code}` as Key) || label("ReviewGeometry")}</strong>
+                      <div className="geometry-issue-actions">
+                        {(issues ?? []).map((issue, i) => (
+                          <Button key={i} variant="outline" size="sm" onClick={() => reviewIssue(code, issue.id)}>
+                            {issueTarget(issue.id)?.name ?? label(code === "missing_envelope" ? "envelope" : "Review")}
+                          </Button>
+                        ))}
+                      </div>
+                    </li>
                   ))}
-                </NativeSelect>
-              </Field>
-              {selectedEdge.profile !== "manual" &&
-                selectedEdge.profile !== "boundary_exception" && (
+                </ul>
+              )
+            ) : (
+              <>
+                {!selected && (
                   <>
-                    <Field label={label("HeightSource")}>
-                      <NativeSelect
-                        disabled={disabled}
-                        value={selectedEdge.heightSource}
-                        onChange={(e) =>
-                          update({
-                            setbacks: geometry.setbacks.map((x) =>
-                              x.id === selectedEdge.id
-                                ? {
-                                    ...x,
-                                    heightSource: e.target
-                                      .value as typeof x.heightSource,
-                                    reviewed: false,
-                                    reviewedHeight: null,
-                                  }
-                                : x,
-                            ),
-                          })
-                        }
-                      >
-                        <option value="manual">{label("ManualHeight")}</option>
-                        <option value="buildings">
-                          {label("BuildingHeight")}
-                        </option>
-                      </NativeSelect>
-                    </Field>
-                    {selectedEdge.heightSource === "manual" && (
-                      <Field label={label("AssessmentHeight")}>
+                    <h3>{label("Summary")}</h3>
+                    {result && geometry.parcel ? (
+                      <dl className="geometry-values">
+                        <dt>{label("Status")}</dt>
+                        <dd><Badge variant="outline">{label(result.status)}</Badge></dd>
+                        <dt>{label("ParcelArea")}</dt>
+                        <dd>{format(result.parcelArea)} m²</dd>
+                        <dt>{label("Usable")}</dt>
+                        <dd>{format(result.usableArea)} m²</dd>
+                        {result.buildings.map((b) => {
+                          const index = geometry.buildings.findIndex((x) => x.id === b.id);
+                          return [
+                            <dt key={`${b.id}-n`}>{index >= 0 ? buildingName(geometry.buildings[index]!, index) : label("ObjectBuilding")}</dt>,
+                            <dd key={`${b.id}-v`}>GF {format(b.countableFloorArea)} m² · BGF {format(b.grossFloorArea)} m²<br /><small className="muted">{label(b.validPlacement ? "Fits" : "DoesNotFit")}</small></dd>,
+                          ];
+                        })}
+                      </dl>
+                    ) : (
+                      <p className="text-ui-xs muted">{label("NeedParcel")}</p>
+                    )}
+                    {onUseArea && result && geometry.parcel && (
+                      <div className="geometry-review">
+                        <Button size="sm" variant="outline" disabled={disabled || !result.usableArea} onClick={() => onUseArea(result.usableArea)}>
+                          {label("UseArea")}
+                        </Button>
+                        <small className="muted">{label("UseAreaHint").replace("{area}", format(result.usableArea))}</small>
+                      </div>
+                    )}
+                    {engine && geometry.parcel && (
+                      <div className="geometry-review">
+                        <h3>{label("CandidatesTitle")}</h3>
+                        <Button variant="outline" size="sm" disabled={disabled || !options} onClick={() => options && setCandidates(engine.generateMassingCandidates(geometry, options))}>
+                          {label("Candidates")}
+                        </Button>
+                        {!options && <small className="muted">{label("CandidatesNeed")}</small>}
+                        {candidates.map((candidate, i) => {
+                          const name = `${label("Variant")} ${i + 1} · ${label(candidate.strategy)}`;
+                          return (
+                            <div key={candidate.id} className="geometry-candidate text-ui-xs">
+                              <strong>{name}</strong>
+                              <span>GF {format(candidate.metrics.countableFloorArea)} m² · BGF {format(candidate.metrics.grossFloorArea)} m²</span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={disabled}
+                                onClick={() => {
+                                  update({ buildings: [{ ...candidate.building, label: name, footprint: { ...candidate.building.footprint, label: name } }] });
+                                  setSelected({ kind: "building", id: candidate.building.id });
+                                }}
+                              >
+                                {label("UseVariant")}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <p className="text-ui-2xs muted">{label("SelectHint")}</p>
+                  </>
+                )}
+                {selectedEvidence && selected && selected.kind !== "edge" && selected.kind !== "line" && (
+                  <>
+                    <div className="geometry-inspector-heading">
+                      <h3>{label(`Kind${selected.kind}`)}</h3>
+                      {reviewState(selectedEvidence.reviewed)}
+                    </div>
+                    {(selected.kind === "building" || selected.kind === "exclusion" || selected.kind === "staffel") && (
+                      <Field label={label("Name")}>
                         <Input
-                          type="number"
-                          min={0}
-                          step={0.1}
                           disabled={disabled}
-                          value={selectedEdge.assessmentHeight ?? ""}
+                          maxLength={200}
+                          value={selected.kind === "building" && selectedBuilding ? buildingName(selectedBuilding, geometry.buildings.indexOf(selectedBuilding)) : selectedEvidence.label}
                           onChange={(e) =>
-                            update({
-                              setbacks: geometry.setbacks.map((x) =>
-                                x.id === selectedEdge.id
-                                  ? {
-                                      ...x,
-                                      assessmentHeight: Number.isFinite(
-                                        e.target.valueAsNumber,
-                                      )
-                                        ? e.target.valueAsNumber
-                                        : null,
-                                      reviewed: false,
-                                      reviewedHeight: null,
-                                    }
-                                  : x,
-                              ),
-                            })
+                            selected.kind === "building" && selectedBuilding
+                              ? patchBuilding(selectedBuilding.id, (b) => ({ ...b, label: e.target.value, footprint: { ...b.footprint, label: e.target.value } }))
+                              : updateEvidence({ ...selectedEvidence, label: e.target.value })
                           }
                         />
                       </Field>
                     )}
+                    {evidenceFields(selectedEvidence, (patch) => updateEvidence({ ...selectedEvidence, ...patch }))}
+                    <div className="geometry-move" role="group" aria-label={label("Move")}>
+                      <span className="text-ui-xs">{label("Move")}</span>
+                      {([[0, 1, "↑"], [0, -1, "↓"], [-1, 0, "←"], [1, 0, "→"]] as const).map(([x, y, s]) => (
+                        <Button key={s} size="icon-sm" variant="outline" disabled={disabled} aria-label={`${label("Move")} ${s}`} onClick={() => shift(x, y)}>
+                          {s}
+                        </Button>
+                      ))}
+                    </div>
                   </>
                 )}
-              <Field label={label("Distance")}>
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  disabled={disabled}
-                  value={selectedEdge.distance ?? ""}
-                  onChange={(e) => {
-                    const n = e.target.valueAsNumber;
-                    update({
-                      setbacks: geometry.setbacks.map((x) =>
-                        x.id === selectedEdge.id
-                          ? {
-                              ...x,
-                              distance: Number.isFinite(n) && n >= 0 ? n : null,
-                              reviewed: false,
-                            }
-                          : x,
-                      ),
-                    });
-                  }}
-                />
-              </Field>
-              <Field label={label("Source")}>
-                <Input
-                  disabled={disabled}
-                  value={selectedEdge.source}
-                  onChange={(e) =>
-                    update({
-                      setbacks: geometry.setbacks.map((x) =>
-                        x.id === selectedEdge.id
-                          ? { ...x, source: e.target.value, reviewed: false }
-                          : x,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <Field label={label("Date")}>
-                <Input
-                  type="date"
-                  disabled={disabled}
-                  value={selectedEdge.sourceDate ?? ""}
-                  onChange={(e) =>
-                    update({
-                      setbacks: geometry.setbacks.map((x) =>
-                        x.id === selectedEdge.id
-                          ? {
-                              ...x,
-                              sourceDate: e.target.value || null,
-                              reviewed: false,
-                            }
-                          : x,
-                      ),
-                    })
-                  }
-                />
-              </Field>
-              <label className="site-review text-ui-xs">
-                <Checkbox
-                  disabled={
-                    disabled ||
-                    !selectedEdge.source ||
-                    !selectedEdge.sourceDate ||
-                    ((selectedEdge.profile === "manual" ||
-                      selectedEdge.profile === "boundary_exception") &&
-                      selectedEdge.distance === null)
-                  }
-                  checked={selectedEdge.reviewed}
-                  onCheckedChange={(v) =>
-                    update({
-                      setbacks: geometry.setbacks.map((x) =>
-                        x.id === selectedEdge.id
-                          ? {
-                              ...x,
-                              reviewed: v === true,
-                              reviewedHeight:
-                                x.heightSource === "buildings"
-                                  ? geometry.buildings.length
-                                    ? Math.max(
-                                        ...geometry.buildings.map((b) =>
-                                          Math.max(
-                                            b.height ?? 0,
-                                            b.fullStoreys * b.storeyHeight +
-                                              b.staffel.reduce(
-                                                (h, s) => h + s.height,
-                                                0,
-                                              ),
-                                          ),
-                                        ),
-                                      )
-                                    : null
-                                  : x.assessmentHeight,
-                            }
-                          : x,
-                      ),
-                    })
-                  }
-                />
-                {label("Reviewed")}
-              </label>
-            </>
-          )}
-          {selected && !disabled && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (selected.kind === "line")
-                  update({
-                    mandatoryLines: geometry.mandatoryLines.filter(
-                      (l) => l.id !== selected.id,
-                    ),
-                  });
-                if (selected.kind === "parcel")
-                  update({ parcel: null, setbacks: [] });
-                if (selected.kind === "envelope") update({ envelope: null });
-                if (selected.kind === "exclusion")
-                  update({
-                    exclusions: geometry.exclusions.filter(
-                      (e) => e.id !== selected.id,
-                    ),
-                    exclusionsReviewed: false,
-                  });
-                if (selected.kind === "building")
-                  update({
-                    buildings: geometry.buildings.filter(
-                      (b) => b.id !== selected.id,
-                    ),
-                  });
-                if (selected.kind === "staffel")
-                  update({
-                    buildings: geometry.buildings.map((b) => ({
-                      ...b,
-                      staffel: b.staffel.filter(
-                        (s) => s.footprint.id !== selected.id,
-                      ),
-                    })),
-                  });
-                if (selected.kind === "edge")
-                  update({
-                    setbacks: geometry.setbacks.filter(
-                      (e) => e.id !== selected.id,
-                    ),
-                  });
-                setSelected(null);
-              }}
-            >
-              {label("Remove")}
-            </Button>
-          )}
-          <label className="site-review text-ui-xs">
-            <Checkbox
-              disabled={disabled}
-              checked={geometry.exclusionsReviewed}
-              onCheckedChange={(v) =>
-                update({ exclusionsReviewed: v === true })
-              }
-            />
-            {label("ExclusionsReviewed")}
-          </label>
-          {engine && geometry.parcel && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={disabled || !options}
-              onClick={() =>
-                options &&
-                setCandidates(
-                  engine.generateMassingCandidates(geometry, options),
-                )
-              }
-            >
-              {label("Candidates")}
-            </Button>
-          )}
-          {candidates.map((candidate, i) => (
-            <div key={candidate.id} className="geometry-candidate text-ui-xs">
-              <strong>
-                {label("Variant")} {i + 1} · {label(candidate.strategy)}
-              </strong>
-              <span>
-                GF {format(candidate.metrics.countableFloorArea)} m² · BGF{" "}
-                {format(candidate.metrics.grossFloorArea)} m²
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disabled}
-                onClick={() => {
-                  update({
-                    buildings: [
-                      {
-                        ...candidate.building,
-                        label: `${label("Variant")} ${i + 1}`,
-                        footprint: {
-                          ...candidate.building.footprint,
-                          label: label("building"),
-                        },
-                      },
-                    ],
-                  });
-                  setSelected({ kind: "building", id: candidate.building.id });
-                }}
-              >
-                {label("UseVariant")}
-              </Button>
-            </div>
-          ))}
-        </aside>
-      </div>
+                {selectedBuilding && selected?.kind === "building" && (
+                  <>
+                    <h3>{label("StoreysTitle")}</h3>
+                    {numberField(label("FullStoreys"), selectedBuilding.fullStoreys, (n) => n !== null && n > 0 && patchBuilding(selectedBuilding.id, (b) => ({ ...b, fullStoreys: n, storeysReviewed: false })), { min: 1, step: 1, integer: true })}
+                    {numberField(label("StoreyHeight"), selectedBuilding.storeyHeight, (n) => n !== null && n > 0 && patchBuilding(selectedBuilding.id, (b) => ({ ...b, storeyHeight: n, storeysReviewed: false })))}
+                    <Field label={label("StoreysSource")}>
+                      <Input value={selectedBuilding.storeysSource} disabled={disabled} onChange={(e) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, storeysSource: e.target.value, storeysReviewed: false }))} />
+                    </Field>
+                    <div className="geometry-review">
+                      <label className="site-review text-ui-xs">
+                        <Checkbox checked={selectedBuilding.storeysReviewed} disabled={disabled || !selectedBuilding.storeysSource.trim()} onCheckedChange={(v) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, storeysReviewed: v === true }))} />
+                        {label("StoreysReviewed")}
+                      </label>
+                      {!selectedBuilding.storeysReviewed && !selectedBuilding.storeysSource.trim() && reviewHint([label("StoreysSource")])}
+                    </div>
+                    <Button size="sm" variant="outline" disabled={!canDraw} onClick={() => start("staffel")}>
+                      {label("AddStaffel")}
+                    </Button>
+                  </>
+                )}
+                {selectedStaffel && selectedBuilding && (
+                  <>
+                    <h3>{label("StaffelTitle")}</h3>
+                    {numberField(label("StaffelHeight"), selectedStaffel.height, (n) => n !== null && n > 0 && patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, height: n, classificationReviewed: false } : x)) })))}
+                    {(["areaAbove230", "averageTopAboveTerrain"] as const).map((key) => (
+                      <div key={key}>{numberField(label(key), selectedStaffel[key], (n) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, [key]: n, classificationReviewed: false } : x)) })))}</div>
+                    ))}
+                    <label className="site-review text-ui-xs">
+                      <Checkbox checked={selectedStaffel.countable} disabled={disabled} onCheckedChange={(v) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, countable: v === true, classificationReviewed: false } : x)) }))} />
+                      {label("Countable")}
+                    </label>
+                    <div className="geometry-review">
+                      <label className="site-review text-ui-xs">
+                        <Checkbox
+                          checked={selectedStaffel.classificationReviewed}
+                          disabled={disabled || selectedStaffel.areaAbove230 === null || selectedStaffel.averageTopAboveTerrain === null || !selectedStaffel.footprint.reviewed}
+                          onCheckedChange={(v) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, classificationReviewed: v === true } : x)) }))}
+                        />
+                        {label("ClassificationReviewed")}
+                      </label>
+                      {!selectedStaffel.classificationReviewed &&
+                        reviewHint([
+                          selectedStaffel.areaAbove230 === null && label("areaAbove230"),
+                          selectedStaffel.averageTopAboveTerrain === null && label("averageTopAboveTerrain"),
+                          !selectedStaffel.footprint.reviewed && label("Reviewed"),
+                        ].filter(Boolean) as string[])}
+                    </div>
+                  </>
+                )}
+                {selectedLine && (
+                  <>
+                    <div className="geometry-inspector-heading">
+                      <h3>{label("Kindline")}</h3>
+                      {reviewState(selectedLine.reviewed)}
+                    </div>
+                    <Field label={label("Name")}>
+                      <Input disabled={disabled} maxLength={200} value={lineName(selectedLine, geometry.mandatoryLines.indexOf(selectedLine))} onChange={(e) => update({ mandatoryLines: geometry.mandatoryLines.map((l) => (l.id === selectedLine.id ? { ...l, label: e.target.value } : l)) })} />
+                    </Field>
+                    {evidenceFields(selectedLine, (patch) => update({ mandatoryLines: geometry.mandatoryLines.map((l) => (l.id === selectedLine.id ? { ...l, ...patch } : l)) }))}
+                  </>
+                )}
+                {selectedEdge && (
+                  <>
+                    <div className="geometry-inspector-heading">
+                      <h3>{edgeName(selectedEdge.polygonIndex, selectedEdge.ringIndex, selectedEdge.edgeIndex)}</h3>
+                      {reviewState(selectedEdge.reviewed)}
+                    </div>
+                    {(() => {
+                      const patchEdge = (patch: Partial<typeof selectedEdge>) => update({ setbacks: geometry.setbacks.map((x) => (x.id === selectedEdge.id ? { ...x, ...patch } : x)) });
+                      const needsDistance = selectedEdge.profile === "manual" || selectedEdge.profile === "boundary_exception";
+                      return (
+                        <>
+                          <Field label={label("Profile")}>
+                            <NativeSelect disabled={disabled} value={selectedEdge.profile} onChange={(e) => patchEdge({ profile: e.target.value as typeof selectedEdge.profile, reviewed: false, reviewedHeight: null })}>
+                              {["manual", "standard", "commercial", "low_class", "boundary_exception"].map((v) => (
+                                <option key={v} value={v}>{label(v)}</option>
+                              ))}
+                            </NativeSelect>
+                          </Field>
+                          {!needsDistance && (
+                            <>
+                              <Field label={label("HeightSource")}>
+                                <NativeSelect disabled={disabled} value={selectedEdge.heightSource} onChange={(e) => patchEdge({ heightSource: e.target.value as typeof selectedEdge.heightSource, reviewed: false, reviewedHeight: null })}>
+                                  <option value="manual">{label("ManualHeight")}</option>
+                                  <option value="buildings">{label("BuildingHeight")}</option>
+                                </NativeSelect>
+                              </Field>
+                              {selectedEdge.heightSource === "manual" && numberField(label("AssessmentHeight"), selectedEdge.assessmentHeight, (n) => patchEdge({ assessmentHeight: n, reviewed: false, reviewedHeight: null }))}
+                            </>
+                          )}
+                          {numberField(label("Distance"), selectedEdge.distance, (n) => patchEdge({ distance: n !== null && n >= 0 ? n : null, reviewed: false }))}
+                          <Field label={label("Source")}>
+                            <Input disabled={disabled} value={selectedEdge.source} onChange={(e) => patchEdge({ source: e.target.value, reviewed: false })} />
+                          </Field>
+                          <Field label={label("Date")}>
+                            <DateInput disabled={disabled} value={selectedEdge.sourceDate} onValueChange={(sourceDate) => patchEdge({ sourceDate, reviewed: false })} />
+                          </Field>
+                          {(() => {
+                            const missing = [...evidenceMissing(selectedEdge), ...(needsDistance && selectedEdge.distance === null ? [label("Distance")] : [])];
+                            return (
+                              <div className="geometry-review">
+                                <label className="site-review text-ui-xs">
+                                  <Checkbox
+                                    disabled={disabled || missing.length > 0}
+                                    checked={selectedEdge.reviewed}
+                                    onCheckedChange={(v) =>
+                                      patchEdge({
+                                        reviewed: v === true,
+                                        reviewedHeight:
+                                          selectedEdge.heightSource === "buildings"
+                                            ? geometry.buildings.length
+                                              ? Math.max(...geometry.buildings.map((b) => Math.max(b.height ?? 0, b.fullStoreys * b.storeyHeight + b.staffel.reduce((h, s) => h + s.height, 0))))
+                                              : null
+                                            : selectedEdge.assessmentHeight,
+                                      })
+                                    }
+                                  />
+                                  {label("Reviewed")}
+                                </label>
+                                {!selectedEdge.reviewed && reviewHint(missing)}
+                              </div>
+                            );
+                          })()}
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
+                {selected && !disabled && (
+                  <Button variant="ghost" size="sm" className="geometry-remove" onClick={removeSelected}>
+                    {label(selected.kind === "edge" ? "ResetEdge" : "Remove")}
+                  </Button>
+                )}
+              </>
+            )}
+          </aside>
+        </div>
+        <footer className="geometry-status">
+          {result && <Badge variant="outline">{label(result.status)}</Badge>}
+          <span>
+            {result ? `${label("Usable")} ${format(result.usableArea)} m²` : label("NeedParcelShort")}
+            {result?.buildings.length ? ` · GF ${format(result.buildings.reduce((n, b) => n + b.countableFloorArea, 0))} m² · BGF ${format(result.buildings.reduce((n, b) => n + b.grossFloorArea, 0))} m²` : ""}
+          </span>
+          <span>{view === "2d" && hover ? `EPSG:25833 · ${hover.map((n) => n.toFixed(2)).join(" / ")}` : "EPSG:25833 · N ↑"}</span>
+          <span>{label(view === "2d" ? "StatusHint" : "StatusHint3D")}</span>
+        </footer>
+      </section>
       <SitePlanAlignment
         projectId={projectId}
         overlay={geometry.planOverlay}
@@ -1595,126 +1283,6 @@ export function SiteGeometryEditor({
         }}
         onChange={(planOverlay) => update({ planOverlay })}
       />
-      {result && (
-        <div className="geometry-results text-ui-xs">
-          <Badge variant="outline">{label(result.status)}</Badge>
-          {onUseArea && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={disabled || !result.usableArea}
-              onClick={() => onUseArea(result.usableArea)}
-            >
-              {label("UseArea")}
-            </Button>
-          )}
-          <span>
-            {label("Usable")}: {format(result.usableArea)} m²
-          </span>
-          {result.buildings.map((b) => (
-            <span key={b.id}>
-              GF {format(b.countableFloorArea)} m² · BGF{" "}
-              {format(b.grossFloorArea)} m² ·{" "}
-              {label(b.validPlacement ? "Fits" : "DoesNotFit")}
-            </span>
-          ))}
-          {result.issues.length > 0 && (
-            <ul className="geometry-issue-list">
-              {Object.entries(
-                result.issues.reduce<Record<string, typeof result.issues>>(
-                  (groups, issue) => {
-                    (groups[issue.code] ??= []).push(issue);
-                    return groups;
-                  },
-                  {},
-                ),
-              ).map(([code, issues]) => {
-                const list = issues ?? [];
-                const affected = (id?: string) => {
-                  if (!id) return "";
-                  const edge = geometry.setbacks.find((e) => e.id === id);
-                  if (edge) return `${label("edge")} ${edge.edgeIndex + 1}`;
-                  if (id.startsWith("edge-"))
-                    return `${label("edge")} ${Number(id.split("-").at(-1)) + 1}`;
-                  return (
-                    geometry.buildings.find(
-                      (b) => b.id === id || b.footprint.id === id,
-                    )?.label ??
-                    geometry.exclusions.find((e) => e.id === id)?.label ??
-                    geometry.mandatoryLines.find((l) => l.id === id)?.label ??
-                    (id === geometry.parcel?.id
-                      ? label("Parcel")
-                      : id === geometry.envelope?.id
-                        ? label("envelope")
-                        : label("ReviewGeometry"))
-                  );
-                };
-                const review = (id?: string) => {
-                  if (code === "missing_envelope") return start("envelope");
-                  if (id?.startsWith("edge-")) {
-                    const edge =
-                      geometry.setbacks.find((e) => e.id === id) ??
-                      engine
-                        ?.createDefaultSetbacks(geometry.parcel!)
-                        .find((e) => e.id === id);
-                    if (edge) {
-                      if (!geometry.setbacks.some((e) => e.id === id))
-                        update({ setbacks: [...geometry.setbacks, edge] });
-                      setSelected({ kind: "edge", id: edge.id });
-                      setTool("edge");
-                      return;
-                    }
-                  }
-                  if (id === geometry.parcel?.id)
-                    return setSelected({ kind: "parcel", id: "parcel" });
-                  if (id === geometry.envelope?.id)
-                    return setSelected({ kind: "envelope", id: "envelope" });
-                  const b = geometry.buildings.find(
-                    (b) => b.footprint.id === id,
-                  );
-                  if (b) return setSelected({ kind: "building", id: b.id });
-                  if (id) selectId(id);
-                };
-                return (
-                  <li key={code}>
-                    <strong>{label(code) || label("ReviewGeometry")}</strong>
-                    {list.length > 1 && <span> · {list.length}</span>}
-                    <div className="geometry-issue-actions">
-                      {list.slice(0, 3).map((issue, i) => (
-                        <Button
-                          key={i}
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => review(issue.id)}
-                        >
-                          {label("Review")} {affected(issue.id)}
-                        </Button>
-                      ))}
-                      {list.length > 3 && (
-                        <details>
-                          <summary>
-                            {label("MoreIssues")} · {list.length - 3}
-                          </summary>
-                          {list.slice(3).map((issue, i) => (
-                            <Button
-                              key={i}
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => review(issue.id)}
-                            >
-                              {label("Review")} {affected(issue.id)}
-                            </Button>
-                          ))}
-                        </details>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
-    </section>
+    </>
   );
 }

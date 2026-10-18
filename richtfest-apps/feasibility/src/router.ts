@@ -1,10 +1,10 @@
 import { Router, type Request } from "express";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { calculateFeasibility, feasibilityMethod, feasibilityStudyInput, ok, type FeasibilityStudy } from "@richtfest/shared";
+import { calculateFeasibility, calculateSiteAssessment, feasibilityMethod, feasibilityStudyInput, ok, type FeasibilityStudy } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { feasibilityStudies, feasibilityStudyRevisions } from "./schema";
-import { initialStudy } from "./defaults";
+import { feasibilityStudies, feasibilityStudyRevisions, siteAssessments } from "./schema";
+import { initialStudy, type SiteAssessmentSummary } from "./defaults";
 
 import { createBerlinSiteContextRouter } from "./berlin-site-context";
 import { createSiteLocationRouter } from "./site-location";
@@ -20,12 +20,22 @@ async function readStudy(d: AppDeps, projectId: string) {
   const project = await d.project(projectId);
   if (!project) throw error(404, "not_found", "Project not found");
   const [row] = await d.db.select().from(feasibilityStudies).where(and(eq(feasibilityStudies.tenantId, d.tenantId), eq(feasibilityStudies.projectId, projectId))).limit(1);
-  const figures = await d.siteFigures(projectId);
+  const [figures, [assessmentRow]] = await Promise.all([
+    d.siteFigures(projectId),
+    d.db.select({ revision: siteAssessments.revision, input: siteAssessments.input }).from(siteAssessments).where(and(eq(siteAssessments.tenantId, d.tenantId), eq(siteAssessments.projectId, projectId))).limit(1),
+  ]);
+  const siteAssessment = assessmentRow ? summarizeSiteAssessment(assessmentRow.revision, assessmentRow.input) : null;
   const study: FeasibilityStudy = row
     ? { site: row.site, scenarios: row.scenarios, notes: row.notes, revision: row.revision, updatedAt: row.updatedAt.toISOString() }
-    : { ...initialStudy(figures), revision: 0, updatedAt: null };
+    : { ...initialStudy(figures, siteAssessment), revision: 0, updatedAt: null };
   const results = study.scenarios.map(scenario => calculateFeasibility(study.site, scenario));
-  return { project, study, results, figures, method: feasibilityMethod };
+  return { project, study, results, figures, siteAssessment, method: feasibilityMethod };
+}
+
+function summarizeSiteAssessment(revision: number, input: typeof siteAssessments.$inferSelect["input"]): SiteAssessmentSummary {
+  const result = calculateSiteAssessment({ ...input, baseRevision: revision });
+  const parcel = input.constraints.parcelArea;
+  return { revision, parcelArea: parcel?.value ?? null, parcelAreaReviewed: !!parcel?.reviewed, countableFloorArea: result.baseline?.countableFloorArea ?? null, status: result.status };
 }
 
 export function createRouter(getDeps: (req: Request) => AppDeps) {

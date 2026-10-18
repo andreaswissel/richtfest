@@ -133,13 +133,9 @@ export async function testSiteGeometry() {
       ),
     );
     await wait(() => host.textContent?.includes("GF 200"));
-    const selection = host.querySelector<HTMLSelectElement>(
-      'select[aria-label="Selected geometry"]',
-    )!;
-    flushSync(() => {
-      selection.value = "building-a";
-      selection.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    const layer = [...host.querySelectorAll<HTMLButtonElement>(".geometry-object-row")].find((b) => b.textContent?.startsWith("Building A"))!;
+    flushSync(() => layer.click());
+    check(layer.getAttribute("aria-pressed") === "true", "Layer rows select their object");
     fill(input("Full storeys"), "3");
     await wait(() => host.textContent?.includes("GF 300"));
     check(
@@ -157,9 +153,11 @@ export async function testSiteGeometry() {
         !state.buildings[0]!.footprint.reviewed,
       "Moving a footprint changes projected coordinates and invalidates evidence",
     );
+    // Clearing the selection returns the inspector to the site summary.
+    flushSync(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     flushSync(() => button("Use usable area as capacity input").click());
     check(adopted === 1296, "Usable area adoption is explicit and calculated");
-    flushSync(() => button("Trace mandatory building line").click());
+    flushSync(() => host.querySelector<HTMLButtonElement>('.workbench-tool[aria-label="Trace mandatory building line"]')!.click());
     const canvas = host.querySelector<HTMLElement>(".geometry-plan")!,
       box = canvas.getBoundingClientRect();
     for (const [x, y] of [
@@ -191,7 +189,7 @@ export async function testSiteGeometry() {
     const withStaffel = { ...edited, height: 30, staffel: [{ footprint: building.footprint, height: 3, countable: false, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }] };
     if (fullStoreyMeshHeight(withStaffel) + 3 !== 30) throw new Error("Explicit total height must not double-count Staffel");
     if (fullStoreyMeshHeight({ ...withStaffel, height: 12 }) + 3 !== 27) throw new Error("Computed total height must include Staffel above full storeys");
-    return { passed: true, checks: 9 };
+    return { passed: true, checks: 10 };
   } finally {
     root.unmount();
     host.remove();

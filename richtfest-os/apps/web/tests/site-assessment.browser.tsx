@@ -76,8 +76,12 @@ export async function testSiteAssessment() {
       ...document.querySelectorAll<HTMLButtonElement>(
         ".site-editor-panel button",
       ),
-    ].find((b) => b.textContent === "Close editor");
+    ].find((b) => b.textContent?.trim() === "Close");
     if (close) flushSync(() => close.click());
+  };
+  const step = (name: string) => {
+    const tab = [...host.querySelectorAll<HTMLButtonElement>(".site-steps button")].find((b) => b.textContent?.startsWith(name))!;
+    flushSync(() => tab.click());
   };
   const field = (text: string) => {
     let label = [
@@ -190,7 +194,6 @@ export async function testSiteAssessment() {
       record.assessment.constraints.parcelArea.value === 1200,
       "Save persists the numeric change",
     );
-    button("Add reference building").closest("details")!.open = true;
     flushSync(() => button("Add reference building").click());
     closeEditor();
     flushSync(() => button("Save assessment").click());
@@ -210,7 +213,8 @@ export async function testSiteAssessment() {
     );
     fill(field("Full storeys")!, "3");
     closeEditor();
-    const notes = field("Notes") as unknown as HTMLTextAreaElement;
+    step("Result");
+    const notes = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]')!;
     fill(notes, "My unsaved review");
     record = {
       ...record,
@@ -243,6 +247,7 @@ export async function testSiteAssessment() {
       router.state.location.search.includes("study=site"),
       "Switching subviews blocks unsaved navigation",
     );
+    await wait(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].some((b) => b.textContent === "Keep editing"));
     const stay = [
       ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
     ].find((b) => b.textContent === "Keep editing")!;

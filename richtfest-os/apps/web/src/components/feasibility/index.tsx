@@ -21,7 +21,9 @@ import { SiteAssessment } from "./site-assessment";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
-type StudyResponse = { study: FeasibilityStudy; results: FeasibilityResult[]; figures: FeasibilitySiteFigures; method: string; canWrite: boolean };
+type SiteAssessmentSummary = { revision: number; parcelArea: number | null; parcelAreaReviewed: boolean; countableFloorArea: number | null; status: "incomplete" | "indicative" | "reviewed" };
+type StudyResponse = { study: FeasibilityStudy; results: FeasibilityResult[]; figures: FeasibilitySiteFigures; siteAssessment: SiteAssessmentSummary | null; method: string; canWrite: boolean };
+const sourceLabel = { standard: "feasibilitySourceStandard", building_model: "feasibilitySourceModel", site_assessment: "feasibilitySourceSiteAssessment" } as const;
 type InputKey = FeasibilitySiteKey | FeasibilityScenarioKey;
 const camel = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 const inputLabel = (key: string, t: T) => t(`feasibilityInput${camel(key)}` as Key);
@@ -82,7 +84,7 @@ function ValueField({ state, field, label, disabled, language, raw, onRaw, onCha
       {error ? <span role="alert">{t(`feasibilityError${camel(error)}` as Key)}</span> : missing ? t("feasibilityRequired") : hint ? t(hint) : optional ? t("feasibilityOptionalZero") : null}
     </div>
     {state && state.source !== "entered" && <div className="feasibility-proposal text-ui-2xs">
-      <Badge variant="outline">{state.source === "standard" ? t("feasibilitySourceStandard") : t("feasibilitySourceModel")}</Badge>
+      <Badge variant="outline">{t(sourceLabel[state.source as keyof typeof sourceLabel])}</Badge>
       <label><Checkbox aria-label={`${label}: ${t("feasibilityReviewed")}`} checked={state.reviewed} disabled={disabled}
         onCheckedChange={checked => onChange({ ...state, reviewed: checked === true })} />{t("feasibilityReviewed")}</label>
       {state.note && <span className="muted">{state.note}</span>}
@@ -178,6 +180,10 @@ function FinancialFeasibility({ projectId }: { projectId: string }) {
     <details className="feasibility-disclosure" open={siteOpen ?? (study.site.parcelArea?.value == null || study.site.acquisitionCostRate?.value == null)} onToggle={event => setSiteOpen(event.currentTarget.open)}>
       <summary className="text-ui-sm">{t("feasibilitySite")}<span className="muted text-ui-xs">{Number.isFinite(study.site.parcelArea?.value) ? study.site.parcelArea!.value!.toLocaleString(locale) : "–"} m² · {euro(study.site.askingPrice?.value ?? null)}</span></summary>
       <div className="feasibility-fields">{feasibilitySiteKeys.map(key => field(key, true))}</div>
+      <SiteAssessmentLink projectId={projectId} summary={data.siteAssessment} locale={locale} disabled={disabled}
+        parcelArea={study.site.parcelArea} newGrossFloorArea={study.scenarios.find(s => s.kind === "new_build")?.values.newGrossFloorArea}
+        onParcelArea={parcelArea => setDraft({ ...study, site: { ...study.site, parcelArea } })}
+        onNewGrossFloorArea={value => setDraft({ ...study, scenarios: study.scenarios.map(s => s.kind === "new_build" ? { ...s, values: { ...s.values, newGrossFloorArea: value } } : s) })} />
       {(data.figures.gfz !== null || data.figures.grz !== null) && <p className="muted text-ui-2xs">{t("feasibilityZoning").replace("{grz}", data.figures.grz?.toLocaleString(locale) ?? "–").replace("{gfz}", data.figures.gfz?.toLocaleString(locale) ?? "–")}{" "}<Link className="underline" to={`/projects/${projectId}?view=building-model`}>{t("feasibilityOpenModel")}</Link></p>}
     </details>
     <Section title={scenarioLabel(selected, t)} meta={<Segmented value={scenario.revenueMode} onChange={mode => setScenario({ revenueMode: mode as FeasibilityScenario["revenueMode"] })}
@@ -194,5 +200,28 @@ function FinancialFeasibility({ projectId }: { projectId: string }) {
       <dl className="feasibility-results">{resultRows.filter(row => row.key !== "headroom" || study.site.askingPrice?.value != null).map(row => <div key={row.key}><dt>{t(row.label)}</dt><dd>{row.key === "livingArea" ? result.livingArea === null ? "–" : `${result.livingArea.toLocaleString(locale)} m²` : euro(result[row.key])}</dd></div>)}</dl>
     </details>
     <details className="feasibility-disclosure"><summary className="text-ui-sm">{t("feasibilityNotes")}</summary><Textarea aria-label={t("feasibilityNotes")} maxLength={5000} rows={3} value={study.notes} disabled={disabled} onChange={event => setDraft({ ...study, notes: event.target.value })} /></details>
+  </div>;
+}
+
+/** Figures from the saved site assessment, adopted into the study as unreviewed, source-labelled proposals. */
+function SiteAssessmentLink({ projectId, summary, locale, disabled, parcelArea, newGrossFloorArea, onParcelArea, onNewGrossFloorArea }: {
+  projectId: string; summary: SiteAssessmentSummary | null; locale: string; disabled: boolean;
+  parcelArea?: FeasibilityValue; newGrossFloorArea?: FeasibilityValue;
+  onParcelArea: (value: FeasibilityValue) => void; onNewGrossFloorArea: (value: FeasibilityValue) => void;
+}) {
+  const t = useT();
+  const link = <Link className="underline" to={`/projects/${projectId}?view=feasibility&study=site`}>{t(summary ? "feasibilityOpenSiteAssessment" : "feasibilityStartSiteAssessment")}</Link>;
+  if (!summary) return <p className="muted text-ui-2xs">{t("feasibilityNoSiteAssessment")} {link}</p>;
+  const m2 = (n: number) => `${Math.round(n).toLocaleString(locale)} m²`;
+  const proposal = (value: number): FeasibilityValue => ({ value: Math.round(value * 100) / 100, source: "site_assessment", note: `Grundstücksprüfung r${summary.revision}`, reviewed: false });
+  const same = (state: FeasibilityValue | undefined, value: number | null) => value !== null && state?.source === "site_assessment" && state.value === Math.round(value * 100) / 100;
+  return <div className="feasibility-site-link text-ui-xs" aria-label={t("feasibilitySiteAssessmentFigures")}>
+    <span className="muted">{t("feasibilitySiteAssessmentFigures")} · r{summary.revision}</span>
+    <Badge variant="outline">{t(summary.status === "reviewed" ? "siteAssessmentReviewedShort" : summary.status === "indicative" ? "siteAssessmentindicative" : "siteAssessmentincomplete")}</Badge>
+    <span>{t("feasibilityParcelArea")}: <strong className="tabular-nums">{summary.parcelArea === null ? "–" : m2(summary.parcelArea)}</strong></span>
+    {summary.parcelArea !== null && <Button variant="outline" size="sm" disabled={disabled || same(parcelArea, summary.parcelArea)} onClick={() => onParcelArea(proposal(summary.parcelArea!))}>{t("feasibilityUseParcelArea")}</Button>}
+    <span>{t("feasibilityMaxCountableFloorArea")}: <strong className="tabular-nums">{summary.countableFloorArea === null ? "–" : m2(summary.countableFloorArea)}</strong></span>
+    {summary.countableFloorArea !== null && <Button variant="outline" size="sm" disabled={disabled || same(newGrossFloorArea, summary.countableFloorArea)} onClick={() => onNewGrossFloorArea(proposal(summary.countableFloorArea!))}>{t("feasibilityUseFloorArea")}</Button>}
+    {link}
   </div>;
 }
