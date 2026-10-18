@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Files Richtfest creates itself (environmental surveys and road/rail lookups, forwarded email and its attachments, public-data snapshots, generated PDFs) are now stored in production; previously these failed with "Direct bucket upload is required".
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

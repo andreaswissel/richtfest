@@ -6,7 +6,17 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { HttpError } from "./middleware/auth";
 import { env } from "./env";
-import { S3Client, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const safeStoragePath = (key: string) => {
@@ -141,12 +151,74 @@ const bucketStorage = bucketReady
           headers: { "content-type": mimeType },
           expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
         }),
-        saveStream: async () => {
-          throw new HttpError(
-            503,
-            "storage_unconfigured",
-            "Direct bucket upload is required",
-          );
+        // Files the server produces itself (surveys, filed email, generated PDFs) stream into the
+        // bucket in 8 MiB parts, so size is never capped by memory; small files are one PUT.
+        saveStream: async (
+          key: string,
+          stream: NodeJS.ReadableStream,
+          mimeType: string,
+        ) => {
+          const hash = crypto.createHash("sha256");
+          const partSize = 8 * 1024 * 1024;
+          const parts: { ETag?: string; PartNumber: number }[] = [];
+          let chunks: Buffer[] = [],
+            buffered = 0,
+            sizeBytes = 0,
+            uploadId: string | undefined;
+          const flush = async () => {
+            const body = Buffer.concat(chunks);
+            chunks = [];
+            buffered = 0;
+            uploadId ??= (
+              await client.send(
+                new CreateMultipartUploadCommand({ Bucket: env.BUCKET!, Key: key, ContentType: mimeType }),
+              )
+            ).UploadId;
+            const PartNumber = parts.length + 1;
+            const part = await client.send(
+              new UploadPartCommand({ Bucket: env.BUCKET!, Key: key, UploadId: uploadId, PartNumber, Body: body }),
+            );
+            parts.push({ ETag: part.ETag, PartNumber });
+          };
+          try {
+            for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+              const bytes = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk);
+              hash.update(bytes);
+              sizeBytes += bytes.length;
+              chunks.push(bytes);
+              buffered += bytes.length;
+              if (buffered >= partSize) await flush();
+            }
+            const checksum = hash.digest("hex");
+            if (!uploadId)
+              await client.send(
+                new PutObjectCommand({
+                  Bucket: env.BUCKET!,
+                  Key: key,
+                  ContentType: mimeType,
+                  Body: Buffer.concat(chunks),
+                  Metadata: { sha256: checksum },
+                }),
+              );
+            else {
+              if (buffered) await flush();
+              await client.send(
+                new CompleteMultipartUploadCommand({
+                  Bucket: env.BUCKET!,
+                  Key: key,
+                  UploadId: uploadId,
+                  MultipartUpload: { Parts: parts },
+                }),
+              );
+            }
+            return { sizeBytes, checksum, mimeType };
+          } catch (error) {
+            if (uploadId)
+              await client
+                .send(new AbortMultipartUploadCommand({ Bucket: env.BUCKET!, Key: key, UploadId: uploadId }))
+                .catch(() => undefined);
+            throw error;
+          }
         },
         head: async (key: string) => {
           try {
@@ -155,7 +227,7 @@ const bucketStorage = bucketReady
             );
             return {
               sizeBytes: object.ContentLength ?? 0,
-              checksum: object.ChecksumSHA256 ?? "",
+              checksum: object.Metadata?.sha256 ?? object.ChecksumSHA256 ?? "",
               mimeType: object.ContentType ?? "application/octet-stream",
             };
           } catch {
