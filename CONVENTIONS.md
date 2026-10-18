@@ -98,11 +98,10 @@ description: The rules every change follows, from API responses to audit events 
 ## Release notes
 
 `CHANGELOG.md` is the source for team updates. Keep entries short, human and non-technical where possible.
-Use `Unreleased` only as a temporary queue for completed, verified work not yet deployed. Before each deployment commit
-and docs build, move the included entries into `## YYYY-MM-DD` using the deployment date in Europe/Berlin. Reuse that
-date's section and keep dated sections newest first; leave unrelated undeployed entries in `Unreleased`. Never put shipped
-work back in `Unreleased`. Confirm Railway success before reporting a release as live; if deployment is abandoned, return
-only its still-undeployed entries to the queue. Correct historical dates from successful deployment evidence, not guessed
+Write each entry directly under today's `## YYYY-MM-DD` section (Europe/Berlin) when the work is completed and verified;
+there is no `Unreleased` section. Reuse that date's section and keep dated sections newest first. If a deployment happens
+on a later day, move its entries to the deployment day's section in the deployment commit. Confirm Railway success before
+reporting a release as live; if deployment is abandoned, remove or redate only its still-undeployed entries. Correct historical dates from successful deployment evidence, not guessed
 commit dates. Consolidate rapid fix iterations into one item and keep incomplete work out of release claims.
 
 Before committing user-facing or operational changes, include the release note and affected documentation in the same

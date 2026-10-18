@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 ## 2026-10-18
 
 - **Feasibility:** Opens directly on the site assessment; the financial study is paused and no longer shown.
