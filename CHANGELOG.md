@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Exterior noise suggests the mapped roads and railways near the building, using class-based screening radii measured from the placed plan or the official footprint. Each suggestion can be added individually, or all at once.
+- Exterior noise suggests the mapped roads and railways near the building, using class-based screening radii measured from the placed plan or the official footprint. Each suggestion can be added individually, or all at once. 3D location shows the same suggestions in a new Suggestions panel and highlights them on the map; later planning domains will add their own suggestions there.
 
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 

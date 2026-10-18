@@ -22,6 +22,7 @@ import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout } from "../ui/primitives";
 import { Input } from "../ui/input";
 import { fromLocal, useSiteGeometry, type NoiseData, type SiteGeometry, type SiteOverlay } from "./site-geometry";
+import { SiteSuggestionsSection, useSiteSuggestions } from "./site-suggestions";
 import "./site-workbench.css";
 
 type T = ReturnType<typeof useT>;
@@ -237,6 +238,10 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
     [picks],
   );
   const { geometry, sitePlan } = useSiteGeometry(projectId, pageIndex, pending);
+  const suggestionDomains = useSiteSuggestions(projectId);
+  // Keyed by content: the domains are rebuilt every render, and a new overlay would redraw every axis.
+  const suggestedKey = suggestionDomains.flatMap((domain) => domain.suggestions.map((item) => item.axisId ?? "")).filter(Boolean).join("\n");
+  const suggestedAxes = useMemo(() => new Set(suggestedKey.split("\n")), [suggestedKey]);
   const [zoomedOut, setZoomedOut] = useState(false);
   const aerialSource = context ? aerialSourceFor(context) : null;
   const image = (path: string, enabled: boolean, error: string) => ({
@@ -299,7 +304,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
   // Distances only mean something for a stored or freshly aligned placement, never the centred default.
   const distances = useMemo(() => geometry?.stored || pending ? geometry?.distances ?? [] : [], [geometry, pending]);
   const overlay: SiteOverlay = useMemo(() => ({
-    axes: geometry?.axes ?? [],
+    axes: (geometry?.axes ?? []).map((axis) => suggestedAxes.has(axis.id) ? { ...axis, suggested: true } : axis),
     plan: geometry?.page ? { walls: geometry.walls } : null,
     distances: distances.map((item) => ({
       id: item.sourceId,
@@ -311,7 +316,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
     aerial: { near: aerialNear.data ?? null, far: aerialFar.data ?? null },
     picks: aligning ? picks.map((pick) => pick.local) : [],
     snaps: aligning ? (picks.length % 2 === 0 ? planVertices : siteVertices) : [],
-  }), [geometry, distances, context, railNoise.data, aerialNear.data, aerialFar.data, aligning, picks, planVertices, siteVertices]);
+  }), [geometry, suggestedAxes, distances, context, railNoise.data, aerialNear.data, aerialFar.data, aligning, picks, planVertices, siteVertices]);
 
   const steps = ["sitePickPlanA", "sitePickSiteA", "sitePickPlanB", "sitePickSiteB"] as const;
   const scaleOff = pending && Math.abs(pending.scaleRatio - 1) > 0.02;
@@ -333,6 +338,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
         {layer("roads", t("siteRoadsRail"), <Route className="size-icon-sm" />, geometry?.axes.length)}
         {geometry && !geometry.axes.length && <p className="text-ui-xs muted">{t("siteAxesMissing")}</p>}
       </div>
+      <SiteSuggestionsSection domains={suggestionDomains} canWrite={canWrite} />
       <div className="location-layer-section">
         {layer("railNoise", t("siteRailNoise"), <Volume2 className="size-icon-sm" />)}
         {layers.railNoise && (

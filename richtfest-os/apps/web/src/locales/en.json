@@ -2098,5 +2098,11 @@
   "noiseSuggestedWithin": "within {radius} m",
   "noiseSuggestedAddAll": "Add all {count}",
   "noiseSuggestedEmpty": "No further mapped source lies within its screening radius.",
-  "noiseSuggestedByAddress": "address point {distance} m"
+  "noiseSuggestedByAddress": "address point {distance} m",
+  "noiseSuggestedShort": "Exterior noise",
+  "noiseSuggestedHintShort": "Mapped roads and railways within their class screening radius; a Richtfest proposal, not a norm decision.",
+  "siteSuggestions": "Suggestions",
+  "siteSuggestionsUnavailable": "Look up roads and railways first.",
+  "siteSuggestionsNone": "Nothing further to suggest.",
+  "siteSuggestionsHighlighted": "Highlighted in amber."
 }

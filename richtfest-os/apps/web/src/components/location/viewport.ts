@@ -609,8 +609,15 @@ export function createViewport(
     }
     if (previous?.site.axes !== next.site.axes) {
       disposeGroup(groups.roads);
-      for (const axis of next.site.axes)
-        groups.roads.add(ribbon(axis.parts, axis.kind === "rail" ? 1.6 : 2.4, axis.added ? 0x5b60b9 : axis.kind === "rail" ? 0x7a5236 : 0x59616d, axis.added ? 0.95 : 0.7, 0.06));
+      // Added sources in the primary indigo, open suggestions in amber, everything else muted.
+      for (const axis of next.site.axes) {
+        groups.roads.add(ribbon(axis.parts, axis.kind === "rail" ? 1.6 : 2.4,
+          axis.added ? 0x5b60b9 : axis.suggested ? 0xd97706 : axis.kind === "rail" ? 0x7a5236 : 0x59616d, axis.added || axis.suggested ? 0.95 : 0.7, 0.06));
+        // Suggestions also get a pixel-wide line so they stay visible from the surroundings view.
+        if (axis.suggested)
+          for (const part of axis.parts)
+            if (part.length > 1) groups.roads.add(fatLine(part.map(([x, z]) => new THREE.Vector3(x, 0.1, z)), 0xd97706, 3));
+      }
     }
     if (previous?.site.railNoise !== next.site.railNoise) {
       disposeGroup(groups.railNoise);

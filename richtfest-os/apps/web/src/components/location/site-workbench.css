@@ -71,3 +71,20 @@
   flex-basis: 100%;
   color: var(--destructive);
 }
+.site-suggestions-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.site-suggestion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.site-suggestion-row {
+  flex-wrap: nowrap;
+}
+.site-suggestion-row > span {
+  flex: 1 1 0;
+}

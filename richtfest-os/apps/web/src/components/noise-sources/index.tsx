@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { noiseInputKeys, noiseInputUnit, requestableNoiseInputs, suggestNoiseSources, type LocationState, type MappedNoiseSource, type NoiseInputValue, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
+import { noiseInputKeys, noiseInputUnit, requestableNoiseInputs, type LocationState, type MappedNoiseSource, type NoiseInputValue, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
 import { api, ApiError, type RecordData } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -13,6 +13,8 @@ import { Badge, Callout, Empty, Field, RowLink, Segmented, Table } from "../ui/p
 import { inquiryLink } from "../inquiries/types";
 import { useSiteGeometry } from "../location/site-geometry";
 import { FacadeDistanceRow } from "../location/site-workbench";
+import { mappedClass, mappedDetails, mappedName } from "./labels";
+import { noiseReasonText, noiseReferenceText, useNoiseSuggestions } from "./suggestions";
 import "./noise-sources.css";
 
 type T = ReturnType<typeof useT>;
@@ -30,18 +32,6 @@ const inputKeys = {
   distanceToFacade: "noiseInputDistanceToFacade", trafficBasis: "noiseInputTrafficBasis", trainVolumes: "noiseInputTrainVolumes", speed: "noiseInputSpeed", trackType: "noiseInputTrackType",
 } as const;
 export const noiseInputLabel = (key: string, t: T) => key in inputKeys ? t(inputKeys[key as keyof typeof inputKeys]) : key;
-const dedicationKeys: Record<string, Parameters<T>[0]> = { "1301": "noiseRoadMotorway", "1303": "noiseRoadFederal", "1305": "noiseRoadState", "1306": "noiseRoadDistrict", "1307": "noiseRoadMunicipal", "9997": "noiseRoadPrivate", "9999": "noiseRoadOtherPublic" };
-const railKeys: Record<string, Parameters<T>[0]> = { "1100": "noiseRailRailway", "1101": "noiseRailPassenger", "1102": "noiseRailFreight", "1103": "noiseRailOperational", "1104": "noiseRailSBahn", "1200": "noiseRailLightRail", "1201": "noiseRailTram", "1202": "noiseRailUBahn" };
-const roadClass = (code: string | null, t: T) => code ? (dedicationKeys[code] ? t(dedicationKeys[code]!) : code) : "—";
-const railClass = (codes: string[], t: T) => codes.length ? codes.map((code) => railKeys[code] ? t(railKeys[code]!) : code).join(", ") : "—";
-const mappedClass = (item: MappedNoiseSource, t: T) => item.kind === "road" ? roadClass(item.dedication, t) : railClass(item.categories, t);
-const mappedDetails = (item: MappedNoiseSource, t: T) => item.kind === "road"
-  ? [item.lanes ? t("noiseLanes").replace("{count}", String(item.lanes)) : null, item.carriagewayWidthM ? `${item.carriagewayWidthM} m` : null].filter(Boolean).join(" · ")
-  : [item.name && item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : null, item.lines.join(", ") || null,
-    item.tracks === "2000" ? t("noiseTracksDouble") : item.tracks === "1000" ? t("noiseTracksSingle") : null,
-    item.electrified === true ? t("noiseElectrified") : item.electrified === false ? t("noiseNotElectrified") : null].filter(Boolean).join(" · ");
-const mappedName = (item: MappedNoiseSource, t: T) => item.kind === "road" ? [item.designation, item.name].filter(Boolean).join(" ") || t("noiseUnnamedRoad")
-  : item.name || (item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : item.lines.join(", ") || t("noiseUnnamedRail"));
 const displayValue = (state: NoiseInputValue | undefined) => state ? `${state.value}${state.unit ? ` ${state.unit}` : ""}` : "";
 
 /**
@@ -81,7 +71,7 @@ export function NoiseSources({ projectId, selectedId }: { projectId: string; sel
     </Section>
     {selected && <SourceInputs key={selected.id} projectId={projectId} source={selected} canWrite={canWrite} t={t} />}
     {selectedId && !selected && query.isSuccess && <Callout>{t("noiseSourceNotFound")}</Callout>}
-    {data && <SuggestedSources projectId={projectId} survey={data.survey} sources={sources} canWrite={canWrite} t={t} />}
+    {data && <SuggestedSources projectId={projectId} canWrite={canWrite} t={t} />}
     {data && <MappedSources projectId={projectId} survey={data.survey} sources={sources} canWrite={canWrite} t={t} />}
     {canWrite && sources.some((source) => source.missing.some((field) => (requestableNoiseInputs[source.kind] as readonly string[]).includes(field)))
       && <RequestData projectId={projectId} sources={sources} address={data?.survey?.address ?? null} t={t} />}
@@ -104,39 +94,20 @@ function AddSource({ projectId, kind, t, onDone }: { projectId: string; kind: No
 }
 
 /** Roads and railways the official topographic model maps around the address, nearest first. */
-/** Richtfest's screening proposal: mapped sources within a class-specific radius of the building, not a norm decision. */
-function SuggestedSources({ projectId, survey, sources, canWrite, t }: { projectId: string; survey: SurveyMapped | null; sources: NoiseSource[]; canWrite: boolean; t: T }) {
-  const { geometry } = useSiteGeometry(projectId);
-  const added = new Set(sources.map((source) => source.mapped?.ref).filter(Boolean));
-  const suggestions = useMemo(() => {
-    const items = [...(survey?.roads ?? []), ...(survey?.rail ?? [])].filter((item) => !added.has(item.ref));
-    // Screening errs towards inclusion: a source qualifies when the building (placed plan or official footprint)
-    // or the address point lies within its radius, since an approximate placement can be off by metres.
-    const building = (item: MappedNoiseSource) => geometry?.distanceTo(item.axes) ?? null;
-    return suggestNoiseSources(items, (item) => {
-      const distances = [building(item), item.distanceMeters].filter((value): value is number => value !== null);
-      return distances.length ? Math.min(...distances) : null;
-    }).map((suggestion) => ({ ...suggestion, distanceMeters: Math.round(building(suggestion.item) ?? suggestion.distanceMeters) }))
-      .sort((a, b) => a.distanceMeters - b.distanceMeters);
-  }, [survey, geometry, sources]); // eslint-disable-line react-hooks/exhaustive-deps
-  const add = useMutation({
-    mutationFn: async (refs: string[]) => { for (const mappedRef of refs) await api<RecordData>(`/projects/${projectId}/noise-sources`, { mappedRef }); },
-    onSettled: () => invalidate(projectId),
-  });
-  if (!survey || !(survey.roads || survey.rail)) return null;
-  const basis = geometry?.reference === "plan" ? t("noiseSuggestedFromPlan") : geometry?.reference === "footprint" ? t("noiseSuggestedFromFootprint") : t("noiseSuggestedFromAddress");
+function SuggestedSources({ projectId, canWrite, t }: { projectId: string; canWrite: boolean; t: T }) {
+  const { available, suggestions, reference, add } = useNoiseSuggestions(projectId);
+  if (!available) return null;
   return <Section title={t("noiseSuggested")} meta={canWrite && suggestions.length > 1
     && <Button size="sm" variant="outline" disabled={add.isPending} onClick={() => add.mutate(suggestions.map((s) => s.item.ref))}>
       {add.isPending ? t("loading") : t("noiseSuggestedAddAll").replace("{count}", String(suggestions.length))}</Button>}>
-    <p className="muted text-ui-xs">{t("noiseSuggestedHint")} {basis}</p>
+    <p className="muted text-ui-xs">{t("noiseSuggestedHint")} {noiseReferenceText(reference, t)}</p>
     {add.isError && <Callout tone="error">{errorText(add.error)}</Callout>}
     {suggestions.length ? <Table headers={[t("noiseSourceName"), t("noiseClass"), t("noiseDistance"), t("noiseSuggestedReason"), ""]}
-      rows={suggestions.map(({ item, distanceMeters, radiusMeters }) => ({ id: item.ref, sort: [mappedName(item, t), mappedClass(item, t), String(distanceMeters).padStart(5, "0"), String(radiusMeters).padStart(5, "0"), ""], cells: [
+      rows={suggestions.map(({ item, distanceMeters, radiusMeters, addressDistanceMeters }) => ({ id: item.ref, sort: [mappedName(item, t), mappedClass(item, t), String(distanceMeters).padStart(5, "0"), String(radiusMeters).padStart(5, "0"), ""], cells: [
         mappedName(item, t),
         <span className="text-ui-xs">{mappedClass(item, t)}</span>,
         <span className="text-ui-xs">{distanceMeters} m</span>,
-        <span className="text-ui-xs muted">{t("noiseSuggestedWithin").replace("{radius}", String(radiusMeters))}
-          {distanceMeters > radiusMeters && item.distanceMeters !== null ? ` · ${t("noiseSuggestedByAddress").replace("{distance}", String(item.distanceMeters))}` : ""}</span>,
+        <span className="text-ui-xs muted">{noiseReasonText(distanceMeters, radiusMeters, addressDistanceMeters, t)}</span>,
         canWrite ? <Button size="sm" variant="ghost" disabled={add.isPending} onClick={() => add.mutate([item.ref])}>{t("noiseAdd")}</Button> : null,
       ] }))} /> : <Empty>{t("noiseSuggestedEmpty")}</Empty>}
   </Section>;

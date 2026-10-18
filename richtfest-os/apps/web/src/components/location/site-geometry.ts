@@ -25,7 +25,7 @@ export type NoiseData = { sources: NoiseSource[]; survey: NoiseSurvey };
 
 /** Geometry the location viewer draws on top of the public context, in local X/Z metres. */
 export type SiteOverlay = {
-  axes: Array<{ id: string; kind: "road" | "rail"; added: boolean; parts: Point2[][] }>;
+  axes: Array<{ id: string; kind: "road" | "rail"; added: boolean; suggested?: boolean; parts: Point2[][] }>;
   plan: { walls: Array<{ id: string; exterior: boolean; ring: Point2[] }> } | null;
   distances: Array<{ id: string; from: Point2; to: Point2; label: string }>;
   railNoise: string | null;

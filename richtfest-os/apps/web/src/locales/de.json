@@ -2098,5 +2098,11 @@
   "noiseSuggestedWithin": "innerhalb {radius} m",
   "noiseSuggestedAddAll": "Alle {count} übernehmen",
   "noiseSuggestedEmpty": "Keine weitere kartierte Quelle liegt innerhalb ihres Radius.",
-  "noiseSuggestedByAddress": "Adresspunkt {distance} m"
+  "noiseSuggestedByAddress": "Adresspunkt {distance} m",
+  "noiseSuggestedShort": "Außenlärm",
+  "noiseSuggestedHintShort": "Kartierte Straßen und Schienenwege innerhalb ihres klassenabhängigen Radius; Richtfest-Vorschlag, keine normative Festlegung.",
+  "siteSuggestions": "Vorschläge",
+  "siteSuggestionsUnavailable": "Zuerst Straßen und Schienenwege abrufen.",
+  "siteSuggestionsNone": "Keine weiteren Vorschläge.",
+  "siteSuggestionsHighlighted": "Bernsteinfarben hervorgehoben."
 }
