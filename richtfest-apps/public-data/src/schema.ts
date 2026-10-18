@@ -1,5 +1,5 @@
-import { pgTable, uuid, text, timestamp, jsonb, integer, bigint, boolean, index, uniqueIndex, primaryKey } from "drizzle-orm/pg-core";
-import type { PublicDatasetMetadata, PublicFeature } from "@richtfest/shared";
+import { pgTable, uuid, text, timestamp, jsonb, integer, bigint, boolean, index, uniqueIndex, primaryKey, doublePrecision, real } from "drizzle-orm/pg-core";
+import type { PublicDatasetMetadata, PublicFeature, TrafficCountRecord } from "@richtfest/shared";
 
 // Only curated public data belongs here. No tenant IDs, project selections or private uploads.
 export const datasets = pgTable("public_data_datasets", {
@@ -71,3 +71,79 @@ export const releaseMembers = pgTable("public_data_release_members", {
   revisionId: uuid("revision_id").notNull().references(() => revisions.id),
   sourceId: text("source_id").notNull(),
 }, t => ({ pk: primaryKey({ columns: [t.releaseId, t.sourceId] }) }));
+
+// --- Traffic counts published only as files (BASt, state road authorities) ---
+
+/** Sync checkpoint per count source; the source definitions themselves live in code (traffic-count-sources.ts). */
+export const trafficCountSources = pgTable("public_data_traffic_count_sources", {
+  id: text("id").primaryKey(),
+  currentRelease: text("current_release"),
+  /** SHA-256 over the source file checksums of the last successful import; unchanged files are skipped. */
+  checksum: text("checksum"),
+  importerVersion: text("importer_version"),
+  recordCount: integer("record_count").notNull().default(0),
+  nextCheckAt: timestamp("next_check_at", { withTimezone: true }).notNull().defaultNow(),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  failures: integer("failures").notNull().default(0),
+  error: text("error"),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+}, t => ({ due: index("public_data_traffic_count_sources_due").on(t.nextCheckAt) }));
+
+/** One row per import attempt: the audit trail of this tenant-independent job. */
+export const trafficCountRuns = pgTable("public_data_traffic_count_runs", {
+  id: uuid("id").primaryKey(),
+  sourceId: text("source_id").notNull().references(() => trafficCountSources.id),
+  status: text("status").notNull(),
+  trigger: text("trigger").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  release: text("release"),
+  checksum: text("checksum"),
+  /** Retrieved files: url, sha256, size, retrieval time and private-bucket evidence key. */
+  files: jsonb("files").$type<Array<{ url: string; sha256: string; sizeBytes: number; retrievedAt: string; storageKey: string | null }>>(),
+  records: integer("records"),
+  inserted: integer("inserted"),
+  updated: integer("updated"),
+  removed: integer("removed"),
+  skipped: integer("skipped"),
+  error: text("error"),
+}, t => ({ history: index("public_data_traffic_count_runs_history").on(t.sourceId, t.startedAt) }));
+
+/** Imported count records; global reference data, no tenant. Bounding box columns serve bbox queries without PostGIS. */
+export const trafficCounts = pgTable("public_data_traffic_counts", {
+  id: uuid("id").primaryKey(),
+  sourceId: text("source_id").notNull().references(() => trafficCountSources.id),
+  release: text("release").notNull(),
+  stationId: text("station_id").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  year: integer("year").notNull(),
+  kind: text("kind").$type<TrafficCountRecord["kind"]>().notNull(),
+  road: text("road"),
+  roadClass: text("road_class"),
+  name: text("name"),
+  geometry: jsonb("geometry").$type<TrafficCountRecord["geometry"]>().notNull(),
+  minLon: doublePrecision("min_lon").notNull(),
+  minLat: doublePrecision("min_lat").notNull(),
+  maxLon: doublePrecision("max_lon").notNull(),
+  maxLat: doublePrecision("max_lat").notNull(),
+  dailyTraffic: integer("daily_traffic").notNull(),
+  heavyVehicles: integer("heavy_vehicles"),
+  hourlyDay: real("hourly_day"),
+  hourlyNight: real("hourly_night"),
+  heavyShareDay: real("heavy_share_day"),
+  heavyShareNight: real("heavy_share_night"),
+  p1Day: real("p1_day"),
+  p2Day: real("p2_day"),
+  p1Night: real("p1_night"),
+  p2Night: real("p2_night"),
+  /** Hash of the normalised record; unchanged records are not rewritten on re-import. */
+  recordHash: text("record_hash").notNull(),
+  /** SHA-256 of the source file(s) this record was last written from. */
+  checksum: text("checksum").notNull(),
+  importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => ({
+  identity: uniqueIndex("public_data_traffic_count_identity").on(t.sourceId, t.release, t.stationId),
+  box: index("public_data_traffic_counts_box").on(t.minLat, t.minLon),
+}));

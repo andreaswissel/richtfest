@@ -314,7 +314,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
     : scoped.kind === "location"
     ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
     : await hessenCategories(site, bbox, retrievedAt, rawResponses, options.signal);
-  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal).catch(() => options.signal?.throwIfAborted());
+  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal, d.trafficCounts).catch(() => options.signal?.throwIfAborted());
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
   const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
   const fileId = randomUUID(), versionId = randomUUID();

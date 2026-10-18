@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { EnvironmentSurvey, MappedRail, MappedRoad, RailTraffic } from "@richtfest/shared";
+import type { EnvironmentSurvey, MappedRail, MappedRoad, RailTraffic, TrafficCountRecord } from "@richtfest/shared";
 import { boundedBody } from "./location-context";
 import { distanceToPolylineMeters, readGmlFeatures, type GmlFeature } from "./noise-geodata";
 
@@ -186,6 +186,84 @@ export function matchRailCounts(rail: MappedRail[], counts: RailCount[], site: S
   return attached;
 }
 
+// --- Imported file counts (BASt, state road authorities) ---
+
+/** A count station (point) belongs to a mapped road whose axis passes within this distance. */
+export const STATION_MATCH_M = 30;
+/** A counted section must run along the mapped axis for at least this length near the axis. */
+const SECTION_MIN_FIT_M = 50, SECTION_STEP_M = 5, SECTION_MAX_SAMPLES = 400;
+const designationKey = (value: string | null | undefined) => value ? value.replace(/\s+/g, "").toUpperCase() : null;
+
+/**
+ * Mean distance of a counted section to a mapped axis where the section runs
+ * along it; unlike `alongDistance`, only the part of a long section near the
+ * axis is judged, since state sections often run for kilometres past the site.
+ */
+function sectionDistance(source: Shape, target: Shape, tolerance: number): number | null {
+  const reach = tolerance * 4;
+  if (!source.segments.length || !target.segments.length || !overlaps(source.box, target.box, reach)) return null;
+  const box = target.box, near = (s: Segment) => Math.max(s.ax, s.bx) >= box[0] - reach && Math.min(s.ax, s.bx) <= box[2] + reach && Math.max(s.ay, s.by) >= box[1] - reach && Math.min(s.ay, s.by) <= box[3] + reach;
+  const segments = source.segments.filter(near), total = segments.reduce((sum, segment) => sum + segment.length, 0);
+  const step = Math.max(SECTION_STEP_M, total / SECTION_MAX_SAMPLES);
+  let close = 0, fit = 0, sum = 0;
+  for (const segment of segments) {
+    const n = Math.max(1, Math.round(segment.length / step));
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n, point = { x: segment.ax + t * (segment.bx - segment.ax), y: segment.ay + t * (segment.by - segment.ay) };
+      const hit = nearest(point, target);
+      if (hit.distance > reach) continue;
+      close++;
+      if (hit.distance <= tolerance && Math.abs(segment.ux * hit.ux + segment.uy * hit.uy) >= PARALLEL_COS) { fit++; sum += hit.distance; }
+    }
+  }
+  return fit * step >= SECTION_MIN_FIT_M && fit / close >= FIT_SHARE ? sum / fit : null;
+}
+
+const recordParts = (record: TrafficCountRecord): Parts => record.geometry.type === "Point" ? [[record.geometry.coordinates]] : record.geometry.coordinates;
+
+/** Short provenance for a road count, e.g. "BASt Dauerzählstellen 2024, station 9539 AS Allersberg (S)". */
+export const importedCountSource = (record: TrafficCountRecord) =>
+  `${record.label}${record.label.includes(String(record.year)) ? "" : ` (${record.year})`}, ${record.kind === "station" ? "station" : "section"} ${record.stationId}${record.name ? ` ${record.name}` : ""}`.slice(0, 200);
+
+/**
+ * Attaches imported counts to mapped roads that have none yet. A station
+ * attaches to every road within STATION_MATCH_M carrying its designation, or,
+ * when none does, to the nearest road without a designation; a road with a
+ * different designation never takes it. Sections attach the same way where
+ * they run along the axis within ROAD_MATCH_M. Per road the most recent count
+ * wins, then the more specific source (state section > BASt permanent station >
+ * BASt SVZ point), then the one nearest the site. Returns the records used.
+ */
+export function matchImportedCounts(roads: MappedRoad[], records: TrafficCountRecord[], site: Site): TrafficCountRecord[] {
+  const local = projector(site);
+  const targets = roads.map(road => ({ road, key: designationKey(road.designation), shape: shape(road.axes ?? [], local) })).filter(target => !target.road.traffic && target.shape.segments.length);
+  const candidates = new Map<MappedRoad, Array<{ record: TrafficCountRecord; site: number }>>();
+  for (const record of records) {
+    const key = designationKey(record.road);
+    const hits = targets.flatMap(target => {
+      if (key && target.key && key !== target.key) return [];
+      let distance: number | null;
+      if (record.geometry.type === "Point") {
+        const [x, y] = local(record.geometry.coordinates);
+        distance = nearest({ x, y }, target.shape).distance;
+        if (distance > STATION_MATCH_M) distance = null;
+      } else distance = sectionDistance(shape(record.geometry.coordinates, local), target.shape, ROAD_MATCH_M);
+      return distance === null ? [] : [{ target, distance, named: Boolean(key && target.key) }];
+    });
+    const named = hits.filter(hit => hit.named);
+    const chosen = named.length ? named : hits.filter(hit => !hit.target.key).sort((a, b) => a.distance - b.distance).slice(0, 1);
+    const fromSite = distanceToPolylineMeters(site, recordParts(record)) ?? Infinity;
+    for (const hit of chosen) candidates.set(hit.target.road, [...(candidates.get(hit.target.road) ?? []), { record, site: fromSite }]);
+  }
+  const used = new Set<TrafficCountRecord>();
+  for (const [road, items] of candidates) {
+    const { record } = items.sort((a, b) => b.record.year - a.record.year || b.record.specificity - a.record.specificity || a.site - b.site)[0]!;
+    road.traffic = { dailyTraffic: record.dailyTraffic, heavyVehicles: record.heavyVehicles, year: record.year, source: importedCountSource(record) };
+    used.add(record);
+  }
+  return [...used];
+}
+
 // --- Retrieval ---
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -211,23 +289,44 @@ export const ebaUrl = (bbox: [number, number, number, number], limit: number) =>
 
 const unavailable = "Nationwide count source unavailable; published counts were not checked.";
 
+const importedNote = (records: TrafficCountRecord[]) => {
+  const sources = [...new Map(records.map(record => [record.sourceId, record])).values()];
+  return `Counts marked ${sources.map(record => `"${record.label}"`).join(", ")} are published counts imported from the source files (${sources.map(record => `${record.label}: ${record.licence}`).join("; ")}): Kfz/24h (DTV) and heavy vehicles/24h (SV). Count stations attach to a mapped road within ${STATION_MATCH_M} m carrying the same designation, counted sections where they run along the road within ${ROAD_MATCH_M} m. They take precedence over the UBA noise-mapping counts; counts a state connector already set (Berlin) are kept. Per road the most recent count wins, then a state section over a BASt station; SVZ 2021 counts fall in the pandemic. Planning inputs, not an acoustic assessment.`.slice(0, 2000);
+};
+
 /**
  * Lays the nationwide counts over the roads and rail categories a state
  * connector built (mutating their mapped lists, sources and limitations).
+ * Imported file counts (BASt, state road authorities) attach first; the UBA's
+ * EU noise-mapping counts fill roads still without one. Counts a state
+ * connector already set (Berlin) are never replaced.
  * Never throws except on abort; a failed source leaves the lists as they were.
  */
-export async function overlayNationalCounts(categories: Category[], site: Site, bbox: [number, number, number, number], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+export async function overlayNationalCounts(categories: Category[], site: Site, bbox: [number, number, number, number], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal,
+  importedCounts?: (bbox: [number, number, number, number]) => Promise<TrafficCountRecord[]>) {
   const roads = categories.find(item => item.category === "roads"), rail = categories.find(item => item.category === "rail");
   const tasks: Array<Promise<void>> = [];
   if (roads?.mapped?.length) tasks.push((async () => {
+    const mapped = roads.mapped!.filter((item): item is MappedRoad => item.kind === "road");
     const url = ubaUrl(UBA_ROADS_WFS, "MajorRoadSource", bbox, ROAD_LIMIT);
-    try {
-      const result = await wfs(url, "MajorRoadSource", ROAD_LIMIT, retrievedAt, rawResponses, signal);
-      roads.sources.push(result.source);
-      const attached = matchRoadCounts(roads.mapped!.filter((item): item is MappedRoad => item.kind === "road"), ubaRoadCounts(result.features), site);
-      if (attached) roads.limitations.push(`Counts marked "${UBA_ROAD_SOURCE}" come from the Umweltbundesamt's EU noise mapping source data (roads above 3 million vehicles a year, dl-de/zero-2-0): annual vehicles divided by 365, without a heavy-vehicle share. They attach only where a mapped segment runs along the road within ${ROAD_MATCH_M} m; indicative, not an RLS-19 input.`);
-      if (result.truncated) roads.limitations.push("The nationwide road count query reached its limit; some counts may be missing.");
-    } catch { signal?.throwIfAborted(); roads.sources.push({ url, retrievedAt, sha256: null }); roads.limitations.push(unavailable); }
+    const uba = wfs(url, "MajorRoadSource", ROAD_LIMIT, retrievedAt, rawResponses, signal).catch(() => { signal?.throwIfAborted(); return null; });
+    if (importedCounts) {
+      const records = await importedCounts(bbox).catch(() => null);
+      signal?.throwIfAborted();
+      if (!records) roads.limitations.push("Imported traffic counts (BASt, state road authorities) could not be read; they were not checked.");
+      else {
+        const used = matchImportedCounts(mapped, records, site);
+        // Provenance: the imported source file (URL and SHA-256) and when its records were imported.
+        for (const record of new Map(used.map(item => [`${item.sourceUrl}|${item.checksum}`, item])).values()) roads.sources.push({ url: record.sourceUrl, retrievedAt: record.importedAt, sha256: record.checksum });
+        if (used.length) roads.limitations.push(importedNote(used));
+      }
+    }
+    const result = await uba;
+    if (!result) { roads.sources.push({ url, retrievedAt, sha256: null }); roads.limitations.push(unavailable); return; }
+    roads.sources.push(result.source);
+    const attached = matchRoadCounts(mapped, ubaRoadCounts(result.features), site);
+    if (attached) roads.limitations.push(`Counts marked "${UBA_ROAD_SOURCE}" come from the Umweltbundesamt's EU noise mapping source data (roads above 3 million vehicles a year, dl-de/zero-2-0): annual vehicles divided by 365, without a heavy-vehicle share. They attach only where a mapped segment runs along the road within ${ROAD_MATCH_M} m; indicative, not an RLS-19 input.`);
+    if (result.truncated) roads.limitations.push("The nationwide road count query reached its limit; some counts may be missing.");
   })());
   if (rail?.mapped?.length) tasks.push((async () => {
     const queries = [

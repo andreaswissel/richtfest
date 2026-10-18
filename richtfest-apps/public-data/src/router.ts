@@ -5,6 +5,7 @@ import { ok, type PublicReleaseStatusResponse } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { assets, datasets, partitions, releases, runs } from "./schema";
 import { releaseFeatures } from "./queries";
+import { trafficCountStatus } from "./traffic-count-queries";
 
 export function createRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
@@ -51,6 +52,9 @@ export function createRouter(getDeps: (req: Request) => AppDeps) {
       const page = rows.slice(0, query.limit).map((row: any) => ({ ...row, stale: !row.partition.lastSuccessAt || Date.now() - row.partition.lastSuccessAt.getTime() > row.partition.intervalSeconds * 1000 }));
       res.json(ok({ items: page, nextCursor: rows.length > query.limit ? page.at(-1).partition.id : null }));
     } catch (error) { next(error); }
+  });
+  router.get("/traffic-counts", async (req, res, next) => {
+    try { res.json(ok({ items: await trafficCountStatus(getDeps(req).db) })); } catch (error) { next(error); }
   });
   router.get("/partitions/:id/runs", async (req, res, next) => {
     try {

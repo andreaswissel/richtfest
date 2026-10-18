@@ -379,6 +379,13 @@
       "when": 1793300000000,
       "tag": "0053_project_deletion_objects",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1793400000000,
+      "tag": "0054_traffic_counts",
+      "breakpoints": true
     }
   ]
 }
