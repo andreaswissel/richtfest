@@ -142,6 +142,7 @@ export function LocationEditor({
   const [layers, setLayers] = useState({
     buildings: true,
     trees: true,
+    detectedTrees: true,
     objects: true,
     lidar: false,
     roads: true,
@@ -200,9 +201,12 @@ export function LocationEditor({
       ),
     });
   const object = scene.objects.find((o) => o.id === selected);
-  const tree = state.data?.context?.trees.find(
-    (o) => `tree:${o.id}` === selected,
-  );
+  const tree =
+    state.data?.context?.trees.find((o) => `tree:${o.id}` === selected) ??
+    state.data?.context?.treeDetection?.trees.find(
+      (o) => `detected-tree:${o.id}` === selected,
+    );
+  const treeDetection = state.data?.context?.treeDetection;
   const building = state.data?.context?.buildings.find(
     (o) => `building:${o.id}` === selected,
   );
@@ -914,6 +918,45 @@ export function LocationEditor({
                   </div>
                   <div className="location-layer-section">
                     {layer(
+                      "detectedTrees",
+                      t("locationDetectedTrees"),
+                      <Trees className="size-icon-sm" />,
+                      treeDetection?.trees.length,
+                    )}
+                    <p className="text-ui-xs muted">
+                      {busy(state.data?.lidarJob.status)
+                        ? t("locationDetectedTreesBusy")
+                        : t("locationDetectedTreesHint")}
+                    </p>
+                    {!treeDetection && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          busy(state.data?.lidarJob.status) ||
+                          importLidar.isPending
+                        }
+                        onClick={() => importLidar.mutate()}
+                      >
+                        <ScanSearch className="size-icon-sm" />
+                        {t("locationDetectTrees")}
+                      </Button>
+                    )}
+                    {treeDetection && (
+                      <details>
+                        <summary>{t("locationDetectedTreesList")}</summary>
+                        {treeDetection.trees.map((b) =>
+                          row(
+                            `detected-tree:${b.id}`,
+                            `${t("locationDetectedTree")} · ${b.height ?? "—"} m`,
+                            <Trees className="size-icon-sm" />,
+                          ),
+                        )}
+                      </details>
+                    )}
+                  </div>
+                  <div className="location-layer-section">
+                    {layer(
                       "lidar",
                       t("locationLidar"),
                       <Scan className="size-icon-sm" />,
@@ -1271,10 +1314,26 @@ export function LocationEditor({
                 </>
               ) : tree || building ? (
                 <>
-                  <h3>{tree?.species || building?.label}</h3>
-                  <Badge>{t("locationReadOnly")}</Badge>
+                  <h3>
+                    {tree?.provenance === "lidar-detected"
+                      ? t("locationDetectedTree")
+                      : tree?.species || building?.label}
+                  </h3>
+                  <Badge>
+                    {t(
+                      tree?.provenance === "lidar-detected"
+                        ? "locationDetectedUnreviewed"
+                        : "locationReadOnly",
+                    )}
+                  </Badge>
                   <dl className="location-values">
-                    <dt>{t("locationRecordedHeight")}</dt>
+                    <dt>
+                      {t(
+                        tree?.provenance === "lidar-detected"
+                          ? "locationDetectedHeight"
+                          : "locationRecordedHeight",
+                      )}
+                    </dt>
                     <dd>
                       {(tree?.height ?? building?.height)?.toFixed(2) ??
                         t("locationUnknown")}{" "}
@@ -1282,11 +1341,14 @@ export function LocationEditor({
                     </dd>
                     {tree && (
                       <>
-                        <dt>{t("locationCrown")}</dt>
+                        <dt>{t(tree.provenance === "lidar-detected" ? "locationDetectedCrown" : "locationCrown")}</dt>
                         <dd>{tree.crownDiameter ?? t("locationUnknown")} m</dd>
                       </>
                     )}
                   </dl>
+                  {tree?.provenance === "lidar-detected" && (
+                    <Callout>{t("locationDetectedTreeHint")}</Callout>
+                  )}
                   <Callout>
                     {t(
                       tree

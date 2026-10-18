@@ -48,7 +48,7 @@ export async function testTrees() {
     },
     objects: [],
     models: {},
-    layers: { buildings: true, trees: true, objects: true, lidar: false, roads: true, railNoise: false, plan: true, aerial: false },
+    layers: { buildings: true, trees: true, detectedTrees: true, objects: true, lidar: false, roads: true, railNoise: false, plan: true, aerial: false },
     site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
     selected: null,
     tool: "select",
@@ -114,9 +114,30 @@ export async function testTrees() {
       JSON.stringify(state.context) === original,
       "View modes must not mutate source records",
     );
+    // The same tree inferred from LiDAR: own layer, own selection id, visibly distinct from cadastre.
+    const detected = {
+      ...state.context,
+      trees: [],
+      treeDetection: {
+        method: "lidar-chm-maxima-v1",
+        sourceUrl: "https://gdi.berlin.de/data/a_als/atom/Mitte.zip",
+        surveyedAt: "2021-02-24/2021-03-02",
+        detectedAt: "2026-10-18",
+        trees: [{ ...state.context.trees[0], id: "lidar-tree", species: "", provenance: "lidar-detected" as const }],
+      },
+    };
+    const detectedImage = image({ ...state, context: detected });
+    assert(detectedImage !== schematic, "Detected trees must be distinguishable from cadastre trees");
+    selected = null;
+    clickCentre();
+    assert(selected === "detected-tree:lidar-tree", "Detected trees select under their own id");
+    assert(
+      image({ ...state, context: detected, layers: { ...state.layers, detectedTrees: false } }) !== detectedImage,
+      "The detected-tree layer toggles independently",
+    );
     return {
       checks:
-        "distinct styles, source selection, measurement protection, missing height, missing diameter, source immutability",
+        "distinct styles, source selection, measurement protection, missing height, missing diameter, source immutability, detected-tree layer",
       measuredHeight,
     };
   } finally {
@@ -145,7 +166,7 @@ export async function testConstruction() {
       { id: "vehicle", kind: "vehicle", label: "Vehicle", position: [-400, 0, 250], size: [3, 4, 8], rotation: 0, note: "" },
     ],
     models: {},
-    layers: { buildings: true, trees: true, objects: true, lidar: false, roads: true, railNoise: false, plan: true, aerial: false },
+    layers: { buildings: true, trees: true, detectedTrees: true, objects: true, lidar: false, roads: true, railNoise: false, plan: true, aerial: false },
     site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
     selected: "vehicle", tool: "select", treeStyle: "schematic", measurement: [], clipHeight: 50, dark: false,
     constructionLabel: "Planned construction",

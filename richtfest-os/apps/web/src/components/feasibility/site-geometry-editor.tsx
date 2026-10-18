@@ -260,7 +260,7 @@ function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, d
       editable: editableItem,
       objects: [],
       models: {},
-      layers: { buildings: true, trees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
+      layers: { buildings: true, trees: false, detectedTrees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
       site: EMPTY_OVERLAY,
       selected,
       tool,

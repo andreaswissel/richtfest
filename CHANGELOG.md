@@ -2,6 +2,7 @@
 
 ## 2026-10-18
 
+- **Trees from LiDAR in 3D location:** Berlin sites now show trees on private plots that the public tree inventory misses, detected from the 2021 laser scan with approximate height and crown, on their own layer and marked as unreviewed. LiDAR now loads for sites in every Berlin district, not just Mitte.
 - **Exterior noise in Berlin:** Look up roads and railways now works for Berlin sites, using the city's street network and the strategic noise map 2022: roads come with their published traffic count (Kfz/24h, Lkw share), which fills a road's traffic inputs as imported values when you add it, and railways list S- und Fernbahn, tram and above-ground U-Bahn. Sites outside the covered regions now say so instead of asking to look up again.
 - **Outline editing:** Right-click a corner of a building or room outline to delete that point, or an edge to add one where you clicked. Clicking a corner now also focuses it, so Delete removes the point instead of the whole building.
 - **Updates in projects:** "New updates available" now also appears in the project bar next to your profile, since the navigation rail is hidden inside projects.
