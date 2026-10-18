@@ -52,6 +52,14 @@ export type LocationScene = {
   planningNotes: string;
   /** Absent on scenes saved before general measurements were introduced. */
   measurements?: SceneMeasurement[];
+  /** Display-only plan interpretation, not surveyed geometry or a calculation reference. Null explicitly clears it. */
+  projectExtent?: {
+    rings: [number, number][][];
+    context: Pick<LocationContext, "siteId" | "origin"> & { crs: "EPSG:25832" | "EPSG:25833" };
+    source: { fileId: string; version: number; page: number };
+    alignmentStatus: "approximate";
+    note: string;
+  } | null;
 };
 export type LocationBuilding = {
   id: string;

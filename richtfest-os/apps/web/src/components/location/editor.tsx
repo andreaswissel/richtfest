@@ -113,7 +113,7 @@ export function LocationEditor({
     theme = usePreferences((s) => s.theme);
   const addressLabel = formatProjectAddress(address);
   const constructionLabel = t("locationConstruction");
-  const siteFootprintLabel = t("locationSiteFootprint");
+  const projectExtentLabel = t("locationProjectExtent");
   const siteAddressLabel = t("locationSiteAddress");
   const hasAddress = !!address.street && !!address.city;
   const path = `/projects/${projectId}/location`;
@@ -454,6 +454,7 @@ export function LocationEditor({
       viewport.current.update({
         context: state.data.context,
         objects: scene.objects,
+        projectExtent: scene.projectExtent,
         models,
         cloud: cloud.data,
         layers,
@@ -465,7 +466,7 @@ export function LocationEditor({
         clipHeight,
         dark: theme === "dark",
         constructionLabel,
-        siteFootprintLabel,
+        projectExtentLabel,
         siteAddressLabel,
       });
   }, [
@@ -473,6 +474,7 @@ export function LocationEditor({
     viewportReady,
     state.data?.context,
     scene.objects,
+    scene.projectExtent,
     models,
     cloud.data,
     layers,
@@ -483,7 +485,7 @@ export function LocationEditor({
     clipHeight,
     theme,
     constructionLabel,
-    siteFootprintLabel,
+    projectExtentLabel,
     siteAddressLabel,
   ]);
   const envelopeCount = useMemo(
@@ -658,6 +660,7 @@ export function LocationEditor({
                   !!draft ||
                   scene.objects.length > 0 ||
                   (scene.measurements?.length ?? 0) > 0 ||
+                  !!scene.projectExtent ||
                   importContext.isPending ||
                   busy(state.data?.contextJob.status) ||
                   busy(state.data?.lidarJob.status)
@@ -1329,6 +1332,23 @@ export function LocationEditor({
               </div>
               {!!state.data?.context?.publicReleases?.length && (
                 <PublicDataStatus projectId={projectId} state={state.data} address={address} />
+              )}
+              {scene.projectExtent && (
+                <details className="location-sources">
+                  <summary>{projectExtentLabel}</summary>
+                  <p>{t("locationProjectExtentHint")}</p>
+                  <p>{scene.projectExtent.note}</p>
+                  <a
+                    href={`/api/projects/${projectId}/files/${scene.projectExtent.source.fileId}/versions/${scene.projectExtent.source.version}/download?inline=1#page=${scene.projectExtent.source.page}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {t("locationProjectExtentSource").replace("{page}", String(scene.projectExtent.source.page)).replace("{version}", String(scene.projectExtent.source.version))}
+                  </a>
+                  <Button variant="outline" size="xs" onClick={() => change({ ...sceneRef.current, projectExtent: null })}>
+                    <Trash2 aria-hidden="true" />{t("locationRemoveProjectExtent")}
+                  </Button>
+                </details>
               )}
               <details className="location-sources">
                 <summary>{t("locationSources")}</summary>

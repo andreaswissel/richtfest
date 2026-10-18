@@ -8,6 +8,7 @@ import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type {
   LocationContext,
+  LocationScene,
   LocationPointCloud,
   SceneObject,
   SceneVector,
@@ -21,6 +22,7 @@ export type ViewportState = {
   /** Optional proposal geometry owned by the feasibility workspace, in local X/Z metres. */
   assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number }>;
   objects: SceneObject[];
+  projectExtent?: LocationScene["projectExtent"];
   models: Record<string, IfcGeometry>;
   cloud?: LocationPointCloud;
   layers: {
@@ -41,7 +43,7 @@ export type ViewportState = {
   clipHeight: number;
   dark: boolean;
   constructionLabel: string;
-  siteFootprintLabel: string;
+  projectExtentLabel: string;
   siteAddressLabel: string;
 };
 export function createViewport(
@@ -295,14 +297,15 @@ export function createViewport(
     sprite.scale.set(height * aspect, height, 1);
     return sprite;
   };
-  /** Pixel-wide line with a white halo, drawn over everything: readable on imagery, buildings and ground. */
-  const fatLine = (points: THREE.Vector3[], color: number, width: number, dashed = false) => {
+  /** Pixel-wide line with a white halo; ground extents obey occlusion instead of appearing painted on roofs. */
+  const fatLine = (points: THREE.Vector3[], color: number, width: number, dashed = false, depthTest = false) => {
     const group = new THREE.Group();
     const { width: w, height: h } = renderer.domElement;
     for (const [lineColor, lineWidth, order] of [[0xffffff, width + 3, 10], [color, width, 11]] as const) {
       const geometry = new LineGeometry();
       geometry.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
-      const material = new LineMaterial({ color: lineColor, linewidth: lineWidth * renderer.getPixelRatio(), depthTest: false, transparent: true, dashed: dashed && lineColor !== 0xffffff, dashSize: 0.8, gapSize: 0.5 });
+      const material = new LineMaterial({ color: lineColor, linewidth: lineWidth * renderer.getPixelRatio(), depthTest, depthWrite: false, transparent: true, dashed: dashed && lineColor !== 0xffffff, dashSize: 0.8, gapSize: 0.5 });
+      if (depthTest) groundLayer(material, 5);
       material.resolution.set(w, h);
       const line = new Line2(geometry, material);
       line.computeLineDistances();
@@ -722,7 +725,7 @@ export function createViewport(
       previous?.site.plan !== next.site.plan ||
       previous?.layers.objects !== next.layers.objects || previous?.layers.plan !== next.layers.plan ||
       previous?.constructionLabel !== next.constructionLabel ||
-      previous?.siteFootprintLabel !== next.siteFootprintLabel || previous?.siteAddressLabel !== next.siteAddressLabel
+      previous?.projectExtent !== next.projectExtent || previous?.projectExtentLabel !== next.projectExtentLabel || previous?.siteAddressLabel !== next.siteAddressLabel
     ) {
       disposeGroup(groups.construction);
       constructionBounds.makeEmpty();
@@ -747,26 +750,17 @@ export function createViewport(
       }
       let locatorLabel = next.constructionLabel;
       if (constructionBounds.isEmpty()) {
-        // The address is a reference, not evidence of proposed geometry. Never pick a nearest neighbour.
-        const containsOrigin = (ring: Point2[]) => {
-          let inside = false;
-          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-            const [x, z] = ring[i], [previousX, previousZ] = ring[j];
-            if ((z > 0) !== (previousZ > 0) && 0 < x - z * (previousX - x) / (previousZ - z)) inside = !inside;
-          }
-          return inside;
-        };
-        const footprint = next.layers.buildings ? next.context.buildings.find((building) =>
-          building.polygons.some(([outer, ...holes]) => outer && containsOrigin(outer) && !holes.some(containsOrigin))) : undefined;
-        const node = footprint && groups.buildings.children.find((node) => node.userData.id === `building:${footprint.id}`);
+        // An address-containing building is not evidence of the development's extent.
+        // Only a source-backed plan interpretation can supply the fallback outline.
+        const extent = next.projectExtent;
         locatorLabel = next.siteAddressLabel;
-        if (node && footprint) {
-          constructionBounds.setFromObject(node);
-          locatorLabel = next.siteFootprintLabel;
-          for (const polygon of footprint.polygons) for (const ring of polygon) {
-            if (ring.length < 3) continue;
-            groups.construction.add(fatLine([...ring, ring[0]].map(([x, z]) =>
-              new THREE.Vector3(x, constructionBounds.max.y + 0.08, z)), 0x0f766e, 3));
+        if (extent && extent.context.siteId === next.context.siteId && extent.context.crs === (next.context.crs ?? "EPSG:25833") &&
+          extent.context.origin.every((value, i) => value === next.context.origin[i])) {
+          locatorLabel = next.projectExtentLabel;
+          for (const ring of extent.rings) {
+            const points = ring.map(([x, z]) => new THREE.Vector3(x, 0.08, z));
+            for (const point of points) constructionBounds.expandByPoint(point);
+            groups.construction.add(fatLine([...points, points[0]], 0x0f766e, 3, true, true));
           }
         }
       }

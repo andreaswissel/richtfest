@@ -160,6 +160,42 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect((await request("", "PUT", {revision:10,scene:{...input.scene,measurements:[]}})).body.data.scene.measurements).toEqual([]);
     expect((await request()).body.data.scene.measurements).toEqual([]);
     expect((await request("/import", "POST", {revision:11})).body.data.contextJob.status).toBe("queued");
+    // A source-linked extent is an approximate locator, separate from address and model geometry.
+    await pool.query("ALTER TABLE projects_files ADD COLUMN purpose text DEFAULT 'project_evidence'; ALTER TABLE projects_file_versions ADD COLUMN mime_type text DEFAULT 'application/pdf'");
+    await pool.query("update projects_locations set context=$1,context_status='ready'", [JSON.stringify(context)]);
+    await pool.query("update projects_file_versions set status='ready'");
+    const extent = {
+      rings: [[[-90, 11], [-25, 11], [-25, 30], [-90, 30]]],
+      context: { siteId:context.siteId, origin:context.origin, crs:"EPSG:25833" },
+      source: { fileId:sourceId, version:1, page:12 }, alignmentStatus:"approximate", note:"Project behind the address building, per source sheet 12",
+    };
+    const extentScene = { ...input.scene, measurements:[], projectExtent:extent };
+    expect((await request("", "PUT", {revision:12,scene:extentScene},{"x-test-access":"read"})).status).toBe(403);
+    expect((await request("", "PUT", {revision:12,scene:extentScene})).status).toBe(200);
+    expect((await request()).body.data).toMatchObject({context, scene:extentScene, revision:13});
+    expect((await request("/import", "POST", {revision:13})).body.error.code).toBe("location_has_objects");
+    expect((await request("", "PUT", {revision:13,scene:input.scene})).body.data.scene.projectExtent).toEqual(extent);
+    for (const projectExtent of [
+      { ...extent, rings:[[[0,0],[1,1],[2,2]]] },
+      { ...extent, source:{...extent.source,page:0} },
+      { ...extent, alignmentStatus:"reviewed" },
+    ]) expect((await request("", "PUT", {revision:14,scene:{...extentScene,projectExtent}})).status).toBe(400);
+    expect((await request("", "PUT", {revision:14,scene:{...extentScene,projectExtent:{...extent,context:{...extent.context,origin:[1,2]}}}})).body.error.code).toBe("extent_context_changed");
+    for (const [table, column, bad, good] of [
+      ["projects_files", "tenant_id", other, tenant],
+      ["projects_files", "project_id", crypto.randomUUID(), project],
+      ["projects_files", "purpose", "comparison_only", "project_evidence"],
+      ["projects_file_versions", "tenant_id", other, tenant],
+      ["projects_file_versions", "status", "pending", "ready"],
+      ["projects_file_versions", "mime_type", "image/png", "application/pdf"],
+    ]) {
+      await pool.query(`UPDATE ${table} SET ${column}=$1`, [bad]);
+      expect((await request("", "PUT", {revision:14,scene:extentScene})).status).toBe(404);
+      await pool.query(`UPDATE ${table} SET ${column}=$1`, [good]);
+    }
+    expect((await request()).body.data.revision).toBe(14);
+    expect((await request("", "PUT", {revision:14,scene:{...extentScene,projectExtent:null}})).body.data.scene.projectExtent).toBeNull();
+    expect((await request("/import", "POST", {revision:15})).body.data.contextJob.status).toBe("queued");
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`); await admin.pool.end(); }
 }, 30000);
 

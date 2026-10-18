@@ -206,7 +206,7 @@ function Geometry3D({
       clipHeight: 200,
       dark,
       constructionLabel: "",
-      siteFootprintLabel: "",
+      projectExtentLabel: "",
       siteAddressLabel: context.address,
     });
   }, [context, geometry, ready, dark]);

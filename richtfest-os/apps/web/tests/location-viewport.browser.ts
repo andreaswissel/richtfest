@@ -57,7 +57,7 @@ export async function testTrees() {
     clipHeight: 50,
     dark: false,
     constructionLabel: "Planned construction",
-    siteFootprintLabel: "Project site · existing footprint",
+    projectExtentLabel: "Project extent · approximate",
     siteAddressLabel: "Project address",
   };
   try {
@@ -149,7 +149,7 @@ export async function testConstruction() {
     site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
     selected: "vehicle", tool: "select", treeStyle: "schematic", measurement: [], clipHeight: 50, dark: false,
     constructionLabel: "Planned construction",
-    siteFootprintLabel: "Project site · existing footprint",
+    projectExtentLabel: "Project extent · approximate",
     siteAddressLabel: "Project address",
   };
   const canvas = host.querySelector("canvas")!;
@@ -210,20 +210,32 @@ export async function testConstruction() {
       ]] },
       footprint,
     ] };
-    viewport.update({ ...state, context });
+    const projectExtent: NonNullable<ViewportState["projectExtent"]> = {
+      rings: [[[-130, 50], [-45, 50], [-45, 110], [-130, 110]]],
+      context: { siteId:context.siteId, origin:context.origin, crs:"EPSG:25833" },
+      source: {fileId:"00000000-0000-4000-8000-000000000001",version:1,page:12},
+      alignmentStatus:"approximate", note:"Plan-linked project behind, not at, the address",
+    };
+    viewport.update({ ...state, context, projectExtent });
     viewport.focus("build");
     const plannedOverSite = canvas.toDataURL();
     viewport.fitConstruction();
-    assert(canvas.toDataURL() === plannedOverSite, "Visible planning geometry must take precedence over the address footprint");
+    assert(canvas.toDataURL() === plannedOverSite, "Visible planning geometry must take precedence over the approximate extent");
     const siteState = { ...state, context, objects: [], selected: null };
     viewport.update(siteState);
-    viewport.focus("building:site");
-    const expectedSite = canvas.toDataURL();
+    viewport.focus();
+    const addressOnly = canvas.toDataURL();
     viewport.view("area");
     viewport.fitConstruction();
-    assert(canvas.toDataURL() === expectedSite, "A context-only site must fit the containing footprint, not a courtyard or all context buildings");
-    clickCentre();
-    assert(selected === "building:site", "The site outline must not intercept building selection");
+    assert(canvas.toDataURL() === addressOnly, "An address-containing building must never be inferred as construction");
+    for (const buildings of [true, false]) {
+      viewport.update({ ...siteState, projectExtent, tool:"place", layers:{...state.layers, buildings} });
+      viewport.view("area");
+      viewport.fitConstruction();
+      clickCentre();
+      assert(Math.abs(placed[0] - (-87.5 - 0.08 * 0.8 / 0.95)) < 0.001 && Math.abs(placed[2] - (80 - 0.08 / 0.95)) < 0.001,
+        "Fit must centre the source-backed extent independently of context building visibility");
+    }
     const image = document.createElement("canvas");
     image.width = canvas.width; image.height = canvas.height;
     const pixels = image.getContext("2d")!;
@@ -233,17 +245,10 @@ export async function testConstruction() {
     let tealPixels = 0;
     for (let i = 0; i < rgba.length; i += 4)
       if (rgba[i + 1] > 60 && rgba[i + 1] > rgba[i] * 2 && rgba[i + 2] > rgba[i] * 1.5) tealPixels++;
-    assert(tealPixels > 100, "A site without planning geometry must have a visible teal locator");
-    viewport.update({ ...siteState, layers: { ...state.layers, buildings: false } });
-    viewport.focus();
-    const addressOnly = canvas.toDataURL();
+    assert(tealPixels > 100, "A saved extent without planning geometry must have a visible teal locator");
+    viewport.update({ ...siteState, projectExtent:{...projectExtent,context:{...projectExtent.context,origin:[1,2]}} });
     viewport.fitConstruction();
-    assert(canvas.toDataURL() === addressOnly, "Hidden context must fall back to the address, not frame the hidden footprint");
-    viewport.update({ ...siteState, context: { ...context, buildings: [context.buildings[0]] } });
-    viewport.focus();
-    const courtyard = canvas.toDataURL();
-    viewport.fitConstruction();
-    assert(canvas.toDataURL() === courtyard, "An address in a polygon hole must not identify that building as the site");
+    assert(canvas.toDataURL() === addressOnly, "An extent from another coordinate frame must not be displayed");
     const concave = { ...footprint, polygons: [[[[-20, -20], [20, -20], [20, -5], [0, -5], [0, 20], [-20, 20], [-20, -20]]]] as [number, number][][][] };
     viewport.update({ ...siteState, context: { ...context, buildings: [concave] }, selected: "building:site" });
     viewport.focus();
@@ -264,7 +269,7 @@ export async function testConstruction() {
     pixels.clearRect(0, 0, image.width, image.height);
     pixels.drawImage(canvas, 0, 0);
     assert(!selectionAt(0, 10), "Deselecting must remove the precise building outline");
-    return { checks: "translated/rotated construction, selected vehicle excluded, wide and narrow framing, picking through locator, hidden and empty fallback, placed plan, loaded IFC, visible context-only locator, courtyard exclusion, hidden context fallback, concave building selection" };
+    return { checks: "translated/rotated construction, selected vehicle excluded, wide and narrow framing, picking through locator, hidden and empty fallback, placed plan, loaded IFC, source-backed extent, no address-footprint inference, coordinate-frame guard, hidden context, concave building selection" };
   } finally {
     viewport.dispose();
     host.remove();
