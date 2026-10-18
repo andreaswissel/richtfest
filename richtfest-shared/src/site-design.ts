@@ -13,9 +13,11 @@ export function calculateSiteDesign(raw:SiteAssessmentInput):SiteDesignResult {
  if(geometry.status==="incomplete"||!input.geometry.buildings.length){if(!input.geometry.buildings.length)result.issues.push("missing_buildings");return result;}
  const arithmetic=calculateSiteAssessment(input);if(arithmetic.status!=="reviewed")result.issues.push(...arithmetic.missing.map(id=>`unreviewed_assessment:${id}`));
  const add=(id:string,actual:number|null,limit:number|null,ready:boolean,buildingId?:string)=>{const check:SiteDesignCheck={id,actual,limit,status:!ready||actual===null||limit===null?"unresolved":actual<=limit+1e-6?"pass":"exceeded",...(buildingId?{buildingId}:{})};result.checks.push(check);return check;};
- const c=input.constraints,parcel=c.parcelArea.value,scalarReady=(key:keyof typeof c)=>evidence(c[key])&&c[key].value!==null;
+ const c=input.constraints,parcel=c.parcelArea.value,scalarReady=(key:Exclude<keyof typeof c,"grz2">)=>evidence(c[key])&&c[key].value!==null;
  const footprint=geometryArea(unionGeometry(...input.geometry.buildings.map(b=>b.footprint.geometry))),gf=geometry.buildings.reduce((n,b)=>n+b.countableFloorArea,0);
  add("grz",parcel&&parcel>0?footprint/parcel:null,c.grz.value,scalarReady("parcelArea")&&scalarReady("grz"));
+ // Drawn buildings are main buildings; GRZ 2 only adds a check when the plan sets one below their coverage.
+ if(c.grz2&&c.grz2.value!==null)add("grz2",parcel&&parcel>0?footprint/parcel:null,c.grz2.value,scalarReady("parcelArea")&&evidence(c.grz2));
  add("gfz",parcel&&parcel>0?gf/parcel:null,c.gfz.value,scalarReady("parcelArea")&&scalarReady("gfz"));
  add("envelope",footprint,c.buildableFootprint.value,scalarReady("buildableFootprint"));
  const parcelMatch=add("parcel_area_consistency",parcel===null?null:Math.abs(parcel-geometry.parcelArea),tolerance(geometry.parcelArea),scalarReady("parcelArea"));

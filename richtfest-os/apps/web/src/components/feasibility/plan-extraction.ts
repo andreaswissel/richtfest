@@ -1,4 +1,4 @@
-import type { SiteAssessmentInput } from "@richtfest/shared";
+import { SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS, type SiteAssessmentInput } from "@richtfest/shared";
 import { api } from "../../api";
 import type { AdoptedEvidence } from "./site-evidence-panel";
 import type { BerlinPlan, BerlinSiteContext } from "./site-lookups";
@@ -18,11 +18,14 @@ export type PlanExtraction = {
 };
 /** Figures a B-Plan sets that the capacity check needs; the plan sheet's Nutzungsschablone carries them. */
 export const PLAN_FIGURES = ["grz", "gfz", "maxFullStoreys"] as const;
+/** Figures listed in the summary when read from the plan; GRZ 2 is optional and § 19 (4) BauNVO applies when absent. */
+export const PLAN_LISTED = [...PLAN_FIGURES, "grz2"] as const;
 const MAX_TEXT_PAGES = 8;
+const CONSTRAINT_KEYS: string[] = [...SITE_ASSESSMENT_CONSTRAINT_KEYS, ...SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS];
 
 /** The adopted plan covering the address, when the summary should read it: B-Plan (or unresolved) basis with figures missing. */
 export function planToRead(draft: Draft, context: BerlinSiteContext | null): BerlinPlan | null {
-  if (!context || context.planStatus !== "available" || draft.planningBasis === "section34") return null;
+  if (!context || context.planStatus !== "available" || draft.planningBasis === "section34" || draft.planningBasis === "section35") return null;
   if (PLAN_FIGURES.every((key) => draft.constraints[key].value !== null)) return null;
   const covering = context.plans.filter((p) => p.containsAddress);
   const adopted = covering.find((p) => p.status === "adopted");
@@ -52,7 +55,7 @@ export async function extractPlanFigures(projectId: string, locator: Locator | u
     const taken = new Set<string>();
     for (const [index, claim] of proposal.payload.constraints.entries()) {
       const key = claim.key as keyof Draft["constraints"];
-      if (taken.has(key) || !(key in draft.constraints) || draft.constraints[key].value !== null) continue;
+      if (taken.has(key) || !CONSTRAINT_KEYS.includes(key) || (draft.constraints[key]?.value ?? null) !== null) continue;
       taken.add(key);
       const value = await adopt("constraints", index);
       if (value) result.constraints.push(value);

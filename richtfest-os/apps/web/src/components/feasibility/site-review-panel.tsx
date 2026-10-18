@@ -117,7 +117,7 @@ export function SiteReviewPanel({ item, items, assessment, disabled, canWrite, i
         {item?.kind === "constraint" && (
           <EvidenceEditor
             name={label(item.key)}
-            value={assessment.constraints[item.key]}
+            value={assessment.constraints[item.key] ?? { value: null, source: "", sourceDate: null, kind: "assessment", reviewed: false }}
             disabled={disabled}
             invalid={invalidKeys.has(item.key)}
             raw={raw[`baseline:${item.key}`]}

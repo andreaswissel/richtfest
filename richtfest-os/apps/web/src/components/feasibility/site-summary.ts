@@ -3,7 +3,9 @@ import type { MassingOptions } from "@richtfest/shared/site-geometry-model";
 import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import type * as Proposals from "@richtfest/shared/site-proposals";
 import { discoveryPolygons, planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
-import { planBuildingForm, PLAN_FIGURES, type PlanExtraction } from "./plan-extraction";
+import { planBuildingForm, PLAN_FIGURES, PLAN_LISTED, type PlanExtraction } from "./plan-extraction";
+import { SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS } from "@richtfest/shared";
+const CONSTRAINT_KEYS: string[] = [...SITE_ASSESSMENT_CONSTRAINT_KEYS, ...SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS];
 
 type Draft = Omit<SiteAssessmentInput, "baseRevision">;
 export type SummaryStepId = "parcel" | "basis" | "references" | "frame" | "form" | "envelope" | "upside" | "massing";
@@ -58,7 +60,7 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     const adopted = law.plans.find((p) => p.status === "adopted");
     if (adopted) { next = { ...next, planningBasis: "b_plan" }; step("basis", "done", "BasisBPlanFound", { plan: adopted.name }); }
     else if (law.kind === "in_progress") step("basis", "needs_input", "BasisInProgress", { plan: law.plans[0]!.name });
-    else if (law.kind === "section35") step("basis", "needs_input", "BasisSection35", { landUse: law.landUse!.label });
+    else if (law.kind === "section35") { next = { ...next, planningBasis: "section35" }; step("basis", "needs_input", "BasisSection35", { landUse: law.landUse!.label }); }
     else { next = { ...next, planningBasis: "section34" }; step("basis", "done", law.landUse ? "BasisSection34Fnp" : "BasisSection34", law.landUse ? { landUse: law.landUse.label } : undefined); }
   }
 
@@ -90,9 +92,9 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     const plan = sources.plan, filled: string[] = [];
     for (const { key, value } of plan?.constraints ?? []) {
       const k = key as keyof typeof c;
-      if (!(k in c) || c[k].value !== null || typeof value.value !== "number") continue;
+      if (!CONSTRAINT_KEYS.includes(k) || (c[k]?.value ?? null) !== null || typeof value.value !== "number") continue;
       c[k] = { ...value, value: value.value };
-      if ((PLAN_FIGURES as readonly string[]).includes(k)) filled.push(k === "maxFullStoreys" ? "storeys" : k);
+      if ((PLAN_LISTED as readonly string[]).includes(k)) filled.push(k === "maxFullStoreys" ? "storeys" : k);
     }
     const facts = (plan?.facts ?? []).filter((f) => !next.planningFacts?.[f.key as keyof NonNullable<Draft["planningFacts"]>]?.value);
     if (facts.length) next = { ...next, planningFacts: { ...next.planningFacts, ...Object.fromEntries(facts.map((f) => [f.key, { ...f.value, value: String(f.value.value) }])) } };
@@ -103,7 +105,10 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     else if (plan?.status === "failed") step("frame", "needs_input", "FramePlanReadFailed", { plan: plan.plan, message: plan.message ?? "" });
     else if (plan) step("frame", "needs_input", "FramePlanEmpty", { plan: plan.plan });
     else step("frame", "needs_input", "FramePlanMissing");
-  } else step("frame", "needs_input", "FrameNeedsBasis");
+  } else step("frame", "needs_input", next.planningBasis === "section35" ? "FrameSection35" : "FrameNeedsBasis");
+  // GRZ 2: § 19 (4) BauNVO lets garages, parking, access and ancillary structures exceed GRZ by 50 %, up to 0.8, unless the plan says otherwise.
+  if (next.planningBasis !== "section35" && c.grz.value !== null && (c.grz2?.value ?? null) === null)
+    c.grz2 = proposal(round(Math.max(c.grz.value, Math.min(0.8, c.grz.value * 1.5))), `${engine.siteProposalMethod}: § 19 (4) BauNVO default (GRZ + 50 %, at most 0.8); replace with the plan's figure if it deviates`, "assessment");
   // Area additions default to zero only as visible, unreviewed proposals so the capacity can be shown.
   for (const key of ["additionalGrossArea", "additionalCountableArea"] as const)
     if (c[key].value === null) c[key] = proposal(0, `${engine.siteProposalMethod}: no additional area assumed; enter Staffel or attic areas if planned`, "assessment");

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useBlocker } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download, Save } from "lucide-react";
@@ -38,13 +38,59 @@ import { SiteSummaryPanel } from "./site-summary-panel";
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
 type Step = "site" | "limits" | "design" | "result";
-const FACT_KEYS = ["landUse", "buildingForm", "roofForm", "heightRule", "encroachments"] as const;
-const REVIEW_ITEMS: ReviewItem[] = [
-  ...SITE_ASSESSMENT_CONSTRAINT_KEYS.map((key) => ({ kind: "constraint" as const, key })),
-  ...SITE_ASSESSMENT_CHECK_KEYS.map((key) => ({ kind: "check" as const, key })),
-  { kind: "rules", key: "designRules" },
-  ...FACT_KEYS.map((key) => ({ kind: "fact" as const, key })),
+/** Required constraints with the optional GRZ 2 next to GRZ, in reading order. */
+const CONSTRAINT_ROWS = SITE_ASSESSMENT_CONSTRAINT_KEYS.flatMap((key) => (key === "grz" ? (["grz", "grz2"] as const) : ([key] as const)));
+const EMPTY_CONSTRAINT = { value: null, source: "", sourceDate: null, kind: "assessment" as const, reviewed: false };
+/** Older assessments have no GRZ 2; show it as an empty optional input instead of a missing field. */
+const withOptional = (a: Assessment): Assessment => (a.constraints.grz2 ? a : { ...a, constraints: { ...a.constraints, grz2: EMPTY_CONSTRAINT } });
+type RuleTopic = "landUse" | "buildingForm" | "height" | "roofForm" | "setbacks" | "encroachments";
+/** Plan rules grouped per topic, so the plan text, the design rule and the check for one topic sit together. */
+const RULE_TOPICS: { topic: RuleTopic; items: ReviewItem[] }[] = [
+  { topic: "landUse", items: [{ kind: "fact", key: "landUse" }] },
+  { topic: "buildingForm", items: [{ kind: "fact", key: "buildingForm" }, { kind: "rules", key: "designRules" }, { kind: "check", key: "bauweise" }] },
+  { topic: "height", items: [{ kind: "fact", key: "heightRule" }, { kind: "rules", key: "designRules" }, { kind: "check", key: "height" }] },
+  { topic: "roofForm", items: [{ kind: "fact", key: "roofForm" }] },
+  { topic: "setbacks", items: [{ kind: "check", key: "setbacks" }] },
+  { topic: "encroachments", items: [{ kind: "fact", key: "encroachments" }] },
 ];
+const OTHER_CHECKS = ["planningBasis", "rights", "heritage"] as const;
+/** Review panel order follows the screen: figures, plan rules per topic, other checks. */
+const REVIEW_ITEMS: ReviewItem[] = [
+  ...CONSTRAINT_ROWS.map((key) => ({ kind: "constraint" as const, key })),
+  ...RULE_TOPICS.flatMap((t) => t.items).filter((item, i, all) => all.findIndex((o) => o.kind === item.kind && o.key === item.key) === i),
+  ...OTHER_CHECKS.map((key) => ({ kind: "check" as const, key })),
+];
+
+/** One column layout for every Planning limits table, so values, sources and statuses line up across sections. */
+function LimitsTable({ label, children }: { label: (key: string) => string; children: ReactNode }) {
+  return (
+    <Table className="site-limits-table">
+      <colgroup><col className="site-limits-name" /><col className="site-limits-value" /><col /><col className="site-limits-status" /><col className="site-limits-action" /></colgroup>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{label("Item")}</TableHead>
+          <TableHead>{label("Value")}</TableHead>
+          <TableHead>{label("SourceColumn")}</TableHead>
+          <TableHead>{label("Status")}</TableHead>
+          <TableHead><span className="sr-only">{label("Edit")}</span></TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>{children}</TableBody>
+    </Table>
+  );
+}
+
+function LimitRow({ name, value, numeric, source, status, action, sub }: { name: string; value: string | null; numeric?: boolean; source: string | undefined; status: ReactNode; action: ReactNode; sub?: boolean }) {
+  return (
+    <TableRow>
+      <TableCell className={sub ? "site-limits-sub" : undefined}>{name}</TableCell>
+      <TableCell className={numeric ? "tabular-nums" : "site-limits-text"} title={value ?? undefined}>{value || "–"}</TableCell>
+      <TableCell className="site-limits-source muted" title={source || undefined}>{source || "–"}</TableCell>
+      <TableCell>{status}</TableCell>
+      <TableCell className="text-right">{action}</TableCell>
+    </TableRow>
+  );
+}
 
 type ProposalEngine = typeof import("@richtfest/shared/site-proposals");
 const loadProposals = () => import("@richtfest/shared/site-proposals");
@@ -103,7 +149,8 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   const [step, setStep] = useState<Step>();
   const [scenario, setScenario] = useState<"baseline" | "upside">("baseline");
   const [summarySteps, setSummarySteps] = useState<SummaryStep[] | null>(null);
-  const assessment = draft ?? data?.assessment;
+  const loaded = useMemo(() => data?.assessment && withOptional(data.assessment), [data?.assessment]);
+  const assessment = draft ?? loaded;
   const dirty = !!draft;
   const input = useMemo<SiteAssessmentInput | undefined>(
     () =>
@@ -235,11 +282,13 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
     const [group, name] = key.split(".");
     if (group === "constraints" && name && !seen.has(key.replace(/\.(value|evidence)$/, ""))) {
       seen.add(key.replace(/\.(value|evidence)$/, ""));
-      const k = name as (typeof SITE_ASSESSMENT_CONSTRAINT_KEYS)[number];
-      openItems.push({ id: `constraint:${k}`, step: "limits", name: label(k), issue: label(evidenceStatus(assessment.constraints[k], invalidKeys.has(k))), open: () => openReview({ kind: "constraint", key: k }) });
+      const k = name as (typeof CONSTRAINT_ROWS)[number];
+      openItems.push({ id: `constraint:${k}`, step: "limits", name: label(k), issue: label(evidenceStatus(assessment.constraints[k] ?? EMPTY_CONSTRAINT, invalidKeys.has(k))), open: () => openReview({ kind: "constraint", key: k }) });
     } else if (group === "checks" && name) {
       const k = name as (typeof SITE_ASSESSMENT_CHECK_KEYS)[number];
       openItems.push({ id: `check:${k}`, step: "limits", name: label(k), issue: label("unresolved"), open: () => openReview({ kind: "check", key: k }) });
+    } else if (key === "planningBasis.section35") {
+      openItems.push({ id: key, step: "limits", name: label("PlanningBasis"), issue: label("OpenSection35"), open: () => setStep("limits") });
     } else if (key === "planningBasis") {
       openItems.push({ id: "planningBasis", step: "limits", name: label("PlanningBasis"), issue: label("OpenPlanningBasis"), open: () => setStep("limits") });
     } else if (group === "references") {
@@ -254,23 +303,29 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   const stepLabel = (s: Step, key: string) => (count(s) ? `${label(key)} · ${count(s)}` : label(key));
   const canReport = !dirty && !!assessment.revision && !save.isPending;
 
-  const constraintRows = SITE_ASSESSMENT_CONSTRAINT_KEYS.map((key) => {
-    const value = assessment.constraints[key];
-    return (
-      <TableRow key={key}>
-        <TableCell>{label(key)}</TableCell>
-        <TableCell className="text-right tabular-nums">{value.value === null || !Number.isFinite(value.value) ? "–" : value.value.toLocaleString(locale, { maximumFractionDigits: 2 })}</TableCell>
-        <TableCell><ReviewStatusBadge status={evidenceStatus(value, invalidKeys.has(key))} /></TableCell>
-        <TableCell className="text-right">
-          <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label(key)}`} onClick={() => openReview({ kind: "constraint", key })}>
-            {label(data.canWrite ? "Edit" : "View")}
-          </Button>
-        </TableCell>
-      </TableRow>
-    );
-  });
   const rules = assessment.designRules ?? EMPTY_RULES;
   const checkStatus = (check: Assessment["checks"][keyof Assessment["checks"]]) => (check.status === "unresolved" || !check.note || !check.source ? "unresolved" : check.status);
+  const reviewButton = (item: ReviewItem) => (
+    <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label(item.key)}`} onClick={() => openReview(item)}>
+      {label(data.canWrite ? "Edit" : "View")}
+    </Button>
+  );
+  const ruleRow = (item: ReviewItem, name: string, sub: boolean, topic?: RuleTopic) => {
+    const key = `${topic ?? "check"}:${item.kind}:${item.key}`;
+    const row = { name, sub, action: reviewButton(item) };
+    if (item.kind === "fact") {
+      const fact = assessment.planningFacts?.[item.key as keyof NonNullable<Assessment["planningFacts"]>];
+      return <LimitRow key={key} {...row} value={fact?.value || null} source={fact?.source} status={<Badge variant="outline">{label(!fact?.value ? "ValueMissing" : fact.reviewed ? "ReviewedShort" : "Unreviewed")}</Badge>} />;
+    }
+    if (item.kind === "check") {
+      const check = assessment.checks[item.key as keyof Assessment["checks"]];
+      return <LimitRow key={key} {...row} value={check.note || null} source={check.source} status={<Badge variant="outline">{label(checkStatus(check))}</Badge>} />;
+    }
+    const value = topic === "height"
+      ? rules.heightNotSpecified ? label("HeightNotSpecified") : rules.maxHeight ? `${rules.maxHeight.toLocaleString(locale, { maximumFractionDigits: 1 })} m` : null
+      : rules.buildingForm === "unresolved" ? null : label(rules.buildingForm);
+    return <LimitRow key={key} {...row} value={value} source={rules.source} status={<Badge variant="outline">{label(rules.reviewed ? "ReviewedShort" : value === null ? "ValueMissing" : "Unreviewed")}</Badge>} />;
+  };
   return (
     <div className="feasibility site-assessment">
       {blocker.state === "blocked" && (
@@ -375,8 +430,9 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
           <Segmented
             value={assessment.planningBasis}
             onChange={(planningBasis) => update({ planningBasis: planningBasis as Assessment["planningBasis"], checks: { ...assessment.checks, planningBasis: { ...assessment.checks.planningBasis, status: "unresolved" } } })}
-            items={["b_plan", "section34", "unresolved"].map((value) => ({ value, label: label(value), disabled }))}
+            items={["b_plan", "section34", "section35", "unresolved"].map((value) => ({ value, label: label(value), disabled }))}
           />
+          {assessment.planningBasis === "section35" && <Callout tone="warning">{label("Section35Hint")}</Callout>}
           {assessment.planningBasis === "section34" && (
             <Callout>
               {label("Section34References").replace("{count}", String(assessment.references.length))}{" "}
@@ -388,81 +444,6 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             <p className="muted">{label("Scope")}</p>
           </details>
         </Section>
-        <Section title={label("Constraints")}>
-          <Table className="site-constraint-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{label("Constraint")}</TableHead>
-                <TableHead className="text-right">{label("Value")}</TableHead>
-                <TableHead>{t("status")}</TableHead>
-                <TableHead><span className="sr-only">{label("Edit")}</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>{constraintRows}</TableBody>
-          </Table>
-        </Section>
-        <Section title={label("Checks")}>
-          <Table className="site-constraint-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{label("Check")}</TableHead>
-                <TableHead>{t("status")}</TableHead>
-                <TableHead><span className="sr-only">{label("Edit")}</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {SITE_ASSESSMENT_CHECK_KEYS.map((key) => (
-                <TableRow key={key}>
-                  <TableCell>{label(key)}</TableCell>
-                  <TableCell><Badge variant="outline">{label(checkStatus(assessment.checks[key]))}</Badge></TableCell>
-                  <TableCell className="text-right">
-                    <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label(key)}`} onClick={() => openReview({ kind: "check", key })}>
-                      {label(data.canWrite ? "Edit" : "View")}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              <TableRow>
-                <TableCell>{label("designRules")}</TableCell>
-                <TableCell><Badge variant="outline">{label(rules.reviewed ? "ReviewedShort" : rules.buildingForm === "unresolved" ? "unresolved" : "Unreviewed")}</Badge></TableCell>
-                <TableCell className="text-right">
-                  <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label("designRules")}`} onClick={() => openReview({ kind: "rules", key: "designRules" })}>
-                    {label(data.canWrite ? "Edit" : "View")}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </Section>
-        <Section title={label("PlanningFacts")}>
-          <Table className="site-constraint-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{label("Fact")}</TableHead>
-                <TableHead>{label("Value")}</TableHead>
-                <TableHead>{t("status")}</TableHead>
-                <TableHead><span className="sr-only">{label("Edit")}</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {FACT_KEYS.map((key) => {
-                const fact = assessment.planningFacts?.[key];
-                return (
-                  <TableRow key={key}>
-                    <TableCell>{label(key)}</TableCell>
-                    <TableCell className="site-fact-value">{fact?.value || "–"}</TableCell>
-                    <TableCell><Badge variant="outline">{label(!fact?.value ? "ValueMissing" : fact.reviewed ? "ReviewedShort" : "Unreviewed")}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label(key)}`} onClick={() => openReview({ kind: "fact", key })}>
-                        {label(data.canWrite ? "Edit" : "View")}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </Section>
         <SiteEvidencePanel
           projectId={projectId}
           disabled={disabled}
@@ -473,6 +454,41 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             else update({ planningFacts: { ...assessment.planningFacts, [key]: value } });
           }}
         />
+        <Section title={label("Figures")}>
+          <LimitsTable label={label}>
+            {CONSTRAINT_ROWS.map((key) => {
+              const value = assessment.constraints[key] ?? EMPTY_CONSTRAINT;
+              return (
+                <LimitRow
+                  key={key}
+                  name={label(key === "grz2" ? "grz2Short" : key)}
+                  value={value.value === null || !Number.isFinite(value.value) ? null : value.value.toLocaleString(locale, { maximumFractionDigits: 2 })}
+                  numeric
+                  source={value.source}
+                  status={<ReviewStatusBadge status={evidenceStatus(value, invalidKeys.has(key))} />}
+                  action={reviewButton({ kind: "constraint", key })}
+                />
+              );
+            })}
+          </LimitsTable>
+        </Section>
+        <Section title={label("PlanRules")}>
+          <LimitsTable label={label}>
+            {RULE_TOPICS.map(({ topic, items }) =>
+              items.length === 1 ? (
+                ruleRow(items[0]!, label(topic), false, topic)
+              ) : (
+                <Fragment key={topic}>
+                  <TableRow className="site-limits-group"><TableCell colSpan={5}>{label(topic)}</TableCell></TableRow>
+                  {items.map((item) => ruleRow(item, label(item.kind === "fact" ? "RulePlanText" : item.kind === "check" ? "RuleCheck" : "RuleDesign"), true, topic))}
+                </Fragment>
+              ),
+            )}
+          </LimitsTable>
+        </Section>
+        <Section title={label("OtherChecks")}>
+          <LimitsTable label={label}>{OTHER_CHECKS.map((key) => ruleRow({ kind: "check", key }, label(key), false))}</LimitsTable>
+        </Section>
         <details className="site-secondary" id="site-upside">
           <summary className="text-ui-sm">{label("Upside")}{assessment.upside ? ` · ${label("UpsideOn")}` : ""}</summary>
           <div className="site-upside">
@@ -595,6 +611,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
               ) : (
                 <p className="muted text-ui-xs">{label("RangeNoUpside")} <Button variant="link" size="sm" onClick={openUpside}>{label("RangeAddUpside")}</Button></p>
               )}
+              {result.baseline.ancillaryAllowance !== null && <p className="text-ui-xs">{label("AncillaryAllowance")}: <strong className="tabular-nums">{area(result.baseline.ancillaryAllowance)}</strong></p>}
             </Section>
           )}
           <SiteCapacityVisual

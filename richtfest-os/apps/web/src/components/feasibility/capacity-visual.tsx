@@ -9,7 +9,7 @@ import "./capacity-visual.css";
 /** Compare like-for-like areas without suggesting surveyed geometry or a building placement. */
 export function SiteCapacityVisual({ result, onEdit, empty }: {
   result: SiteAssessmentResult | null;
-  onEdit: (key: SiteAssessmentConstraintKey) => void;
+  onEdit: (key: SiteAssessmentConstraintKey | "grz2") => void;
   /** Shown instead of the comparison while constraints are missing. */
   empty?: React.ReactNode;
 }) {
@@ -17,7 +17,7 @@ export function SiteCapacityVisual({ result, onEdit, empty }: {
   const label = (key: string) => t(`siteAssessment${key}` as Parameters<typeof t>[0]);
   const format = (n: number) => `${n.toLocaleString(language === "de" ? "de-DE" : "en-GB", { maximumFractionDigits: 2 })} m²`;
   const value = result?.baseline;
-  const capacityLabel = { grz: "VisualGrz", buildableFootprint: "VisualEnvelope", maxFullStoreys: "VisualStoreys", gfz: "VisualGfz" } as const;
+  const capacityLabel = { grz: "VisualGrz", grz2: "VisualGrz2", buildableFootprint: "VisualEnvelope", maxFullStoreys: "VisualStoreys", gfz: "VisualGfz" } as const;
   return <Section title={label("VisualTitle")}>
     <p className="text-ui-xs muted">{label("VisualHint")}</p>
     {value ? <>

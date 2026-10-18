@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- **Planning limits:** Reorganised into one consistent layout: planning basis and source documents first, then Figures, Building rules and Other checks with aligned value, source and status columns. Building form and height now group what the sources state, the rule used for the design and the check under one heading instead of spreading them over three tables.
+- **Site assessment:** GRZ 2 (garages, parking and ancillary structures, § 19 (4) BauNVO) is an optional input, read from the B-Plan when stated and otherwise proposed as GRZ + 50 % up to 0.8. It limits the footprint only when below GRZ, and Result shows what it leaves for ancillary structures. § 35 outer area is a planning basis of its own: the site summary proposes it on open land and keeps the capacity hypothetical until the authority confirms permissibility.
 - **Parcel map:** Neighbouring parcels show GRZ 1 (main buildings) and GRZ 2 (including garages, sheds and underground garages) next to GFZ, as a layer you can toggle. Each parcel is marked as B-Plan in force, plan in progress, likely § 34 or likely § 35, using the B-Plan register and the Berlin land-use plan; the site summary no longer assumes § 34 on open land.
 
 - Workbench tools in Site assessment, 3D location and the building model show a tooltip with their name and shortcut on hover, including tools that are currently unavailable.

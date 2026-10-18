@@ -28,7 +28,7 @@ export function SiteSummaryPanel({ steps, running, error, disabled, primary, onR
     let text = label(step.detail);
     const values = { ...step.values };
     // Filled figures are stored as keys so the list follows the app language.
-    if (typeof values.items === "string") values.items = values.items.split(", ").filter(Boolean).map((key) => (key === "storeys" ? label("Storeys") : key.toUpperCase())).join(", ");
+    if (typeof values.items === "string") values.items = values.items.split(", ").filter(Boolean).map((key) => (key === "storeys" ? label("Storeys") : key === "grz2" ? "GRZ 2" : key.toUpperCase())).join(", ");
     for (const [key, value] of Object.entries(values)) text = text.replaceAll(`{${key}}`, String(value));
     return text;
   };

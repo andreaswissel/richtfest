@@ -35,6 +35,8 @@ describe("one-click site summary", () => {
     expect(draft.references.every((r) => r.note === "")).toBe(true);
     expect(draft.constraints.grz).toMatchObject({ value: 0.46, kind: "estimated", reviewed: false });
     expect(draft.constraints.gfz.value).toBe(1.46);
+    // § 19 (4) BauNVO default: 0.46 × 1.5 = 0.69, below the 0.8 cap.
+    expect(draft.constraints.grz2).toMatchObject({ value: 0.69, kind: "assessment", reviewed: false });
     expect(draft.constraints.maxFullStoreys.value).toBe(3);
     expect(draft.designRules).toMatchObject({ buildingForm: "closed", reviewed: false });
     // Closed form: east and west on the boundary, north and south 0.4 × 9 m = 3.6 m.
@@ -92,7 +94,10 @@ describe("one-click site summary", () => {
     const forest = { id: "f", label: "Wald", purpose: null, category: "open" as const, sourceUrl: "fnp", polygons: [[ring(-100, -100, 300, 300)]], containsAddress: true };
     const { draft, steps } = applySiteSummary(empty, { context: { ...context(), landUse: [forest] }, discovery: discovery([]) }, engine, "2026-10-18");
     expect(steps.find((s) => s.id === "basis")).toMatchObject({ status: "needs_input", detail: "BasisSection35", values: { landUse: "Wald" } });
-    expect(draft.planningBasis).toBe("unresolved");
+    // § 35 is proposed as the basis (unreviewed), and no figures or GRZ 2 default are invented for the outer area.
+    expect(draft.planningBasis).toBe("section35");
+    expect(steps.find((s) => s.id === "frame")).toMatchObject({ status: "needs_input", detail: "FrameSection35" });
+    expect(draft.constraints.grz2).toBeUndefined();
     expect(draft.references).toEqual([]);
   });
   test("planning law is decided per point from plan outlines, not from the address flag", () => {

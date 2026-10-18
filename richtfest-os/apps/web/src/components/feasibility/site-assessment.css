@@ -476,3 +476,35 @@
 .site-map-legend i[data-law="in_progress"] { background: rgb(124 58 237 / .45); }
 .site-map-legend i[data-law="section34"] { background: rgb(59 130 246 / .4); }
 .site-map-legend i[data-law="section35"] { background: rgb(245 158 11 / .55); }
+/* Planning limits: every table shares one column grid so values, sources and statuses line up across sections. */
+.site-limits-table {
+  table-layout: fixed;
+  width: 100%;
+  max-width: 64rem;
+}
+.site-limits-name { width: 15rem; }
+.site-limits-value { width: 14rem; }
+.site-limits-status { width: 10.5rem; }
+.site-limits-action { width: 4.5rem; }
+.site-limits-text,
+.site-limits-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.site-limits-table td:first-child {
+  white-space: normal;
+}
+.site-limits-text,
+.site-limits-source {
+  white-space: nowrap;
+}
+.site-limits-group > td {
+  padding-top: var(--stack);
+  font-weight: 500;
+}
+.site-limits-group:hover { background: transparent; }
+.site-limits-table td.site-limits-sub {
+  padding-left: 1.25rem;
+  color: var(--muted-foreground);
+}
+.site-limits-table [data-slot="table-cell"] { padding-block: calc(var(--cell) / 2); }

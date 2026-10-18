@@ -96,3 +96,36 @@ describe("Berlin arithmetic envelope capacity", () => {
     expect(result.baseline).toBeNull(); expect(result.limitations).toContain("extra_area_exceeds_gfz");
   });
 });
+
+test("GRZ 2 is optional, caps the main footprint only below GRZ, and reports the ancillary allowance", () => {
+  const base = createEmptySiteAssessmentInput();
+  base.planningBasis = "b_plan";
+  const numbers = [1000, 0.4, 2, 1000, 3, 0, 0];
+  SITE_ASSESSMENT_CONSTRAINT_KEYS.forEach((key, i) => { base.constraints[key] = { value: numbers[i]!, source: "s", sourceDate: "2026-10-18", kind: "official", reviewed: true }; });
+  // Older assessments without GRZ 2 still parse and calculate.
+  expect(siteAssessmentInputSchema.safeParse(base).success).toBe(true);
+  expect(calculateSiteAssessment(base).baseline).toMatchObject({ footprint: 400, ancillaryAllowance: null });
+  const withCap = structuredClone(base);
+  withCap.constraints.grz2 = { value: 0.6, source: "B-Plan § 2", sourceDate: "2026-10-18", kind: "official", reviewed: true };
+  const r = calculateSiteAssessment(withCap).baseline!;
+  expect(r.footprint).toBe(400);
+  expect(r.ancillaryAllowance).toBeCloseTo(200, 9);
+  expect(r.bindingConstraints).not.toContain("grz2");
+  const below = structuredClone(withCap);
+  below.constraints.grz2!.value = 0.3;
+  const b = calculateSiteAssessment(below).baseline!;
+  expect(b.footprint).toBeCloseTo(300, 9);
+  expect(b.bindingConstraints).toContain("grz2");
+  expect(b.ancillaryAllowance).toBe(0);
+});
+test("§ 35 keeps the result indicative with an outer-area limitation", () => {
+  const input = createEmptySiteAssessmentInput();
+  input.planningBasis = "section35";
+  const numbers = [1000, 0.4, 1.2, 1000, 3, 0, 0];
+  SITE_ASSESSMENT_CONSTRAINT_KEYS.forEach((key, i) => { input.constraints[key] = { value: numbers[i]!, source: "s", sourceDate: "2026-10-18", kind: "official", reviewed: true }; });
+  for (const key of Object.keys(input.checks) as (keyof typeof input.checks)[]) input.checks[key] = { status: "confirmed", note: "n", source: "s" };
+  const r = calculateSiteAssessment(input);
+  expect(r.limitations).toContain("section35_outer_area");
+  expect(r.status).toBe("indicative");
+  expect(r.baseline).not.toBeNull();
+});

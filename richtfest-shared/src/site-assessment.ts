@@ -3,6 +3,8 @@ import { siteGeometryInputSchema } from "./site-geometry-model";
 import { siteReferenceSchema } from "./site-references";
 export const siteAssessmentMethod = "berlin_arithmetic_v1" as const;
 export const SITE_ASSESSMENT_CONSTRAINT_KEYS = ["parcelArea", "grz", "gfz", "buildableFootprint", "maxFullStoreys", "additionalGrossArea", "additionalCountableArea"] as const;
+/** Optional inputs: absent in older assessments, never required for a result. GRZ 2 is the § 19 (4) BauNVO cap including garages and ancillary structures. */
+export const SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS = ["grz2"] as const;
 export const SITE_ASSESSMENT_CHECK_KEYS = ["planningBasis", "bauweise", "height", "setbacks", "rights", "heritage"] as const;
 export type SiteAssessmentConstraintKey = typeof SITE_ASSESSMENT_CONSTRAINT_KEYS[number];
 export type SiteAssessmentCheckKey = typeof SITE_ASSESSMENT_CHECK_KEYS[number];
@@ -11,8 +13,8 @@ export const siteAssessmentConstraintSchema = z.object({ value: z.number().finit
 const constraint = <T extends z.ZodTypeAny>(value: T) => siteAssessmentConstraintSchema.extend({ value: value.nullable() });
 const check = z.object({ status: z.enum(["unresolved", "confirmed", "not_applicable"]), note: z.string().trim().max(2000), source: z.string().trim().max(2000) }).strict();
 export const siteAssessmentInputSchema = z.object({
-  baseRevision: z.number().int().min(0), jurisdiction: z.literal("BE"), planningBasis: z.enum(["b_plan", "section34", "unresolved"]),
-  constraints: z.object({ parcelArea: constraint(z.number().finite().positive().max(1e9)), grz: constraint(z.number().finite().min(0).max(1)), gfz: constraint(z.number().finite().min(0).max(100)), buildableFootprint: constraint(z.number().finite().min(0).max(1e9)), maxFullStoreys: constraint(z.number().int().min(1).max(200)), additionalGrossArea: siteAssessmentConstraintSchema, additionalCountableArea: siteAssessmentConstraintSchema }).strict(),
+  baseRevision: z.number().int().min(0), jurisdiction: z.literal("BE"), planningBasis: z.enum(["b_plan", "section34", "section35", "unresolved"]),
+  constraints: z.object({ parcelArea: constraint(z.number().finite().positive().max(1e9)), grz: constraint(z.number().finite().min(0).max(1)), gfz: constraint(z.number().finite().min(0).max(100)), buildableFootprint: constraint(z.number().finite().min(0).max(1e9)), maxFullStoreys: constraint(z.number().int().min(1).max(200)), additionalGrossArea: siteAssessmentConstraintSchema, additionalCountableArea: siteAssessmentConstraintSchema, grz2: constraint(z.number().finite().min(0).max(1)).optional() }).strict(),
   checks: z.object(Object.fromEntries(SITE_ASSESSMENT_CHECK_KEYS.map(key => [key, check])) as Record<SiteAssessmentCheckKey, typeof check>).strict(),
   geometry: siteGeometryInputSchema.nullable().optional(),
   siteLocator: z.object({origin:z.tuple([z.number().min(350000).max(430000),z.number().min(5780000).max(5860000)]),label:z.string().min(1).max(300),source:z.string().max(2000),reviewed:z.boolean()}).strict().optional(),
@@ -22,7 +24,7 @@ export const siteAssessmentInputSchema = z.object({
 }).strict();
 export type SiteAssessmentInput = z.infer<typeof siteAssessmentInputSchema>;
 export type SiteAssessmentConstraint = z.infer<typeof siteAssessmentConstraintSchema>;
-export type SiteAssessmentCapacity = { footprint: number; fullFloorArea: number; countableFloorArea: number; grossFloorArea: number; gfzCapacity: number; unusedGfzCapacity: number; limits: { id: "grz" | "buildableFootprint" | "maxFullStoreys" | "gfz"; capacity: number; unit: "footprint_m2" | "full_floor_m2" }[]; bindingConstraints: string[] };
+export type SiteAssessmentCapacity = { footprint: number; fullFloorArea: number; countableFloorArea: number; grossFloorArea: number; gfzCapacity: number; unusedGfzCapacity: number; ancillaryAllowance: number | null; limits: { id: "grz" | "grz2" | "buildableFootprint" | "maxFullStoreys" | "gfz"; capacity: number; unit: "footprint_m2" | "full_floor_m2" }[]; bindingConstraints: string[] };
 export type SiteAssessmentResult = { method: typeof siteAssessmentMethod; status: "incomplete" | "indicative" | "reviewed"; missing: string[]; limitations: string[]; baseline: SiteAssessmentCapacity | null; upside: SiteAssessmentCapacity | null; upsideStatus: "indicative" | null };
 export function createEmptySiteAssessmentInput(): SiteAssessmentInput {
   return { baseRevision: 0, jurisdiction: "BE", planningBasis: "unresolved", constraints: Object.fromEntries(SITE_ASSESSMENT_CONSTRAINT_KEYS.map(key => [key, { value: null, source: "", sourceDate: null, kind: "assessment", reviewed: false }])) as SiteAssessmentInput["constraints"], checks: Object.fromEntries(SITE_ASSESSMENT_CHECK_KEYS.map(key => [key, { status: "unresolved", note: "", source: "" }])) as SiteAssessmentInput["checks"], references: [], notes: "", upside: null };
@@ -39,6 +41,10 @@ export function calculateSiteAssessment(raw: SiteAssessmentInput): SiteAssessmen
     if (!item.reviewed || !item.source || !item.sourceDate) result.missing.push(`constraints.${key}.evidence`);
   }
   if (input.planningBasis === "unresolved") result.missing.push("planningBasis");
+  // § 35 outer area: building is generally not permitted; the arithmetic only shows what the figures would allow.
+  if (input.planningBasis === "section35") { result.limitations.push("section35_outer_area"); result.missing.push("planningBasis.section35"); }
+  const grz2 = values.grz2;
+  if (grz2 && grz2.value !== null && (!grz2.reviewed || !grz2.source || !grz2.sourceDate)) result.missing.push("constraints.grz2.evidence");
   if (input.planningBasis === "section34") {
     result.limitations.push("section34_comparison_only");
     if (!input.references.length) result.missing.push("references");
@@ -55,12 +61,14 @@ export function calculateSiteAssessment(raw: SiteAssessmentInput): SiteAssessmen
   const gfzCapacity = n.parcelArea * n.gfz;
   if (n.additionalCountableArea > gfzCapacity) { result.limitations.push("extra_area_exceeds_gfz"); result.missing.push("constraints.additionalCountableArea"); return result; }
   const capacity = (storeys: number): SiteAssessmentCapacity => {
-    const grzFootprint = n.parcelArea * n.grz, footprint = Math.min(grzFootprint, n.buildableFootprint), envelopeCapacity = footprint * storeys, available = gfzCapacity - n.additionalCountableArea, fullFloorArea = Math.min(envelopeCapacity, available);
+    // GRZ 2 caps main buildings plus garages and ancillary structures; only below GRZ does it limit the main footprint.
+    const grz2Value = grz2?.value ?? null, grz2Footprint = grz2Value === null ? null : n.parcelArea * grz2Value;
+    const grzFootprint = n.parcelArea * n.grz, footprint = Math.min(grzFootprint, grz2Footprint ?? Infinity, n.buildableFootprint), envelopeCapacity = footprint * storeys, available = gfzCapacity - n.additionalCountableArea, fullFloorArea = Math.min(envelopeCapacity, available);
     const equal = (a: number, b: number) => Math.abs(a - b) <= 1e-8 * Math.max(1, Math.abs(a), Math.abs(b));
     const bindingConstraints: string[] = [];
-    if (equal(fullFloorArea, envelopeCapacity)) { if (equal(footprint, grzFootprint)) bindingConstraints.push("grz"); if (equal(footprint, n.buildableFootprint)) bindingConstraints.push("buildableFootprint"); bindingConstraints.push("maxFullStoreys"); }
+    if (equal(fullFloorArea, envelopeCapacity)) { if (equal(footprint, grzFootprint)) bindingConstraints.push("grz"); if (grz2Footprint !== null && equal(footprint, grz2Footprint)) bindingConstraints.push("grz2"); if (equal(footprint, n.buildableFootprint)) bindingConstraints.push("buildableFootprint"); bindingConstraints.push("maxFullStoreys"); }
     if (equal(fullFloorArea, available)) bindingConstraints.push("gfz");
-    return { footprint, fullFloorArea, countableFloorArea: fullFloorArea + n.additionalCountableArea, grossFloorArea: fullFloorArea + n.additionalGrossArea, gfzCapacity, unusedGfzCapacity: Math.max(0, gfzCapacity - fullFloorArea - n.additionalCountableArea), limits: [{ id: "grz", capacity: grzFootprint, unit: "footprint_m2" }, { id: "buildableFootprint", capacity: n.buildableFootprint, unit: "footprint_m2" }, { id: "maxFullStoreys", capacity: envelopeCapacity, unit: "full_floor_m2" }, { id: "gfz", capacity: available, unit: "full_floor_m2" }], bindingConstraints };
+    return { footprint, fullFloorArea, countableFloorArea: fullFloorArea + n.additionalCountableArea, grossFloorArea: fullFloorArea + n.additionalGrossArea, gfzCapacity, unusedGfzCapacity: Math.max(0, gfzCapacity - fullFloorArea - n.additionalCountableArea), ancillaryAllowance: grz2Footprint === null ? null : Math.max(0, grz2Footprint - footprint), limits: [{ id: "grz", capacity: grzFootprint, unit: "footprint_m2" }, ...(grz2Footprint === null ? [] : [{ id: "grz2" as const, capacity: grz2Footprint, unit: "footprint_m2" as const }]), { id: "buildableFootprint", capacity: n.buildableFootprint, unit: "footprint_m2" }, { id: "maxFullStoreys", capacity: envelopeCapacity, unit: "full_floor_m2" }, { id: "gfz", capacity: available, unit: "full_floor_m2" }], bindingConstraints };
   };
   result.baseline = capacity(n.maxFullStoreys); result.status = result.missing.length ? "indicative" : "reviewed";
   if (input.upside) { result.limitations.push("upside_requires_separate_review"); if (input.upside.maxFullStoreys.value !== null) { result.upside = capacity(input.upside.maxFullStoreys.value); result.upsideStatus = "indicative"; } }
