@@ -66,6 +66,20 @@ export const projects = pgTable("projects_projects", {
     .defaultNow()
     .notNull(),
 });
+/** Planning tracking only; completion is not engineering approval or phase advancement. */
+export const projectPlanning = pgTable("project_planning", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  revision: integer("revision").notNull().default(1),
+  currentPhase: text("current_phase").$type<import("@richtfest/shared").ProjectPhase>(),
+  items: jsonb("items").$type<import("@richtfest/shared").ProjectPlanningItem[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({
+  project: uniqueIndex("project_planning_project_unique").on(table.tenantId, table.projectId),
+}));
+
 export const projectMembers = pgTable("projects_members", {
   projectId: uuid("project_id").notNull(),
   tenantId: uuid("tenant_id").notNull(),

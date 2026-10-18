@@ -4,8 +4,8 @@
 export function testProjectHeader() {
   const header = document.querySelector<HTMLElement>(".project-bar")!;
   const title = header.querySelector<HTMLElement>(".project-bar-title")!;
-  const nav = header.querySelector<HTMLElement>("nav")!;
-  const actions = header.querySelector<HTMLElement>(".project-bar-actions")!;
+  const nav = document.querySelector<HTMLElement>(".project-module-bar nav")!;
+  const actions = document.querySelector<HTMLElement>(".project-module-bar")!;
   if (!header.getBoundingClientRect().height)
     throw new Error(
       "Open a non-conversation project view to test the visible header",
@@ -17,7 +17,7 @@ export function testProjectHeader() {
   const edit = document.createElement("button");
   edit.textContent = "Projektdetails bearbeiten";
   const positions = () =>
-    [...nav.querySelectorAll("a")].map((link) => {
+    [...nav.querySelectorAll("a:not(.project-all-modules)")].map((link) => {
       const { x, y } = link.getBoundingClientRect();
       return { x, y };
     });

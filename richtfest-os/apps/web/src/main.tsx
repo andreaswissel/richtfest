@@ -86,6 +86,8 @@ const router = createBrowserRouter([
             prefetch(`/knowledge/workspaces/${params.id}/analytics?page=0`)();
           if (view === "building-model")
             prefetch(`/projects/${params.id}/building-model`)();
+          if (view === "overview")
+            prefetch(`/projects/${params.id}/planning`)();
           return null;
         },
       },

@@ -29,6 +29,7 @@ import { Inquiries } from "../components/inquiries";
 import { NoiseSources } from "../components/noise-sources";
 import { Feasibility } from "../components/feasibility";
 import { AddressSelect } from "../components/address-select";
+import { ProjectOverview } from "../components/project-workspace/project-overview";
 import { ArrowUp } from "lucide-react";
 
 const MIN_ARTIFACT_WIDTH = 25;
@@ -103,7 +104,16 @@ export function ProjectWorkspace() {
   const { id } = useParams(),
     t = useT(),
     [params, setParams] = useSearchParams();
-  const view = params.get("view") || "workspace";
+  const perspective =
+    params.get("perspective") === "coordinator"
+      ? "coordinator"
+      : params.get("perspective") === "planner"
+        ? "planner"
+        : "nerd";
+  const view =
+    params.get("view") === "overview" && perspective === "nerd"
+      ? "workspace"
+      : params.get("view") || "workspace";
   const workspaceNavigation = useOutletContext<
     { workspaceNavigation: ReactNode } | undefined
   >()?.workspaceNavigation;
@@ -125,7 +135,13 @@ export function ProjectWorkspace() {
   const project = useApi(`/projects/${id}`),
     workspace = useApi(
       `/knowledge/workspaces/${id}`,
-      view !== "location" && view !== "analytics" && view !== "building-model" && view !== "inquiries" && view !== "noise" && view !== "feasibility",
+      view !== "overview" &&
+        view !== "location" &&
+        view !== "analytics" &&
+        view !== "building-model" &&
+        view !== "inquiries" &&
+        view !== "noise" &&
+        view !== "feasibility",
     ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
@@ -160,7 +176,14 @@ export function ProjectWorkspace() {
     next.delete("panel");
     next.delete("message");
     next.delete("agentRun");
-    for (const key of ["artifact", "revision", "file", "sourceVersion", "sourceSelection", "page"])
+    for (const key of [
+      "artifact",
+      "revision",
+      "file",
+      "sourceVersion",
+      "sourceSelection",
+      "page",
+    ])
       next.delete(key);
     setParams(next);
   });
@@ -178,40 +201,110 @@ export function ProjectWorkspace() {
   const [width, setWidth] = useState(38);
   const details = project.data?.project || project.data || {};
   const title = details.name || t("project");
+  const perspectiveLink = (next: typeof perspective) => {
+    const search = new URLSearchParams(params);
+    search.set("perspective", next);
+    // A lens change inside an editor changes chrome only; the editor stays mounted.
+    if (view === "overview" || view === "workspace") {
+      search.set("view", next === "nerd" ? "workspace" : "overview");
+    }
+    return `/projects/${id}?${search}`;
+  };
+  const perspectiveNavigation = (
+    <nav
+      className="segmented project-perspectives"
+      aria-label={t("planningPerspective")}
+    >
+      {(["coordinator", "planner", "nerd"] as const).map((key) => (
+        <Button key={key} asChild variant="ghost" size="sm">
+          <Link
+            to={perspectiveLink(key)}
+            data-state={perspective === key ? "on" : "off"}
+            aria-current={perspective === key ? "true" : undefined}
+          >
+            {t(
+              key === "coordinator"
+                ? "planningViewCoordinator"
+                : key === "planner"
+                  ? "planningViewPlanner"
+                  : "planningViewNerd",
+            )}
+          </Link>
+        </Button>
+      ))}
+    </nav>
+  );
+  const moduleLink = (key: string) => {
+    // Carry the overview lens, not stale source or editor selections, into another module.
+    const search = new URLSearchParams();
+    search.set("view", key);
+    search.set("perspective", perspective);
+    for (const context of ["phase", "discipline", "planningItem"])
+      if (params.has(context)) search.set(context, params.get(context)!);
+    if (key === "workspace" && selected)
+      search.set("conversation", selected.id);
+    return `/projects/${id}?${search}`;
+  };
+  const allModules = [
+    "workspace",
+    "location",
+    "building-model",
+    "details",
+    "sources",
+    "inquiries",
+    "noise",
+    "feasibility",
+    "knowledge",
+    "analytics",
+  ];
+  const visibleModules =
+    perspective === "nerd"
+      ? allModules
+      : [
+          ...new Set([
+            "overview",
+            "workspace",
+            "location",
+            "building-model",
+            "sources",
+            ...(perspective === "planner" ? ["inquiries"] : ["details"]),
+            view,
+          ]),
+        ];
   const projectNavigation = (
     <nav className="workspace-view-links" aria-label={t("projectDetails")}>
-      {[
-        "workspace",
-        "location",
-        "building-model",
-        "details",
-        "sources",
-        "inquiries",
-        "noise",
-        "feasibility",
-        "knowledge",
-        "analytics",
-      ].map((key) => (
+      {visibleModules.map((key) => (
         <Link
           key={key}
           aria-current={view === key ? "page" : undefined}
-          to={`/projects/${id}${key === "workspace" ? (selected ? `?conversation=${selected.id}` : "") : `?view=${key}`}`}
+          to={moduleLink(key)}
         >
-          {key === "workspace"
-            ? t("workspaceConversation")
-            : key === "location"
-              ? t("locationEditor")
-              : key === "building-model"
-                ? t("buildingModel")
-              : key === "details"
-                ? t("projectDetails")
-                : key === "noise"
-                ? t("noiseNav")
-                : key === "feasibility"
-                ? t("feasibilityNav")
-                : t(key as "sources" | "inquiries")}
+          {key === "overview"
+            ? t(
+                perspective === "planner"
+                  ? "planningPlannerOverview"
+                  : "planningOverview",
+              )
+            : key === "workspace"
+              ? t("workspaceConversation")
+              : key === "location"
+                ? t("locationEditor")
+                : key === "building-model"
+                  ? t("buildingModel")
+                  : key === "details"
+                    ? t("projectDetails")
+                    : key === "noise"
+                      ? t("noiseNav")
+                      : key === "feasibility"
+                        ? t("feasibilityNav")
+                        : t(key as "sources" | "inquiries")}
         </Link>
       ))}
+      {perspective !== "nerd" && (
+        <Link to={perspectiveLink("nerd")} className="project-all-modules">
+          {t("planningAllModules")}
+        </Link>
+      )}
     </nav>
   );
   if (view === "sharedWork") {
@@ -223,35 +316,62 @@ export function ProjectWorkspace() {
   return (
     <Page>
       <header className="project-bar">
-        <Link to="/" className="project-bar-brand" aria-label="Richtfest">R</Link>
-        <Link className="project-bar-back" to="/projects" aria-label={t("projects")}>←<span className="project-bar-back-label"> {t("projects")}</span></Link>
+        <Link to="/" className="project-bar-brand" aria-label="Richtfest">
+          R
+        </Link>
+        <Link
+          className="project-bar-back"
+          to="/projects"
+          aria-label={t("projects")}
+        >
+          ←<span className="project-bar-back-label"> {t("projects")}</span>
+        </Link>
         <div className="project-bar-title">
-          {project.data?.customerName && <span className="project-bar-customer">{project.data.customerName}</span>}
+          {project.data?.customerName && (
+            <span className="project-bar-customer">
+              {project.data.customerName}
+            </span>
+          )}
           <h1>{title}</h1>
           <Badge>{projectStatusLabel(details.status, t)}</Badge>
         </div>
-        {projectNavigation}
+        {perspectiveNavigation}
         <div className="project-bar-actions">
-          {view === "details" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                updateProject.reset();
-                setEditingDetails(true);
-              }}
-            >
-              {t("editProject")}
-            </Button>
-          )}
           {meUser?.id && (
-            <Link to="/settings/security" className="avatar" title={meUser.name} aria-label={meUser.name}>
+            <Link
+              to="/settings/security"
+              className="avatar"
+              title={meUser.name}
+              aria-label={meUser.name}
+            >
               {meUser.name?.slice(0, 1) || "R"}
             </Link>
           )}
         </div>
       </header>
+      <div className="project-module-bar">
+        {projectNavigation}
+        {view === "details" && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              updateProject.reset();
+              setEditingDetails(true);
+            }}
+          >
+            {t("editProject")}
+          </Button>
+        )}
+      </div>
       <LoadState query={project} />
+      {view === "overview" && project.isSuccess && (
+        <ProjectOverview
+          projectId={id!}
+          projectName={title}
+          perspective={perspective === "planner" ? "planner" : "coordinator"}
+        />
+      )}
       {view === "location" && project.isSuccess && (
         <LocationMode projectId={id!} address={details} />
       )}
@@ -281,6 +401,7 @@ export function ProjectWorkspace() {
                           <h2>{t("project")}</h2>
                           <Badge>{projectStatusLabel(details.status, t)}</Badge>
                         </div>
+                        {perspectiveNavigation}
                         {projectNavigation}
                         <nav aria-label={t("workspaceResources")}>
                           <Link
@@ -593,8 +714,12 @@ export function ProjectWorkspace() {
       {view === "sources" && (
         <Sources projectId={id!} initial={project.data || {}} />
       )}
-      {view === "inquiries" && <Inquiries projectId={id!} selectedId={params.get("inquiry")} />}
-      {view === "noise" && <NoiseSources projectId={id!} selectedId={params.get("source")} />}
+      {view === "inquiries" && (
+        <Inquiries projectId={id!} selectedId={params.get("inquiry")} />
+      )}
+      {view === "noise" && (
+        <NoiseSources projectId={id!} selectedId={params.get("source")} />
+      )}
       {view === "feasibility" && <Feasibility projectId={id!} />}
       {view === "knowledge" && <Knowledge projectId={id!} />}
     </Page>

@@ -19,6 +19,7 @@ import { createInquiriesRouter } from "./inquiries";
 import { createNoiseSourcesRouter } from "./noise-sources";
 import { createInboundEmailRouter } from "./inbound-email";
 import { enrollReadyVersion } from "./project-files";
+import { createPlanningRouter } from "./planning-router";
 
 type GetDeps = (req: Request) => AppDeps;
 const projectInput = z.object({
@@ -80,6 +81,7 @@ export function createRouter(getDeps: GetDeps) {
   const router = Router();
   router.use(createLocationRouter(getDeps));
   router.use(createEnvironmentRouter(getDeps));
+  router.use(createPlanningRouter(getDeps));
   router.use(createSourceModelRouter(getDeps));
   router.use(createBuildingModelRouter(getDeps));
   router.use(createDocumentTypesRouter(getDeps));

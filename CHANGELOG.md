@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- Project views: Coordinator and Planner overviews organize saved planning entries, dependencies, decisions and milestones by phase and discipline. Nerd keeps every module tab; both editors stay shared. Viewing a phase does not advance it or approve engineering work. Includes additive database migration 0052.
+
 - Upload PDFs directly in the site assessment without changing tabs. Project sources retain the workflow context and propose document types from their content, with supporting evidence and an explicit unreviewed state.
 
 - 3D location can locate a source-linked, approximate project extent when no placed model is available. Fit construction no longer mistakes the building at the address for the development; the outline links to its source plan and stays separate from surveyed or calculation geometry.

@@ -162,12 +162,18 @@ export function LocationEditor({
   const [viewportReady, setViewportReady] = useState(false),
     [viewportError, setViewportError] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    const current = new URLSearchParams(currentLocation.search);
+    const next = new URLSearchParams(nextLocation.search);
+    // Changing the project lens leaves this editor and its unsaved scene mounted.
+    current.delete("perspective");
+    next.delete("perspective");
+    return (
       !!draft &&
       (currentLocation.pathname !== nextLocation.pathname ||
-        currentLocation.search !== nextLocation.search),
-  );
+        current.toString() !== next.toString())
+    );
+  });
   useEffect(() => {
     if (!draft) return;
     const before = (event: BeforeUnloadEvent) => {
