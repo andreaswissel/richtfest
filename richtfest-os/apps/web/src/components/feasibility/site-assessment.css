@@ -456,14 +456,6 @@
   padding-left: 1rem;
   list-style: disc;
 }
-@media (max-width: 900px) {
-  .berlin-parcels {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .berlin-parcel-preview svg {
-    max-height: 18rem;
-  }
-}
 .berlin-subtitle { margin-top: var(--stack); }
 .site-summary-provider { display: inline-flex; align-items: center; gap: 6px; }
 .site-map-basis { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); }

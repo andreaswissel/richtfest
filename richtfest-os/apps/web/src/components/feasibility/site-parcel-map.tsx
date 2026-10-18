@@ -216,13 +216,13 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
 
     <div className="site-map-controls">
       <div className="site-map-control-group">
-        <WorkbenchTool label={label("ZoomIn")} onClick={() => zoom(1 / 1.5)}><Plus className="size-icon-sm" /></WorkbenchTool>
-        <WorkbenchTool label={label("ZoomOut")} onClick={() => zoom(1.5)}><Minus className="size-icon-sm" /></WorkbenchTool>
-        <WorkbenchTool label={label("Fit")} onClick={() => setView(fit)}><LocateFixed className="size-icon-sm" /></WorkbenchTool>
+        <WorkbenchTool tooltipSide="left" label={label("ZoomIn")} onClick={() => zoom(1 / 1.5)}><Plus className="size-icon-sm" /></WorkbenchTool>
+        <WorkbenchTool tooltipSide="left" label={label("ZoomOut")} onClick={() => zoom(1.5)}><Minus className="size-icon-sm" /></WorkbenchTool>
+        <WorkbenchTool tooltipSide="left" label={label("Fit")} onClick={() => setView(fit)}><LocateFixed className="size-icon-sm" /></WorkbenchTool>
       </div>
       <div className="site-map-control-group">
         <Popover>
-          <PopoverTrigger asChild><WorkbenchTool label={label("Layers")}><Layers className="size-icon-sm" /></WorkbenchTool></PopoverTrigger>
+          <PopoverTrigger asChild><WorkbenchTool tooltipSide="left" label={label("Layers")}><Layers className="size-icon-sm" /></WorkbenchTool></PopoverTrigger>
           <PopoverContent side="left" align="start" className="site-map-layers w-56">
             <p className="text-ui-sm font-medium">{label("Layers")}</p>
             {(["aerial", "plans", "buildings", "labels"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">

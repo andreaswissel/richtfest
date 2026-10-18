@@ -33,3 +33,13 @@
 .workbench-tool:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .workbench-tool:disabled { opacity: .35; }
 .workbench-tool kbd { color: var(--muted-foreground); font-family: inherit; font-size: var(--ui-2xs); line-height: 1; }
+.workbench-tool-wrap { display: inline-flex; flex: 0 0 auto; }
+.workbench-tool-wrap > .workbench-tool:disabled { pointer-events: none; }
+.workbench-tool-tip-kbd {
+  min-width: 1.25rem;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--background) 20%, transparent);
+  font-family: inherit;
+  text-align: center;
+}
