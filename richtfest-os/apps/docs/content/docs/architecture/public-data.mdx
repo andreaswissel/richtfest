@@ -58,6 +58,14 @@ In the project location inspector, **Public data status** shows each pinned rele
 
 Users with project write access can choose **Refresh project context**, then **Adopt latest releases**. Confirmation explains that the background job uses the latest published releases at execution time. Planning objects, notes, unsaved scene edits and LiDAR remain unchanged; the old context stays visible while queued or running and survives a failed refresh. Successful refresh audit events retain old and new release IDs. Read-only users can inspect status but cannot refresh. Legacy contexts without release pins keep their existing UI. Conversation agents do not yet have a dedicated catalogue tool.
 
+## Traffic counts
+
+Counts published only as files are imported into three tenant-free tables: `public_data_traffic_counts` (one row per source, release and station or section, with lon/lat geometry, an indexed bounding box, Kfz/24h, heavy vehicles/24h and, where published, hourly day/night values and p1/p2 shares), `public_data_traffic_count_sources` (checkpoint per source: release, file checksums, importer version, schedule, lease) and `public_data_traffic_count_runs` (one row per attempt with the retrieved files, their SHA-256 and private evidence key, and inserted/updated/removed/skipped counts). The run table is the audit trail, since this data belongs to no tenant.
+
+Sources: BASt Dauerzählstellen 2024 and BASt Straßenverkehrszählung 2021 (Autobahnen and Bundesstraßen nationwide), Straßen.NRW Verkehrswerte (SVZ 2021 values), NLStBV Niedersachsen SVZ 2021 and Sachsen SVZ 2021. 2021 counts fall in the pandemic; the survey limitation says so. Imports are idempotent: unchanged files and importer version are skipped, changed rows are upserted by source, release and station, and stations missing from a new file or superseded releases are removed. A failed download keeps the existing records.
+
+With `TRAFFIC_COUNT_IMPORT_ENABLED=true` a background job checks each source every 30 days (about 50 MB per cycle; changed files are stored in the bucket). Operators can run `bun src/scripts/import-traffic-counts.ts [source ids] [--force]` in `richtfest-os/apps/api`. `GET /api/public-data/traffic-counts` shows checkpoints and recent runs. Reading counts is always on; the exterior-noise lookup queries them through the projects host contract (`trafficCounts(bbox)`).
+
 ## Enable and operate
 
 Apply migration `0029_public_data` using the normal migration process, configure the private Railway Bucket, then set `PUBLIC_DATA_ENABLED=true` on the API service and restart it through the normal deployment process. This flag enables both the scheduled worker and catalogue-backed project imports. Startup idempotently seeds the three curated datasets and their partitions, preserving operational state. The production adapter uploads directly to the private Bucket; the local filesystem adapter is development-only.
