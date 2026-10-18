@@ -2072,5 +2072,18 @@
   "siteAerialLoading": "Loading aerial imagery…",
   "siteAerialUnavailable": "The official aerial imagery could not be loaded.",
   "siteAerialHint": "Official orthophotos: 500 m around the site, a 3 km window once you zoom out. Imagery date may differ from today; not a survey.",
-  "locationPan": "Pan"
+  "locationPan": "Pan",
+  "siteMeasureUseAs": "Use the horizontal {distance} m as",
+  "siteMeasureSource": "Noise source",
+  "siteKindRail": "railway",
+  "siteKindRoad": "road",
+  "siteMeasureNewRail": "New railway source…",
+  "siteMeasureNewRoad": "New road source…",
+  "siteMeasureNewName": "Name of the new source",
+  "siteNewRailName": "Railway",
+  "siteNewRoadName": "Road",
+  "siteMeasureApply": "Use as distance to facade",
+  "siteMeasureSaved": "Saved to Exterior noise",
+  "siteMeasureDiscard": "Discard",
+  "siteMeasureBasis": "Measured in 3D location from {from} to {to} ({crs}), horizontal, on official imagery and footprints; not surveyed"
 }

@@ -45,7 +45,7 @@ import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
 import { EnvironmentSurveyButton } from "./environment-survey";
 import { PublicDataStatus } from "./public-data";
-import { useSiteWorkbench } from "./site-workbench";
+import { MeasurementActions, useSiteWorkbench } from "./site-workbench";
 import "./location.css";
 
 const busy = (status?: string) => status === "queued" || status === "running";
@@ -985,6 +985,13 @@ export function LocationEditor({
                   </strong>{" "}
                   · {t("locationVertical")}:{" "}
                   {Math.abs(measurement[0][1] - measurement[1][1]).toFixed(2)} m
+                  <MeasurementActions
+                    key={measurement.flat().join(",")}
+                    projectId={projectId}
+                    context={state.data!.context!}
+                    points={[measurement[0], measurement[1]]}
+                    onDone={() => setMeasurement([])}
+                  />
                 </div>
               )}
             </div>

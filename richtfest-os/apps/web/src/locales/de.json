@@ -2072,5 +2072,18 @@
   "siteAerialLoading": "Luftbild wird geladen…",
   "siteAerialUnavailable": "Das amtliche Luftbild konnte nicht geladen werden.",
   "siteAerialHint": "Amtliche Orthophotos: 500 m um das Grundstück, beim Herauszoomen ein Ausschnitt von 3 km. Der Bildflug kann älter sein; keine Vermessung.",
-  "locationPan": "Verschieben"
+  "locationPan": "Verschieben",
+  "siteMeasureUseAs": "Horizontale {distance} m übernehmen als",
+  "siteMeasureSource": "Lärmquelle",
+  "siteKindRail": "Bahnstrecke",
+  "siteKindRoad": "Straße",
+  "siteMeasureNewRail": "Neue Bahnstrecke…",
+  "siteMeasureNewRoad": "Neue Straße…",
+  "siteMeasureNewName": "Name der neuen Quelle",
+  "siteNewRailName": "Bahnstrecke",
+  "siteNewRoadName": "Straße",
+  "siteMeasureApply": "Als Abstand zur Fassade übernehmen",
+  "siteMeasureSaved": "In Außenlärm gespeichert",
+  "siteMeasureDiscard": "Verwerfen",
+  "siteMeasureBasis": "Im 3D-Standort gemessen von {from} bis {to} ({crs}), horizontal, auf amtlichem Luftbild und Gebäudegrundrissen; keine Vermessung"
 }

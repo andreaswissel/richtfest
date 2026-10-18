@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Crosshair, FileStack, Image as ImageIcon, Route, Volume2 } from "lucide-react";
 import {
+  toUtm,
   aerialSourceFor,
   railNoiseAttribution,
   siteToPlan,
@@ -17,6 +18,7 @@ import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout } from "../ui/primitives";
+import { Input } from "../ui/input";
 import { fromLocal, useSiteGeometry, type SiteGeometry, type SiteOverlay } from "./site-geometry";
 import "./site-workbench.css";
 
@@ -91,6 +93,88 @@ export function FacadeDistanceRow({ projectId, geometry, item, canWrite, compact
           {t("siteUseDistance")}
         </Button>
       ) : null}
+      {apply.isError && <small className="noise-input-error">{apply.error instanceof Error ? apply.error.message : String(apply.error)}</small>}
+    </div>
+  );
+}
+
+/**
+ * What to do with a finished measurement in the 3D viewer: today, take it as a
+ * noise source's distance to the facade (an existing source or a new one),
+ * with a basis naming both measured points.
+ */
+export function MeasurementActions({ projectId, context, points, onDone }: {
+  projectId: string;
+  context: LocationContext;
+  points: [[number, number, number], [number, number, number]];
+  onDone: () => void;
+}) {
+  const t = useT();
+  const session = useApi("/auth/me");
+  const canWrite = (session.data?.permissions || session.data?.user?.permissions || []).includes("projects:write");
+  const noise = useApi(`/projects/${projectId}/noise-sources`);
+  const sources = ((noise.data as { sources?: NoiseSource[] } | undefined)?.sources ?? []);
+  // Noise distances are horizontal; the vertical difference stays in the readout.
+  const horizontal = Math.round(Math.hypot(points[0][0] - points[1][0], points[0][2] - points[1][2]) * 10) / 10;
+  const ends = points.map(([x, , z]) => fromLocal(context, [x, z]));
+  const nearest = useMemo(() => {
+    // Preselect the source whose mapped axis passes closest to either end, else the first railway, else the first source.
+    const zone = context.crs === "EPSG:25832" ? 32 : 33;
+    let best: { id: string; distance: number } | null = null;
+    for (const source of sources) for (const part of source.mapped?.axes ?? []) for (const [lon, lat] of part) {
+      const [e, n] = toUtm(lon, lat, zone);
+      for (const end of ends) {
+        const distance = Math.hypot(e - end[0], n - end[1]);
+        if (distance < 60 && (!best || distance < best.distance)) best = { id: source.id, distance };
+      }
+    }
+    return best?.id ?? sources.find((source) => source.kind === "rail")?.id ?? sources[0]?.id ?? "_new_rail";
+  }, [sources, points]);
+  const [choice, setChoice] = useState<string | null>(null);
+  const target = choice ?? nearest;
+  const [name, setName] = useState("");
+  const apply = useMutation({
+    mutationFn: async () => {
+      let source = sources.find((item) => item.id === target);
+      if (!source) {
+        const kind = target === "_new_road" ? "road" : "rail";
+        const created = await api<{ id: string }>(`/projects/${projectId}/noise-sources`, { kind, name: name.trim() || t(kind === "rail" ? "siteNewRailName" : "siteNewRoadName") });
+        source = { id: created.id, inputs: {} } as NoiseSource;
+      }
+      const crs = context.crs ?? "EPSG:25833";
+      const basis = t("siteMeasureBasis")
+        .replace("{from}", ends[0].map((v) => v.toFixed(1)).join(" / "))
+        .replace("{to}", ends[1].map((v) => v.toFixed(1)).join(" / "))
+        .replace("{crs}", crs);
+      await api(`/projects/${projectId}/noise-sources/${source.id}/inputs/distanceToFacade`, { value: horizontal, basis, expectedVersion: source.inputs.distanceToFacade?.version ?? 0 }, "PUT");
+      return source.id;
+    },
+    // A new source becomes the selection, so the link and a repeat save point at it.
+    onSuccess: async (sourceId) => { setChoice(sourceId); await invalidate(projectId); },
+  });
+  if (!canWrite) return null;
+  return (
+    <div className="measurement-actions">
+      <span className="text-ui-xs muted">{t("siteMeasureUseAs").replace("{distance}", horizontal.toFixed(1))}</span>
+      <NativeSelect aria-label={t("siteMeasureSource")} value={target} onChange={(event) => { setChoice(event.target.value); apply.reset(); }}>
+        {sources.map((source) => (
+          <option key={source.id} value={source.id}>{`${source.name} · ${t(source.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
+        ))}
+        <option value="_new_rail">{t("siteMeasureNewRail")}</option>
+        <option value="_new_road">{t("siteMeasureNewRoad")}</option>
+      </NativeSelect>
+      {target.startsWith("_new") && (
+        <Input aria-label={t("siteMeasureNewName")} placeholder={t(target === "_new_rail" ? "siteNewRailName" : "siteNewRoadName")} value={name} onChange={(event) => setName(event.target.value)} />
+      )}
+      {apply.isSuccess ? (
+        <>
+          <Badge variant="outline">{t("siteMeasureSaved")}</Badge>
+          <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise&source=${apply.data}`}>{t("buildingExteriorNoiseOpen")}</Link>
+        </>
+      ) : (
+        <Button size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>{t("siteMeasureApply")}</Button>
+      )}
+      <Button size="sm" variant="ghost" onClick={onDone}>{t("siteMeasureDiscard")}</Button>
       {apply.isError && <small className="noise-input-error">{apply.error instanceof Error ? apply.error.message : String(apply.error)}</small>}
     </div>
   );

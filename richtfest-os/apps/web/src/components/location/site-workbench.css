@@ -55,3 +55,19 @@
   flex-basis: 100%;
   color: var(--destructive);
 }
+.measurement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  margin-top: 0.4rem;
+}
+.measurement-actions select,
+.measurement-actions input {
+  width: auto;
+  max-width: 18rem;
+}
+.measurement-actions .noise-input-error {
+  flex-basis: 100%;
+  color: var(--destructive);
+}

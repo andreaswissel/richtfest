@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 3D location: a finished measurement can be taken over as a road or railway's distance to facade in Exterior noise, for an existing source or a new one, with both measured points recorded as its basis.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
