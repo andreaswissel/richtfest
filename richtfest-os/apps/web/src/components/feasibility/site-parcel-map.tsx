@@ -13,7 +13,7 @@ type Bounds = [number, number, number, number];
 type View = { cx: number; cy: number; half: number };
 type Range = { mean: number; max: number };
 /** What the map knows about one parcel: observed ratios, covering plans and the § 34 frame of its neighbours. */
-export type ParcelFacts = { grz: number | null; grz2: number | null; gfz: number | null; law: PlanningLaw | null; frame: { grz: Range | null; grz2: Range | null; gfz: Range | null; count: number } };
+export type ParcelFacts = { grz: number | null; grz2: number | null; gfz: number | null; storeys: number | null; law: PlanningLaw | null; frame: { grz: Range | null; grz2: Range | null; gfz: Range | null; storeys: Range | null; count: number } };
 const FRAME_RADIUS_M = 100;
 type LayerKey = "aerial" | "law" | "plans" | "buildings" | "labels" | "ratios";
 /** Must match the server's orthophoto window (AERIAL_WINDOW_M / AERIAL_SNAP_M in the feasibility app). */
@@ -134,9 +134,14 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   });
 
   const ratios = useMemo(() => {
-    const byParcel = new Map<string, { grz: number | null; grz2: number | null; gfz: number | null }>();
-    for (const r of discovery?.references ?? []) if (r.parcelId && !byParcel.has(r.parcelId))
-      byParcel.set(r.parcelId, { grz: r.metrics?.grz?.value ?? null, grz2: r.metrics?.grz2?.value ?? null, gfz: r.metrics?.gfz?.value ?? null });
+    const byParcel = new Map<string, { grz: number | null; grz2: number | null; gfz: number | null; storeys: number | null }>();
+    for (const r of discovery?.references ?? []) {
+      if (!r.parcelId) continue;
+      // Storeys: the tallest reported building on the parcel, as for the § 34 comparison.
+      const storeys = r.metrics?.storeys?.value ?? null, known = byParcel.get(r.parcelId);
+      if (known) { if (storeys != null && (known.storeys == null || storeys > known.storeys)) known.storeys = storeys; continue; }
+      byParcel.set(r.parcelId, { grz: r.metrics?.grz?.value ?? null, grz2: r.metrics?.grz2?.value ?? null, gfz: r.metrics?.gfz?.value ?? null, storeys });
+    }
     return byParcel;
   }, [discovery]);
   const buildings = useMemo(() => discovery ? discovery.buildings.map(b => ({ id: b.id, d: path(discoveryPolygons(discovery, b), aerial) })) : [], [discovery, aerial]);
@@ -152,9 +157,9 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
     const near = at ? parcels.filter(p => p.parcel.id !== parcel.id && p.at && Math.hypot(p.at[0] - at[0], p.at[1] - at[1]) <= FRAME_RADIUS_M).map(p => ratios.get(p.parcel.id)).filter(r => r?.grz != null) : [];
     const range = (values: number[]): Range | null => values.length ? { mean: values.reduce((a, b) => a + b, 0) / values.length, max: Math.max(...values) } : null;
     return {
-      ...(ratios.get(parcel.id) ?? { grz: null, grz2: null, gfz: null }),
+      ...(ratios.get(parcel.id) ?? { grz: null, grz2: null, gfz: null, storeys: null }),
       law: parcels.find(p => p.parcel.id === parcel.id)?.law ?? null,
-      frame: { grz: range(near.map(r => r!.grz!)), grz2: range(near.flatMap(r => r!.grz2 != null ? [r!.grz2] : [])), gfz: range(near.flatMap(r => r!.gfz != null ? [r!.gfz] : [])), count: near.length },
+      frame: { grz: range(near.map(r => r!.grz!)), grz2: range(near.flatMap(r => r!.grz2 != null ? [r!.grz2] : [])), gfz: range(near.flatMap(r => r!.gfz != null ? [r!.gfz] : [])), storeys: range(near.flatMap(r => r!.storeys != null ? [r!.storeys] : [])), count: near.length },
     };
   };
   // A scale bar of a round length about a sixth of the map width.
@@ -182,7 +187,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
           <tspan x={lx(at[0])} fontWeight={600}>{parcel.number || parcel.label}</tspan>
           {/* GRZ 1 / GRZ 2 like the planning map convention; GFZ on its own line. */}
           {layers.ratios && !small && r?.grz != null && <tspan x={lx(at[0])} dy={px(14)} fontSize={px(11)}>GRZ {fmt(r.grz)}{r.grz2 != null ? ` / ${fmt(r.grz2)}` : ""}</tspan>}
-          {layers.ratios && !small && r?.gfz != null && <tspan x={lx(at[0])} dy={px(13)} fontSize={px(11)}>GFZ {fmt(r.gfz)}</tspan>}
+          {layers.ratios && !small && r?.gfz != null && <tspan x={lx(at[0])} dy={px(13)} fontSize={px(11)}>GFZ {fmt(r.gfz)}{r.storeys != null ? ` · ${label("StoreysShort").replace("{n}", String(r.storeys))}` : ""}</tspan>}
         </text>;
       })}
       {layers.plans && layers.labels && plans.map(({ plan, bounds }) => {

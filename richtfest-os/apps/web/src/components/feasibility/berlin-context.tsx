@@ -33,7 +33,12 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   const lookup = useBerlinContext(projectId, siteLocator);
   const context = lookup.data;
   // Discovery is only read from the cache here; its references add observed GRZ/GFZ and footprints to the map.
-  const discovery = useSiteDiscovery(projectId, siteLocator).data;
+  const discoveryQuery = useSiteDiscovery(projectId, siteLocator);
+  const discovery = discoveryQuery.data;
+  // Neighbour GRZ/GFZ and storeys come from the nearby-buildings lookup; run it with the parcel lookup so the map shows them.
+  useEffect(() => {
+    if (context && !discoveryQuery.data && !discoveryQuery.isFetching && !discoveryQuery.isError) void discoveryQuery.refetch();
+  }, [lookup.dataUpdatedAt]);
   useEffect(() => {
     if (!context) return;
     setSelected(context.parcels.find(p => p.containsAddress)?.id);
@@ -78,9 +83,10 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
               <dt>{label("Area")}</dt><dd className="tabular-nums">{area(parcel.area)}</dd>
               <dt>{label("Relation")}</dt><dd>{parcel.containsAddress ? <Badge variant="outline">{label("Contains")}</Badge> : label("Nearby")}</dd>
               <dt>{label("LastChange")}</dt><dd>{parcel.sourceDate ? new Date(parcel.sourceDate).toLocaleDateString(locale) : "–"}</dd>
-              <dt>GRZ 1</dt><dd className="tabular-nums">{facts.grz != null ? num(facts.grz) : <span className="muted">{label(discovery ? "NoRatios" : "RatiosAfterDiscovery")}</span>}</dd>
+              <dt>GRZ 1</dt><dd className="tabular-nums">{facts.grz != null ? num(facts.grz) : <span className="muted">{label(discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</span>}</dd>
               {facts.grz != null && <><dt>GRZ 2</dt><dd className="tabular-nums">{facts.grz2 != null ? `≥ ${num(facts.grz2)}` : "–"}</dd>
-              <dt>GFZ</dt><dd className="tabular-nums">{facts.gfz != null ? num(facts.gfz) : "–"}</dd></>}
+              <dt>GFZ</dt><dd className="tabular-nums">{facts.gfz != null ? num(facts.gfz) : "–"}</dd>
+              <dt>{label("Storeys")}</dt><dd className="tabular-nums">{facts.storeys != null ? facts.storeys : "–"}</dd></>}
             </dl>
             {facts.grz != null && <p className="muted text-ui-2xs">{label("RatiosHint")}</p>}
             {facts.law && <div className="site-map-basis text-ui-xs" data-law={facts.law.kind}>
@@ -103,8 +109,9 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
                 <dt>GRZ 1</dt><dd className="tabular-nums">{range(facts.frame.grz)}</dd>
                 <dt>GRZ 2</dt><dd className="tabular-nums">{range(facts.frame.grz2)}</dd>
                 <dt>GFZ</dt><dd className="tabular-nums">{range(facts.frame.gfz)}</dd>
+                <dt>{label("Storeys")}</dt><dd className="tabular-nums">{range(facts.frame.storeys)}</dd>
                 <dt>{label("Section34Basis")}</dt><dd>{label("Section34Count").replace("{count}", String(facts.frame.count))}</dd>
-              </dl> : <p className="muted">{label(discovery ? "NoRatios" : "RatiosAfterDiscovery")}</p>}
+              </dl> : <p className="muted">{label(discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</p>}
             </details>
             <div className="site-map-panel-actions">
               {adopted?.id === parcel.id ? <Badge variant="outline">{label("AdoptedShort")}</Badge>

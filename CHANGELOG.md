@@ -2,6 +2,7 @@
 
 ## 2026-10-18
 
+- **Parcel map:** Looking up parcels now also loads the surrounding buildings, so every parcel shows GRZ 1/GRZ 2, GFZ and its storeys straight away, and the § 34 comparison lists the storey range of the neighbours.
 - **Feasibility:** Opens directly on the site assessment; the financial study is paused and no longer shown.
 - **Design:** Double-click closes a footprint outline in the plan and in 3D. The footprint tool is now called "Draw building footprint", the building-line tool has its own line icon, and in 3D the selected building stands out while the others turn grey.
 - **Baugrenze from the plan:** With a B-Plan page aligned on the parcel, one click traces the Baugrenze and Baulinien around the parcel as an unreviewed envelope and building lines, using the provider you choose. Drag the approximate corners onto the plan lines, then review.
