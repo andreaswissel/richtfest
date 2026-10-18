@@ -134,7 +134,9 @@ function MappedSources({ projectId, survey, sources, canWrite, t }: { projectId:
   const mappedAvailable = survey && (survey.roads || survey.rail);
   return <Section title={t("noiseMapped")} meta={canWrite && <Button size="sm" variant="outline" disabled={lookup.isPending} onClick={() => lookup.mutate()}>
     {lookup.isPending ? t("loading") : survey ? t("noiseLookupRefresh") : t("noiseLookup")}</Button>}>
-    {survey && <p className="muted text-ui-xs">{survey.address} · {t("noiseLookupAt").replace("{date}", formatDate(survey.retrievedAt))} · {survey.attribution ?? (survey.connectorVersion.startsWith("he-") ? t("noiseAttributionHessen") : survey.connectorVersion.startsWith("be-") ? t("noiseAttributionBerlin") : t("noiseAttributionRlp"))}</p>}
+    {survey && <p className="muted text-ui-xs">{[survey.address, t("noiseLookupAt").replace("{date}", formatDate(survey.retrievedAt)),
+      // Surveys saved before attributions came from the server fall back to the connector prefix; null means no road/rail source was connected.
+      survey.attribution !== undefined ? survey.attribution : survey.connectorVersion.startsWith("he-") ? t("noiseAttributionHessen") : survey.connectorVersion.startsWith("be-") ? t("noiseAttributionBerlin") : t("noiseAttributionRlp")].filter(Boolean).join(" · ")}</p>}
     {lookup.isError && <Callout tone="error">{errorText(lookup.error)}</Callout>}
     {!survey && <Empty>{t("noiseLookupEmpty")}</Empty>}
     {survey && !mappedAvailable && <Callout>{t(survey.unavailable ? "noiseLookupUnavailable" : "noiseLookupOutdated")}</Callout>}
