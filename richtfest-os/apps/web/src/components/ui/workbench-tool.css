@@ -1,0 +1,35 @@
+.workbench-tool-rail {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border-right: 1px solid var(--border);
+  background: var(--background);
+  overflow-y: auto;
+}
+.workbench-tool {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  width: calc(var(--control-sm) + 8px);
+  min-height: calc(var(--control-sm) + 10px);
+  place-content: center;
+  justify-items: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.workbench-tool:hover:not(:disabled),
+.workbench-tool[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.workbench-tool[aria-pressed="true"] { border-color: var(--border); }
+.workbench-tool:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.workbench-tool:disabled { opacity: .35; }
+.workbench-tool kbd { color: var(--muted-foreground); font-family: inherit; font-size: var(--ui-2xs); line-height: 1; }

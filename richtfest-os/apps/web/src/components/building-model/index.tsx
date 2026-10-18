@@ -10,6 +10,7 @@ import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
+import { WorkbenchTool } from "../ui/workbench-tool";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { AudioLines, ChevronDown, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
@@ -868,15 +869,15 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
           addRegion={<RegionForm projectId={projectId} modelRevision={model.revision || 0} storeyId={currentSource?.storeyId || undefined} sourcePage={currentSource?.page || page} sourceVersionId={evidence.sourceVersionId || undefined} compact
             onComplete={() => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] })} t={t} />}
           footer={state !== "proposed" && hiddenWallCount > 0 && <p className="building-model-outliner-note"><span>{hiddenWallCount} {t("buildingModelHiddenWallHypotheses")}</span>{" "}<Link className="underline underline-offset-2" to={`?${wallReviewParams}`}>{t("buildingModelReviewWallHypotheses")}</Link></p>} />
-        <div className="building-model-tool-rail" role="toolbar" aria-orientation="vertical" aria-label={t("buildingModelTools")}>
-          {tools.map(({ value, key, Icon, label, disabled }) => <button key={value} type="button" className="building-model-tool" aria-pressed={activeTool === value} disabled={disabled} aria-label={label} title={`${label} (${key})`} onClick={() => chooseTool(value)}>
-            <Icon className="size-icon" aria-hidden="true" /><kbd>{key}</kbd>
-          </button>)}
+        <div className="workbench-tool-rail" role="toolbar" aria-orientation="vertical" aria-label={t("buildingModelTools")}>
+          {tools.map(({ value, key, Icon, label, disabled }) => <WorkbenchTool key={value} label={label} shortcut={key} aria-pressed={activeTool === value} disabled={disabled} onClick={() => chooseTool(value)}>
+            <Icon className="size-icon" aria-hidden="true" />
+          </WorkbenchTool>)}
           <div className="building-model-tool-rail-zoom" aria-label={t("buildingModelZoomControls")}>
-            <button type="button" className="building-model-tool" onClick={() => zoomBy(.25)} disabled={viewerTransform.zoom >= 4} aria-label={t("buildingModelZoomIn")} title={t("buildingModelZoomIn")}><Plus className="size-icon-sm" aria-hidden="true" /></button>
+            <WorkbenchTool onClick={() => zoomBy(.25)} disabled={viewerTransform.zoom >= 4} label={t("buildingModelZoomIn")}><Plus className="size-icon-sm" aria-hidden="true" /></WorkbenchTool>
             <span aria-live="polite">{Math.round(viewerTransform.zoom * 100)}%</span>
-            <button type="button" className="building-model-tool" onClick={() => zoomBy(-.25)} disabled={viewerTransform.zoom <= 1} aria-label={t("buildingModelZoomOut")} title={t("buildingModelZoomOut")}><Minus className="size-icon-sm" aria-hidden="true" /></button>
-            <button type="button" className="building-model-tool" onClick={() => setViewerTransform({ zoom: 1, pan: { x: 0, y: 0 } })} aria-label={t("buildingModelFitView")} title={t("buildingModelFitView")}><Maximize className="size-icon-sm" aria-hidden="true" /></button>
+            <WorkbenchTool onClick={() => zoomBy(-.25)} disabled={viewerTransform.zoom <= 1} label={t("buildingModelZoomOut")}><Minus className="size-icon-sm" aria-hidden="true" /></WorkbenchTool>
+            <WorkbenchTool onClick={() => setViewerTransform({ zoom: 1, pan: { x: 0, y: 0 } })} label={t("buildingModelFitView")}><Maximize className="size-icon-sm" aria-hidden="true" /></WorkbenchTool>
           </div>
         </div>
         <section className="building-model-evidence" aria-label={t("buildingModelSourceEvidence")}>

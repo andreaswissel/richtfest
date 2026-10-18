@@ -22,6 +22,12 @@ import {
   Save,
   Layers,
   Download,
+  Crosshair,
+  PanelLeft,
+  PanelRight,
+  CircleHelp,
+  Map,
+  Navigation,
 } from "lucide-react";
 import type {
   LocationState,
@@ -42,6 +48,8 @@ import { usePreferences } from "../../store";
 import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { Badge, Callout, Field, Segmented } from "../ui/primitives";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { WorkbenchTool } from "../ui/workbench-tool";
 import type { IfcGeometry } from "./ifc-loader";
 import type { createViewport, ViewportState } from "./viewport";
 import { pointsInEnvelope } from "./scene-math";
@@ -128,6 +136,7 @@ export function LocationEditor({
   const [treeStyle, setTreeStyle] =
     useState<ViewportState["treeStyle"]>("schematic");
   const [tab, setTab] = useState("properties");
+  const [panel, setPanel] = useState<"layers" | "inspector" | null>(null);
   const [layers, setLayers] = useState({
     buildings: true,
     trees: true,
@@ -669,22 +678,63 @@ export function LocationEditor({
         </div>
       ) : showContext ? (
         <>
-          <div className="location-toolbar">
+          <div
+            className="location-toolbar"
+            role="toolbar"
+            aria-label={t("locationSceneActions")}
+          >
             <div className="location-toolbar-group">
-              <Button variant="outline" onClick={() => addObject("vehicle")}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="location-panel-toggle"
+                aria-label={t("locationLayers")}
+                title={t("locationLayers")}
+                aria-pressed={panel === "layers"}
+                onClick={() => setPanel(panel === "layers" ? null : "layers")}
+              >
+                <PanelLeft className="size-icon-sm" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="location-panel-toggle"
+                aria-label={t("locationInspector")}
+                title={t("locationInspector")}
+                aria-pressed={panel === "inspector"}
+                onClick={() =>
+                  setPanel(panel === "inspector" ? null : "inspector")
+                }
+              >
+                <PanelRight className="size-icon-sm" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => addObject("vehicle")}
+              >
                 <Truck className="size-icon-sm" />
                 {t("locationVehicle")}
               </Button>
-              <Button variant="outline" onClick={() => addObject("mass")}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => addObject("mass")}
+              >
                 <Box className="size-icon-sm" />
                 {t("locationMass")}
               </Button>
-              <Button variant="outline" onClick={() => addObject("note")}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => addObject("note")}
+              >
                 <MapPin className="size-icon-sm" />
                 {t("locationPin")}
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
+                size="sm"
                 disabled={importIfc.isPending}
                 onClick={() => fileInput.current?.click()}
               >
@@ -742,7 +792,7 @@ export function LocationEditor({
             </div>
           </div>
           {importIfc.isPending && <Callout>{t("locationIfcBusy")}</Callout>}
-          <div className="location-workbench">
+          <div className={`location-workbench${panel ? ` show-${panel}` : ""}`}>
             <aside className="location-layers" aria-label={t("locationLayers")}>
               <h2>
                 <Layers className="size-icon-sm" />
@@ -885,89 +935,93 @@ export function LocationEditor({
                 )}
               </div>
             </aside>
-            <div className="location-canvas-column">
-              <div className="location-view-tools">
-                <div className="location-toolbar-group">
-                  {(
-                    [
-                      ["select", MousePointer2, "locationSelect", "V"],
-                      ["place", Move, "locationPlace", "G"],
-                      ["measure", Ruler, "locationMeasure", "M"],
-                      ["pan", Hand, "locationPan", "H"],
-                    ] as const
-                  ).map(([value, Icon, key, shortcut]) => (
-                    <Button
-                      key={value}
-                      variant="ghost"
-                      size="icon"
-                      title={`${t(key)} (${shortcut})`}
-                      aria-keyshortcuts={shortcut}
-                      aria-label={t(key)}
-                      aria-pressed={tool === value}
-                      disabled={value === "place" && !object}
-                      onClick={() => {
-                        if (value === "measure") setTreeStyle("schematic");
-                        setTool(value);
-                      }}
-                    >
-                      <Icon className="size-icon-sm" />
-                    </Button>
-                  ))}
-                </div>
-                <div className="location-toolbar-group">
-                  <Button
-                    variant="ghost"
-                    title={t("locationShortcut").replace("{key}", "T")}
-                    aria-keyshortcuts="T"
-                    onClick={() => viewport.current?.view("top")}
+            <div
+              className="workbench-tool-rail"
+              role="toolbar"
+              aria-orientation="vertical"
+              aria-label={t("locationTools")}
+            >
+              {(
+                [
+                  ["select", MousePointer2, "locationSelect", "V"],
+                  ["place", Move, "locationPlace", "G"],
+                  ["measure", Ruler, "locationMeasure", "M"],
+                  ["pan", Hand, "locationPan", "H"],
+                  ["align", Crosshair, "siteAlignPlan", "A"],
+                ] as const
+              ).map(([value, Icon, key, shortcut]) => (
+                <WorkbenchTool
+                  key={value}
+                  label={t(key)}
+                  shortcut={shortcut}
+                  aria-pressed={tool === value}
+                  disabled={
+                    (value === "place" && !object) ||
+                    (value === "align" && !site.canAlign)
+                  }
+                  onClick={() => {
+                    if (value === "measure") setTreeStyle("schematic");
+                    setTool(value);
+                  }}
+                >
+                  <Icon className="size-icon" aria-hidden="true" />
+                </WorkbenchTool>
+              ))}
+              <div
+                className="location-view-tools"
+                role="group"
+                aria-label={t("locationViews")}
+              >
+                {(
+                  [
+                    ["top", Map, "locationTop", "T"],
+                    ["perspective", Box, "locationPerspective", "3"],
+                    ["street", Navigation, "locationStreet", "S"],
+                    ["area", Scan, "locationArea", "U"],
+                  ] as const
+                ).map(([value, Icon, key, shortcut]) => (
+                  <WorkbenchTool
+                    key={value}
+                    label={t(key)}
+                    shortcut={shortcut}
+                    onClick={() => viewport.current?.view(value)}
                   >
-                    {t("locationTop")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    title={t("locationShortcut").replace("{key}", "3")}
-                    aria-keyshortcuts="3"
-                    onClick={() => viewport.current?.view("perspective")}
+                    <Icon className="size-icon" aria-hidden="true" />
+                  </WorkbenchTool>
+                ))}
+                <WorkbenchTool
+                  label={t("locationFrame")}
+                  shortcut="F"
+                  onClick={() => viewport.current?.focus(selected)}
+                >
+                  <Focus className="size-icon" aria-hidden="true" />
+                </WorkbenchTool>
+                <WorkbenchTool
+                  label={t("locationFitConstruction")}
+                  shortcut="⇧F"
+                  aria-keyshortcuts="Shift+F"
+                  title={`${t("locationFitConstructionHint")} (Shift+F)`}
+                  onClick={() => viewport.current?.fitConstruction()}
+                >
+                  <ScanSearch className="size-icon" aria-hidden="true" />
+                </WorkbenchTool>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <WorkbenchTool label={t("locationNavigationHelp")}>
+                      <CircleHelp className="size-icon" aria-hidden="true" />
+                    </WorkbenchTool>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    side="right"
+                    align="end"
+                    className="text-ui-xs"
                   >
-                    3D
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    title={t("locationShortcut").replace("{key}", "S")}
-                    aria-keyshortcuts="S"
-                    onClick={() => viewport.current?.view("street")}
-                  >
-                    {t("locationStreet")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    title={t("locationShortcut").replace("{key}", "U")}
-                    aria-keyshortcuts="U"
-                    onClick={() => viewport.current?.view("area")}
-                  >
-                    {t("locationArea")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title={`${t("locationFrame")} (F)`}
-                    aria-keyshortcuts="F"
-                    aria-label={t("locationFrame")}
-                    onClick={() => viewport.current?.focus(selected)}
-                  >
-                    <Focus className="size-icon-sm" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    title={`${t("locationFitConstructionHint")} (Shift+F)`}
-                    aria-keyshortcuts="Shift+F"
-                    onClick={() => viewport.current?.fitConstruction()}
-                  >
-                    <ScanSearch className="size-icon-sm" />
-                    {t("locationFitConstruction")}
-                  </Button>
-                </div>
+                    {t("locationControls")}
+                  </PopoverContent>
+                </Popover>
               </div>
+            </div>
+            <div className="location-canvas-column">
               <div
                 className="location-viewport"
                 ref={host}
@@ -985,16 +1039,15 @@ export function LocationEditor({
                   {t("locationLoading")}
                 </div>
               )}
-              <div className="location-canvas-caption">
-                <span>
-                  {tool === "place"
-                    ? t("locationPlaceHint")
-                    : tool === "measure"
-                      ? t("locationMeasureHint")
-                      : t("locationControls")}
-                </span>
-                <Badge>{t("locationUnverified")}</Badge>
-              </div>
+              {(tool === "place" || tool === "measure") && (
+                <div className="location-canvas-caption" role="status">
+                  {t(
+                    tool === "place"
+                      ? "locationPlaceHint"
+                      : "locationMeasureHint",
+                  )}
+                </div>
+              )}
               {measurement.length === 2 && (
                 <div className="location-measurement" role="status">
                   {t("locationDistance")}:{" "}
@@ -1276,6 +1329,7 @@ export function LocationEditor({
             </aside>
           </div>
           <footer className="location-status">
+            <Badge>{t("locationUnverified")}</Badge>
             <span>{t("locationOrigin")}</span>
             <span>
               {state.data!.context!.crs ?? "EPSG:25833"} ·{" "}

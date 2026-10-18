@@ -28,6 +28,18 @@ import "./site-workbench.css";
 type T = ReturnType<typeof useT>;
 type Pick = { local: Point2; plan?: Point2; site?: Point2 };
 const SNAP_M = 1.5;
+
+/** Cache image bytes, not a URL whose lifetime ends when this viewer unmounts. */
+function useImageUrl(image: Blob | undefined) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const next = image ? URL.createObjectURL(image) : null;
+    setUrl(next);
+    return () => { if (next) URL.revokeObjectURL(next); };
+  }, [image]);
+  return url;
+}
+
 /** EBA legend colours, Lden bands in dB(A). */
 const railNoiseBands = [
   ["#E2F2BF", "55–59"],
@@ -249,7 +261,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
     queryFn: async () => {
       const response = await fetch(`/api/projects/${projectId}/location/${path}`, { credentials: "include" });
       if (!response.ok) throw new Error(error);
-      return URL.createObjectURL(await response.blob());
+      return response.blob();
     },
     enabled: enabled && !!context,
     staleTime: Infinity,
@@ -261,9 +273,9 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
   const aerialNear = useQuery(image("aerial/near", layers.aerial && !!aerialSource, t("siteAerialUnavailable")));
   // The wide window is only fetched once the planner zooms out of the neighbourhood.
   const aerialFar = useQuery(image("aerial/far", layers.aerial && !!aerialSource && zoomedOut, t("siteAerialUnavailable")));
-  useEffect(() => () => { if (aerialNear.data) URL.revokeObjectURL(aerialNear.data); }, [aerialNear.data]);
-  useEffect(() => () => { if (aerialFar.data) URL.revokeObjectURL(aerialFar.data); }, [aerialFar.data]);
-  useEffect(() => () => { if (railNoise.data) URL.revokeObjectURL(railNoise.data); }, [railNoise.data]);
+  const nearUrl = useImageUrl(aerialNear.data);
+  const farUrl = useImageUrl(aerialFar.data);
+  const railNoiseUrl = useImageUrl(railNoise.data);
   const aligning = tool === "align";
   useEffect(() => { if (!aligning && picks.length < 4) setPicks([]); }, [aligning]);
   const planVertices = useMemo(() => (geometry?.walls ?? []).flatMap((wall) => wall.ring), [geometry?.walls]);
@@ -312,11 +324,11 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
       to: [item.to[0] - context!.origin[0], context!.origin[1] - item.to[1]] as Point2,
       label: `${item.distance.toFixed(1)} m`,
     })),
-    railNoise: railNoise.data ?? null,
-    aerial: { near: aerialNear.data ?? null, far: aerialFar.data ?? null },
+    railNoise: railNoiseUrl,
+    aerial: { near: nearUrl, far: farUrl },
     picks: aligning ? picks.map((pick) => pick.local) : [],
     snaps: aligning ? (picks.length % 2 === 0 ? planVertices : siteVertices) : [],
-  }), [geometry, suggestedAxes, distances, context, railNoise.data, aerialNear.data, aerialFar.data, aligning, picks, planVertices, siteVertices]);
+  }), [geometry, suggestedAxes, distances, context, railNoiseUrl, nearUrl, farUrl, aligning, picks, planVertices, siteVertices]);
 
   const steps = ["sitePickPlanA", "sitePickSiteA", "sitePickPlanB", "sitePickSiteB"] as const;
   const scaleOff = pending && Math.abs(pending.scaleRatio - 1) > 0.02;
