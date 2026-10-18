@@ -20,7 +20,7 @@
 
 - 3D location now fills the project window and shares the building model's compact tool rail, visible shortcuts and narrow-window panels. Aerial imagery and rail-noise overlays stay visible when returning to the editor instead of turning into black rectangles.
 
-- Project navigation stays in place as the project name, customer and status badge load, and when switching to Project details.
+- Project navigation stays pinned across dashboards, editors and other tabs, including on narrow screens. Only module content scrolls; Project details keeps its Edit button out of the tab row. Loading the project name, customer or status no longer shifts navigation.
 
 - 3D location: **Fit construction** (Shift+F) brings the planned build back into view after zooming or panning. A teal outline and readable label keep it distinct from the surroundings. Sites without planning geometry highlight the existing footprint at the address instead, clearly labelled as reference geometry; otherwise the address remains marked. Selected reference buildings are outlined along their actual shape rather than an oversized box.
 

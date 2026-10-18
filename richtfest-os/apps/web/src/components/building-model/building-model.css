@@ -183,8 +183,7 @@
 .building-model-outline-midpoint { width: 8px; height: 8px; border: 1px solid var(--primary); background: color-mix(in oklch, var(--primary) 35%, var(--background)); opacity: .55; cursor: copy; }
 .building-model-outline-midpoint:hover { opacity: 1; }
 /* Workbench: one toolbar, outliner, tool rail, plan, properties and a status bar filling the project page. */
-.page:has(> .building-model.is-workbench) { height: 100dvh; min-height: 0; overflow: hidden; padding-bottom: 0; gap: 0; }
-.building-model.is-workbench { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; margin-inline: calc(var(--page) * -1); }
+.building-model.is-workbench { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .building-model-toolbar { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .building-model-toolbar > * { flex: 0 0 auto; }
 .building-model-toolbar-source { display: flex; align-items: center; gap: 6px; max-width: 300px; flex: 0 0 auto; color: var(--muted-foreground); }

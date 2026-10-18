@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
-export function Page({ children }: { children: ReactNode }) {
-  return <div className="page p-page">{children}</div>;
+export function Page({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <div className={`page p-page ${className}`}>{children}</div>;
 }
 export function PageHeader({
   eyebrow,

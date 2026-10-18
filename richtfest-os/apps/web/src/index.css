@@ -415,9 +415,6 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 dialog.modal { margin: auto; color: inherit; }
 dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, transparent); backdrop-filter: blur(3px); }
 /* Shared-record project conversation and revision workspace. */
-.page:has(.project-workspace-content) { height:calc(100dvh - 52px); min-height:0; gap:.5rem; overflow:hidden; padding-block:.75rem; }
-.page:has(.project-workspace-content) .page-header { min-height:36px; }
-.page:has(.project-workspace-content) .eyebrow { display:none; }
 .workspace-view-links { display:flex; align-items:center; gap:var(--spacing-stack, .5rem); flex-wrap:wrap; border-bottom:1px solid var(--border); padding-bottom:.5rem; }
 .workspace-view-links a { padding:.4rem .65rem; border-radius:var(--radius); color:var(--muted-foreground); }
 .workspace-view-links a[aria-current="page"] { background:var(--muted); color:var(--foreground); }
@@ -485,14 +482,7 @@ dialog.modal::backdrop { background: color-mix(in oklch, var(--foreground) 35%, 
 .workspace-navigation-links .nav-icon svg { width:var(--icon); height:var(--icon); }
 .workspace-navigation-links .nav-arrow { display:none; }
 @media(max-width:850px) {
-  .app-shell:has(.project-workspace-content) { height:100dvh; overflow:hidden; display:flex; flex-direction:column; }
-  .app-shell:has(.project-workspace-content) > .sidebar,
-  .main-shell:has(.project-workspace-content) > .topbar,
-  .page:has(.project-workspace-content) > .page-header,
-  .page:has(.project-workspace-content) > .workspace-view-links { display:none; }
-  .main-shell:has(.project-workspace-content) { flex:1; margin-left:0; display:flex; flex-direction:column; min-height:0; }
-  main:has(.project-workspace-content) { display:flex; flex:1; min-height:0; }
-  .page:has(.project-workspace-content) { flex:1; min-width:0; height:auto; min-height:0; padding:0; gap:0; }
+  .project-module-content[data-view="workspace"] { padding:0; }
   .project-thread-layout, .project-thread-main { gap:0; }
   .thread-rail.has-mobile-menu { overflow:visible; max-height:none; }
   .thread-rail.has-mobile-menu > .thread-rail-toggle,
@@ -550,8 +540,14 @@ table[data-slot="table"].supervisor-preset-table th[scope="row"] { color:var(--f
 .message-annotation { border-left:2px solid var(--border); padding-left:.75rem; margin:.5rem 0; }
 /* Project chrome: inside a project the workspace sidebar and topbar step aside for one thin project bar. */
 .app-shell.is-project .main-shell { margin-left: 0; }
-.app-shell.is-project .page { min-height: 100vh; gap: var(--stack); padding-top: 0; }
-.project-bar { display: flex; align-items: center; gap: 14px; min-height: 44px; margin-inline: calc(var(--page) * -1); padding: 0 var(--page); border-bottom: 1px solid var(--border); }
+.page.project-shell { height: 100dvh; min-height: 0; gap: 0; padding: 0; overflow: hidden; }
+.project-module-content { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column; gap: var(--stack); padding: var(--stack) var(--page) var(--page); overflow: auto; }
+.project-module-content > * { flex-shrink: 0; }
+.project-module-content[data-view="workspace"] { overflow: hidden; }
+/* Full-bleed editors size only their content slot, never the shared project chrome. */
+.project-module-content:has(> .location-editor),
+.project-module-content:has(> .building-model.is-workbench) { padding: 0; gap: 0; overflow: hidden; }
+.project-bar { display: flex; flex-shrink: 0; align-items: center; gap: 14px; min-height: 44px; padding: 0 var(--page); border-bottom: 1px solid var(--border); }
 .project-bar-brand { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; border-radius: 6px; background: var(--foreground); color: var(--background); font-size: var(--ui-sm); font-weight: 600; text-decoration: none; }
 .project-bar-back { flex: 0 0 auto; color: var(--muted-foreground); font-size: var(--ui-xs); text-decoration: none; }
 .project-bar-back:hover { color: var(--foreground); }
@@ -567,12 +563,9 @@ table[data-slot="table"].supervisor-preset-table th[scope="row"] { color:var(--f
 .project-bar > .project-perspectives { margin-left: auto; align-self: center; }
 .project-perspectives { flex-shrink: 0; }
 .project-perspectives a { font-size: var(--ui-xs); }
-.project-module-bar { display: flex; align-items: center; gap: var(--stack); flex-shrink: 0; min-width: 0; margin-inline: calc(var(--page) * -1); padding: 6px var(--page); border-bottom: 1px solid var(--border); }
-.project-module-bar > button { flex-shrink: 0; }
+.project-module-bar { display: flex; align-items: center; flex-shrink: 0; min-width: 0; padding: 6px var(--page); border-bottom: 1px solid var(--border); }
 .project-module-bar .workspace-view-links { flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; border: 0; padding: 0; gap: 2px; }
 .project-module-bar .workspace-view-links a { flex-shrink: 0; font-size: var(--ui-xs); font-weight: 500; }
 .project-all-modules { margin-left: auto; }
-.page:has(.project-workspace-content) { height: 100dvh; }
 @media (max-width: 1100px) { .project-bar-customer { display: none; } }
-@media (max-width: 850px) { .page:has(.project-workspace-content) > .project-bar, .page:has(.project-workspace-content) > .project-module-bar { display: none; } }
 @media (max-width: 600px) { .project-bar { gap: 10px; flex-wrap: wrap; padding-block: 8px; } .project-bar-title [data-slot="badge"], .project-bar-back-label { display: none; } .project-bar-title { flex-basis: 32%; } .project-bar > .project-perspectives { order: 4; margin-left: 0; } .project-bar-actions { margin-left: auto; } }

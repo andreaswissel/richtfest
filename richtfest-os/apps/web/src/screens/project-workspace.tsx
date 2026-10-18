@@ -314,7 +314,7 @@ export function ProjectWorkspace() {
     return <Navigate replace to={`?${next}`} />;
   }
   return (
-    <Page>
+    <Page className="project-shell">
       <header className="project-bar">
         <Link to="/" className="project-bar-brand" aria-label="Richtfest">
           R
@@ -349,379 +349,387 @@ export function ProjectWorkspace() {
           )}
         </div>
       </header>
-      <div className="project-module-bar">
-        {projectNavigation}
-        {view === "details" && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              updateProject.reset();
-              setEditingDetails(true);
-            }}
-          >
-            {t("editProject")}
-          </Button>
+      <div className="project-module-bar">{projectNavigation}</div>
+      <div key={view} className="project-module-content" data-view={view}>
+        <LoadState query={project} />
+        {view === "overview" && project.isSuccess && (
+          <ProjectOverview
+            projectId={id!}
+            projectName={title}
+            perspective={perspective === "planner" ? "planner" : "coordinator"}
+          />
         )}
-      </div>
-      <LoadState query={project} />
-      {view === "overview" && project.isSuccess && (
-        <ProjectOverview
-          projectId={id!}
-          projectName={title}
-          perspective={perspective === "planner" ? "planner" : "coordinator"}
-        />
-      )}
-      {view === "location" && project.isSuccess && (
-        <LocationMode projectId={id!} address={details} />
-      )}
-      {view === "building-model" && project.isSuccess && (
-        <BuildingModelMode projectId={id!} />
-      )}
-      {view === "analytics" && project.isSuccess && (
-        <ProjectAnalytics key={id} projectId={id!} />
-      )}
-      {view === "workspace" && (
-        <>
-          <LoadState query={workspace} />
-          <div className="project-workspace-content">
-            <div className="project-thread-layout">
-              <ThreadRail
-                projectId={id!}
-                mobileMenu={{
-                  title,
-                  subtitle:
-                    mobilePanel === "resources"
-                      ? t("workspaceResources")
-                      : selected?.title || t("workspaceConversation"),
-                  navigation: (
-                    <>
-                      <section>
-                        <div className="flex items-center justify-between gap-stack">
-                          <h2>{t("project")}</h2>
-                          <Badge>{projectStatusLabel(details.status, t)}</Badge>
-                        </div>
-                        {perspectiveNavigation}
-                        {projectNavigation}
-                        <nav aria-label={t("workspaceResources")}>
-                          <Link
-                            to={`?${resourcesParams}`}
-                            aria-current={
-                              mobilePanel === "resources" ? "page" : undefined
-                            }
-                          >
-                            {t("workspaceResources")}
-                          </Link>
-                        </nav>
-                      </section>
-                      <section>
-                        <h2>{t("home")}</h2>
-                        {workspaceNavigation}
-                      </section>
-                    </>
-                  ),
-                }}
-                conversations={conversations}
-                selectedId={selected?.id}
-                creating={create.isPending}
-                onCreate={() =>
-                  create.mutate({
-                    projectId: id,
-                    title: `${t("threadRailThread")} ${conversations.length + 1}`,
-                    assigneeType: "user",
-                  })
-                }
-                onArchived={(threadId, archived) => {
-                  if (!archived || selected?.id !== threadId) return;
-                  const nextThread = conversations.find(
-                    (thread) => thread.id !== threadId && !thread.archivedAt,
-                  );
-                  const next = new URLSearchParams(params);
-                  if (nextThread) next.set("conversation", nextThread.id);
-                  else next.delete("conversation");
-                  next.delete("message");
-                  next.delete("agentRun");
-                  for (const key of [
-                    "artifact",
-                    "revision",
-                    "file",
-                    "sourceVersion",
-                    "sourceSelection",
-                    "page",
-                  ])
-                    next.delete(key);
-                  setParams(next, { replace: true });
-                }}
-              />
-              <div className="project-thread-main">
-                {create.error && (
-                  <Callout tone="error">{create.error.message}</Callout>
-                )}
-                {activeRuns
-                  .filter((run) => !transcriptLiveRunIds.has(run.id))
-                  .map((run) => (
-                    <LiveRun key={run.id} run={run} projectId={id!} silent />
-                  ))}
-                <div
-                  className="project-workspace-grid"
-                  data-mobile-panel={mobilePanel}
-                  style={{
-                    gridTemplateColumns: `minmax(0,${100 - width}fr) 8px minmax(0,${width}fr)`,
-                  }}
-                >
-                  {agentRunId ? (
-                    <SubagentThread
-                      key={agentRunId}
-                      projectId={id!}
-                      runId={agentRunId}
-                      conversationId={selected?.id}
-                      initialRun={selectedRun}
-                    />
-                  ) : selected ? (
-                    <Transcript
-                      key={selected.id}
-                      projectId={id!}
-                      conversationId={selected.id}
-                      conversationTitle={selected.title}
-                      readState={selected.readState}
-                      initialMessage={initialMessage}
-                      onInitialMessageSent={() => {
-                        setInitialMessage(undefined);
-                        setInitialMessageDraft("");
-                      }}
-                      runs={list(workspace.data?.runs).filter(
-                        (run) => run.conversationId === selected.id,
-                      )}
-                    />
-                  ) : (
-                    <div className="project-conversation workspace-empty-thread">
-                      <div className="workspace-empty-prompt">
-                        <p>{t("workspaceStart")}</p>
-                      </div>
-                      <form
-                        className="workspace-composer"
-                        onSubmit={async (event) => {
-                          event.preventDefault();
-                          const body = initialMessageDraft.trim();
-                          if (
-                            !body ||
-                            create.isPending ||
-                            initialMessage !== undefined ||
-                            !workspace.isSuccess
-                          )
-                            return;
-                          setInitialMessage(body);
-                          try {
-                            await create.mutateAsync({
-                              projectId: id,
-                              title: `${t("threadRailThread")} ${conversations.length + 1}`,
-                              assigneeType: "user",
-                            });
-                          } catch {
-                            setInitialMessage(undefined);
-                          }
-                        }}
-                      >
-                        <div className="workspace-composer-shell">
-                          <div className="workspace-composer-input">
-                            <Textarea
-                              rows={1}
-                              value={initialMessageDraft}
-                              required
-                              disabled={
-                                !workspace.isSuccess ||
-                                create.isPending ||
-                                initialMessage !== undefined
-                              }
-                              aria-label={t("message")}
-                              placeholder={t("workspaceUiComposerPlaceholder")}
-                              onChange={(event) =>
-                                setInitialMessageDraft(event.target.value)
-                              }
-                              onKeyDown={(event) => {
-                                if (
-                                  event.key === "Enter" &&
-                                  !event.shiftKey &&
-                                  !event.nativeEvent.isComposing
-                                ) {
-                                  event.preventDefault();
-                                  event.currentTarget.form?.requestSubmit();
-                                }
-                              }}
-                            />
+        {view === "location" && project.isSuccess && (
+          <LocationMode projectId={id!} address={details} />
+        )}
+        {view === "building-model" && project.isSuccess && (
+          <BuildingModelMode projectId={id!} />
+        )}
+        {view === "analytics" && project.isSuccess && (
+          <ProjectAnalytics key={id} projectId={id!} />
+        )}
+        {view === "workspace" && (
+          <>
+            <LoadState query={workspace} />
+            <div className="project-workspace-content">
+              <div className="project-thread-layout">
+                <ThreadRail
+                  projectId={id!}
+                  mobileMenu={{
+                    title,
+                    subtitle:
+                      mobilePanel === "resources"
+                        ? t("workspaceResources")
+                        : selected?.title || t("workspaceConversation"),
+                    navigation: (
+                      <>
+                        <section>
+                          <div className="flex items-center justify-between gap-stack">
+                            <h2>{t("project")}</h2>
+                            <Badge>
+                              {projectStatusLabel(details.status, t)}
+                            </Badge>
                           </div>
-                          <div className="workspace-composer-controls">
-                            <span className="workspace-composer-status" />
-                            <Button
-                              type="submit"
-                              size="icon"
-                              className="workspace-send-button"
-                              aria-label={t("workspaceUiSendMessage")}
-                              title={t("workspaceUiSendShortcut")}
-                              disabled={
-                                !workspace.isSuccess ||
-                                create.isPending ||
-                                initialMessage !== undefined ||
-                                !initialMessageDraft.trim()
+                          {perspectiveNavigation}
+                          {projectNavigation}
+                          <nav aria-label={t("workspaceResources")}>
+                            <Link
+                              to={`?${resourcesParams}`}
+                              aria-current={
+                                mobilePanel === "resources" ? "page" : undefined
                               }
                             >
-                              <ArrowUp aria-hidden="true" />
-                            </Button>
-                          </div>
-                        </div>
-                      </form>
-                    </div>
+                              {t("workspaceResources")}
+                            </Link>
+                          </nav>
+                        </section>
+                        <section>
+                          <h2>{t("home")}</h2>
+                          {workspaceNavigation}
+                        </section>
+                      </>
+                    ),
+                  }}
+                  conversations={conversations}
+                  selectedId={selected?.id}
+                  creating={create.isPending}
+                  onCreate={() =>
+                    create.mutate({
+                      projectId: id,
+                      title: `${t("threadRailThread")} ${conversations.length + 1}`,
+                      assigneeType: "user",
+                    })
+                  }
+                  onArchived={(threadId, archived) => {
+                    if (!archived || selected?.id !== threadId) return;
+                    const nextThread = conversations.find(
+                      (thread) => thread.id !== threadId && !thread.archivedAt,
+                    );
+                    const next = new URLSearchParams(params);
+                    if (nextThread) next.set("conversation", nextThread.id);
+                    else next.delete("conversation");
+                    next.delete("message");
+                    next.delete("agentRun");
+                    for (const key of [
+                      "artifact",
+                      "revision",
+                      "file",
+                      "sourceVersion",
+                      "sourceSelection",
+                      "page",
+                    ])
+                      next.delete(key);
+                    setParams(next, { replace: true });
+                  }}
+                />
+                <div className="project-thread-main">
+                  {create.error && (
+                    <Callout tone="error">{create.error.message}</Callout>
                   )}
-                  <WorkspaceResizeHandle
-                    width={width}
-                    onChange={setWidth}
-                    label={t("workspacePanelWidth")}
-                  />
-                  <ArtifactPanel
-                    projectId={id!}
-                    conversationId={selected?.id}
-                    artifacts={threadArtifacts}
-                    runs={list(workspace.data?.runs)}
-                    tasks={threadTasks}
-                    initialFiles={list(project.data?.files)}
-                  />
+                  {activeRuns
+                    .filter((run) => !transcriptLiveRunIds.has(run.id))
+                    .map((run) => (
+                      <LiveRun key={run.id} run={run} projectId={id!} silent />
+                    ))}
+                  <div
+                    className="project-workspace-grid"
+                    data-mobile-panel={mobilePanel}
+                    style={{
+                      gridTemplateColumns: `minmax(0,${100 - width}fr) 8px minmax(0,${width}fr)`,
+                    }}
+                  >
+                    {agentRunId ? (
+                      <SubagentThread
+                        key={agentRunId}
+                        projectId={id!}
+                        runId={agentRunId}
+                        conversationId={selected?.id}
+                        initialRun={selectedRun}
+                      />
+                    ) : selected ? (
+                      <Transcript
+                        key={selected.id}
+                        projectId={id!}
+                        conversationId={selected.id}
+                        conversationTitle={selected.title}
+                        readState={selected.readState}
+                        initialMessage={initialMessage}
+                        onInitialMessageSent={() => {
+                          setInitialMessage(undefined);
+                          setInitialMessageDraft("");
+                        }}
+                        runs={list(workspace.data?.runs).filter(
+                          (run) => run.conversationId === selected.id,
+                        )}
+                      />
+                    ) : (
+                      <div className="project-conversation workspace-empty-thread">
+                        <div className="workspace-empty-prompt">
+                          <p>{t("workspaceStart")}</p>
+                        </div>
+                        <form
+                          className="workspace-composer"
+                          onSubmit={async (event) => {
+                            event.preventDefault();
+                            const body = initialMessageDraft.trim();
+                            if (
+                              !body ||
+                              create.isPending ||
+                              initialMessage !== undefined ||
+                              !workspace.isSuccess
+                            )
+                              return;
+                            setInitialMessage(body);
+                            try {
+                              await create.mutateAsync({
+                                projectId: id,
+                                title: `${t("threadRailThread")} ${conversations.length + 1}`,
+                                assigneeType: "user",
+                              });
+                            } catch {
+                              setInitialMessage(undefined);
+                            }
+                          }}
+                        >
+                          <div className="workspace-composer-shell">
+                            <div className="workspace-composer-input">
+                              <Textarea
+                                rows={1}
+                                value={initialMessageDraft}
+                                required
+                                disabled={
+                                  !workspace.isSuccess ||
+                                  create.isPending ||
+                                  initialMessage !== undefined
+                                }
+                                aria-label={t("message")}
+                                placeholder={t(
+                                  "workspaceUiComposerPlaceholder",
+                                )}
+                                onChange={(event) =>
+                                  setInitialMessageDraft(event.target.value)
+                                }
+                                onKeyDown={(event) => {
+                                  if (
+                                    event.key === "Enter" &&
+                                    !event.shiftKey &&
+                                    !event.nativeEvent.isComposing
+                                  ) {
+                                    event.preventDefault();
+                                    event.currentTarget.form?.requestSubmit();
+                                  }
+                                }}
+                              />
+                            </div>
+                            <div className="workspace-composer-controls">
+                              <span className="workspace-composer-status" />
+                              <Button
+                                type="submit"
+                                size="icon"
+                                className="workspace-send-button"
+                                aria-label={t("workspaceUiSendMessage")}
+                                title={t("workspaceUiSendShortcut")}
+                                disabled={
+                                  !workspace.isSuccess ||
+                                  create.isPending ||
+                                  initialMessage !== undefined ||
+                                  !initialMessageDraft.trim()
+                                }
+                              >
+                                <ArrowUp aria-hidden="true" />
+                              </Button>
+                            </div>
+                          </div>
+                        </form>
+                      </div>
+                    )}
+                    <WorkspaceResizeHandle
+                      width={width}
+                      onChange={setWidth}
+                      label={t("workspacePanelWidth")}
+                    />
+                    <ArtifactPanel
+                      projectId={id!}
+                      conversationId={selected?.id}
+                      artifacts={threadArtifacts}
+                      runs={list(workspace.data?.runs)}
+                      tasks={threadTasks}
+                      initialFiles={list(project.data?.files)}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
+          </>
+        )}
+        {view === "details" && !editingDetails && (
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                updateProject.reset();
+                setEditingDetails(true);
+              }}
+            >
+              {t("editProject")}
+            </Button>
           </div>
-        </>
-      )}
-      {view === "details" &&
-        (editingDetails ? (
-          <form
-            className="form project-details-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const form = new FormData(event.currentTarget);
-              const values = Object.fromEntries(form.entries());
-              const body: Record<string, unknown> = {
-                name: values.name,
-                status: values.status,
-                street: values.street,
-                postalCode: values.postalCode,
-                city: values.city,
-                country: values.country,
-                addressReference: JSON.parse(
-                  String(values.addressReference || "null"),
-                ),
-              };
-              if (typeof values.customerId === "string")
-                body.customerId = values.customerId || null;
-              updateProject.mutate(body);
-            }}
-          >
-            <Field label={t("name")}>
-              <Input
-                autoFocus
-                required
-                maxLength={200}
-                name="name"
-                defaultValue={details.name || ""}
-              />
-            </Field>
-            <AddressSelect
-              defaultValue={details}
-              disabled={updateProject.isPending}
-            />
-            <Field label={t("customer")}>
-              <NativeSelect
-                name="customerId"
-                defaultValue={details.customerId || ""}
-                disabled={customers.isPending || customers.isError}
-              >
-                <option value="">{t("noCustomer")}</option>
-                {details.customerId &&
-                  !list(customers.data, "customers").some(
-                    (customer) => customer.id === details.customerId,
-                  ) && (
-                    <option value={details.customerId}>
-                      {project.data?.customerName || details.customerId}
-                    </option>
-                  )}
-                {list(customers.data, "customers").map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </option>
-                ))}
-              </NativeSelect>
-            </Field>
-            {customers.isError && (
-              <Callout tone="error">{customers.error.message}</Callout>
-            )}
-            <Field label={t("status")}>
-              <NativeSelect
-                name="status"
-                defaultValue={details.status || "planning"}
-              >
-                {!(["planning", "active", "completed"] as string[]).includes(
-                  details.status || "planning",
-                ) && <option value={details.status}>{details.status}</option>}
-                <option value="planning">{t("projectStatusPlanning")}</option>
-                <option value="active">{t("projectStatusActive")}</option>
-                <option value="completed">{t("projectStatusCompleted")}</option>
-              </NativeSelect>
-            </Field>
-            {updateProject.error && (
-              <Callout tone="error">{updateProject.error.message}</Callout>
-            )}
-            <div className="form-footer">
-              <Button
-                type="button"
-                variant="outline"
+        )}
+        {view === "details" &&
+          (editingDetails ? (
+            <form
+              className="form project-details-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                const values = Object.fromEntries(form.entries());
+                const body: Record<string, unknown> = {
+                  name: values.name,
+                  status: values.status,
+                  street: values.street,
+                  postalCode: values.postalCode,
+                  city: values.city,
+                  country: values.country,
+                  addressReference: JSON.parse(
+                    String(values.addressReference || "null"),
+                  ),
+                };
+                if (typeof values.customerId === "string")
+                  body.customerId = values.customerId || null;
+                updateProject.mutate(body);
+              }}
+            >
+              <Field label={t("name")}>
+                <Input
+                  autoFocus
+                  required
+                  maxLength={200}
+                  name="name"
+                  defaultValue={details.name || ""}
+                />
+              </Field>
+              <AddressSelect
+                defaultValue={details}
                 disabled={updateProject.isPending}
-                onClick={() => {
-                  updateProject.reset();
-                  setEditingDetails(false);
-                }}
-              >
-                {t("cancel")}
-              </Button>
-              <Button type="submit" disabled={updateProject.isPending}>
-                {updateProject.isPending ? t("saving") : t("save")}
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <dl className="project-details">
-            <dt>{t("name")}</dt>
-            <dd>{title}</dd>
-            <dt>{t("address")}</dt>
-            <dd>
-              {formatProjectAddress(details) || "—"}
-              {details.addressReference && (
-                <p className="text-ui-xs text-muted-foreground">
-                  <a
-                    href="https://www.geoapify.com/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {details.addressReference.attribution}
-                  </a>
-                </p>
+              />
+              <Field label={t("customer")}>
+                <NativeSelect
+                  name="customerId"
+                  defaultValue={details.customerId || ""}
+                  disabled={customers.isPending || customers.isError}
+                >
+                  <option value="">{t("noCustomer")}</option>
+                  {details.customerId &&
+                    !list(customers.data, "customers").some(
+                      (customer) => customer.id === details.customerId,
+                    ) && (
+                      <option value={details.customerId}>
+                        {project.data?.customerName || details.customerId}
+                      </option>
+                    )}
+                  {list(customers.data, "customers").map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </Field>
+              {customers.isError && (
+                <Callout tone="error">{customers.error.message}</Callout>
               )}
-            </dd>
-            <dt>{t("customer")}</dt>
-            <dd>{project.data?.customerName || t("noCustomer")}</dd>
-            <dt>{t("status")}</dt>
-            <dd>{projectStatusLabel(details.status, t)}</dd>
-          </dl>
-        ))}
-      {view === "sources" && (
-        <Sources projectId={id!} initial={project.data || {}} />
-      )}
-      {view === "inquiries" && (
-        <Inquiries projectId={id!} selectedId={params.get("inquiry")} />
-      )}
-      {view === "noise" && (
-        <NoiseSources projectId={id!} selectedId={params.get("source")} />
-      )}
-      {view === "feasibility" && <Feasibility projectId={id!} />}
-      {view === "knowledge" && <Knowledge projectId={id!} />}
+              <Field label={t("status")}>
+                <NativeSelect
+                  name="status"
+                  defaultValue={details.status || "planning"}
+                >
+                  {!(["planning", "active", "completed"] as string[]).includes(
+                    details.status || "planning",
+                  ) && <option value={details.status}>{details.status}</option>}
+                  <option value="planning">{t("projectStatusPlanning")}</option>
+                  <option value="active">{t("projectStatusActive")}</option>
+                  <option value="completed">
+                    {t("projectStatusCompleted")}
+                  </option>
+                </NativeSelect>
+              </Field>
+              {updateProject.error && (
+                <Callout tone="error">{updateProject.error.message}</Callout>
+              )}
+              <div className="form-footer">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={updateProject.isPending}
+                  onClick={() => {
+                    updateProject.reset();
+                    setEditingDetails(false);
+                  }}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button type="submit" disabled={updateProject.isPending}>
+                  {updateProject.isPending ? t("saving") : t("save")}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <dl className="project-details">
+              <dt>{t("name")}</dt>
+              <dd>{title}</dd>
+              <dt>{t("address")}</dt>
+              <dd>
+                {formatProjectAddress(details) || "—"}
+                {details.addressReference && (
+                  <p className="text-ui-xs text-muted-foreground">
+                    <a
+                      href="https://www.geoapify.com/"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {details.addressReference.attribution}
+                    </a>
+                  </p>
+                )}
+              </dd>
+              <dt>{t("customer")}</dt>
+              <dd>{project.data?.customerName || t("noCustomer")}</dd>
+              <dt>{t("status")}</dt>
+              <dd>{projectStatusLabel(details.status, t)}</dd>
+            </dl>
+          ))}
+        {view === "sources" && (
+          <Sources projectId={id!} initial={project.data || {}} />
+        )}
+        {view === "inquiries" && (
+          <Inquiries projectId={id!} selectedId={params.get("inquiry")} />
+        )}
+        {view === "noise" && (
+          <NoiseSources projectId={id!} selectedId={params.get("source")} />
+        )}
+        {view === "feasibility" && <Feasibility projectId={id!} />}
+        {view === "knowledge" && <Knowledge projectId={id!} />}
+      </div>
     </Page>
   );
 }
