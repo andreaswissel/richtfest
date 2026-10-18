@@ -77,9 +77,16 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
    metrics:{footprint:metric(b.area,source,date),storeys:metric(storeys,source,null,"official"),ridgeHeight:metric(number(p.hoehe),source,null,"official"),eaveHeight:metric(null,source,null,"estimated"),depth:metric(dimensions.depth,source,date,"estimated"),frontage:metric(dimensions.frontage,source,date,"estimated"),boundaryDistance:metric(boundaryDistance,`${source} · ${parcelId??""}`,null),buildingLineOffset:metric(null,source,null,"estimated"),grz:metric(ratios?.grz??null,ratios?.grz2!=null?coverageSource:ratioSource,null),grz2:metric(ratios?.grz2??null,coverageSource,null,"estimated"),gfz:metric(ratios?.gfz??null,ratioSource,null,"estimated")},
    ...(cad&&text(cad.f.properties.bezbaw)?{buildingForm:{value:text(cad.f.properties.bezbaw),source:`${urls[2]} · ${text(cad.f.properties.uuid)}`,sourceDate:null,reviewed:false}}:{})};
  });
+ // § 6 (7) BauO Bln: garages and sheds may stand in setback areas. Classified by the best-overlapping ALKIS building's function, or a height under 3 m.
+ const isAncillary=(b:{g:Multi;area:number;box:ReturnType<typeof bbox>;f:{properties:Record<string,unknown>}})=>{
+  const height=number(b.f.properties.hoehe);if(height!==null&&height>0&&height<3)return true;
+  let best:{share:number;cls:"main"|"ancillary"}|null=null;
+  for(const c of cadastral){if(c.f.properties.bezeich!=="AX_Gebaeude"||!touches(b.box,c.box))continue;const share=polygonArea(intersection(b.g,c.g))/b.area;if(share>.5&&(!best||share>best.share))best={share,cls:buildingCoverageClass(c.f.properties)};}
+  return best?.cls==="ancillary";
+ };
  references.sort((a,b)=>{const ac=bbox(a.polygons!),bc=bbox(b.polygons!);return Math.hypot((ac.x+ac.X)/2-site.origin[0],(ac.y+ac.Y)/2-site.origin[1])-Math.hypot((bc.x+bc.X)/2-site.origin[0],(bc.y+bc.Y)/2-site.origin[1]);});
  return{address:site.address,origin:site.origin,longitude:displayLonLat(site.origin)[0],latitude:displayLonLat(site.origin)[1],retrievedAt:new Date().toISOString(),references,status:results.map((r,i)=>r.status==="fulfilled"&&[buildings,parcels,cadastral][i]!.length===list(i).length?"available":"unavailable"),sources:urls,
-  buildings:buildings.map(b=>({id:text(b.f.properties.gml_id)||text(b.f.id),sourceId:text(b.f.id),polygons:b.g.map(p=>p.map(r=>r.map(point=>[point[0]-site.origin[0],site.origin[1]-point[1]] as Point))),height:number(b.f.properties.hoehe),label:references.find(r=>r.id===(text(b.f.properties.gml_id)||text(b.f.id)))?.label??"Building",roof:text(b.f.properties.dachart_txt)||null}))};
+  buildings:buildings.map(b=>({id:text(b.f.properties.gml_id)||text(b.f.id),sourceId:text(b.f.id),polygons:b.g.map(p=>p.map(r=>r.map(point=>[point[0]-site.origin[0],site.origin[1]-point[1]] as Point))),height:number(b.f.properties.hoehe),label:references.find(r=>r.id===(text(b.f.properties.gml_id)||text(b.f.id)))?.label??"Building",roof:text(b.f.properties.dachart_txt)||null,...(isAncillary(b)?{ancillary:true}:{})}))};
 }
 /** ALKIS `namlag` often already includes the house number ("Giersstraße 20"); avoid "Giersstraße 20 20". */
 export function referenceLabel(street:string,houseNumber:string){if(!houseNumber)return street;const escaped=houseNumber.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");return new RegExp(`(^|\\s)${escaped}$`,"i").test(street)?street:[street,houseNumber].filter(Boolean).join(" ");}

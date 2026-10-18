@@ -9,7 +9,7 @@ import { Badge, Callout } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { compareSiteReferences, type SiteAssessmentConstraint, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
 
-import { useBerlinContext, useSiteDiscovery, type BerlinParcel as Parcel } from "./site-lookups";
+import { protectionAt, useBerlinContext, useSiteDiscovery, type BerlinHint, type BerlinParcel as Parcel } from "./site-lookups";
 import { SiteParcelMap } from "./site-parcel-map";
 import { correctReferenceStoreys, parcelReference, storeysFromHeight } from "./site-summary";
 const VISIBLE_PARCELS = 5;
@@ -133,6 +133,18 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
                   {label(chosen ? "RemoveReference" : "AddReference")}
                 </Button>
               </div>;
+            })()}
+            {(() => {
+              // Heritage and preservation areas are always checked, also when none applies: absence is shown as a result, not left blank.
+              const p = protectionAt(context, parcel);
+              const item = (h: BerlinHint) => <span key={`${h.kind}:${h.id}`}>{h.detailUrl ? <a className="underline" href={h.detailUrl} target="_blank" rel="noreferrer">{h.type && h.type !== h.label ? `${h.type} ${h.label}` : h.label}</a> : h.label}{h.effectiveDate ? <span className="muted"> · {label("InForceSince")} {h.effectiveDate}</span> : null}</span>;
+              const rows: [string, BerlinHint[]][] = [["HeritageOn", p.heritageOn], ["HeritageNear", p.heritageNear], ["SocialPreservation", p.social], ["UrbanPreservation", p.urban]];
+              return <dl className="site-map-facts text-ui-xs" aria-label={label("Protection")}>
+                {rows.map(([key, items]) => <div key={key} className="contents">
+                  <dt>{label(key)}</dt>
+                  <dd className="site-map-protections">{items.length ? items.map(item) : <span className="muted">{label(p.known ? "ProtectionNone" : "ProtectionUnknown")}</span>}</dd>
+                </div>)}
+              </dl>;
             })()}
             {facts.law && <div className="site-map-basis text-ui-xs" data-law={facts.law.kind}>
               <p className="muted text-ui-2xs">{label("PlanningLaw")}</p>

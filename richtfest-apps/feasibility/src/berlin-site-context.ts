@@ -62,7 +62,8 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
   const parcelUrl = serviceUrl("alkis_flurstuecke", "flurstuecke", site.origin);
   const planUrls = [serviceUrl("bplan", "b_bp_fs", site.origin), serviceUrl("bplan", "a_bp_iv", site.origin)];
   const hintLayers = [["denkmale", "denkmale"], ["erhaltungsverordnungsgebiete", "erhaltgeb_em"], ["erhaltungsverordnungsgebiete", "erhaltgeb_es"]] as const;
-  const hintUrls = hintLayers.map(([service,layer]) => serviceUrl(service,layer,site.origin));
+  // Wide enough for the parcel map window: monuments next to the parcel (e.g. a protected avenue) matter as much as those on it.
+  const hintUrls = hintLayers.map(([service,layer]) => serviceUrl(service,layer,site.origin,150,200));
   // Land-use plan (FNP): building land suggests § 34 where no B-Plan applies; forest, green or farmland suggests § 35.
   const landUseUrl = serviceUrl("fnp_ak", "fnp_ak_vektor", site.origin);
   const [parcelResult, adoptedPlan, draftPlan, landUseResult, ...hintResults] = await Promise.allSettled([features(parcelUrl, signal), ...planUrls.map(url => features(url, signal)), features(landUseUrl, signal), ...hintUrls.map(url => features(url, signal))]);
@@ -80,7 +81,7 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
     sourceUrl: planUrls[index]!, documentUrl: publicLink(feature.properties.scan_www), explanationUrl: publicLink(feature.properties.grund_www),
     effectiveDate: text(feature.properties.festsg_am) || null, polygons: polygonsOf(feature), containsAddress: containsPoint(polygonsOf(feature), site.origin),
   })));
-  const hints = hintResults.flatMap((result,index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({id: text(feature.id),kind:index === 0 ? "heritage" : "preservation", label: text(feature.properties.gebietsname) || text(feature.properties.typ) || text(feature.properties.id),sourceUrl:hintUrls[index]!,detailUrl:publicLink(feature.properties.link),effectiveDate:text(feature.properties.ae_inkraft)||text(feature.properties.f_in_kraft)||null,containsAddress:containsPoint(polygonsOf(feature),site.origin)})));
+  const hints = hintResults.flatMap((result,index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({id: text(feature.id),kind:(["heritage","social_preservation","urban_preservation"] as const)[index]!, type: text(feature.properties.typ) || null, label: text(feature.properties.gebietsname) || text(feature.properties.typ) || text(feature.properties.id),polygons:polygonsOf(feature),sourceUrl:hintUrls[index]!,detailUrl:publicLink(feature.properties.link),effectiveDate:text(feature.properties.ae_inkraft)||text(feature.properties.f_in_kraft)||null,containsAddress:containsPoint(polygonsOf(feature),site.origin)})));
   const landUse = landUseResult!.status !== "fulfilled" ? [] : landUseResult!.value.flatMap(feature => {
     const polygons = polygonsOf(feature), label = text(feature.properties.nutzungsart);
     return polygons.length && label ? [{ id: text(feature.properties.gisid) || text(feature.id), label, purpose: text(feature.properties.zweckbestimmung) || null, category: landUseCategory(label), sourceUrl: landUseUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }] : [];

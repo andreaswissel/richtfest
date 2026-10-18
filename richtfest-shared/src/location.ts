@@ -70,6 +70,8 @@ export type LocationBuilding = {
   label: string;
   roof: string | null;
   sourceId: string;
+  /** ALKIS garage, shed or other ancillary building (or under 3 m high): § 6 (7) BauO Bln lets it stand in setback areas. */
+  ancillary?: boolean;
 };
 export type LocationTree = {
   id: string;

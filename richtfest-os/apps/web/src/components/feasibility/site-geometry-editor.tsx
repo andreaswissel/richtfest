@@ -505,6 +505,8 @@ export function SiteGeometryEditor({
           replaced.add(b.id);
           return [];
         }
+        // Nebengebäude (garages, sheds) may stand in setback areas and keep none of their own (§ 6 (7) BauO Bln).
+        if (b.ancillary) return [];
         return b.height ? [{ footprint, area: engine.berlinSetbackArea(footprint, engine.deriveBerlinSetback("standard", b.height) ?? 3) }] : [];
       } catch {
         return [];
@@ -1896,28 +1898,31 @@ export function SiteGeometryEditor({
           <span>{view === "2d" && hover ? `EPSG:25833 · ${hover.map((n) => n.toFixed(2)).join(" / ")}` : "EPSG:25833 · N ↑"}</span>
           <span>{label(view === "2d" ? "StatusHint" : "StatusHint3D")}</span>
         </footer>
+        {/* Plan alignment as a drawer at the bottom of the workbench, so the editor stays one full window. */}
+        <div className="geometry-plan-drawer">
+          <SitePlanAlignment
+            projectId={projectId}
+            overlay={geometry.planOverlay}
+            disabled={disabled}
+            pickedSite={pickedSite}
+            onRequestSite={() => {
+              setView("2d");
+              setPickingAlignment(true);
+            }}
+            onChange={(planOverlay) => update({ planOverlay })}
+            parcel={geometry.parcel}
+            envelopeReviewed={!!geometry.envelope?.reviewed}
+            onTrace={(traced) => {
+              // A new trace replaces earlier unreviewed traced lines; lines a person drew or reviewed stay.
+              update({
+                envelope: traced.envelope ?? geometry.envelope,
+                mandatoryLines: [...geometry.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines],
+              });
+              if (traced.envelope) setSelected({ kind: "envelope", id: "envelope" });
+            }}
+          />
+        </div>
       </section>
-      <SitePlanAlignment
-        projectId={projectId}
-        overlay={geometry.planOverlay}
-        disabled={disabled}
-        pickedSite={pickedSite}
-        onRequestSite={() => {
-          setView("2d");
-          setPickingAlignment(true);
-        }}
-        onChange={(planOverlay) => update({ planOverlay })}
-        parcel={geometry.parcel}
-        envelopeReviewed={!!geometry.envelope?.reviewed}
-        onTrace={(traced) => {
-          // A new trace replaces earlier unreviewed traced lines; lines a person drew or reviewed stay.
-          update({
-            envelope: traced.envelope ?? geometry.envelope,
-            mandatoryLines: [...geometry.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines],
-          });
-          if (traced.envelope) setSelected({ kind: "envelope", id: "envelope" });
-        }}
-      />
     </>
   );
 }

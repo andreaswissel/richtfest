@@ -516,3 +516,19 @@
 .site-map-reference { display: grid; gap: var(--stack-gap, .375rem); }
 .site-map-reference-check { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
 .site-reference-frame { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem; }
+.site-map-protection { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; fill-rule: evenodd; pointer-events: none; }
+.site-map-protection[data-kind="heritage"] { fill: rgb(225 29 72 / .18); stroke: #e11d48; }
+.site-map-protection[data-kind="social_preservation"] { fill: rgb(192 38 211 / .07); stroke: #c026d3; stroke-dasharray: 8 4; stroke-width: 2.5; }
+.site-map-protection[data-kind="urban_preservation"] { fill: rgb(8 145 178 / .07); stroke: #0891b2; stroke-dasharray: 2 4; stroke-width: 2.5; }
+.site-map-legend i.is-outline { background: transparent; border-width: 2px; }
+.site-map-legend i[data-kind="heritage"] { border-color: #e11d48; background: rgb(225 29 72 / .18); }
+.site-map-legend i[data-kind="social_preservation"] { border-color: #c026d3; border-style: dashed; }
+.site-map-legend i[data-kind="urban_preservation"] { border-color: #0891b2; border-style: dotted; }
+.site-map-protections { display: grid; gap: 2px; }
+
+/* Design is a full-window workbench like 3D location and the building model: no page gutters, no scrolling, the editor fills below the step bar. */
+.project-module-content:has(> .site-assessment.is-design) { padding: 0; gap: 0; overflow: hidden; }
+.site-assessment.is-design { flex: 1; min-height: 0; gap: 0; }
+.site-assessment.is-design > .site-header { position: static; margin: 0; padding: var(--stack) var(--page); }
+.site-assessment.is-design > .site-step.is-workbench { flex: 1; min-height: 0; gap: 0; }
+.site-assessment.is-design .geometry-workbench { flex: 1; height: auto; min-height: 0; border: 0; border-radius: 0; }

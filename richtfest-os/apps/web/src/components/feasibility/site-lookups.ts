@@ -7,9 +7,11 @@ type Locator = NonNullable<SiteAssessmentInput["siteLocator"]>;
 export type BerlinParcel = { id: string; label: string; number?: string; district?: string; area: number | null; sourceDate: string | null; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
 export type BerlinPlan = { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; polygons?: Point[][][]; containsAddress: boolean };
 export type BerlinLandUse = { id: string; label: string; purpose: string | null; category: "building" | "open" | "other"; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
+/** Heritage monuments and preservation areas (Erhaltungsverordnungen): social (Milieuschutz) or urban character. */
+export type BerlinHint = { id: string; kind: "heritage" | "social_preservation" | "urban_preservation" | "preservation"; type?: string | null; label: string; sourceUrl: string; detailUrl: string | null; effectiveDate?: string | null; polygons?: Point[][][]; containsAddress: boolean };
 export type BerlinSiteContext = {
   landUse?: BerlinLandUse[]; landUseStatus?: string;
-  hints?: { id: string; kind: string; label: string; sourceUrl: string; detailUrl: string | null; containsAddress: boolean }[];
+  hints?: BerlinHint[];
   hintStatus?: string; address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: BerlinParcel[]; plans: BerlinPlan[];
 };
 export type SiteDiscovery = { address: string; origin: Point; longitude: number; latitude: number; retrievedAt: string; references: SiteReference[]; buildings: LocationBuilding[]; sources: string[]; status: string[] };
@@ -71,4 +73,21 @@ export function planningLawAt(context: BerlinSiteContext, point: Point): Plannin
   if (context.planStatus !== "available") return { kind: "unresolved", plans, landUse };
   if (landUse?.category === "open") return { kind: "section35", plans, landUse };
   return { kind: landUse?.category === "building" ? "section34" : "unresolved", plans, landUse };
+}
+
+/** Protection hints for one parcel: monuments on or next to it (within `near` metres of its outline's vertices) and the preservation areas it lies in. */
+export function protectionAt(context: BerlinSiteContext, parcel: Pick<BerlinParcel, "polygons">, near = 25) {
+  const vertices = parcel.polygons.flatMap((p) => p[0] ?? []);
+  const hints = (context.hints ?? []).filter((h) => h.polygons?.length);
+  const inside = (h: BerlinHint) => vertices.some((v) => containsPoint(h.polygons!, v)) || h.polygons!.some((p) => (p[0] ?? []).some((v) => containsPoint(parcel.polygons, v)));
+  const close = (h: BerlinHint) => h.polygons!.some((p) => (p[0] ?? []).some(([x, y]) => vertices.some(([vx, vy]) => Math.hypot(x - vx, y - vy) <= near)));
+  const heritage = hints.filter((h) => h.kind === "heritage");
+  return {
+    heritageOn: heritage.filter(inside),
+    heritageNear: heritage.filter((h) => !inside(h) && close(h)),
+    social: hints.filter((h) => h.kind === "social_preservation" && inside(h)),
+    urban: hints.filter((h) => h.kind === "urban_preservation" && inside(h)),
+    /** Without polygons (older cached lookups) or with the lookup down, absence is not evidence. */
+    known: context.hintStatus !== "unavailable" && (context.hints ?? []).every((h) => h.polygons),
+  };
 }

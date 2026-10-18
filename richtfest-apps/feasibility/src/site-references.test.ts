@@ -47,9 +47,11 @@ test('GRZ 1 counts main buildings only; GRZ 2 adds garages and underground struc
  globalThis.fetch=(async(url:unknown)=>{const u=String(url);
   if(u.includes('alkis_gebaeude'))return Response.json({numberMatched:cadastral.length,features:cadastral});
   if(u.includes('alkis_flurstuecke'))return Response.json({numberMatched:1,features:[{id:'p',properties:{uuid:'p',afl:2000},geometry:rect(-10,-20,50,40)}]});
-  return Response.json({numberMatched:1,features:[{id:'b1',properties:{gml_id:'b1',geschosse:'3',hoehe:10},geometry:rect(0,0,20,10)}]});}) as unknown as typeof fetch;
+  return Response.json({numberMatched:2,features:[{id:'b1',properties:{gml_id:'b1',geschosse:'3',hoehe:10},geometry:rect(0,0,20,10)},{id:'b2',properties:{gml_id:'b2',geschosse:'1',hoehe:3.2},geometry:rect(25,0,5,10)}]});}) as unknown as typeof fetch;
  try{
   const r=await discoverSiteReferences({address:'test',origin:[0,0],sources:[]},new AbortController().signal);
+  // The garage is a Nebengebäude by its ALKIS function (3.2 m high, so not by height): § 6 (7) BauO Bln lets it stand in setback areas.
+  expect(r.buildings.map(b=>[b.id,!!b.ancillary])).toEqual([['b1',false],['b2',true]]);
   const m=r.references[0]!.metrics!;
   expect(m.grz!.value).toBeCloseTo(200/2000,9);
   // House 200 + garage 50 + underground outside the house 100 = 350 m².

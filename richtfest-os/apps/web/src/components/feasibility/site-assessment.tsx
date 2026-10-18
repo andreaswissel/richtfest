@@ -363,7 +363,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
     return <LimitRow key={key} {...row} value={value} source={rules.source} status={<Badge variant="outline">{label(rules.reviewed ? "ReviewedShort" : value === null ? "ValueMissing" : "Unreviewed")}</Badge>} />;
   };
   return (
-    <div className="feasibility site-assessment">
+    <div className={`feasibility site-assessment${currentStep === "design" ? " is-design" : ""}`}>
       {blocker.state === "blocked" && (
         <Modal title={t("feasibilityUnsaved")} onClose={() => blocker.reset()}>
           <p>{t("feasibilityUnsavedHint")}</p>
@@ -547,7 +547,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
       </div>
 
       {currentStep === "design" && (
-        <div className="site-step">
+        <div className="site-step is-workbench">
           <SiteGeometryEditor
             projectId={projectId}
             value={assessment.geometry ?? null}
@@ -590,12 +590,13 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
                 : null
             }
           />
-          <SiteDesignResult input={input} result={design} />
         </div>
       )}
 
       {currentStep === "result" && (
         <div className="site-step" id="site-assessment-result">
+          {/* The Design step is a full-window workbench; its detailed check table reads here with the capacity. */}
+          <SiteDesignResult input={input} result={design} />
           {result?.baseline && (
             <Section title={label("RangeTitle")} meta={<Badge variant="outline">{label("indicative")}</Badge>}>
               <Table aria-label={label("RangeTitle")}>

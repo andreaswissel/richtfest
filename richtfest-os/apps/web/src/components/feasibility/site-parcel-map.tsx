@@ -15,7 +15,7 @@ type Range = { mean: number; max: number };
 /** What the map knows about one parcel: observed ratios, covering plans and the § 34 frame of its neighbours. */
 export type ParcelFacts = { grz: number | null; grz2: number | null; gfz: number | null; storeys: number | null; law: PlanningLaw | null; frame: { grz: Range | null; grz2: Range | null; gfz: Range | null; storeys: Range | null; count: number } };
 const FRAME_RADIUS_M = 100;
-type LayerKey = "aerial" | "law" | "plans" | "buildings" | "labels" | "ratios";
+type LayerKey = "aerial" | "law" | "plans" | "heritage" | "preservation" | "buildings" | "labels" | "ratios";
 /** Must match the server's orthophoto window (AERIAL_WINDOW_M / AERIAL_SNAP_M in the feasibility app). */
 const AERIAL_WINDOW_M = 200, AERIAL_SNAP_M = 25;
 const MIN_HALF = 12, MAX_HALF = AERIAL_WINDOW_M;
@@ -62,7 +62,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   const label = (key: string) => t(`berlinMap${key}` as Parameters<typeof t>[0]);
   const frame = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<[number, number]>([800, 480]);
-  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, law: true, plans: true, buildings: true, labels: true, ratios: true });
+  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, law: true, plans: true, heritage: true, preservation: true, buildings: true, labels: true, ratios: true });
   const [aerialFailed, setAerialFailed] = useState(false);
   const fit = useMemo(() => {
     const own = context.parcels.filter(p => p.containsAddress);
@@ -148,6 +148,8 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   }, [discovery]);
   const buildings = useMemo(() => discovery ? discovery.buildings.map(b => ({ id: b.id, d: path(discoveryPolygons(discovery, b), aerial) })) : [], [discovery, aerial]);
   const parcels = useMemo(() => context.parcels.map(p => { const at = labelPoint(p.polygons); return { parcel: p, d: path(p.polygons, aerial), at, bounds: boundsOf(p.polygons), law: at ? planningLawAt(context, at) : null }; }), [context, aerial]);
+  // Monuments and preservation areas (Milieuschutz, urban character) as their own layers; outlines only, so parcels stay readable.
+  const protections = useMemo(() => (context.hints ?? []).filter(h => h.polygons?.length).map(h => ({ hint: h, d: path(h.polygons!, aerial) })), [context, aerial]);
   const plans = useMemo(() => context.plans.filter(p => p.polygons?.length).map(p => ({ plan: p, d: path(p.polygons!, aerial), bounds: boundsOf(p.polygons!) })), [context, aerial]);
   const visible: Bounds = [view.cx - view.half, view.cy - (view.half * h) / w, view.cx + view.half, view.cy + (view.half * h) / w];
   const px = (n: number) => n * m;
@@ -176,6 +178,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
         x={-AERIAL_WINDOW_M} y={-AERIAL_WINDOW_M} width={AERIAL_WINDOW_M * 2} height={AERIAL_WINDOW_M * 2}
         preserveAspectRatio="none" onError={() => setAerialFailed(true)} />}
       {layers.buildings && buildings.map(b => <path key={b.id} className="site-map-building" d={b.d} />)}
+      {protections.map(({ hint, d }) => (hint.kind === "heritage" ? layers.heritage : layers.preservation) && <path key={`${hint.kind}:${hint.id}`} className="site-map-protection" data-kind={hint.kind} d={d}><title>{hint.label}</title></path>)}
       {layers.plans && plans.map(({ plan, d }) => <path key={plan.id} className="site-map-plan" data-status={plan.status} d={d}><title>{plan.name}</title></path>)}
       {parcels.map(({ parcel, d, law }) => <path key={parcel.id} className="site-map-parcel" d={d} data-parcel={parcel.id} data-law={layers.law ? law?.kind : undefined}
         data-selected={selected === parcel.id} data-adopted={adoptedId === parcel.id} data-reference={referenceIds?.has(parcel.id) || undefined} data-address={parcel.containsAddress}>
@@ -225,10 +228,13 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
           <PopoverTrigger asChild><WorkbenchTool tooltipSide="left" label={label("Layers")}><Layers className="size-icon-sm" /></WorkbenchTool></PopoverTrigger>
           <PopoverContent side="left" align="start" className="site-map-layers w-56">
             <p className="text-ui-sm font-medium">{label("Layers")}</p>
-            {(["aerial", "law", "plans", "buildings", "labels", "ratios"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
+            {(["aerial", "law", "plans", "heritage", "preservation", "buildings", "labels", "ratios"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
               <span>{label(`Layer_${key}`)}{(key === "buildings" || key === "ratios") && !discovery && <span className="muted text-ui-2xs"> · {label("BuildingsAfterDiscovery")}</span>}</span>
               <Switch checked={layers[key]} onCheckedChange={() => toggle(key)} />
             </label>)}
+            {(layers.heritage || layers.preservation) && <p className="site-map-legend muted text-ui-2xs">
+              {(["heritage", "social_preservation", "urban_preservation"] as const).map(kind => <span key={kind}><i className="is-outline" data-kind={kind} />{label(`Protection_${kind}`)}</span>)}
+            </p>}
             {layers.law && <p className="site-map-legend muted text-ui-2xs">
               {(["b_plan", "in_progress", "section34", "section35"] as const).map(kind => <span key={kind}><i data-law={kind} />{t(`berlinContextLaw_${kind}` as Parameters<typeof t>[0])}</span>)}
             </p>}
