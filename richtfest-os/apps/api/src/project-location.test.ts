@@ -3,6 +3,8 @@ import express from "express";
 import { sql } from "drizzle-orm";
 import { createRouter } from "@richtfest/projects";
 import { runLocationJob } from "@richtfest/projects/location-worker";
+import { locationImageVersion, type LocationContext } from "@richtfest/shared";
+import { fileStorage } from "./file-storage";
 import { createDatabase } from "./db/client";
 
 const url = process.env.DATABASE_URL;
@@ -159,4 +161,140 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect((await request()).body.data.scene.measurements).toEqual([]);
     expect((await request("/import", "POST", {revision:11})).body.data.contextJob.status).toBe("queued");
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`); await admin.pool.end(); }
+}, 30000);
+
+(local ? test : test.skip)("location images persist across API instances, deduplicate downloads and retain safe fallback during rate limits", async () => {
+  // Use actual local object storage, never a configured production bucket.
+  expect(fileStorage.kind).toBe("local");
+  const schema = `imagery_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!);
+  await admin.pool.query(`CREATE SCHEMA ${schema}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${schema}`);
+  let primary = createDatabase(isolated.href);
+  const replica = createDatabase(isolated.href);
+  const tenant = crypto.randomUUID(), other = crypto.randomUUID(), project = crypto.randomUUID(), otherProject = crypto.randomUUID();
+  const context: LocationContext = { siteId: "berlin-image-test", address: "Berlin", origin: [397139.4, 5824134.9], radius: 100,
+    longitude: 13, latitude: 52, buildings: [], trees: [], sources: [], importedAt: "2026-10-18T00:00:00.000Z" };
+  const jpeg = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/2Q==", "base64");
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
+  const originalFetch = globalThis.fetch;
+  let downloads = 0;
+  let upstream: (url: URL) => Promise<Response> = async url => new Response(url.searchParams.get("FORMAT") === "image/png" ? png : jpeg,
+    { headers: { "content-type": url.searchParams.get("FORMAT")! } });
+  globalThis.fetch = (async (input: any, init: any) => {
+    const target = new URL(String(input));
+    if (["gdi.berlin.de", "geo4.service24.rlp.de", "geoinformation.eisenbahn-bundesamt.de"].includes(target.hostname)) {
+      downloads++;
+      return upstream(target);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  const start = (index: number) => {
+    const app = express();
+    app.use("/api", createRouter(req => ({ db: (index ? replica : primary).db,
+      tenantId: req.headers["x-test-tenant"] === "other" ? other : tenant, actorId: tenant, fileStorage,
+      requirePermission() { if (req.headers["x-test-access"] === "none") throw Object.assign(new Error("Forbidden"), { status: 403 }); },
+      audit: async (tx, action) => { await tx.execute(sql`insert into test_audit (action) values (${action})`); },
+      validateCustomer: async () => false, customerNames: async () => ({}),
+    })));
+    app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status ?? 500).json({ error: error.code }));
+    return app.listen(0);
+  };
+  const servers = [start(0), start(1)];
+  const image = async (suffix = "aerial/near", instance = 0, headers = {}, id = project, version = locationImageVersion(context)) => {
+    const res = await originalFetch(`http://127.0.0.1:${(servers[instance].address() as any).port}/api/projects/${id}/location/${suffix}?v=${encodeURIComponent(version)}`, { headers });
+    return { res, bytes: Buffer.from(await res.arrayBuffer()) };
+  };
+  const waitFor = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 3000;
+    while (!predicate()) { if (Date.now() > deadline) throw new Error("Upstream request did not start"); await Bun.sleep(10); }
+  };
+  try {
+    await primary.pool.query(`CREATE TABLE projects_projects (id uuid primary key, tenant_id uuid, name text, street text, postal_code text, city text, country text, address_reference jsonb,
+      customer_id uuid, status text, created_by uuid, created_at timestamptz);
+      CREATE TABLE test_audit (action text)`);
+    for (const migration of ["0023_project_locations", "0049_location_images"])
+      await primary.pool.query(await Bun.file(new URL(`../drizzle/${migration}.sql`, import.meta.url)).text());
+    for (const [id, owner] of [[project, tenant], [otherProject, other]]) {
+      await primary.pool.query("insert into projects_projects (id, tenant_id, name) values ($1,$2,'Imagery test')", [id, owner]);
+      await primary.pool.query("insert into projects_locations (project_id, tenant_id, context) values ($1,$2,$3)", [id, owner, JSON.stringify(context)]);
+    }
+    // Separate API instances race on an empty cache; only one goes to the provider.
+    const success = upstream;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    upstream = async url => { await gate; return success(url); };
+    const batch = Promise.all(Array.from({ length: 6 }, (_, i) => image("aerial/near", i % 2)));
+    await waitFor(() => downloads === 1); await Bun.sleep(300); release();
+    for (const result of await batch) { expect(result.res.status).toBe(200); expect(result.bytes).toEqual(jpeg); }
+    expect(downloads).toBe(1);
+    expect((await image()).res.headers.get("cache-control")).toMatch(/^private, max-age=604\d+/);
+    const [cached] = (await primary.pool.query("select * from projects_location_images where tenant_id=$1", [tenant])).rows;
+    expect(cached.source_url).toContain("truedop_2024"); expect(cached.attribution).toContain("Geoportal Berlin");
+    expect(cached.size_bytes).toBe(jpeg.length);
+
+    // Recreate both the HTTP app and its DB connection: only durable bytes can satisfy this.
+    servers[0].close(); await primary.pool.end(); primary = createDatabase(isolated.href); servers[0] = start(0);
+    upstream = async () => new Response("Rate limited", { status: 429, headers: { "retry-after": "180" } });
+    expect((await image()).bytes).toEqual(jpeg); expect(downloads).toBe(1);
+    expect((await image("aerial/near", 0, { "x-test-tenant": "other" })).res.status).toBe(404);
+    expect((await image("aerial/near", 0, { "x-test-access": "none" })).res.status).toBe(403);
+    expect(downloads).toBe(1);
+
+    // A failed refresh preserves the last good image and a shared Retry-After cooldown.
+    await primary.pool.query("update projects_location_images set fresh_until=now()-interval '1 second'");
+    const fallback = await image(); expect(fallback.bytes).toEqual(jpeg);
+    expect(fallback.res.headers.get("x-imagery-cache")).toBe("stale");
+    expect(fallback.res.headers.get("cache-control")).toBe("private, no-cache");
+    const [failed] = (await primary.pool.query("select * from projects_location_images")).rows;
+    expect(failed.fetched_at).toEqual(cached.fetched_at);
+    expect(failed.retry_at.getTime()).toBeGreaterThan(Date.now() + 170_000);
+    expect((await image("aerial/near", 1)).bytes).toEqual(jpeg); expect(downloads).toBe(2);
+
+    // A different extent has no stale fallback, and also backs off across replicas.
+    const far = await image("aerial/far"); expect(far.res.status).toBe(503);
+    expect(Number(far.res.headers.get("retry-after"))).toBeGreaterThan(170);
+    expect((await image("aerial/far", 1)).res.status).toBe(503); expect(downloads).toBe(3);
+    upstream = success;
+    // Equal public imagery never bypasses another tenant's cache/access boundary.
+    expect((await image("aerial/near", 1, { "x-test-tenant": "other" }, otherProject)).bytes).toEqual(jpeg); expect(downloads).toBe(4);
+    expect((await image("rail-noise")).bytes).toEqual(png); expect(downloads).toBe(5);
+    expect((await image("rail-noise", 1)).bytes).toEqual(png); expect(downloads).toBe(5);
+
+    // Missing object + abandoned lease recovers from storage, not from an in-process cache.
+    await fileStorage.remove(cached.storage_key);
+    await primary.pool.query("update projects_location_images set retry_at=null, lease_token=$2, lease_until=now()-interval '1 second' where id=$1", [cached.id, crypto.randomUUID()]);
+    expect((await image()).bytes).toEqual(jpeg); expect(downloads).toBe(6);
+
+    // A moved site's old URL is rejected; even a provider outage cannot borrow the old site.
+    const moved = { ...context, origin: [397839.4, 5824134.9] as [number, number] };
+    await primary.pool.query("update projects_locations set context=$1 where project_id=$2", [JSON.stringify(moved), project]);
+    expect((await image()).res.status).toBe(409); expect(downloads).toBe(6);
+    upstream = async () => new Response("<ServiceException/>", { headers: { "content-type": "image/jpeg" } });
+    expect((await image("aerial/near", 0, {}, project, locationImageVersion(moved))).res.status).toBe(503);
+    expect(downloads).toBe(7);
+
+    // An old downloader cannot overwrite a new lease owner's successful refresh.
+    await primary.pool.query("update projects_locations set context=$1 where project_id=$2", [JSON.stringify(context), project]);
+    await primary.pool.query("update projects_location_images set fresh_until=now()-interval '1 second' where id=$1", [cached.id]);
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+    let entered = false;
+    upstream = async url => { entered = true; await oldGate; return success(url); };
+    const oldRequest = image(); await waitFor(() => entered);
+    await primary.pool.query("update projects_location_images set lease_until=now()-interval '1 second' where id=$1", [cached.id]);
+    const newer = Buffer.concat([jpeg, Buffer.from("new-image-version")]);
+    upstream = async () => new Response(newer, { headers: { "content-type": "image/jpeg" } });
+    expect((await image("aerial/near", 1)).bytes).toEqual(newer);
+    releaseOld(); expect((await oldRequest).bytes).toEqual(newer);
+    expect((await image()).bytes).toEqual(newer);
+    expect((await primary.pool.query("select count(*)::int as n from test_audit where action='projects.location_image.saved'")).rows[0].n).toBe(5);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const server of servers) server.close();
+    const keys = await primary.pool.query("select storage_key from projects_location_images where storage_key is not null").catch(() => ({ rows: [] }));
+    for (const { storage_key } of keys.rows) await fileStorage.remove(storage_key);
+    await primary.pool.end(); await replica.pool.end();
+    await admin.pool.query(`DROP SCHEMA ${schema} CASCADE`); await admin.pool.end();
+  }
 }, 30000);

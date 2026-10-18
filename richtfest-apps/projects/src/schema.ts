@@ -15,6 +15,25 @@ import {
 } from "drizzle-orm/pg-core";
 import type { MappedNoiseSource, AddressReference, LocationContext, LocationPointCloud, LocationScene, ProjectAddress, SourceText, SourceFactInput, BuildingEvidence, BuildingPropertyValue } from "@richtfest/shared";
 
+/** Tenant-scoped WMS snapshots; bytes live in private object storage. */
+export const locationImages = pgTable("projects_location_images", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  attribution: text("attribution").notNull(),
+  mimeType: text("mime_type").notNull(),
+  storageKey: text("storage_key"),
+  checksum: text("checksum"),
+  sizeBytes: integer("size_bytes"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+  freshUntil: timestamp("fresh_until", { withTimezone: true }),
+  failures: integer("failures").notNull().default(0),
+  retryAt: timestamp("retry_at", { withTimezone: true }),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+}, table => ({ request: uniqueIndex("projects_location_images_request").on(table.tenantId, table.requestHash) }));
+
 export const projectLocations = pgTable("projects_locations", {
   projectId: uuid("project_id").primaryKey(),
   tenantId: uuid("tenant_id").notNull(),

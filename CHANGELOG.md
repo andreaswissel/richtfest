@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- Location imagery is saved server-side and reused across viewers and deployments, reducing requests to official map services. Aerial and rail-noise layers retain their last good image during provider outages or rate limits, without reusing images from another location. Includes database migration 0049.
+
 - Corrected already-shipped acoustic updates to their verified release date. Production builds now reject undated release notes instead of publishing them as Unreleased.
 
 - 3D location measurements float over the map without shifting the model. Save and reopen distances to any surface with an optional description and purpose; exterior-noise actions appear only after saving a road or railway purpose. Corner snapping can be switched off for free picking.

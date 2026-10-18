@@ -7,6 +7,7 @@ import {
   toUtm,
   type MappedNoiseSource,
   aerialSourceFor,
+  locationImageVersion,
   railNoiseAttribution,
   siteToPlan,
   twoPointPlacement,
@@ -293,10 +294,11 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
   const suggestedAxes = useMemo(() => new Set(suggestedKey.split("\n")), [suggestedKey]);
   const [zoomedOut, setZoomedOut] = useState(false);
   const aerialSource = context ? aerialSourceFor(context) : null;
+  const imageVersion = context ? locationImageVersion(context) : "";
   const image = (path: string, enabled: boolean, error: string) => ({
-    queryKey: [`/projects/${projectId}/location/${path}`, context?.importedAt],
+    queryKey: [`/projects/${projectId}/location/${path}`, imageVersion],
     queryFn: async () => {
-      const response = await fetch(`/api/projects/${projectId}/location/${path}`, { credentials: "include" });
+      const response = await fetch(`/api/projects/${projectId}/location/${path}?v=${encodeURIComponent(imageVersion)}`, { credentials: "include" });
       if (!response.ok) throw new Error(error);
       return response.blob();
     },

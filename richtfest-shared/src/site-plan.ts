@@ -5,6 +5,8 @@
  * projection nor a placement is a surveyed setting-out.
  */
 
+import type { LocationContext } from "./location";
+
 export type Point2 = [number, number];
 
 /** WGS84 -> ETRS89 / UTM zone 32N or 33N. The WGS84/ETRS89 difference is immaterial
@@ -25,6 +27,11 @@ export function toUtm(longitude: number, latitude: number, zone: 32 | 33): Point
 /** Rail noise contours (EBA Lärmkartierung, Lden) are fetched for a square window of this half-width around the site. */
 export const RAIL_NOISE_HALF_WIDTH_M = 1000;
 export const railNoiseAttribution = "© Eisenbahn-Bundesamt, Lärmkartierung Schiene (Lden), dl-de/by-2-0";
+
+/** Also versions HTTP-cache URLs, not just the viewer's in-memory query keys. */
+export function locationImageVersion(context: Pick<LocationContext, "siteId" | "crs" | "origin" | "importedAt">) {
+  return JSON.stringify(["wms-image-v1", context.siteId, context.crs ?? "EPSG:25833", context.origin, context.importedAt]);
+}
 
 /** Official orthophotos (DOP) around the site: a sharp near window loaded with the scene and a wide one loaded when zoomed out. */
 export const AERIAL_HALF_WIDTH_M = { near: 250, far: 1500 } as const;
