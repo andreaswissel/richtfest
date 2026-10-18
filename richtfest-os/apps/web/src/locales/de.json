@@ -1686,6 +1686,8 @@
   "buildingModelOutlineArea": "Fläche",
   "buildingModelOutlineNoScale": "Kein Maßstab",
   "buildingModelOutlinePoints": "Punkte",
+  "outlineDeletePoint": "Punkt löschen",
+  "outlineAddPoint": "Punkt hier einfügen",
   "buildingModelOutlinePoint": "Umrisspunkt",
   "buildingModelOutlineAddPoint": "Punkt einfügen",
   "buildingModelOutlineTarget": "Anwenden auf",

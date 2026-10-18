@@ -1686,6 +1686,8 @@
   "buildingModelOutlineArea": "Area",
   "buildingModelOutlineNoScale": "No printed scale",
   "buildingModelOutlinePoints": "Points",
+  "outlineDeletePoint": "Delete point",
+  "outlineAddPoint": "Add point here",
   "buildingModelOutlinePoint": "Outline point",
   "buildingModelOutlineAddPoint": "Add point",
   "buildingModelOutlineTarget": "Apply to",

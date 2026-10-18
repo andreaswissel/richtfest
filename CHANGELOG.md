@@ -2,6 +2,7 @@
 
 ## 2026-10-18
 
+- **Outline editing:** Right-click a corner of a building or room outline to delete that point, or an edge to add one where you clicked. Clicking a corner now also focuses it, so Delete removes the point instead of the whole building.
 - **Updates in projects:** "New updates available" now also appears in the project bar next to your profile, since the navigation rail is hidden inside projects.
 - **Feasibility steps:** The site assessment always opens on Site, and the chosen step is kept in the link, so reloading or sharing it returns to the same step.
 - **Design context layers:** Design shows the same context as the Site map: aerial image, B-Plan areas, monuments and preservation areas, and the neighbours' GRZ, GFZ and storeys on their parcels, each as a layer you can hide.
