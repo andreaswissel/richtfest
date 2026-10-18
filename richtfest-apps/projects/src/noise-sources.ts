@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { noiseInputKeys, noiseInputUnit, noiseSourceGaps, noiseSourceKindSchema, ok, requestableNoiseInputs, validateNoiseInput,
+import { noiseInputKeys, noiseInputUnit, noiseSourceGaps, noiseSourceKindSchema, ok, railTrafficSummary, requestableNoiseInputs, validateNoiseInput,
   type EnvironmentSurvey, type MappedNoiseSource, type NoiseInputValue, type NoiseRequestItem, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { readProjectEnvironment } from "./environment";
@@ -89,6 +89,11 @@ export function createNoiseSourcesRouter(getDeps: (req: Request) => AppDeps) {
           importedFrom = source.includes(String(year)) ? source : `${source} (${year})`;
           imported = [{ key: "dailyTraffic", value: dailyTraffic }, { key: "trafficBasis", value: `${importedFrom}, segment nearest the site, imported from the mapped source` }];
           if (heavyVehicles !== null && dailyTraffic > 0) imported.push({ key: "heavyVehicleShare", value: Math.round((heavyVehicles / dailyTraffic) * 1000) / 10 });
+        }
+        if (item.kind === "rail" && item.traffic) {
+          const { source, year } = item.traffic;
+          importedFrom = source.includes(String(year)) ? source : `${source} (${year})`;
+          imported = [{ key: "trainVolumes", value: railTrafficSummary(item.traffic) }, { key: "trafficBasis", value: `${importedFrom}, segment nearest the site, imported from the mapped source` }];
         }
       } else values = { kind: input.kind, name: input.name, mappedRef: null, mapped: null };
       const created = await d.db.transaction(async (tx: any) => {

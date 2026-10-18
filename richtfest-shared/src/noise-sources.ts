@@ -54,6 +54,41 @@ export const noiseInputUnit = (kind: NoiseSourceKind, key: string) => (noiseSour
 /** Simplified mapped axis as [longitude, latitude] parts, for drawing and facade distances; absent on surveys before axes were kept. */
 const mappedAxesSchema = z.array(z.array(z.tuple([z.number().finite(), z.number().finite()])).min(2).max(400)).max(80).optional();
 
+const trainCount = z.number().int().nonnegative();
+/**
+ * Trains per year of a strategic noise-map rail segment, with the EU noise
+ * periods day 06–18, evening 18–22 and night 22–06 where the source splits
+ * them. Vehicle categories keep the source's raw labels (EBA VK1–VK4); they
+ * are not Schall 03 train types.
+ */
+export const railTrafficSchema = z.object({
+  trainsPerYear: trainCount.nullable(),
+  day: trainCount.nullable(),
+  evening: trainCount.nullable(),
+  night: trainCount.nullable(),
+  vehicleCategories: z.array(z.object({ label: z.string().max(20), day: trainCount.nullable(), evening: trainCount.nullable(), night: trainCount.nullable(), total: trainCount.nullable() }).strict()).max(8).optional(),
+  /** VzG route numbers of the counted segment. */
+  routeNumbers: z.array(z.string().max(12)).max(20),
+  segmentId: z.string().max(100).nullable(),
+  year: z.number().int(),
+  source: z.string().max(200),
+}).strict();
+export type RailTraffic = z.infer<typeof railTrafficSchema>;
+
+const grouped = (value: number) => value.toLocaleString("en-US");
+/** A readable train-volume note for the rail input, from a published count; states the periods and that categories are raw source labels. */
+export function railTrafficSummary(traffic: RailTraffic): string {
+  const parts: string[] = [];
+  const where = [traffic.routeNumbers.length ? `routes ${traffic.routeNumbers.join(", ")}` : null, traffic.segmentId ? `segment ${traffic.segmentId}` : null].filter(Boolean).join(", ");
+  parts.push(`${traffic.source}${traffic.source.includes(String(traffic.year)) ? "" : ` (${traffic.year})`}${where ? `, ${where}` : ""}.`);
+  if (traffic.trainsPerYear !== null) parts.push(`${grouped(traffic.trainsPerYear)} trains per year (about ${grouped(Math.round(traffic.trainsPerYear / 365))} per 24 h).`);
+  const periods = ([["day 06–18 h", traffic.day], ["evening 18–22 h", traffic.evening], ["night 22–06 h", traffic.night]] as const).filter(([, value]) => value !== null);
+  if (periods.length) parts.push(`Per year: ${periods.map(([label, value]) => `${label} ${grouped(value!)}`).join(", ")}.`);
+  const categories = (traffic.vehicleCategories ?? []).filter(category => category.total);
+  if (categories.length) parts.push(`By source vehicle category per year: ${categories.map(category => `${category.label} ${grouped(category.total!)}${category.night !== null ? ` (night ${grouped(category.night)})` : ""}`).join(", ")}. Categories are the source's labels, not Schall 03 train types.`);
+  return parts.join(" ").slice(0, 2000);
+}
+
 /** Roads and railways as mapped in the official topographic model (ATKIS Basis-DLM); codes are AdV code list values. */
 export const mappedRoadSchema = z.object({
   kind: z.literal("road"),
@@ -82,6 +117,8 @@ export const mappedRailSchema = z.object({
   /** AX_AnzahlDerStreckengleise: 1000 single track, 2000 double track. */
   tracks: z.string().nullable(),
   electrified: z.boolean().nullable(),
+  /** Published train count of the mapped noise-map segment nearest the site (EBA Lärmkartierung, UBA EU noise reporting). Absent where no source has one. */
+  traffic: railTrafficSchema.nullable().optional(),
   distanceMeters: z.number().nullable(),
   segments: z.number().int(),
   axes: mappedAxesSchema,

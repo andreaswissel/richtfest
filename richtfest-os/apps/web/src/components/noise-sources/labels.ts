@@ -12,7 +12,9 @@ export const mappedDetails = (item: MappedNoiseSource, t: T) => item.kind === "r
   ? [item.traffic ? t("noiseTraffic").replace("{daily}", item.traffic.dailyTraffic.toLocaleString()).replace("{year}", String(item.traffic.year))
       + (item.traffic.heavyVehicles !== null && item.traffic.dailyTraffic > 0 ? ` · ${t("noiseHeavyShare").replace("{share}", (Math.round(item.traffic.heavyVehicles / item.traffic.dailyTraffic * 1000) / 10).toLocaleString())}` : "") : null,
     item.lanes ? t("noiseLanes").replace("{count}", String(item.lanes)) : null, item.carriagewayWidthM ? `${item.carriagewayWidthM} m` : null].filter(Boolean).join(" · ")
-  : [item.name && item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : null, item.lines.join(", ") || null,
+  : [item.traffic?.trainsPerYear != null ? t("noiseTrains").replace("{daily}", Math.round(item.traffic.trainsPerYear / 365).toLocaleString()).replace("{year}", String(item.traffic.year))
+      + (item.traffic.night !== null ? ` · ${t("noiseTrainsNight").replace("{night}", Math.round(item.traffic.night / 365).toLocaleString())}` : "") : null,
+    item.name && item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : null, item.lines.join(", ") || null,
     item.tracks === "2000" ? t("noiseTracksDouble") : item.tracks === "1000" ? t("noiseTracksSingle") : null,
     item.electrified === true ? t("noiseElectrified") : item.electrified === false ? t("noiseNotElectrified") : null].filter(Boolean).join(" · ");
 export const mappedName = (item: MappedNoiseSource, t: T) => item.kind === "road" ? [item.designation, item.name].filter(Boolean).join(" ") || t("noiseUnnamedRoad")

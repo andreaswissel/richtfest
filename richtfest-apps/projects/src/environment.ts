@@ -5,6 +5,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, toUtm, type EnvironmentSurvey } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
+import { overlayNationalCounts } from "./noise-counts";
 import { atkisMappedAxis, ATKIS_SF_STATES, berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, BW_ATKIS, bwAttribution, bwMappedAxis, inBerlin, groupMappedSources, hessenAttribution, HESSEN_ATKIS, latLonPairs, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, TH_ATKIS, thAttribution, thMappedAxis, utmPairs, type AtkisSfState, type GmlFeature, type MappedAxis, type StateCode } from "./noise-geodata";
 
 /** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
@@ -428,6 +429,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
     ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
     // Hook: once the site point and its state are resolved for any state, this becomes stateCategories(state, ...).
     : await stateCategories("HE", site, bbox, retrievedAt, rawResponses, options.signal);
+  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal).catch(() => options.signal?.throwIfAborted());
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
   const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
   const fileId = randomUUID(), versionId = randomUUID();
