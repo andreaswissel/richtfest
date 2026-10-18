@@ -2200,6 +2200,8 @@
   "locationExportDxf": "DXF · 2D UTM (m)",
   "locationExportGeoJson": "GeoJSON · 2D WGS84 (lon/lat)",
   "feasibilityNav": "Feasibility",
+  "feasibilityStudies": "Feasibility studies",
+  "feasibilityTabFinancial": "Residual land value",
   "feasibilitySite": "Site",
   "feasibilityScopeHint": "Select a scenario to edit its assumptions. Residual values are indicative, not valuations or planning permission. Review proposed inputs; incomplete scenarios cannot be compared reliably.",
   "feasibilityZoning": "Approved in the building model: GRZ {grz} · GFZ {gfz}.",

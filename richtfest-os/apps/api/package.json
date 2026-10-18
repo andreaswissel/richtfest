@@ -8,6 +8,7 @@
     "start": "bun src/index.ts",
     "auth:dev-link": "bun src/scripts/dev-magic-link.ts",
     "auth:bootstrap-admin": "bun src/scripts/bootstrap-admin.ts",
+    "feature-flag": "bun src/scripts/feature-flag.ts",
     "typecheck": "tsc -p tsconfig.json",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "bun src/seed.ts",

@@ -31,6 +31,46 @@ Saving permissions affects every member assigned that role. The server reads cur
 
 At least one active member must retain both OS access and workspace access management. Role edits, member reassignment and offboarding are checked transactionally, including concurrent changes, to prevent administrator lockout. Role creation and edits are recorded in the audit log; edits include the previous and new permissions. Roles are workspace-scoped and cannot be assigned or edited across workspaces.
 
+## Feature flags
+
+A feature flag turns a paused or unreleased capability on for named people, on top of their role permissions; it never replaces a permission. Flags are per user and per workspace, stored in `os_user_feature_flags` (workspace, user, flag key, who enabled it, when). Known keys are defined in `featureFlags` in `@richtfest/shared`; rows for unknown or retired keys are ignored.
+
+| Flag | Enables |
+| --- | --- |
+| `feasibility_financial_study` | The residual land value study as a second tab in [Feasibility](/docs/workflows/feasibility), and its API routes |
+
+The signed-in person's enabled flags arrive with the session data the app already loads at start (`featureFlags` in `GET /api/auth/me`), so no extra request is made when navigating. The server checks flags on every request: a gated route answers `403 feature_not_enabled` without the flag, and enabling or disabling a flag applies without signing in again (already open tabs show the change after the session data refreshes). Richtfest Apps check flags through their host contract.
+
+There is no admin screen yet. An operator enables a flag for one person by email in the production service's shell, from `/app/richtfest-os/apps/api`:
+
+```sh
+bun run feature-flag enable feasibility_financial_study person@example.com
+bun run feature-flag disable feasibility_financial_study person@example.com
+bun run feature-flag list [person@example.com]
+```
+
+The person must have exactly one workspace membership. The command is idempotent and records `access.feature_flag.enabled` or `access.feature_flag.disabled` as a system audit event on the user; repeating it changes nothing. Where a shell is not available, the equivalent SQL inserts the row and the audit event in one transaction:
+
+```sql
+BEGIN;
+WITH target AS (
+  SELECT m.tenant_id, u.id AS user_id, u.email
+  FROM os_users u JOIN os_memberships m ON m.user_id = u.id
+  WHERE lower(u.email) = lower('person@example.com')
+), inserted AS (
+  INSERT INTO os_user_feature_flags (tenant_id, user_id, flag)
+  SELECT tenant_id, user_id, 'feasibility_financial_study' FROM target
+  ON CONFLICT DO NOTHING RETURNING tenant_id, user_id
+)
+INSERT INTO os_audit_events (tenant_id, actor_type, action, entity_type, entity_id, metadata)
+SELECT i.tenant_id, 'system', 'access.feature_flag.enabled', 'user', i.user_id,
+       jsonb_build_object('flag', 'feasibility_financial_study', 'email', t.email)
+FROM inserted i JOIN target t USING (user_id);
+COMMIT;
+```
+
+To add a flag, add its key to `featureFlags`, check it on the server (through the app's host contract) and in the web app with `useFeatureFlag`, and list it in the table above. Remove the key and its checks once the capability is released to everyone.
+
 ## Account settings
 
 Open your name in the sidebar to reach Account settings. The Preferences section contains language (English or German), display density (Dense or Normal) and appearance (Light or Dark); changes are saved to your account and restored when you return. Passwords, passkeys and active sessions are managed on the same page.

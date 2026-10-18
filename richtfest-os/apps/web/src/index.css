@@ -284,7 +284,7 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 .callout.success { border-color: color-mix(in oklch, oklch(.7 .16 145) 30%, var(--border)); background: color-mix(in oklch, oklch(.7 .16 145) 8%, var(--background)); }
 .loading-line { padding: 20px 0; color: var(--muted-foreground); }
 .segmented { display: flex; align-self: flex-start; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--muted); }
-.segmented button { min-height: var(--control-sm); padding: 5px 12px; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--muted-foreground); font-size: var(--ui-xs); }
+.segmented button, .segmented .segmented-link { display: inline-flex; align-items: center; min-height: var(--control-sm); padding: 5px 12px; border-radius: calc(var(--radius) - 4px); background: transparent; color: var(--muted-foreground); font-size: var(--ui-xs); }
 .segmented [data-state="on"], .segmented [data-state="active"], .segmented [aria-pressed="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 3px color-mix(in oklch, var(--foreground) 10%, transparent); }
 .back-link { display: inline-flex; align-items: center; gap: 6px; margin-bottom: -10px; color: var(--muted-foreground); font-size: var(--ui-xs); }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 24px; background: color-mix(in oklch, var(--foreground) 35%, transparent); backdrop-filter: blur(3px); }
@@ -399,7 +399,7 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
   .login-story p { margin-top: 15px; }
   .login-form { padding: 30px 24px; }
   .segmented { max-width: 100%; overflow: auto; }
-  .segmented button { padding: 7px 11px; white-space: nowrap; }
+  .segmented button, .segmented .segmented-link { padding: 7px 11px; white-space: nowrap; }
   .modal { padding: 20px; }
   .modal-backdrop { padding: 12px; }
   .section-heading { align-items: flex-start; }

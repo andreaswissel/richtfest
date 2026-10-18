@@ -2200,6 +2200,8 @@
   "locationExportDxf": "DXF · 2D UTM (m)",
   "locationExportGeoJson": "GeoJSON · 2D WGS84 (Länge/Breite)",
   "feasibilityNav": "Machbarkeit",
+  "feasibilityStudies": "Machbarkeitsstudien",
+  "feasibilityTabFinancial": "Residualwert",
   "feasibilitySite": "Grundstück",
   "feasibilityScopeHint": "Szenario auswählen und Annahmen bearbeiten. Residualwerte sind indikativ, keine Wertermittlung oder Baugenehmigung. Vorschläge prüfen; unvollständige Szenarien sind nicht verlässlich vergleichbar.",
   "feasibilityZoning": "Im Gebäudemodell freigegeben: GRZ {grz} · GFZ {gfz}.",

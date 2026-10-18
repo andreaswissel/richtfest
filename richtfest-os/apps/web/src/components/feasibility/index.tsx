@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from "react";
-import { Link, useBlocker, useSearchParams } from "react-router-dom";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { Link, useBlocker, useLocation, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import {
@@ -10,6 +10,7 @@ import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
 import { usePreferences } from "../../store";
+import { useFeatureFlag } from "../../feature-flags";
 import { Section } from "../layout";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -94,12 +95,32 @@ function ValueField({ state, field, label, disabled, language, raw, onRaw, onCha
 
 export function Feasibility({ projectId }: { projectId: string }) {
   const [params] = useSearchParams();
-  // Site assessment is the feasibility workspace; the financial study stays reachable by link until it returns as a second tab.
-  if (params.get("study") === "financial") return <FinancialFeasibility key={projectId} projectId={projectId} />;
-  return <SiteAssessment key={projectId} projectId={projectId} nav={null} />;
+  // Site assessment is the feasibility workspace. The residual-land-value study is a second tab for people with the
+  // `feasibility_financial_study` flag; for everyone else a `study=financial` link falls back to the site assessment.
+  const financialEnabled = useFeatureFlag("feasibility_financial_study");
+  const financial = financialEnabled && params.get("study") === "financial";
+  const nav = financialEnabled ? <StudyTabs current={financial ? "financial" : "site"} /> : null;
+  if (financial) return <FinancialFeasibility key={projectId} projectId={projectId} nav={nav} />;
+  return <SiteAssessment key={projectId} projectId={projectId} nav={nav} />;
 }
 
-function FinancialFeasibility({ projectId }: { projectId: string }) {
+/** Real links that keep the selected study in the URL; the site assessment keeps its current step. */
+function StudyTabs({ current }: { current: "site" | "financial" }) {
+  const t = useT(), [params] = useSearchParams(), { pathname } = useLocation();
+  const link = (study: "site" | "financial") => {
+    const next = new URLSearchParams(params);
+    if (study === "financial") next.set("study", "financial"); else next.delete("study");
+    return `${pathname}?${next}`;
+  };
+  return <nav className="feasibility-studies" aria-label={t("feasibilityStudies")}>
+    <Segmented value={current} items={[
+      { value: "site", label: t("siteAssessmentTitle"), to: link("site") },
+      { value: "financial", label: t("feasibilityTabFinancial"), to: link("financial") },
+    ]} />
+  </nav>;
+}
+
+function FinancialFeasibility({ projectId, nav }: { projectId: string; nav?: ReactNode }) {
   const t = useT(), language = usePreferences(s => s.language);
   const locale = language === "de" ? "de-DE" : "en-GB";
   const euro = (value: number | null) => value === null || !Number.isFinite(value) ? "–" : `${Math.round(value).toLocaleString(locale)} €`;
@@ -149,6 +170,7 @@ function FinancialFeasibility({ projectId }: { projectId: string }) {
   ].filter(Boolean).join(" · ") || t("feasibilityReady");
   const canReport = !!data.study.revision && !dirty && !invalid && !save.isPending;
   return <div className="feasibility">
+    {nav}
     {blocker.state === "blocked" && <Modal title={t("feasibilityUnsaved")} onClose={() => blocker.reset()}>
       <p>{t("feasibilityUnsavedHint")}</p><div className="inline-actions">
         <Button variant="outline" onClick={() => blocker.proceed()}>{t("locationLeave")}</Button>

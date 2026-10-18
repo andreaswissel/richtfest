@@ -33,6 +33,8 @@ suite("site assessment PostgreSQL API", () => {
       db, tenantId: req.headers["x-other-tenant"] ? otherTenant : tenantId, actorId,
       requirePermission: permission => { if (permission === "projects:write" && req.headers["x-read-only"]) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
       can: () => !req.headers["x-read-only"],
+      // The site assessment never depends on the financial-study flag.
+      featureEnabled: async () => false,
       project: async id => id === projectId && !req.headers["x-other-tenant"] ? { id, name: "Local test", address: "Berlin" } : null,
       siteFigures: async () => ({ parcelArea: null, grz: null, gfz: null, existingGrossFloorArea: null }),
       audit: async (tx, _action, _type, entityId, metadata) => {

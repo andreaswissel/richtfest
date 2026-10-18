@@ -9,6 +9,7 @@ import { projects } from "@richtfest/projects/schema";
 import { readFeasibilitySiteFigures } from "@richtfest/projects/building-model";
 import { HttpError, type Actor } from "./middleware/auth";
 import { recordAudit } from "./audit";
+import { hasFeatureFlag } from "./feature-flags";
 import type { Database } from "./db/client";
 import { projectsDeps } from "./app-hosts";
 
@@ -20,6 +21,7 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
     evidence: createFeasibilityEvidenceHost(db, projectsDeps(db, req)),
     requirePermission: key => { if (!actor.permissions.has(key)) throw new HttpError(403, "forbidden", `Permission ${key} is required`); },
     can: key => actor.permissions.has(key),
+    featureEnabled: flag => hasFeatureFlag(db, actor.tenantId, actor.id, flag),
     audit: (tx, action, type, id, metadata) => recordAudit(tx, actor.id, actor.tenantId, action, type, id, metadata),
     project: async (projectId, tx) => {
       const query = (tx ?? db).select({ id: projects.id, name: projects.name, street: projects.street, postalCode: projects.postalCode, city: projects.city, country: projects.country })

@@ -12,6 +12,7 @@ import { SettingsModels } from "./screens/settings-models";
 import { SettingsAgents } from "./screens/settings-agents";
 import { queryClient } from "./query";
 import { api } from "./api";
+import { cachedFeatureEnabled } from "./feature-flags";
 import { RouteError, RouteLoading } from "./components/module-recovery";
 import "./index.css";
 
@@ -81,7 +82,7 @@ const router = createBrowserRouter([
           const search = new URL(request.url).searchParams;
           const view = search.get("view");
           if (view === "feasibility")
-            prefetch(`/feasibility/projects/${params.id}/${search.get("study") === "site" ? "site-assessment" : "study"}`)();
+            prefetch(`/feasibility/projects/${params.id}/${search.get("study") === "financial" && cachedFeatureEnabled("feasibility_financial_study") ? "study" : "site-assessment"}`)();
           if (view === "analytics")
             prefetch(`/knowledge/workspaces/${params.id}/analytics?page=0`)();
           if (view === "building-model")

@@ -32,6 +32,7 @@ import { createAccessRouter } from "./access-routes";
 import { createAgentPresetsRouter, listAgentPresets } from "./agent-presets";
 import { createAuth } from "./auth";
 import { recordAudit } from "./audit";
+import { featureFlagsFor } from "./feature-flags";
 import { retainWebAssets, type WebAssetArchive } from "./web-assets";
 import { createInboundEmailWebhook, inboundEmailConfigured } from "./inbound-email-webhook";
 
@@ -43,7 +44,7 @@ export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; 
   app.get("/health", (_req, res) => res.json(ok({ status: "ok" })));
   app.get("/api/health", (_req, res) => res.json(ok({ status: "ok" })));
   app.get("/api/auth/delivery-readiness", (_req, res) => res.json(ok({ configured: Boolean(env.RESEND_API_KEY && env.RESEND_FROM), mode: env.RESEND_API_KEY && env.RESEND_FROM ? "resend" : env.NODE_ENV === "production" ? "unconfigured" : "development_outbox" })));
-  app.get("/api/auth/me", async (req, res, next) => { try { const current = await actorFor(db, auth, req); if (!current) return res.status(401).json(fail("unauthorized", "Sign in is required")); return res.json(ok({ id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme, permissions: [...current.permissions], user: { id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme } })); } catch (e) { next(e); } });
+  app.get("/api/auth/me", async (req, res, next) => { try { const current = await actorFor(db, auth, req); if (!current) return res.status(401).json(fail("unauthorized", "Sign in is required")); const enabledFlags = await featureFlagsFor(db, current.tenantId, current.id); return res.json(ok({ id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme, permissions: [...current.permissions], featureFlags: enabledFlags, user: { id: current.id, email: current.email, name: current.name, tenantId: current.tenantId, uiDensity: current.uiDensity, language: current.language, theme: current.theme } })); } catch (e) { next(e); } });
   app.use("/api/auth", (req, res, next) => { void toNodeHandler(auth)(req, res).catch(next); });
   // Signed provider webhooks read the raw body and run before sessions are required.
   if (inboundEmailConfigured()) app.use(options.inboundEmailWebhook ?? createInboundEmailWebhook(db));

@@ -12,7 +12,7 @@ export async function testFeasibility() {
   document.body.append(host);
   let root = createRoot(host);
   const path = "/feasibility/projects/ui-regression/study";
-  const preferences = usePreferences.getState(), originalFetch = window.fetch;
+  const preferences = usePreferences.getState(), originalFetch = window.fetch, session = queryClient.getQueryData<object>(["/auth/me"]);
   const v = (value: number) => ({ value, source: "entered", note: null, reviewed: true });
   let record = { canWrite: true, figures: { grz: null, gfz: null, parcelArea: null }, study: {
     revision: 1, updatedAt: null, notes: "Saved notes", site: { parcelArea: v(1000), askingPrice: v(1000000), acquisitionCostRate: v(8) },
@@ -47,6 +47,8 @@ export async function testFeasibility() {
   };
   try {
     usePreferences.getState().hydrate({ language: "en" });
+    // The financial study is a per-user feature flag delivered with the session.
+    queryClient.setQueryData(["/auth/me"], { ...(session ?? {}), featureFlags: ["feasibility_financial_study"] });
     queryClient.setQueryData([path], record);
     flushSync(() => root.render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>));
     await wait(() => input("Existing living area"));
@@ -60,7 +62,7 @@ export async function testFeasibility() {
     check(button("Keep existing").getAttribute("aria-pressed") === "true" && !input("New floor area (GF)"), "Clicking row whitespace selects the existing scenario");
     fill(input("Existing living area"), "1,000");
     flushSync(() => button("Save study").click());
-    await wait(() => record.study.revision === 2 && button("Save study").disabled);
+    await wait(() => record.study.revision === 2 && button("Save study")?.disabled);
     check(record.study.scenarios[0]!.values.existingLivingArea.value === 1000, "English grouping must save one thousand, not one");
 
     flushSync(() => button("Revenue and profit").click());
@@ -80,7 +82,7 @@ export async function testFeasibility() {
     check(input("Other costs").value === "1,00", "Invalid text survives group switching");
     fill(input("Other costs"), "100");
     flushSync(() => button("Save study").click());
-    await wait(() => record.study.revision === 3 && button("Save study").disabled);
+    await wait(() => record.study.revision === 3 && button("Save study")?.disabled);
 
     // Refetched revisions must not silently replace an in-progress local draft.
     const notes = host.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -107,11 +109,12 @@ export async function testFeasibility() {
     await wait(() => input("Bestandswohnfläche"));
     fill(input("Bestandswohnfläche"), "1.000,75");
     flushSync(() => button("Studie speichern").click());
-    await wait(() => record.study.revision === 5 && button("Studie speichern").disabled);
+    await wait(() => record.study.revision === 5 && button("Studie speichern")?.disabled);
     check(record.study.scenarios[0]!.values.existingLivingArea.value === 1000.75, "German grouping and decimal must preserve the amount");
     return "PASS: full-row scenario selection, grouped EN/DE inputs, one input group, invalid/optional values, draft retention, stale-save conflict, navigation guard";
   } finally {
     root.unmount(); router.dispose(); host.remove(); queryClient.removeQueries({ queryKey: [path] });
+    if (session) queryClient.setQueryData(["/auth/me"], session); else queryClient.removeQueries({ queryKey: ["/auth/me"] });
     window.fetch = originalFetch; usePreferences.getState().hydrate(preferences);
   }
 }

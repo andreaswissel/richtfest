@@ -1,4 +1,4 @@
-import type { FeasibilitySiteFigures, PermissionKey } from "@richtfest/shared";
+import type { FeasibilitySiteFigures, FeatureFlagKey, PermissionKey } from "@richtfest/shared";
 
 /** What the feasibility app needs from Richtfest OS, adapted by richtfest-os/apps/api/src/feasibility-host.ts. */
 export type AppDeps = {
@@ -8,6 +8,8 @@ export type AppDeps = {
   actorId: string;
   requirePermission: (key: PermissionKey) => void;
   can: (key: PermissionKey) => boolean;
+  /** Whether a per-user feature flag is enabled for the actor in this tenant, read live from Richtfest OS. */
+  featureEnabled: (flag: FeatureFlagKey) => Promise<boolean>;
   audit: (tx: any, action: string, entityType: string, entityId: string, metadata?: unknown) => Promise<void>;
   /** The project's name and address in this tenant, or null when it does not exist here. */
   project: (projectId: string, tx?: any) => Promise<{ id: string; name: string; address: string | null } | null>;

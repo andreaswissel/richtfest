@@ -87,16 +87,18 @@ export function Empty({ children }: { children: ReactNode }) {
     </div>
   );
 }
+/** Items with `to` render as router links (tabs kept in the URL); others call `onChange`. */
 export function Segmented({
   items,
   value,
   onChange,
   ...props
 }: {
-  items: { value: string; label: string; disabled?: boolean }[];
+  items: { value: string; label: string; disabled?: boolean; to?: string }[];
   value: string;
-  onChange: (v: string) => void;
+  onChange?: (v: string) => void;
   id?: string;
+  "aria-label"?: string;
   "aria-labelledby"?: string;
 }) {
   return (
@@ -105,15 +107,29 @@ export function Segmented({
       className="segmented"
       value={value}
       onValueChange={(v) => {
-        if (v) onChange(v);
+        if (v) onChange?.(v);
       }}
       {...props}
     >
-      {items.map((i) => (
-        <ToggleGroupItem value={i.value} key={i.value} aria-label={i.label} disabled={i.disabled}>
-          {i.label}
-        </ToggleGroupItem>
-      ))}
+      {items.map((i) =>
+        i.to ? (
+          <ToggleGroupItem
+            value={i.value}
+            key={i.value}
+            disabled={i.disabled}
+            className="segmented-link"
+            asChild
+          >
+            <Link to={i.to} aria-current={i.value === value ? "page" : undefined}>
+              {i.label}
+            </Link>
+          </ToggleGroupItem>
+        ) : (
+          <ToggleGroupItem value={i.value} key={i.value} aria-label={i.label} disabled={i.disabled}>
+            {i.label}
+          </ToggleGroupItem>
+        ),
+      )}
     </ToggleGroup>
   );
 }

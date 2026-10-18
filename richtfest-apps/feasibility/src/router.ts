@@ -38,6 +38,11 @@ function summarizeSiteAssessment(revision: number, input: typeof siteAssessments
   return { revision, parcelArea: parcel?.value ?? null, parcelAreaReviewed: !!parcel?.reviewed, countableFloorArea: result.baseline?.countableFloorArea ?? null, status: result.status };
 }
 
+/** The residual-land-value study is enabled per user (flag `feasibility_financial_study`), so the API gate matches the UI. */
+async function requireFinancialStudy(d: AppDeps) {
+  if (!(await d.featureEnabled("feasibility_financial_study"))) throw error(403, "feature_not_enabled", "The financial feasibility study is not enabled for this account");
+}
+
 export function createRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
   router.use(createSiteAssessmentRouter(getDeps));
@@ -48,7 +53,7 @@ export function createRouter(getDeps: (req: Request) => AppDeps) {
 
   router.get("/projects/:projectId/study", async (req, res, next) => {
     try {
-      const d = getDeps(req); d.requirePermission("projects:read");
+      const d = getDeps(req); d.requirePermission("projects:read"); await requireFinancialStudy(d);
       const result = await readStudy(d, uuid.parse(req.params.projectId));
       res.json(ok({ ...result, canWrite: d.can("projects:write") }));
     } catch (e) { next(e); }
@@ -57,7 +62,7 @@ export function createRouter(getDeps: (req: Request) => AppDeps) {
   // Saves the whole study under optimistic concurrency; every revision is kept as an immutable snapshot.
   router.put("/projects/:projectId/study", async (req, res, next) => {
     try {
-      const d = getDeps(req); d.requirePermission("projects:write");
+      const d = getDeps(req); d.requirePermission("projects:write"); await requireFinancialStudy(d);
       const projectId = uuid.parse(req.params.projectId);
       const input = feasibilityStudyInput.parse(req.body);
       if (!(await d.project(projectId))) throw error(404, "not_found", "Project not found");
@@ -84,7 +89,7 @@ export function createRouter(getDeps: (req: Request) => AppDeps) {
   // PDF report of the saved study for banks, investors or authorities; unsaved inputs are never reported.
   router.get("/projects/:projectId/study/report.pdf", async (req, res, next) => {
     try {
-      const d = getDeps(req); d.requirePermission("projects:read");
+      const d = getDeps(req); d.requirePermission("projects:read"); await requireFinancialStudy(d);
       const result = await readStudy(d, uuid.parse(req.params.projectId));
       if (!result.study.revision) throw error(409, "study_not_saved", "Save the study before exporting a report");
       const { studyReportPdf } = await import("./report-pdf");
