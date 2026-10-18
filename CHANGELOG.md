@@ -24,7 +24,7 @@
 
 ## 2026-10-18
 
-- 3D location: official aerial imagery under the scene for Rheinland-Pfalz and Berlin sites, with a wider window loaded when zooming out; keyboard shortcuts for tools and views (V, G, M, A, T, 3, S, U, F, Esc); measurements snap to building and plan corners.
+- 3D location: official aerial imagery under the scene for Rheinland-Pfalz and Berlin sites, with a wider window loaded when zooming out; keyboard shortcuts for tools and views (V, G, M, H, A, T, 3, S, U, F, Esc), including a pan tool; measurements snap to building and plan corners, follow the pointer with a live distance and draw as bold lines with the value centred on them.
 
 - 3D location shows mapped roads and railways and the federal rail noise map (EBA, Lden) as switchable layers, with a Surroundings view of 2 × 2 km. A floor plan can be placed on the site with two point pairs; facade distances to each road or railway are measured from it and can be taken over into Exterior noise with their basis.
 

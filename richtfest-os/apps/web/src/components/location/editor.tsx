@@ -17,6 +17,7 @@ import {
   MousePointer2,
   Move,
   Ruler,
+  Hand,
   Save,
   Layers,
 } from "lucide-react";
@@ -309,6 +310,7 @@ export function LocationEditor({
   const callbacks = useRef({
     align: (_p: [number, number]) => {},
     zoom: (_out: boolean) => {},
+    snap: (p: SceneVector) => p,
     select: setSelected,
     place: (_p: SceneVector) => {},
     measure: (_p: SceneVector) => {},
@@ -328,7 +330,9 @@ export function LocationEditor({
           ],
         });
     },
-    measure: (point) => {
+    measure: (point) =>
+      setMeasurement((m) => (m.length === 1 ? [...m, point] : [point])),
+    snap: (point) => {
       // Snap to the nearest building or plan corner within 1 m, keeping the picked height.
       let best: [number, number] | null = null,
         bestDistance = 1;
@@ -339,8 +343,7 @@ export function LocationEditor({
           bestDistance = distance;
         }
       }
-      const snapped: SceneVector = best ? [best[0], point[1], best[1]] : point;
-      setMeasurement((m) => (m.length === 1 ? [...m, snapped] : [snapped]));
+      return best ? [best[0], point[1], best[1]] : point;
     },
     align: site.onAlign,
     zoom: site.onZoom,
@@ -357,7 +360,7 @@ export function LocationEditor({
     if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
     if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
     const key = event.key.toLowerCase();
-    const tools: Record<string, ViewportState["tool"]> = { v: "select", g: "place", m: "measure", a: "align" };
+    const tools: Record<string, ViewportState["tool"]> = { v: "select", g: "place", m: "measure", a: "align", h: "pan" };
     const views: Record<string, "top" | "perspective" | "street" | "area"> = { t: "top", "3": "perspective", s: "street", u: "area" };
     if (tools[key]) {
       if ((key === "g" && !object) || (key === "a" && !site.canAlign)) return;
@@ -397,6 +400,7 @@ export function LocationEditor({
             measure: (p) => callbacks.current.measure(p),
             align: (p) => callbacks.current.align(p),
             zoom: (out) => callbacks.current.zoom(out),
+            snap: (p) => callbacks.current.snap(p),
           });
           setViewportReady(true);
         } catch {
@@ -877,6 +881,7 @@ export function LocationEditor({
                       ["select", MousePointer2, "locationSelect", "V"],
                       ["place", Move, "locationPlace", "G"],
                       ["measure", Ruler, "locationMeasure", "M"],
+                      ["pan", Hand, "locationPan", "H"],
                     ] as const
                   ).map(([value, Icon, key, shortcut]) => (
                     <Button

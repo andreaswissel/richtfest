@@ -464,7 +464,7 @@
   "locationRedo": "Änderung wiederholen",
   "locationDelete": "Objekt entfernen",
   "locationSelectHint": "Objekt im Ansichtsfenster oder Szenenbaum auswählen, um es zu prüfen.",
-  "locationControls": "Ziehen: drehen · Rechts ziehen: verschieben · Scrollen: zoomen · V Auswahl · M Messen · A Ausrichten · T/3/S/U Ansichten · F Einpassen",
+  "locationControls": "Ziehen: drehen · Rechts ziehen oder H: verschieben · Scrollen: zoomen · V Auswahl · M Messen · A Ausrichten · T/3/S/U Ansichten · F Einpassen",
   "locationPlaceHint": "Im Ansichtsfenster klicken, um das ausgewählte Objekt in X/Z zu platzieren. Die Basishöhe bleibt unverändert.",
   "locationMeasureHint": "Zwei sichtbare Flächen oder Punkte wählen; Klicks rasten bis 1 m an Gebäude- und Planecken ein. Freier Raum wird auf die ebene Bodenreferenz projiziert. Esc löscht. Werte sind Modellbeobachtungen, keine Vermessung.",
   "locationPosition": "Position · lokale Meter",
@@ -2071,5 +2071,6 @@
   "siteAerial": "Luftbild",
   "siteAerialLoading": "Luftbild wird geladen…",
   "siteAerialUnavailable": "Das amtliche Luftbild konnte nicht geladen werden.",
-  "siteAerialHint": "Amtliche Orthophotos: 500 m um das Grundstück, beim Herauszoomen ein Ausschnitt von 3 km. Der Bildflug kann älter sein; keine Vermessung."
+  "siteAerialHint": "Amtliche Orthophotos: 500 m um das Grundstück, beim Herauszoomen ein Ausschnitt von 3 km. Der Bildflug kann älter sein; keine Vermessung.",
+  "locationPan": "Verschieben"
 }

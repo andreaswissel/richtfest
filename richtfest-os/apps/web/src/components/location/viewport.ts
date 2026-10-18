@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type {
   LocationContext,
   LocationPointCloud,
@@ -28,7 +31,7 @@ export type ViewportState = {
   };
   site: SiteOverlay;
   selected: string | null;
-  tool: "select" | "place" | "measure" | "align";
+  tool: "select" | "place" | "measure" | "align" | "pan";
   treeStyle: "schematic" | "illustrative";
   measurement: SceneVector[];
   clipHeight: number;
@@ -40,6 +43,8 @@ export function createViewport(
     select: (id: string | null) => void;
     place: (point: SceneVector) => void;
     measure: (point: SceneVector) => void;
+    /** Snaps a measuring point (to building and plan corners); used for clicks and the live preview alike. */
+    snap?: (point: SceneVector) => SceneVector;
     align: (point: Point2) => void;
     /** Camera distance from its target, reported when it crosses the far-imagery threshold. */
     zoom?: (zoomedOut: boolean) => void;
@@ -174,6 +179,9 @@ export function createViewport(
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
+    scene.traverse((node) => {
+      if (node instanceof Line2) (node.material as LineMaterial).resolution.set(renderer.domElement.width, renderer.domElement.height);
+    });
     if (initialFrame) {
       initialFrame = false;
       frame();
@@ -193,7 +201,7 @@ export function createViewport(
         // Sprites share one geometry across the scene.
         if (!(node instanceof THREE.Sprite)) node.geometry.dispose();
         const material = node.material as THREE.Material & { map?: THREE.Texture | null };
-        if (!Array.isArray(material)) material.map?.dispose();
+        if (!Array.isArray(material) && material.map !== pointTexture) material.map?.dispose();
         (Array.isArray(node.material)
           ? node.material
           : [node.material]
@@ -242,24 +250,83 @@ export function createViewport(
     mesh.renderOrder = 9;
     return mesh;
   };
-  const label = (text: string) => {
+  /** Text that keeps its screen size at any zoom, centred on its position. */
+  const label = (text: string, color = "#7a2a1d") => {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d")!;
-    context.font = "600 40px Inter, sans-serif";
-    canvas.width = Math.ceil(context.measureText(text).width) + 32;
-    canvas.height = 64;
-    context.font = "600 40px Inter, sans-serif";
-    context.fillStyle = "rgba(255,255,255,0.92)";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#7a2a1d";
+    const font = "600 44px Inter, sans-serif";
+    context.font = font;
+    canvas.width = Math.ceil(context.measureText(text).width) + 36;
+    canvas.height = 68;
+    context.font = font;
+    context.fillStyle = "rgba(255,255,255,0.95)";
+    context.beginPath();
+    context.roundRect(1, 1, canvas.width - 2, canvas.height - 2, 12);
+    context.fill();
+    context.strokeStyle = color;
+    context.lineWidth = 3;
+    context.stroke();
+    context.fillStyle = color;
     context.textBaseline = "middle";
-    context.fillText(text, 16, 34);
+    context.fillText(text, 18, 36);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, toneMapped: false }));
-    sprite.scale.set((canvas.width / canvas.height) * 2.4, 2.4, 1);
-    sprite.renderOrder = 10;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, toneMapped: false, sizeAttenuation: false }));
+    const height = 0.03;
+    sprite.scale.set((canvas.width / canvas.height) * height, height, 1);
+    sprite.renderOrder = 12;
     return sprite;
+  };
+  /** Pixel-wide line with a white halo, drawn over everything: readable on imagery, buildings and ground. */
+  const fatLine = (points: THREE.Vector3[], color: number, width: number, dashed = false) => {
+    const group = new THREE.Group();
+    const { width: w, height: h } = renderer.domElement;
+    for (const [lineColor, lineWidth, order] of [[0xffffff, width + 3, 10], [color, width, 11]] as const) {
+      const geometry = new LineGeometry();
+      geometry.setPositions(points.flatMap((p) => [p.x, p.y, p.z]));
+      const material = new LineMaterial({ color: lineColor, linewidth: lineWidth * renderer.getPixelRatio(), depthTest: false, transparent: true, dashed: dashed && lineColor !== 0xffffff, dashSize: 0.8, gapSize: 0.5 });
+      material.resolution.set(w, h);
+      const line = new Line2(geometry, material);
+      line.computeLineDistances();
+      line.renderOrder = order;
+      group.add(line);
+    }
+    return group;
+  };
+  const pointTexture = (() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#ffffff";
+    context.beginPath();
+    context.arc(32, 32, 30, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#e8590c";
+    context.beginPath();
+    context.arc(32, 32, 20, 0, Math.PI * 2);
+    context.fill();
+    return new THREE.CanvasTexture(canvas);
+  })();
+  const handle = (p: THREE.Vector3) => {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: pointTexture, depthTest: false, toneMapped: false, sizeAttenuation: false }));
+    sprite.scale.set(0.022, 0.022, 1);
+    sprite.position.copy(p);
+    sprite.renderOrder = 12;
+    return sprite;
+  };
+  let preview: SceneVector | null = null;
+  const drawMeasure = (points: SceneVector[]) => {
+    disposeGroup(groups.measure);
+    const ends = (points.length === 1 && preview ? [points[0], preview] : points).map((p) => new THREE.Vector3(...p));
+    if (ends.length === 2) {
+      groups.measure.add(fatLine(ends, 0xe8590c, 3.5, points.length === 1));
+      const mid = ends[0].clone().add(ends[1]).multiplyScalar(0.5);
+      const text = `${ends[0].distanceTo(ends[1]).toFixed(2)} m`;
+      const tag = label(text, "#b5400a");
+      tag.position.copy(mid);
+      groups.measure.add(tag);
+    }
+    for (const p of ends) groups.measure.add(handle(p));
   };
   function update(next: ViewportState) {
     const previous = current;
@@ -594,14 +661,9 @@ export function createViewport(
       disposeGroup(groups.dimensions);
       for (const item of next.site.distances) {
         const points = [item.from, item.to].map(([x, z]) => new THREE.Vector3(x, 0.4, z));
-        const line = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints(points),
-          new THREE.LineBasicMaterial({ color: 0xb4432f, depthTest: false }),
-        );
-        line.renderOrder = 8;
-        groups.dimensions.add(line);
+        groups.dimensions.add(fatLine(points, 0xc92a2a, 2.5));
         const sprite = label(item.label);
-        sprite.position.set((item.from[0] + item.to[0]) / 2, 3, (item.from[1] + item.to[1]) / 2);
+        sprite.position.set((item.from[0] + item.to[0]) / 2, 0.4, (item.from[1] + item.to[1]) / 2);
         groups.dimensions.add(sprite);
       }
       if (next.tool === "align") {
@@ -613,27 +675,8 @@ export function createViewport(
     for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
       groups[key].visible = next.layers[key];
     grid.visible = !(next.layers.aerial && groups.aerial.children.length);
-    disposeGroup(groups.measure);
-    if (next.measurement.length) {
-      const geometry = new THREE.BufferGeometry().setFromPoints(
-        next.measurement.map((p) => new THREE.Vector3(...p)),
-      );
-      groups.measure.add(
-        new THREE.Line(
-          geometry,
-          new THREE.LineBasicMaterial({ color: 0x7771d0, depthTest: false }),
-        ),
-      );
-      for (const p of next.measurement) {
-        const point = new THREE.Mesh(
-          new THREE.SphereGeometry(0.22, 8, 8),
-          new THREE.MeshBasicMaterial({ color: 0x7771d0, depthTest: false }),
-        );
-        point.position.fromArray(p);
-        point.renderOrder = 9;
-        groups.measure.add(point);
-      }
-    }
+    if (next.measurement.length !== 1 || next.tool !== "measure") preview = null;
+    drawMeasure(next.tool === "measure" || next.measurement.length === 2 ? next.measurement : []);
     const selected = Object.values(groups)
       .flatMap((group) => group.children)
       .find(
@@ -645,8 +688,10 @@ export function createViewport(
       selection.box.setFromObject(selected);
       selection.updateMatrixWorld(true);
     }
+    // Pan tool: the left button moves the view instead of orbiting, like the plan editor's hand.
+    controls.mouseButtons.LEFT = next.tool === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
     renderer.domElement.style.cursor =
-      next.tool === "select" ? "default" : "crosshair";
+      next.tool === "pan" ? "grab" : next.tool === "select" ? "default" : "crosshair";
     render();
   }
   const raycaster = new THREE.Raycaster();
@@ -654,6 +699,57 @@ export function createViewport(
   let pointer = [0, 0];
   const down = (e: PointerEvent) => {
     pointer = [e.clientX, e.clientY];
+  };
+  const aim = (e: PointerEvent) => {
+    const bounds = host.getBoundingClientRect();
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ((e.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((e.clientY - bounds.top) / bounds.height) * 2 + 1,
+      ),
+      camera,
+    );
+  };
+  const surfaceHit = () => {
+    const targets = [
+      groups.buildings,
+      groups.trees,
+      groups.objects,
+      ...(current?.tool === "measure" ? [groups.lidar] : []),
+    ].filter((g) => g.visible);
+    return raycaster
+      .intersectObjects(targets, true)
+      .find(
+        (h) =>
+          !(h.object instanceof THREE.LineSegments) &&
+          (!(h.object instanceof THREE.Points) ||
+            h.point.y <= current!.clipHeight),
+      );
+  };
+  /** A visible surface under the pointer, else the flat ground reference; snapped like a click. */
+  const measurePoint = (): SceneVector | null => {
+    const point =
+      surfaceHit()?.point ??
+      raycaster.ray.intersectPlane(
+        new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+        new THREE.Vector3(),
+      );
+    if (!point) return null;
+    const raw = point.toArray() as SceneVector;
+    return callbacks.snap ? callbacks.snap(raw) : raw;
+  };
+  // After the first point the line follows the pointer and measures live.
+  let moveFrame = 0;
+  const move = (e: PointerEvent) => {
+    if (!current || current.tool !== "measure" || current.measurement.length !== 1 || e.buttons) return;
+    cancelAnimationFrame(moveFrame);
+    moveFrame = requestAnimationFrame(() => {
+      if (!current || current.tool !== "measure" || current.measurement.length !== 1) return;
+      aim(e);
+      preview = measurePoint();
+      drawMeasure(current.measurement);
+      render();
+    });
   };
   const up = (e: PointerEvent) => {
     if (
@@ -670,6 +766,7 @@ export function createViewport(
       ),
       camera,
     );
+    if (current.tool === "pan") return;
     if (current.tool === "align") {
       const point = raycaster.ray.intersectPlane(
         new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
@@ -686,28 +783,11 @@ export function createViewport(
       if (point) callbacks.place(point.toArray() as SceneVector);
       return;
     }
-    const targets = [
-      groups.buildings,
-      groups.trees,
-      groups.objects,
-      ...(current.tool === "measure" ? [groups.lidar] : []),
-    ].filter((g) => g.visible);
-    const hit = raycaster
-      .intersectObjects(targets, true)
-      .find(
-        (h) =>
-          !(h.object instanceof THREE.LineSegments) &&
-          (!(h.object instanceof THREE.Points) ||
-            h.point.y <= current!.clipHeight),
-      );
+    const hit = surfaceHit();
     if (current.tool === "measure") {
-      const point =
-        hit?.point ??
-        raycaster.ray.intersectPlane(
-          new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-          new THREE.Vector3(),
-        );
-      if (point) callbacks.measure(point.toArray() as SceneVector);
+      const point = measurePoint();
+      preview = null;
+      if (point) callbacks.measure(point);
     } else {
       let node: THREE.Object3D | null = hit?.object ?? null;
       while (node && !node.userData.id) node = node.parent;
@@ -716,6 +796,7 @@ export function createViewport(
   };
   renderer.domElement.addEventListener("pointerdown", down);
   renderer.domElement.addEventListener("pointerup", up);
+  renderer.domElement.addEventListener("pointermove", move);
   return {
     update,
     view(mode: "perspective" | "top" | "street" | "area") {
@@ -751,6 +832,9 @@ export function createViewport(
       controls.dispose();
       renderer.domElement.removeEventListener("pointerdown", down);
       renderer.domElement.removeEventListener("pointerup", up);
+      renderer.domElement.removeEventListener("pointermove", move);
+      cancelAnimationFrame(moveFrame);
+      pointTexture.dispose();
       Object.values(groups).forEach(disposeGroup);
       scene.traverse((node) => {
         if (node instanceof THREE.Mesh || node instanceof THREE.LineSegments) {
