@@ -439,7 +439,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   const bbox: [number, number, number, number] = [longitude - dx, latitude - dy, longitude + dx, latitude + dy];
   const berlin = state === "BE";
   const categories = await stateCategories(state, site, bbox, retrievedAt, rawResponses, options.signal);
-  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal).catch(() => options.signal?.throwIfAborted());
+  await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal, d.trafficCounts).catch(() => options.signal?.throwIfAborted());
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
   // States without a connected road/rail source still get a survey (counts and Fraport may apply) under an explicit "unconnected" version.
   const connector = stateConnectorVersion(state) ?? `${state.toLowerCase()}-unconnected-v1`;

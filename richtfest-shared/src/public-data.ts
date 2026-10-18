@@ -62,3 +62,34 @@ export type PublicReleaseStatusResponse = {
   items: PublicReleaseStatus[];
   canRefreshProjectContext: boolean;
 };
+
+/**
+ * A published traffic count imported from a file-only source (BASt, state road
+ * authorities) into the public-data catalogue. Coordinates are [longitude, latitude].
+ * `station` counts are points representing a counted section; `section` counts carry the section's line geometry.
+ */
+export type TrafficCountRecord = {
+  sourceId: string;
+  /** Human label of the source, e.g. "BASt Dauerzählstellen 2024". */
+  label: string;
+  sourceUrl: string;
+  licence: string;
+  release: string;
+  year: number;
+  stationId: string;
+  /** Normalised road designation ("A 1", "B 4a", "L 593") when the source names one. */
+  road: string | null;
+  name: string | null;
+  kind: "station" | "section";
+  /** Higher wins between sources of the same year: state sections 3, BASt permanent stations 2, BASt SVZ points 1. */
+  specificity: number;
+  geometry: { type: "Point"; coordinates: [number, number] } | { type: "MultiLineString"; coordinates: Array<Array<[number, number]>> };
+  /** Kfz/24h (DTV) and heavy vehicles/24h (SV, buses and lorries above 3.5 t). */
+  dailyTraffic: number;
+  heavyVehicles: number | null;
+  /** RLS-19 inputs where published: hourly vehicles day (06–22) / night (22–06) and heavy-vehicle shares in percent. */
+  hourly: { day: number | null; night: number | null; heavyShareDay: number | null; heavyShareNight: number | null; p1Day: number | null; p2Day: number | null; p1Night: number | null; p2Night: number | null };
+  /** SHA-256 of the source file(s) the row was imported from, and when. */
+  checksum: string;
+  importedAt: string;
+};

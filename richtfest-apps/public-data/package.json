@@ -9,7 +9,10 @@
     "./deps": "./src/deps.ts",
     "./worker": "./src/worker.ts",
     "./catalogue": "./src/catalogue.ts",
-    "./queries": "./src/queries.ts"
+    "./queries": "./src/queries.ts",
+    "./traffic-count-sources": "./src/traffic-count-sources.ts",
+    "./traffic-count-worker": "./src/traffic-count-worker.ts",
+    "./traffic-count-queries": "./src/traffic-count-queries.ts"
   },
   "scripts": { "typecheck": "tsc -p tsconfig.json" },
   "dependencies": {

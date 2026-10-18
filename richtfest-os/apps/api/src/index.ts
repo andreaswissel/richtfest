@@ -11,6 +11,7 @@ import { structureSourceDocument } from "./source-model-host";
 import { fileStorage } from "./app-hosts";
 import { recordAudit } from "./audit";
 import { startPublicDataWorker } from "@richtfest/public-data/worker";
+import { startTrafficCountWorker } from "@richtfest/public-data/traffic-count-worker";
 import { readBerlinSnapshot } from "@richtfest/public-data/queries";
 import { publicDataWorkerDeps } from "./public-data-host";
 import { withProviderCredential } from "./ai-connections";
@@ -24,6 +25,7 @@ const pdfWorker = startArtifactPdfWorker({
   reportError: () => console.error("Artifact PDF preparation failed; automatic recovery is bounded"),
 });
 const publicDataWorker = env.PUBLIC_DATA_ENABLED ? await startPublicDataWorker(publicDataWorkerDeps(db)) : null;
+const trafficCountWorker = env.TRAFFIC_COUNT_IMPORT_ENABLED ? await startTrafficCountWorker(publicDataWorkerDeps(db)) : null;
 const locationWorker = startLocationWorker({
   db,
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataSnapshot: (origin: [number, number], radius: number) => readBerlinSnapshot(db, origin, radius) } : {}),
@@ -64,6 +66,7 @@ async function shutdown() {
   await extractionWorker.stop();
   await buildingExtractionWorker.stop();
   await publicDataWorker?.stop();
+  await trafficCountWorker?.stop();
   await locationWorker.stop();
   await worker.stop();
   await pool.end();

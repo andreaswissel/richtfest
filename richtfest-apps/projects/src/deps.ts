@@ -38,6 +38,8 @@ export type AppDeps = {
   tenantId: string;
   actorId: string;
   publicDataUpdates?: (releaseIds: string[]) => Promise<import("@richtfest/shared").PublicDataUpdate[]>;
+  /** Imported file-published traffic counts (BASt, state road authorities) overlapping a WGS84 [west, south, east, north] box. */
+  trafficCounts?: (bbox: [number, number, number, number]) => Promise<import("@richtfest/shared").TrafficCountRecord[]>;
   requirePermission: (key: PermissionKey) => void;
   audit: (
     tx: any,

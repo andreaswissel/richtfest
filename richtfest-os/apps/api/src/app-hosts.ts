@@ -34,6 +34,7 @@ import type { AppDeps as CrmDeps } from "@richtfest/crm/deps";
 import type { AppDeps as ProjectsDeps } from "@richtfest/projects/deps";
 import type { AppDeps as KnowledgeDeps } from "@richtfest/knowledge/deps";
 import { availableUpdates } from "@richtfest/public-data/queries";
+import { trafficCountsInBox } from "@richtfest/public-data/traffic-count-queries";
 import { calculateAcoustics } from "@richtfest/acoustics";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
@@ -129,6 +130,8 @@ export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   nominatim: env.NOMINATIM_URL ? { url: env.NOMINATIM_URL, userAgent: `Richtfest/1.0 (+${env.BETTER_AUTH_URL}; site address of individual projects)` } : null,
   inboundEmailDomain: inboundEmailConfigured() ? env.INBOUND_EMAIL_DOMAIN : null,
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),
+  // Imported reference counts are read whenever present; only their import is switched by TRAFFIC_COUNT_IMPORT_ENABLED.
+  trafficCounts: bbox => trafficCountsInBox(db, bbox),
 });
 export const knowledgeDeps = (
   db: Database,
