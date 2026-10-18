@@ -3,6 +3,8 @@
 ## 2026-10-18
 
 - **Updates in projects:** "New updates available" now also appears in the project bar next to your profile, since the navigation rail is hidden inside projects.
+- **Feasibility steps:** The site assessment always opens on Site, and the chosen step is kept in the link, so reloading or sharing it returns to the same step.
+- **Design context layers:** Design shows the same context as the Site map: aerial image, B-Plan areas, monuments and preservation areas, and the neighbours' GRZ, GFZ and storeys on their parcels, each as a layer you can hide.
 - **B-Plan on the aerial map:** The Site step loads the aerial map with parcels and data on its own. On a parcel under a B-Plan, "Overlay on map" imports the official plan PDF and opens the three-point alignment right there; the aligned plan is drawn over the aerial image as its own layer.
 - **Editing in Design:** Drag a Staffelgeschoss as a whole within its building, and drag any edge of a selected outline to move that flank parallel to itself. The Staffel proposal now follows the Landesbauordnung: in Berlin just below ⅔ of the floor below (BauO Bln § 2 Abs. 12), so it does not count as a full storey; 75 % stays available where an approval allows it.
 - **Design full window:** The Design step now fills the whole window like 3D location and the building model, with plan alignment as a drawer at the bottom; the detailed design check table moved to Result.

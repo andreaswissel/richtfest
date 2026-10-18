@@ -64,7 +64,7 @@ import type { createViewport, ViewportState } from "../location/viewport";
 import "./site-geometry-editor.css";
 import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
 import { TRACED_LINE_PREFIX } from "./plan-lines";
-import { containsPoint, useBerlinContext, type BerlinParcel } from "./site-lookups";
+import { containsPoint, useBerlinContext, useSiteDiscovery, type BerlinParcel } from "./site-lookups";
 
 type Engine = typeof import("@richtfest/shared/site-geometry");
 type SelectionKind = "parcel" | "line" | "envelope" | "exclusion" | "building" | "staffel" | "edge";
@@ -355,6 +355,25 @@ export function SiteGeometryEditor({
   const locator = (useApi(`/feasibility/projects/${projectId}/site-assessment`).data as { assessment?: { siteLocator?: SiteAssessmentInput["siteLocator"] } } | undefined)?.assessment?.siteLocator;
   const berlin = useBerlinContext(projectId, locator);
   const alkis = berlin.data?.parcels ?? [];
+  // The same public context as the Site map: aerial image, B-Plan areas, monuments and preservation areas, neighbour ratios.
+  const discoveryQuery = useSiteDiscovery(projectId, locator), discovery = discoveryQuery.data;
+  // Opened directly on Design, the context is still loaded once in the background (cached and shared with Site).
+  useEffect(() => {
+    if (!berlin.data && !berlin.isFetching && !berlin.error) void berlin.refetch();
+  }, [berlin.data, berlin.error]);
+  useEffect(() => {
+    if (berlin.data && !discovery && !discoveryQuery.isFetching && !discoveryQuery.error) void discoveryQuery.refetch();
+  }, [berlin.data, discovery, discoveryQuery.error]);
+  const parcelRatios = useMemo(() => {
+    const byParcel = new Map<string, { grz: number | null; gfz: number | null; storeys: number | null }>();
+    for (const r of discovery?.references ?? []) {
+      if (!r.parcelId) continue;
+      const storeys = r.metrics?.storeys?.value ?? null, known = byParcel.get(r.parcelId);
+      if (known) { if (storeys != null && (known.storeys == null || storeys > known.storeys)) known.storeys = storeys; continue; }
+      byParcel.set(r.parcelId, { grz: r.metrics?.grz?.value ?? null, gfz: r.metrics?.gfz?.value ?? null, storeys });
+    }
+    return byParcel;
+  }, [discovery]);
   const geometry = useMemo(() => {
     const parsed = siteGeometryInputSchema.safeParse(value);
     return parsed.success
@@ -378,7 +397,7 @@ export function SiteGeometryEditor({
     [view, setView] = useState("2d"),
     [tab, setTab] = useState("properties"),
     [panel, setPanel] = useState<"layers" | "inspector" | null>(null),
-    [layers, setLayers] = useState({ context: true, plan: true, parcels: true, setbacks: true }),
+    [layers, setLayers] = useState({ context: true, plan: true, parcels: true, setbacks: true, aerial: true, bplans: true, protection: true, ratios: true }),
     [parcelPick, setParcelPick] = useState<string | null>(null),
     [past, setPast] = useState<SiteGeometryInput[]>([]),
     [future, setFuture] = useState<SiteGeometryInput[]>([]);
@@ -1154,9 +1173,16 @@ export function SiteGeometryEditor({
                   {layers.context ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
                 </Button>
               </div>
-              {([["parcels", label("LayerParcels"), alkis.length, !alkis.length], ["setbacks", label("LayerSetbacks"), setbackChecks.length, !geometry.parcel]] as const).map(([key, name, count, off]) => (
+              {([
+                ["parcels", label("LayerParcels"), alkis.length, !alkis.length],
+                ["ratios", label("LayerRatios"), parcelRatios.size, !parcelRatios.size],
+                ["setbacks", label("LayerSetbacks"), setbackChecks.length, !geometry.parcel],
+                ["aerial", label("LayerAerial"), null, !berlin.data],
+                ["bplans", label("LayerBPlans"), berlin.data?.plans.length ?? 0, !berlin.data?.plans.length],
+                ["protection", label("LayerProtection"), berlin.data?.hints?.filter((h) => h.polygons?.length).length ?? 0, !berlin.data?.hints?.some((h) => h.polygons?.length)],
+              ] as const).map(([key, name, count, off]) => (
                 <div key={key} className="geometry-layer-toggle text-ui-xs">
-                  <span>{name} <small className="muted">{count}</small></span>
+                  <span>{name} {count !== null && <small className="muted">{count}</small>}</span>
                   <Button variant="ghost" size="icon-xs" aria-label={`${name}: ${label(layers[key] ? "HideLayer" : "ShowLayer")}`} aria-pressed={layers[key]} disabled={off} onClick={() => setLayers((l) => ({ ...l, [key]: !l[key] }))}>
                     {layers[key] ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
                   </Button>
@@ -1291,6 +1317,17 @@ export function SiteGeometryEditor({
                   }}
                 >
                   <svg viewBox={`0 0 ${width} ${height}`} aria-label={label("Plan")}>
+                    {layers.aerial && berlin.data && (() => {
+                      // Same orthophoto window as the Site map (400 m, snapped to 25 m around the address).
+                      const e = Math.round(berlin.data.origin[0] / 25) * 25, n = Math.round(berlin.data.origin[1] / 25) * 25, [x, y] = project([e - 200, n + 200]);
+                      return <image className="geometry-aerial" href={`/api/feasibility/projects/${projectId}/aerial?e=${e}&n=${n}`} x={x} y={y} width={400 / metresPerPixel} height={400 / metresPerPixel} preserveAspectRatio="none" />;
+                    })()}
+                    {layers.bplans && berlin.data?.plans.filter((p) => p.polygons?.length).map((p) => (
+                      <path key={p.id} className="geometry-bplan" data-status={p.status} d={pathFor(p.polygons!, project)}><title>{p.name}</title></path>
+                    ))}
+                    {layers.protection && (berlin.data?.hints ?? []).filter((h) => h.polygons?.length).map((h) => (
+                      <path key={`${h.kind}:${h.id}`} className="geometry-protection" data-kind={h.kind} d={pathFor(h.polygons!, project)}><title>{h.label}</title></path>
+                    ))}
                     {planImage && overlayMatrix && layers.plan && (
                       <image href={planImage} width={1} height={1} preserveAspectRatio="none" transform={overlayMatrix} opacity={geometry.planOverlay?.opacity ?? 0.55} style={{ pointerEvents: "none" }} />
                     )}
@@ -1319,7 +1356,14 @@ export function SiteGeometryEditor({
                         const ring = p.polygons[0]?.[0];
                         if (!ring?.length) return null;
                         const [x, y] = project([ring.reduce((n, q) => n + q[0], 0) / ring.length, ring.reduce((n, q) => n + q[1], 0) / ring.length]);
-                        return x < 0 || y < 0 || x > width || y > height ? null : <text key={p.id} className="geometry-alkis-label" x={x} y={y}>{p.number}</text>;
+                        if (x < 0 || y < 0 || x > width || y > height) return null;
+                        const r = layers.ratios ? parcelRatios.get(p.id) : undefined;
+                        return (
+                          <text key={p.id} className="geometry-alkis-label" x={x} y={y}>
+                            {p.number}
+                            {r?.grz != null && <tspan className="geometry-alkis-ratio" x={x} dy="1.2em">GRZ {format(r.grz)}{r.gfz != null ? ` · GFZ ${format(r.gfz)}` : ""}{r.storeys != null ? ` · ${r.storeys} G` : ""}</tspan>}
+                          </text>
+                        );
                       })}
                     {geometry.parcel && (
                       <path

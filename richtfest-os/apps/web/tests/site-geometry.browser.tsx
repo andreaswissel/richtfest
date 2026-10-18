@@ -70,8 +70,13 @@ export async function testSiteGeometry() {
     evidencePath = "/feasibility/projects/geometry-regression/evidence";
   queryClient.setQueryData([locationPath], { context: null });
   queryClient.setQueryData([evidencePath], { sources: [], proposals: [] });
+  queryClient.removeQueries({ queryKey: ["feasibility", "geometry-regression"] });
   window.fetch = async (url, options) =>
-    String(url).includes("geometry-regression")
+    String(url).includes("berlin-context")
+      ? Response.json({ data: { address: "Test", origin: [0, 0], retrievedAt: "2026-10-18T10:00:00Z", parcelStatus: "available", planStatus: "available", parcels: [], plans: [], hints: [] } })
+      : String(url).includes("references/discover")
+      ? Response.json({ data: { address: "Test", origin: [0, 0], longitude: 13.4, latitude: 52.5, retrievedAt: "2026-10-18T10:00:00Z", references: [], buildings: [], sources: [], status: [] } })
+      : String(url).includes("geometry-regression")
       ? Response.json({
           data: String(url).includes("evidence")
             ? { sources: [], proposals: [] }

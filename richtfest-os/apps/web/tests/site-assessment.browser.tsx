@@ -219,6 +219,8 @@ export async function testSiteAssessment() {
     fill(field("Full storeys")!, "3");
     closeEditor();
     step("Result");
+    // Steps live in the URL; the router applies the change after the click.
+    await wait(() => host.querySelector('textarea[aria-label="Notes"]'));
     const notes = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]')!;
     fill(notes, "My unsaved review");
     record = {

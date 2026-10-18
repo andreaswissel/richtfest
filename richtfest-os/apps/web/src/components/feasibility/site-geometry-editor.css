@@ -704,3 +704,12 @@
   border-top: 1px solid var(--border);
 }
 .geometry-plan-drawer > details > summary { padding-block: 6px; }
+/* Public context from the Site map: aerial underneath, B-Plan areas and protection outlines above it, all click-through. */
+.geometry-aerial { pointer-events: none; opacity: 0.85; }
+.geometry-bplan { fill: rgb(16 185 129 / 0.08); stroke: #10b981; stroke-width: 1.5; stroke-dasharray: 6 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.geometry-bplan[data-status="in_progress"] { fill: rgb(124 58 237 / 0.06); stroke: #7c3aed; }
+.geometry-protection { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.geometry-protection[data-kind="heritage"] { fill: rgb(225 29 72 / 0.15); stroke: #e11d48; }
+.geometry-protection[data-kind="social_preservation"] { stroke: #c026d3; stroke-dasharray: 8 4; }
+.geometry-protection[data-kind="urban_preservation"] { stroke: #0891b2; stroke-dasharray: 2 4; }
+.geometry-alkis-ratio { font-size: 0.85em; font-weight: 400; }

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useBlocker } from "react-router-dom";
+import { Link, useBlocker, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download, Save } from "lucide-react";
 import {
@@ -42,6 +42,7 @@ import { TRACED_LINE_PREFIX } from "./plan-lines";
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
 type Step = "site" | "limits" | "design" | "result";
+const STEPS: Step[] = ["site", "limits", "design", "result"];
 /** Required constraints with the optional GRZ 2 next to GRZ, in reading order. */
 const CONSTRAINT_ROWS = SITE_ASSESSMENT_CONSTRAINT_KEYS.flatMap((key) => (key === "grz" ? (["grz", "grz2"] as const) : ([key] as const)));
 const EMPTY_CONSTRAINT = { value: null, source: "", sourceDate: null, kind: "assessment" as const, reviewed: false };
@@ -150,7 +151,17 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   const [geometryContext, setGeometryContext] = useState<LocationContext | null>(null);
   const [editor, setEditor] = useState<ReviewItem>();
   const [raw, setRaw] = useState<Record<string, string>>({});
-  const [step, setStep] = useState<Step>();
+  // The step lives in the URL (?step=), so reloads and shared links return to it; without one the assessment opens on Site, in task order.
+  const [params, setParams] = useSearchParams();
+  const stepParam = params.get("step");
+  const step: Step | undefined = STEPS.includes(stepParam as Step) ? (stepParam as Step) : undefined;
+  const setStep = (next: Step | undefined) =>
+    setParams((current) => {
+      const updated = new URLSearchParams(current);
+      if (next) updated.set("step", next);
+      else updated.delete("step");
+      return updated;
+    }, { replace: true });
   const [scenario, setScenario] = useState<"baseline" | "upside">("baseline");
   const [summarySteps, setSummarySteps] = useState<SummaryStep[] | null>(null);
   const loaded = useMemo(() => data?.assessment && withOptional(data.assessment), [data?.assessment]);
@@ -212,11 +223,12 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   useEffect(() => {
     void import("@richtfest/shared/site-proposals").then(setProposals);
   }, []);
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
+  // Switching steps only changes ?step= and keeps the draft; any other navigation asks first.
+  const withoutStep = (search: string) => { const p = new URLSearchParams(search); p.delete("step"); return p.toString(); };
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (currentLocation.pathname !== nextLocation.pathname || withoutStep(currentLocation.search) !== withoutStep(nextLocation.search)));
   useEffect(() => {
     setDraft(undefined);
     setRaw({});
-    setStep(undefined);
   }, [projectId]);
   useEffect(() => {
     if (!dirty) return;
@@ -258,7 +270,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   const area = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "–" : `${n.toLocaleString(locale, { maximumFractionDigits: 2 })} m²`);
   const invalidKeys = new Set(validation && !validation.success ? validation.error.issues.flatMap((issue) => issue.path.map(String)) : []);
   const hasParcel = !!assessment.geometry?.parcel;
-  const currentStep: Step = step ?? (!hasParcel ? "site" : SITE_ASSESSMENT_CONSTRAINT_KEYS.some((key) => assessment.constraints[key].value === null) ? "limits" : "design");
+  const currentStep: Step = step ?? "site";
   const openReview = (item: ReviewItem) => setEditor(item);
   const openUpside = () => {
     setStep("limits");
