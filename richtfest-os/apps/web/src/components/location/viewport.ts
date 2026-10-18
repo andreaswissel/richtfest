@@ -36,6 +36,7 @@ export type ViewportState = {
   measurement: SceneVector[];
   clipHeight: number;
   dark: boolean;
+  constructionLabel: string;
 };
 export function createViewport(
   host: HTMLElement,
@@ -119,6 +120,7 @@ export function createViewport(
     plan: new THREE.Group(),
     dimensions: new THREE.Group(),
     aerial: new THREE.Group(),
+    construction: new THREE.Group(),
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
@@ -150,6 +152,7 @@ export function createViewport(
   selection.visible = false;
   scene.add(selection);
   const slice = new THREE.Plane(new THREE.Vector3(0, -1, 0), 50);
+  const constructionBounds = new THREE.Box3();
   let current: ViewportState | undefined;
   const render = () => renderer.render(scene, camera);
   let initialFrame = true;
@@ -687,6 +690,41 @@ export function createViewport(
     slice.constant = next.clipHeight;
     for (const key of ["buildings", "trees", "objects", "lidar", "roads", "railNoise", "plan", "aerial"] as const)
       groups[key].visible = next.layers[key];
+    if (
+      previous?.objects !== next.objects || previous?.models !== next.models ||
+      previous?.site.plan !== next.site.plan ||
+      previous?.layers.objects !== next.layers.objects || previous?.layers.plan !== next.layers.plan ||
+      previous?.constructionLabel !== next.constructionLabel
+    ) {
+      disposeGroup(groups.construction);
+      constructionBounds.makeEmpty();
+      const plannedIds = new Set(next.objects.filter((object) => object.kind === "mass" || object.kind === "ifc").map((object) => object.id));
+      const planned = [
+        ...(next.layers.plan ? [groups.plan] : []),
+        ...(next.layers.objects ? groups.objects.children.filter((node) => plannedIds.has(node.userData.id)) : []),
+      ];
+      // Display-only locator: never include it in picking, measurement or framing bounds.
+      for (const node of planned) {
+        const box = new THREE.Box3().setFromObject(node);
+        if (box.isEmpty()) continue;
+        constructionBounds.union(box);
+        const { min, max } = box;
+        groups.construction.add(fatLine([
+          new THREE.Vector3(min.x, min.y + 0.08, min.z),
+          new THREE.Vector3(max.x, min.y + 0.08, min.z),
+          new THREE.Vector3(max.x, min.y + 0.08, max.z),
+          new THREE.Vector3(min.x, min.y + 0.08, max.z),
+          new THREE.Vector3(min.x, min.y + 0.08, min.z),
+        ], 0x0f766e, 3));
+      }
+      if (!constructionBounds.isEmpty()) {
+        const tag = label(next.constructionLabel, "#0f766e");
+        tag.position.copy(constructionBounds.getCenter(new THREE.Vector3()));
+        tag.position.y = constructionBounds.max.y + 1;
+        tag.center.set(0.5, 0);
+        groups.construction.add(tag);
+      }
+    }
     grid.visible = !(next.layers.aerial && groups.aerial.children.length);
     if (next.measurement.length !== 1 || next.tool !== "measure") preview = null;
     drawMeasure(next.tool === "measure" || next.measurement.length === 2 ? next.measurement : []);
@@ -838,6 +876,10 @@ export function createViewport(
         .flatMap((group) => group.children)
         .find((node) => node.userData.id === id);
       frame(node ? new THREE.Box3().setFromObject(node) : undefined);
+      render();
+    },
+    fitConstruction() {
+      frame(constructionBounds.isEmpty() ? undefined : constructionBounds);
       render();
     },
     dispose() {

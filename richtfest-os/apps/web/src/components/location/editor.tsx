@@ -11,6 +11,7 @@ import {
   Undo2,
   Redo2,
   Focus,
+  ScanSearch,
   Trash2,
   Eye,
   EyeOff,
@@ -101,6 +102,7 @@ export function LocationEditor({
   const t = useT(),
     theme = usePreferences((s) => s.theme);
   const addressLabel = formatProjectAddress(address);
+  const constructionLabel = t("locationConstruction");
   const hasAddress = !!address.street && !!address.city;
   const path = `/projects/${projectId}/location`;
   const state = useQuery({
@@ -373,7 +375,8 @@ export function LocationEditor({
       viewport.current.view(views[key]);
     } else if (key === "f") {
       event.preventDefault();
-      viewport.current.focus(selected);
+      if (event.shiftKey) viewport.current.fitConstruction();
+      else viewport.current.focus(selected);
     }
   };
   useEffect(() => {
@@ -431,6 +434,7 @@ export function LocationEditor({
         measurement,
         clipHeight,
         dark: theme === "dark",
+        constructionLabel,
       });
   }, [
     site.overlay,
@@ -446,6 +450,7 @@ export function LocationEditor({
     measurement,
     clipHeight,
     theme,
+    constructionLabel,
   ]);
   const envelopeCount = useMemo(
     () =>
@@ -945,6 +950,15 @@ export function LocationEditor({
                     onClick={() => viewport.current?.focus(selected)}
                   >
                     <Focus className="size-icon-sm" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    title={`${t("locationFitConstructionHint")} (Shift+F)`}
+                    aria-keyshortcuts="Shift+F"
+                    onClick={() => viewport.current?.fitConstruction()}
+                  >
+                    <ScanSearch className="size-icon-sm" />
+                    {t("locationFitConstruction")}
                   </Button>
                 </div>
               </div>
