@@ -107,3 +107,16 @@ test("keeps simplified [longitude, latitude] axes near the site and drops distan
   ]);
   expect(kept).toEqual([[[8, 50.0005], [8.002, 50.0005]]]);
 });
+
+test("a federal road beyond the 150 nearest local streets stays in the list", () => {
+  const site = { longitude: 8, latitude: 50 };
+  const axis = (id: string, lat: number, extra: Partial<MappedAxis> = {}): MappedAxis => ({ id, kind: "road", group: id, name: `Gasse ${id}`, dedication: "1307", designation: null, lanes: null, widthM: null,
+    categories: [], routeNumbers: [], lines: [], tracks: null, electrified: null, parts: [[[7.99, lat], [8.01, lat]]], ...extra });
+  const local = Array.from({ length: 160 }, (_, i) => axis(`L${i}`, 50 + (i + 1) * 0.00005));
+  const federal = axis("B", 50.009, { name: "Mainzer Landstraße", dedication: "1303", designation: "B 40" });
+  const { roads } = groupMappedSources([...local, federal], site);
+  expect(roads).toHaveLength(150);
+  expect(roads.some(road => road.designation === "B 40")).toBe(true);
+  // Still nearest first: the federal road, about 1 km out, comes last.
+  expect(roads.at(-1)!.designation).toBe("B 40");
+});

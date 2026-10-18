@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<wfs:FeatureCollection xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.opengis.net/wfs/2.0 http://schemas.opengis.net/wfs/2.0/wfs.xsd http://www.opengis.net/gml/3.2 http://schemas.opengis.net/gml/3.2.1/gml.xsd http://www.deegree.org/app https://isk.geobasis-bb.de/ows/gaz_wfs?SERVICE=WFS&amp;VERSION=2.0.0&amp;REQUEST=DescribeFeatureType&amp;OUTPUTFORMAT=text%2Fxml%3B+subtype%3Dgml%2F3.2.1&amp;TYPENAME=app:Hauskoordinaten&amp;NAMESPACES=xmlns(app,http%3A%2F%2Fwww.deegree.org%2Fapp)" xmlns:wfs="http://www.opengis.net/wfs/2.0" timeStamp="2026-10-18T18:24:13Z" xmlns:gml="http://www.opengis.net/gml/3.2" numberMatched="1" numberReturned="1">
+  <wfs:boundedBy>
+    <gml:Envelope srsName="urn:ogc:def:crs:EPSG::4326">
+      <gml:lowerCorner>52.405458 13.057776</gml:lowerCorner>
+      <gml:upperCorner>52.405458 13.057776</gml:upperCorner>
+    </gml:Envelope>
+  </wfs:boundedBy>
+  <wfs:member>
+    <app:Hauskoordinaten xmlns:app="http://www.deegree.org/app" gml:id="DEBBAL01000bPBMM">
+      <gml:boundedBy>
+        <gml:Envelope srsName="urn:ogc:def:crs:EPSG::4326">
+          <gml:lowerCorner>52.405458 13.057776</gml:lowerCorner>
+          <gml:upperCorner>52.405458 13.057776</gml:upperCorner>
+        </gml:Envelope>
+      </gml:boundedBy>
+      <app:id>DEBBAL01000bPBMM</app:id>
+      <app:landschluessel>12</app:landschluessel>
+      <app:landname>Brandenburg</app:landname>
+      <app:landname_normalisiert>BRANDENBURG</app:landname_normalisiert>
+      <app:kreisschluessel>12054</app:kreisschluessel>
+      <app:kreisname>Potsdam</app:kreisname>
+      <app:kreisname_normalisiert>POTSDAM</app:kreisname_normalisiert>
+      <app:gemeindeverbandsschluessel>120540000</app:gemeindeverbandsschluessel>
+      <app:gemeindeverbandsname>Potsdam</app:gemeindeverbandsname>
+      <app:gemeindeverbandsname_normalisiert>POTSDAM</app:gemeindeverbandsname_normalisiert>
+      <app:gemeindeschluessel>12054000</app:gemeindeschluessel>
+      <app:gemeindename>Potsdam</app:gemeindename>
+      <app:gemeindename_normalisiert>POTSDAM</app:gemeindename_normalisiert>
+      <app:strassenschluessel>1205400000803</app:strassenschluessel>
+      <app:strassenname>Friedrich-Ebert-Straße</app:strassenname>
+      <app:strassenname_normalisiert>FRIDRICHEBERTSTRASE</app:strassenname_normalisiert>
+      <app:hnr>79</app:hnr>
+      <app:hnr_adz>79</app:hnr_adz>
+      <app:post_plz>14469</app:post_plz>
+      <app:post_strname>Friedrich-Ebert-Str.</app:post_strname>
+      <app:post_ortsname>Potsdam</app:post_ortsname>
+      <app:post_ortsname_normalisiert>POTSDAM</app:post_ortsname_normalisiert>
+      <app:post_ortsname_zusatz></app:post_ortsname_zusatz>
+      <app:post_ortsteil>Nördliche Innenstadt</app:post_ortsteil>
+      <app:post_ortsteil_normalisiert>NORDLICHEINENSTADT</app:post_ortsteil_normalisiert>
+      <app:title>Friedrich-Ebert-Straße 79, 14469 Potsdam OT Nördliche Innenstadt</app:title>
+      <app:title_normalisiert>FRIDRICHEBERTSTRASE791469POTSDAMOTNORDLICHEINENSTADT</app:title_normalisiert>
+      <app:adresse_amtlich>Friedrich-Ebert-Straße 79, 14469 Potsdam</app:adresse_amtlich>
+      <app:adresse_amtlich_normalisiert>FRIDRICHEBERTSTRASE791469POTSDAM</app:adresse_amtlich_normalisiert>
+      <app:adresse_postalisch>Friedrich-Ebert-Straße 79, 14469 Potsdam OT Nördliche Innenstadt</app:adresse_postalisch>
+      <app:adresse_postalisch_normalisiert>FRIDRICHEBERTSTRASE791469POTSDAMOTNORDLICHEINENSTADT</app:adresse_postalisch_normalisiert>
+      <app:akt>2026-09-30</app:akt>
+      <app:geom>
+        <!--Inlined geometry 'DEBBAL01000bPBMM_APP_GEOM'-->
+        <gml:Point gml:id="DEBBAL01000bPBMM_APP_GEOM" srsName="urn:ogc:def:crs:EPSG::4326">
+          <gml:pos>52.405458 13.057776</gml:pos>
+        </gml:Point>
+      </app:geom>
+    </app:Hauskoordinaten>
+  </wfs:member>
+</wfs:FeatureCollection>

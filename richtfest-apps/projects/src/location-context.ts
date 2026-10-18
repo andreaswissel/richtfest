@@ -19,6 +19,19 @@ export async function resolveLocationAddress(input: ProjectAddress, signal: Abor
     const { resolveRlpAddress } = await import("./location-rlp");
     return resolveRlpAddress(address, signal);
   }
+  const { url, matches } = await findBerlinAddresses(address, street, house, suffix, signal);
+  if (!matches.length) throw new Error("Site address not found in the official Berlin address register; check project details");
+  if (matches.length !== 1) throw new Error("Site address is ambiguous; add the postal code in project details");
+  const match = matches[0]!, p = match.properties;
+  const [longitude, latitude] = match.geometry?.coordinates ?? [];
+  return { siteId: `berlin-address:${p.adressid}`, projectAddress: address,
+    address: `${p.str_name} ${p.hnr}${p.hnr_zusatz || ""}, ${p.plz} Berlin`, longitude, latitude,
+    radius: 100, origin: toUtm(longitude, latitude, 33),
+    sources: [{ label: "Official Berlin address register (CC BY 3.0 DE); Amt für Statistik Berlin-Brandenburg; not a surveyed setting-out point", url: url.href, surveyedAt: null }] };
+}
+
+/** Exact matches in the official Berlin address register (street spelling normalised, house number and suffix exact). */
+export async function findBerlinAddresses(address: ProjectAddress, street: string, house: number, suffix: string, signal: AbortSignal) {
   const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
   const normal = (value: string) => value.trim().toLowerCase().replaceAll("ß", "ss");
   // Fetch bounded spelling candidates, then require exact normalized equality
@@ -29,21 +42,18 @@ export async function resolveLocationAddress(input: ProjectAddress, signal: Abor
   url.search = new URLSearchParams({ service: "WFS", version: "2.0.0", request: "GetFeature", typeNames: "adressen_berlin:adressen_berlin", outputFormat: "application/json", srsName: "EPSG:4326", CQL_FILTER: filter, count: "100" }).toString();
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`Berlin address service unavailable (${response.status}); retry import`);
-  const json = JSON.parse((await boundedBody(response, 1_000_000)).toString());
+  const body = (await boundedBody(response, 1_000_000)).toString();
+  const json = JSON.parse(body);
   if (!Array.isArray(json.features) || Number(json.numberMatched) > json.features.length) throw new Error("Site address lookup incomplete; add the postal code or retry");
   const matches = (json.features as Feature[]).filter(f => normal(String(f.properties.str_name ?? "")) === normal(street)
     && Number(f.properties.hnr) === house && normal(String(f.properties.hnr_zusatz ?? "")) === suffix
     && (!address.postalCode || f.properties.plz === address.postalCode));
-  if (!matches.length) throw new Error("Site address not found in the official Berlin address register; check project details");
-  if (matches.length !== 1) throw new Error("Site address is ambiguous; add the postal code in project details");
-  const match = matches[0]!, p = match.properties;
-  const [longitude, latitude] = match.geometry?.coordinates ?? [];
-  if (match.geometry?.type !== "Point" || !Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < 13 || longitude > 14 || latitude < 52 || latitude > 53)
-    throw new Error("Berlin address service returned invalid coordinates");
-  return { siteId: `berlin-address:${p.adressid}`, projectAddress: address,
-    address: `${p.str_name} ${p.hnr}${p.hnr_zusatz || ""}, ${p.plz} Berlin`, longitude, latitude,
-    radius: 100, origin: toUtm(longitude, latitude, 33),
-    sources: [{ label: "Official Berlin address register (CC BY 3.0 DE); Amt für Statistik Berlin-Brandenburg; not a surveyed setting-out point", url: url.href, surveyedAt: null }] };
+  for (const match of matches) {
+    const [longitude, latitude] = match.geometry?.coordinates ?? [];
+    if (match.geometry?.type !== "Point" || !Number.isFinite(longitude) || !Number.isFinite(latitude) || longitude < 13 || longitude > 14 || latitude < 52 || latitude > 53)
+      throw new Error("Berlin address service returned invalid coordinates");
+  }
+  return { url, body, matches };
 }
 export { toUtm };
 export const localXZ = (point: number[], origin: [number, number]): [number, number] => [point[0]! - origin[0], origin[1] - point[1]!];

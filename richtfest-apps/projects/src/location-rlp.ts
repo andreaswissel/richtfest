@@ -26,8 +26,8 @@ export async function resolveRlpAddress(address: ProjectAddress, signal: AbortSi
     return normal(`${p.strasse} ${p.haus}`) === normal(address.street!) && normal(p.ort) === normal(address.city!)
       && (!address.postalCode || address.postalCode === p.plz) ? [parsed.data] : [];
   });
-  if (!matches.length) throw new Error("Site address not found as an exact house in Rheinland-Pfalz. Coverage is Berlin and Rheinland-Pfalz only; check project details");
-  if (matches.length !== 1) throw new Error("Site address is ambiguous; add the postal code in project details");
+  if (!matches.length) throw Object.assign(new Error("Site address not found as an exact house in Rheinland-Pfalz. Coverage is Berlin and Rheinland-Pfalz only; check project details"), { code: "address_not_found" });
+  if (matches.length !== 1) throw Object.assign(new Error("Site address is ambiguous; add the postal code in project details"), { code: "address_ambiguous" });
   const match = matches[0]!, [longitude, latitude] = match.geometry.coordinates;
   if (longitude < 5.9 || longitude > 8.6 || latitude < 48.8 || latitude > 51) throw new Error("Site address service returned invalid coordinates");
   return {

@@ -2006,7 +2006,7 @@
   "noiseLookupIncomplete": "The lookup is incomplete; roads or railways may be missing. Check the map before relying on the list.",
   "noiseAttributionHessen": "Geobasisdaten © HVBG, dl-de/zero-2-0, grouped and measured by Richtfest",
   "noiseAttributionBerlin": "Geoportal Berlin: Detailnetz, Strategische Lärmkarten 2022, dl-de/zero-2-0",
-  "noiseLookupUnavailable": "Roads and railways could not be retrieved for this site. Automatic lists are available in Berlin, Rheinland-Pfalz and Hessen; elsewhere, add sources by hand.",
+  "noiseLookupUnavailable": "Roads and railways could not be retrieved for this site. Automatic lists cover every state except Hamburg, Sachsen and Saarland; there, or if the official service is down, add sources by hand.",
   "noiseTraffic": "{daily} Kfz/24h ({year})",
   "noiseHeavyShare": "Lkw {share} %",
   "noiseTrains": "{daily} trains/24h ({year})",

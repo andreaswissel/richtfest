@@ -2,11 +2,12 @@ import { lockProject } from "./project-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, toUtm, type EnvironmentSurvey } from "@richtfest/shared";
+import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, STATE_CODES, STATE_NAMES, toUtm, type EnvironmentSurvey, type StateCode } from "@richtfest/shared";
+import { locateAddressPoint, nominatimGeocoder, stateAt } from "./address-points";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
 import { overlayNationalCounts } from "./noise-counts";
-import { atkisMappedAxis, ATKIS_SF_STATES, berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, BW_ATKIS, bwAttribution, bwMappedAxis, inBerlin, groupMappedSources, hessenAttribution, HESSEN_ATKIS, latLonPairs, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, TH_ATKIS, thAttribution, thMappedAxis, utmPairs, type AtkisSfState, type GmlFeature, type MappedAxis, type StateCode } from "./noise-geodata";
+import { atkisMappedAxis, ATKIS_SF_STATES, berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, BW_ATKIS, bwAttribution, bwMappedAxis, inBerlin, groupMappedSources, hessenAttribution, HESSEN_ATKIS, latLonPairs, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, TH_ATKIS, thAttribution, thMappedAxis, utmPairs, type AtkisSfState, type GmlFeature, type MappedAxis } from "./noise-geodata";
 
 /** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
 const CONNECTOR = "rlp-basis-dlm-framap-spatial-v5";
@@ -39,7 +40,7 @@ async function scope(d: AppDeps, projectId: string, db = d.db): Promise<Scope> {
     const cacheKey = hash(JSON.stringify({ connector, address, siteId: context.siteId, latitude: context.latitude, longitude: context.longitude }));
     return { kind: "location", site: { siteId: context.siteId, address: context.address, latitude: context.latitude, longitude: context.longitude }, revision: location.revision, cacheKey };
   }
-  // Without an imported location the site point comes from Hessen's official house coordinates at research time.
+  // Without an imported location the site point comes from the state's address register at research time (address-points.ts).
   if (!address.street || !address.city) throw fail("environment_current_location_required");
   return { kind: "address", address, revision: location?.revision ?? 0, cacheKey: hash(JSON.stringify({ connector: HESSEN_CONNECTOR, address })) };
 }
@@ -310,6 +311,13 @@ export function stateConnectorVersion(state: StateCode): string | null {
   if (state === "TH") return TH_CONNECTOR;
   return ATKIS_SF_STATES[state]?.connector ?? null;
 }
+/** Attribution for a saved survey's road and rail data, from the connector version it was made with. */
+export function surveyAttribution(connectorVersion: string, retrievedAt: string): string | null {
+  const year = new Date(retrievedAt).getFullYear();
+  if (connectorVersion === CONNECTOR) return stateAttribution("RP", year);
+  const state = STATE_CODES.find(code => stateConnectorVersion(code) === connectorVersion);
+  return state ? stateAttribution(state, year) : null;
+}
 /** Licence attribution for a state's road and rail data; null where no connector exists. */
 export function stateAttribution(state: StateCode, year = new Date().getFullYear()): string | null {
   if (state === "BE") return berlinAttribution;
@@ -411,30 +419,33 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   if (!options.refresh) { const prior = await cached(d, projectId, scoped.cacheKey); if (prior) return prior; }
   const retrievedAt = new Date().toISOString();
   const rawResponses: RawResponse[] = [];
-  let site: { siteId: string; address: string; latitude: number; longitude: number };
-  if (scoped.kind === "location") site = scoped.site;
+  // `state` (from the site point) selects the state's connector.
+  let site: { siteId: string; address: string; latitude: number; longitude: number; state: StateCode | null };
+  let pointNote: string | null = null;
+  if (scoped.kind === "location") site = { ...scoped.site, state: await stateAt(scoped.site.longitude, scoped.site.latitude) };
   else {
-    const resolved = await resolveHessenAddress(scoped.address, timeout(options.signal, 20000)).catch(error => { options.signal?.throwIfAborted(); throw error; });
-    if (!resolved) throw fail("environment_current_location_required", "Site address not found in Hessen's house coordinates. Import the site location (Berlin, Rheinland-Pfalz) or check the address in project details.");
-    rawResponses.push({ url: resolved.sourceUrl, retrievedAt, sha256: hash(resolved.body), body: resolved.body });
-    site = resolved;
+    const lookup = await locateAddressPoint(scoped.address, timeout(options.signal, 20000), { fallback: d.nominatim ? nominatimGeocoder(d.nominatim) : null }).catch(error => { options.signal?.throwIfAborted(); throw error; });
+    if (!lookup.point) throw fail("environment_current_location_required", `${lookup.message} Alternatively import the site location (Berlin, Rheinland-Pfalz) or check the address in project details.`);
+    for (const response of lookup.point.responses) rawResponses.push({ url: response.url, retrievedAt, sha256: hash(response.body), body: response.body });
+    site = lookup.point;
+    const precision = { house: "official house coordinate", building: "centre of the addressed building's outline", parcel: "centre of the addressed parcels", approximate: "approximate geocoded address point (OpenStreetMap Nominatim), not an official register" }[lookup.point.precision];
+    pointNote = `Site point: ${precision}, not a surveyed setting-out point. ${lookup.point.attribution}.`;
   }
+  const state = site.state;
+  if (!state) throw fail("environment_current_location_required", "The site point lies outside Germany; exterior-noise sources cover German states only.");
   const { latitude, longitude } = site;
   // This is a bounded planning search rectangle, not an acoustic propagation model.
   const dy = 1000 / 111320, dx = 1000 / (111320 * Math.cos(latitude * Math.PI / 180));
   const bbox: [number, number, number, number] = [longitude - dx, latitude - dy, longitude + dx, latitude + dy];
-  const berlin = scoped.kind === "location" && inBerlin(longitude, latitude);
-  const categories = berlin ? await berlinCategories(site, bbox, retrievedAt, rawResponses, options.signal)
-    : scoped.kind === "location"
-    ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
-    // Hook: once the site point and its state are resolved for any state, this becomes stateCategories(state, ...).
-    : await stateCategories("HE", site, bbox, retrievedAt, rawResponses, options.signal);
+  const berlin = state === "BE";
+  const categories = await stateCategories(state, site, bbox, retrievedAt, rawResponses, options.signal);
   await overlayNationalCounts(categories, site, bbox, retrievedAt, rawResponses, options.signal).catch(() => options.signal?.throwIfAborted());
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
-  const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
+  // States without a connected road/rail source still get a survey (counts and Fraport may apply) under an explicit "unconnected" version.
+  const connector = stateConnectorVersion(state) ?? `${state.toLowerCase()}-unconnected-v1`;
   const fileId = randomUUID(), versionId = randomUUID();
   const receipt = environmentSurveySchema.parse({ id: randomUUID(), fileId, versionId, projectId, connectorVersion: connector, cacheKey: scoped.cacheKey, retrievedAt, downloadUrl: `/api/projects/${projectId}/files/${fileId}/versions/1/download`, site: { siteId: site.siteId, address: site.address, latitude, longitude, revision: scoped.revision }, scope: { radiusMeters: 1000, bbox, purpose: "planning_context" }, categories, engineeringApproval: false, noiseMetrics: "unknown", limitations: [berlin ? "Detailnetz and the strategic noise map's source layers are planning context, not an exhaustive inventory of noise sources or an acoustic assessment." : "ATKIS Basis-DLM is topographic context, not an exhaustive inventory of noise sources or an acoustic assessment.", "Search radius is a planning default; relevant sources may lie outside the query.",
-    ...(berlin ? [`${berlinAttribution} Data retrieved as recorded per source.`] : scoped.kind === "location" ? ["©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0; data retrieved as recorded per source."] : ["Site point: official house coordinate (Hauskoordinaten Hessen), not a surveyed setting-out point.", `${hessenAttribution} Data retrieved as recorded per source.`])] });
+    ...(pointNote ? [pointNote] : []), `${stateAttribution(state, new Date(retrievedAt).getFullYear()) ?? `No road and rail source is connected for ${STATE_NAMES[state]} yet.`} Data retrieved as recorded per source.`] });
   const payload = JSON.stringify({ format: "richtfest-environment-receipt-v1", receipt, rawResponses });
   const storageKey = `${d.tenantId}/${projectId}/${fileId}/${versionId}`;
   const saved = await d.fileStorage.saveStream(storageKey, Readable.from([payload]), "application/json");
@@ -446,7 +457,7 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
       const current = await scope(d, projectId, tx);
       if (current.cacheKey !== scoped.cacheKey || current.revision !== scoped.revision) throw fail("environment_location_changed");
       if (!options.refresh) { const prior = await cached(d, projectId, scoped.cacheKey, tx); if (prior) { await d.fileStorage.remove(storageKey); return prior; } }
-      await tx.insert(files).values({ id: fileId, tenantId: d.tenantId, projectId, name: `Environment survey ${retrievedAt.slice(0, 10)}.json`, sourceType: "environment_research", purpose: "project_evidence", sourceRef: berlin ? BERLIN_WFS : scoped.kind === "location" ? BASE : HESSEN_ATKIS, createdBy: d.actorId });
+      await tx.insert(files).values({ id: fileId, tenantId: d.tenantId, projectId, name: `Environment survey ${retrievedAt.slice(0, 10)}.json`, sourceType: "environment_research", purpose: "project_evidence", sourceRef: berlin ? BERLIN_WFS : state === "RP" ? BASE : state === "HE" ? HESSEN_ATKIS : categories.find(item => item.category === "roads")?.sources[0]?.url.split("?")[0] ?? connector, createdBy: d.actorId });
       await tx.insert(fileVersions).values({ id: versionId, tenantId: d.tenantId, fileId, version: 1, status: "ready", sourceMetadata: { environmentCacheKey: scoped.cacheKey, environmentSurvey: receipt }, checksum: saved.checksum, storageKey, sizeBytes: saved.sizeBytes, mimeType: "application/json", createdBy: d.actorId });
       await d.audit(tx, "projects.environment.researched", "file", fileId, { projectId, versionId, cacheKey: scoped.cacheKey, connectorVersion: connector });
       return receipt;

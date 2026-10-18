@@ -24,6 +24,21 @@ export function toUtm(longitude: number, latitude: number, zone: 32 | 33): Point
     k * (m + n * Math.tan(p) * (A ** 2 / 2 + (5 - t + 9 * c + 4 * c ** 2) * A ** 4 / 24 + (61 - 58 * t + t ** 2 + 600 * c - 330 * ep) * A ** 6 / 720))];
 }
 
+/** ETRS89 / UTM zone 32N or 33N -> [longitude, latitude]; the inverse of toUtm with the same accuracy note. */
+export function fromUtm(easting: number, northing: number, zone: 32 | 33): Point2 {
+  const a = 6378137, e2 = 0.00669438002290, k0 = 0.9996, ep = e2 / (1 - e2);
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+  const mu = northing / k0 / (a * (1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256));
+  const p1 = mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu) + (21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu)
+    + (151 * e1 ** 3 / 96) * Math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * Math.sin(8 * mu);
+  const n1 = a / Math.sqrt(1 - e2 * Math.sin(p1) ** 2), t1 = Math.tan(p1) ** 2, c1 = ep * Math.cos(p1) ** 2;
+  const r1 = a * (1 - e2) / (1 - e2 * Math.sin(p1) ** 2) ** 1.5, d = (easting - 500000) / (n1 * k0);
+  const latitude = p1 - (n1 * Math.tan(p1) / r1) * (d ** 2 / 2 - (5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * ep) * d ** 4 / 24
+    + (61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * ep - 3 * c1 ** 2) * d ** 6 / 720);
+  const longitude = (zone * 6 - 183) * Math.PI / 180 + (d - (1 + 2 * t1 + c1) * d ** 3 / 6 + (5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ep + 24 * t1 ** 2) * d ** 5 / 120) / Math.cos(p1);
+  return [longitude * 180 / Math.PI, latitude * 180 / Math.PI];
+}
+
 /** Rail noise contours (EBA Lärmkartierung, Lden) are fetched for a square window of this half-width around the site. */
 export const RAIL_NOISE_HALF_WIDTH_M = 1000;
 export const railNoiseAttribution = "© Eisenbahn-Bundesamt, Lärmkartierung Schiene (Lden), dl-de/by-2-0";

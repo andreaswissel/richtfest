@@ -126,6 +126,7 @@ export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
     return keys;
   },
   geoapifyApiKey: env.GEOAPIFY_API_KEY,
+  nominatim: env.NOMINATIM_URL ? { url: env.NOMINATIM_URL, userAgent: `Richtfest/1.0 (+${env.BETTER_AUTH_URL}; site address of individual projects)` } : null,
   inboundEmailDomain: inboundEmailConfigured() ? env.INBOUND_EMAIL_DOMAIN : null,
   ...(env.PUBLIC_DATA_ENABLED ? { publicDataUpdates: (ids: string[]) => availableUpdates(db, ids) } : {}),
 });

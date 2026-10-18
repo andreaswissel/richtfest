@@ -2006,7 +2006,7 @@
   "noiseLookupIncomplete": "Der Abruf ist unvollständig; Straßen oder Schienenwege können fehlen. Vor Verwendung der Liste die Karte prüfen.",
   "noiseAttributionHessen": "Geobasisdaten © HVBG, dl-de/zero-2-0, von Richtfest gruppiert und vermessen",
   "noiseAttributionBerlin": "Geoportal Berlin: Detailnetz, Strategische Lärmkarten 2022, dl-de/zero-2-0",
-  "noiseLookupUnavailable": "Straßen und Schienenwege konnten für diesen Standort nicht abgerufen werden. Automatische Listen gibt es in Berlin, Rheinland-Pfalz und Hessen; andernorts Quellen von Hand hinzufügen.",
+  "noiseLookupUnavailable": "Straßen und Schienenwege konnten für diesen Standort nicht abgerufen werden. Automatische Listen gibt es in allen Ländern außer Hamburg, Sachsen und Saarland; dort oder bei einer Störung des amtlichen Dienstes Quellen von Hand hinzufügen.",
   "noiseTraffic": "{daily} Kfz/24h ({year})",
   "noiseHeavyShare": "Lkw {share} %",
   "noiseTrains": "{daily} Züge/24h ({year})",

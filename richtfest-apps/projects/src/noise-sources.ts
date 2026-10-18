@@ -4,7 +4,7 @@ import { z } from "zod";
 import { noiseInputKeys, noiseInputUnit, noiseSourceGaps, noiseSourceKindSchema, ok, railTrafficSummary, requestableNoiseInputs, validateNoiseInput,
   type EnvironmentSurvey, type MappedNoiseSource, type NoiseInputValue, type NoiseRequestItem, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { readProjectEnvironment } from "./environment";
+import { readProjectEnvironment, surveyAttribution } from "./environment";
 import { inquiries, inquiryEntries, noiseSources, noiseSourceValues, projects } from "./schema";
 
 /**
@@ -49,7 +49,8 @@ const surveyMapped = (survey: EnvironmentSurvey | null) => {
   return { fileId: survey.fileId, connectorVersion: survey.connectorVersion, retrievedAt: survey.retrievedAt, address: survey.site.address,
     roads: roads?.mapped ?? null, rail: rail?.mapped ?? null, incomplete: !!(roads?.coverage.truncated || rail?.coverage.truncated || roads?.status === "unavailable" || rail?.status === "unavailable"),
     // Neither list could be retrieved, e.g. a site outside every connected region; distinct from a survey made before lists were kept.
-    unavailable: roads?.status === "unavailable" && rail?.status === "unavailable" && !roads.mapped && !rail.mapped };
+    unavailable: !roads?.mapped && !rail?.mapped && ["unavailable", "not_checked"].includes(roads?.status ?? "") && ["unavailable", "not_checked"].includes(rail?.status ?? ""),
+    attribution: surveyAttribution(survey.connectorVersion, survey.retrievedAt) };
 };
 const currentSurvey = async (d: AppDeps, projectId: string) => readProjectEnvironment(d, projectId).catch(() => null);
 

@@ -1,5 +1,5 @@
 import { SaxesParser } from "saxes";
-import { simplifyPolyline, type MappedRail, type MappedRoad, type Point2, type ProjectAddress } from "@richtfest/shared";
+import { simplifyPolyline, type StateCode, type MappedRail, type MappedRoad, type Point2, type ProjectAddress } from "@richtfest/shared";
 import { boundedBody, validateLocationAddress } from "./location-context";
 
 /**
@@ -95,7 +95,11 @@ export function groupMappedSources(axes: MappedAxis[], site: { longitude: number
     }
   }
   const nearest = (a: { distanceMeters: number | null }, b: { distanceMeters: number | null }) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity);
-  return { roads: roads.sort(nearest).slice(0, MAX_SOURCES), rail: rail.sort(nearest).slice(0, MAX_SOURCES) };
+  // In dense centres the nearest 150 are all local streets; classified or counted roads further out matter more for facades, so they keep up to half the places.
+  const classified = (road: MappedRoad) => !!(road.designation || road.traffic || ["1301", "1303", "1305", "1306"].includes(road.dedication ?? ""));
+  const keptClassified = roads.filter(classified).sort(nearest).slice(0, MAX_SOURCES / 2);
+  const keptRoads = [...keptClassified, ...roads.filter(road => !keptClassified.includes(road)).sort(nearest)].slice(0, MAX_SOURCES);
+  return { roads: keptRoads.sort(nearest), rail: rail.sort(nearest).slice(0, MAX_SOURCES) };
 }
 
 /** Rail axes are grouped by VzG route; axes without one by category and line. */
@@ -286,8 +290,7 @@ export const hessenMappedAxis = (feature: GmlFeature, roads: Map<string, GmlFeat
 
 // --- Per-state Basis-DLM road and rail connectors ---
 
-export type StateCode = "BW" | "BY" | "BE" | "BB" | "HB" | "HH" | "HE" | "MV" | "NI" | "NW" | "RP" | "SL" | "SN" | "ST" | "SH" | "TH";
-export const STATE_CODES: readonly StateCode[] = ["BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH"];
+export { STATE_CODES, type StateCode } from "@richtfest/shared";
 
 /** A state's ATKIS Basis-DLM on the AdV "aaa-suite" WFS (same GML schema as Hessen). */
 export type AtkisSfState = {

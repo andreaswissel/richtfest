@@ -18,7 +18,7 @@ import { noiseReasonText, noiseReferenceText, useNoiseSuggestions } from "./sugg
 import "./noise-sources.css";
 
 type T = ReturnType<typeof useT>;
-type SurveyMapped = { fileId: string; connectorVersion: string; retrievedAt: string; address: string; roads: MappedNoiseSource[] | null; rail: MappedNoiseSource[] | null; incomplete: boolean; unavailable?: boolean };
+type SurveyMapped = { fileId: string; connectorVersion: string; retrievedAt: string; address: string; roads: MappedNoiseSource[] | null; rail: MappedNoiseSource[] | null; incomplete: boolean; unavailable?: boolean; attribution?: string | null };
 type NoiseData = { sources: NoiseSource[]; survey: SurveyMapped | null };
 
 const MAPPED_ROWS = 12;
@@ -134,7 +134,7 @@ function MappedSources({ projectId, survey, sources, canWrite, t }: { projectId:
   const mappedAvailable = survey && (survey.roads || survey.rail);
   return <Section title={t("noiseMapped")} meta={canWrite && <Button size="sm" variant="outline" disabled={lookup.isPending} onClick={() => lookup.mutate()}>
     {lookup.isPending ? t("loading") : survey ? t("noiseLookupRefresh") : t("noiseLookup")}</Button>}>
-    {survey && <p className="muted text-ui-xs">{survey.address} · {t("noiseLookupAt").replace("{date}", formatDate(survey.retrievedAt))} · {survey.connectorVersion.startsWith("he-") ? t("noiseAttributionHessen") : survey.connectorVersion.startsWith("be-") ? t("noiseAttributionBerlin") : t("noiseAttributionRlp")}</p>}
+    {survey && <p className="muted text-ui-xs">{survey.address} · {t("noiseLookupAt").replace("{date}", formatDate(survey.retrievedAt))} · {survey.attribution ?? (survey.connectorVersion.startsWith("he-") ? t("noiseAttributionHessen") : survey.connectorVersion.startsWith("be-") ? t("noiseAttributionBerlin") : t("noiseAttributionRlp"))}</p>}
     {lookup.isError && <Callout tone="error">{errorText(lookup.error)}</Callout>}
     {!survey && <Empty>{t("noiseLookupEmpty")}</Empty>}
     {survey && !mappedAvailable && <Callout>{t(survey.unavailable ? "noiseLookupUnavailable" : "noiseLookupOutdated")}</Callout>}
