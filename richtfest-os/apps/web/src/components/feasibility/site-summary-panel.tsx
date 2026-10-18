@@ -1,3 +1,4 @@
+import "./messages";
 import { Sparkles } from "lucide-react";
 import { useT } from "../../i18n";
 import { Section } from "../layout";

@@ -1,3 +1,4 @@
+import "./messages";
 import { BUILDING_CODE_TOPICS, BUILDING_CODES, BUILDING_CODES_VERSION, isBundesland, type BuildingCode, type BuildingCodeTopic } from "@richtfest/shared/building-codes";
 import { useT } from "../../i18n";
 import { usePreferences } from "../../store";

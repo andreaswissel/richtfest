@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { baunutzungsplanCoverage, type LocationBuilding, type LocationContext, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
+import { baunutzungsplanCoverage } from "@richtfest/shared/planning-regime";
+import { type LocationBuilding, type LocationContext, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
 import { api } from "../../api";
 
 type Point = [number, number];

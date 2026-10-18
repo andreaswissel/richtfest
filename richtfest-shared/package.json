@@ -12,6 +12,8 @@
     "./site-geometry-model": "./src/site-geometry-model.ts",
     "./site-design": "./src/site-design.ts",
     "./site-proposals": "./src/site-proposals.ts",
+    "./planning-regime": "./src/planning-regime.ts",
+    "./planning-review": "./src/planning-review.ts",
     "./building-codes": "./src/building-codes.ts"
   },
   "scripts": {

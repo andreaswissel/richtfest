@@ -1,3 +1,4 @@
+import "./messages";
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { DocumentTypeProposal } from "@richtfest/shared";

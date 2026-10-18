@@ -1,3 +1,4 @@
+import "./messages";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Box, Layers, LocateFixed, Minus, Plus, X } from "lucide-react";

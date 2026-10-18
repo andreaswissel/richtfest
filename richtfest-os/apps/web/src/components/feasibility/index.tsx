@@ -1,3 +1,4 @@
+import "./messages";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link, useBlocker, useLocation, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";

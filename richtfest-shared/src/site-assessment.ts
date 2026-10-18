@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { siteGeometryInputSchema } from "./site-geometry-model";
 import { siteReferenceSchema } from "./site-references";
-import { planRegimeSchema } from "./planning-regime";
+import { planRegimeSchema } from "./planning-regime-model";
 export const siteAssessmentMethod = "berlin_arithmetic_v1" as const;
 export const SITE_ASSESSMENT_CONSTRAINT_KEYS = ["parcelArea", "grz", "gfz", "buildableFootprint", "maxFullStoreys", "additionalGrossArea", "additionalCountableArea"] as const;
 /** Optional inputs: absent in older assessments, never required for a result. GRZ 2 is the § 19 (4) BauNVO cap including garages and ancillary structures. */

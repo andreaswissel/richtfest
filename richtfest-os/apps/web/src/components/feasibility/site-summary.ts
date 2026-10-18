@@ -4,7 +4,8 @@ import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-mo
 import type * as Proposals from "@richtfest/shared/site-proposals";
 import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinPlan, type BerlinSiteContext, type PlanningLaw, type SiteDiscovery } from "./site-lookups";
 import { planBuildingForm, PLAN_FIGURES, PLAN_LISTED, type PlanExtraction } from "./plan-extraction";
-import { BO58_CLASS_FIGURES, ordinanceForAdoption, planTypeFromRegister, regimeRules, SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS, type PlanRegime } from "@richtfest/shared";
+import { SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS, type PlanRegime } from "@richtfest/shared";
+import { BO58_CLASS_FIGURES, ordinanceForAdoption, planTypeFromRegister, regimeRules } from "@richtfest/shared/planning-regime";
 const CONSTRAINT_KEYS: string[] = [...SITE_ASSESSMENT_CONSTRAINT_KEYS, ...SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS];
 
 type Draft = Omit<SiteAssessmentInput, "baseRevision">;

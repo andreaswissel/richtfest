@@ -1,3 +1,4 @@
+import "./messages";
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { compareSiteReferences, SITE_REFERENCE_METRICS, type SiteReference, type SiteReferenceMetric, type SiteAssessmentInput, type LocationContext } from "@richtfest/shared";

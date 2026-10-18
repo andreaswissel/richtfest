@@ -1,3 +1,4 @@
+import "./messages";
 import { useRef } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { SiteAssessmentInput } from "@richtfest/shared";

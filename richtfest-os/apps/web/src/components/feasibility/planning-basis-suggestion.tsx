@@ -1,3 +1,4 @@
+import "./messages";
 import { useMutation } from "@tanstack/react-query";
 import { Search, Sparkles } from "lucide-react";
 import type { SiteAssessmentInput } from "@richtfest/shared";

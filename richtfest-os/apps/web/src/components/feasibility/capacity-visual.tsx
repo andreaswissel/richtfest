@@ -1,3 +1,4 @@
+import "./messages";
 import type { SiteAssessmentConstraintKey, SiteAssessmentResult } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { usePreferences } from "../../store";

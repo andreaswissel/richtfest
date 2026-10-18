@@ -92,13 +92,16 @@ export async function testSiteAssessment() {
     ].find((l) => l.textContent === text);
     if (!label) {
       closeEditor();
-      const edit = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-        (b) =>
-          [`Edit ${text}`, `Review evidence ${text}`].includes(
-            b.getAttribute("aria-label") ?? "",
-          ),
+      // Planning limits: show reviewed items, select the item in the review list, then edit it.
+      for (const more of host.querySelectorAll<HTMLButtonElement>('.site-lr-done[aria-expanded="false"]')) flushSync(() => more.click());
+      const row = [...host.querySelectorAll<HTMLElement>(".site-lr-row")].find(
+        (r) => r.querySelector(".site-lr-name")?.textContent === text,
       );
-      if (edit) flushSync(() => edit.click());
+      if (row) {
+        flushSync(() => row.click());
+        const edit = [...host.querySelectorAll<HTMLButtonElement>(".site-lr-actions button")].find((b) => /^(Edit|View)/.test(b.textContent ?? ""));
+        if (edit) flushSync(() => edit.click());
+      }
       label = [
         ...document.querySelectorAll<HTMLLabelElement>(
           ".site-editor-panel label",

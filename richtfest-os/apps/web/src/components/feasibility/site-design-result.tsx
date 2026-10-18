@@ -1,3 +1,4 @@
+import "./messages";
 import type { SiteAssessmentInput } from "@richtfest/shared";
 import type { SiteDesignResult as Result } from "@richtfest/shared/site-design";
 import { useT } from "../../i18n";

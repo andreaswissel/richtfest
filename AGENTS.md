@@ -148,6 +148,8 @@ When adding or changing UI strings, update both:
 - `richtfest-os/apps/web/src/locales/en.json`
 - `richtfest-os/apps/web/src/locales/de.json`
 
+Feasibility strings (`siteAssessment*`, `siteGeometry*`, `berlinContext*`, `feasibility*`, ...) live in `richtfest-os/apps/web/src/components/feasibility/locales/{en,de}.json` and load with that screen's chunk through `registerMessages`, so they stay out of the boot bundle.
+
 Use existing common/status/nav keys where possible. Add feature-specific sections only when needed.
 
 ## Release Notes

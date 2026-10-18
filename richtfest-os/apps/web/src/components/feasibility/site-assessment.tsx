@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import "./messages";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useBlocker, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download, Save } from "lucide-react";
@@ -33,7 +34,7 @@ import { SiteDesignResult } from "./site-design-result";
 import { SiteGeometryEditor } from "./site-geometry-editor";
 import { BerlinContext } from "./berlin-context";
 import { BuildingCodePanel } from "./building-code-panel";
-import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
+import { EvidenceEditor, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
 import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinParcel } from "./site-lookups";
 import { extractPlanFigures, planToRead, type PlanExtraction, type PlanProvider } from "./plan-extraction";
 import { PlanningBasisSuggestion } from "./planning-basis-suggestion";
@@ -41,6 +42,7 @@ import { applySiteSummary, massingOptions, mergePlanExtraction, proposeRegime, t
 import { SiteSummaryPanel } from "./site-summary-panel";
 import { applyTrace } from "./plan-lines";
 import { PlanRegimePanel } from "./plan-regime-panel";
+import { LimitsReview } from "./limits-review";
 
 /** Centre of the parcel's outer ring bounds, for maps around the site. */
 const parcelCentre = (geometry: [number, number][][][] | undefined): [number, number] | null => {
@@ -76,37 +78,6 @@ const REVIEW_ITEMS: ReviewItem[] = [
   ...RULE_TOPICS.flatMap((t) => t.items).filter((item, i, all) => all.findIndex((o) => o.kind === item.kind && o.key === item.key) === i),
   ...OTHER_CHECKS.map((key) => ({ kind: "check" as const, key })),
 ];
-
-/** One column layout for every Planning limits table, so values, sources and statuses line up across sections. */
-function LimitsTable({ label, children }: { label: (key: string) => string; children: ReactNode }) {
-  return (
-    <Table className="site-limits-table">
-      <colgroup><col className="site-limits-name" /><col className="site-limits-value" /><col /><col className="site-limits-status" /><col className="site-limits-action" /></colgroup>
-      <TableHeader>
-        <TableRow>
-          <TableHead>{label("Item")}</TableHead>
-          <TableHead>{label("Value")}</TableHead>
-          <TableHead>{label("SourceColumn")}</TableHead>
-          <TableHead>{label("Status")}</TableHead>
-          <TableHead><span className="sr-only">{label("Edit")}</span></TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>{children}</TableBody>
-    </Table>
-  );
-}
-
-function LimitRow({ name, value, numeric, source, status, action, sub }: { name: string; value: string | null; numeric?: boolean; source: string | undefined; status: ReactNode; action: ReactNode; sub?: boolean }) {
-  return (
-    <TableRow>
-      <TableCell className={sub ? "site-limits-sub" : undefined}>{name}</TableCell>
-      <TableCell className={numeric ? "tabular-nums" : "site-limits-text"} title={value ?? undefined}>{value || "–"}</TableCell>
-      <TableCell className="site-limits-source muted" title={source || undefined}>{source || "–"}</TableCell>
-      <TableCell>{status}</TableCell>
-      <TableCell className="text-right">{action}</TableCell>
-    </TableRow>
-  );
-}
 
 type ProposalEngine = typeof import("@richtfest/shared/site-proposals");
 const loadProposals = () => import("@richtfest/shared/site-proposals");
@@ -384,29 +355,13 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
       },
     });
   };
-  const rules = assessment.designRules ?? EMPTY_RULES;
-  const checkStatus = (check: Assessment["checks"][keyof Assessment["checks"]]) => (check.status === "unresolved" || !check.note || !check.source ? "unresolved" : check.status);
-  const reviewButton = (item: ReviewItem) => (
-    <Button size="sm" variant="ghost" aria-label={`${label(data.canWrite ? "Edit" : "ReviewEvidence")} ${label(item.key)}`} onClick={() => openReview(item)}>
-      {label(data.canWrite ? "Edit" : "View")}
-    </Button>
-  );
-  const ruleRow = (item: ReviewItem, name: string, sub: boolean, topic?: RuleTopic) => {
-    const key = `${topic ?? "check"}:${item.kind}:${item.key}`;
-    const row = { name, sub, action: reviewButton(item) };
-    if (item.kind === "fact") {
-      const fact = assessment.planningFacts?.[item.key as keyof NonNullable<Assessment["planningFacts"]>];
-      return <LimitRow key={key} {...row} value={fact?.value || null} source={fact?.source} status={<Badge variant="outline">{label(!fact?.value ? "ValueMissing" : fact.reviewed ? "ReviewedShort" : "Unreviewed")}</Badge>} />;
-    }
-    if (item.kind === "check") {
-      const check = assessment.checks[item.key as keyof Assessment["checks"]];
-      return <LimitRow key={key} {...row} value={check.note || null} source={check.source} status={<Badge variant="outline">{label(checkStatus(check))}</Badge>} />;
-    }
-    const value = topic === "height"
-      ? rules.heightNotSpecified ? label("HeightNotSpecified") : rules.maxHeight ? `${rules.maxHeight.toLocaleString(locale, { maximumFractionDigits: 1 })} m` : null
-      : rules.buildingForm === "unresolved" ? null : label(rules.buildingForm);
-    return <LimitRow key={key} {...row} value={value} source={rules.source} status={<Badge variant="outline">{label(rules.reviewed ? "ReviewedShort" : value === null ? "ValueMissing" : "Unreviewed")}</Badge>} />;
-  };
+  const FACT_TOPIC: Record<string, RuleTopic> = { landUse: "landUse", buildingForm: "buildingForm", heightRule: "height", roofForm: "roofForm", encroachments: "encroachments" };
+  const reviewName = (item: ReviewItem) =>
+    item.kind === "constraint" ? label(item.key === "grz2" ? "grz2Short" : item.key)
+    : item.kind === "fact" ? (item.key === "buildingForm" || item.key === "heightRule" ? label("ReviewNamePlanText").replace("{topic}", label(FACT_TOPIC[item.key]!)) : label(FACT_TOPIC[item.key] ?? item.key))
+    : item.kind === "rules" ? label("ReviewNameRules")
+    : item.key === "height" ? label("ReviewNameHeightCheck")
+    : label(item.key);
   return (
     <div className={`feasibility site-assessment${currentStep === "design" ? " is-design" : ""}`}>
       {blocker.state === "blocked" && (
@@ -544,6 +499,24 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             <p className="muted">{label("Scope")}</p>
           </details>
         </Section>
+        <Section title={label("ReviewTitle")}>
+          <LimitsReview
+            projectId={projectId}
+            assessment={assessment}
+            input={input}
+            result={result}
+            grossParcelArea={design?.geometry?.parcelArea ?? null}
+            origin={assessment.siteLocator?.origin ?? parcelCentre(assessment.geometry?.parcel?.geometry) ?? null}
+            items={REVIEW_ITEMS}
+            name={reviewName}
+            disabled={disabled}
+            canWrite={data.canWrite}
+            locale={locale}
+            label={label}
+            onUpdate={update}
+            onEdit={openReview}
+          />
+        </Section>
         <SiteEvidencePanel
           projectId={projectId}
           disabled={disabled}
@@ -554,41 +527,6 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             else update({ planningFacts: { ...assessment.planningFacts, [key]: value } });
           }}
         />
-        <Section title={label("Figures")}>
-          <LimitsTable label={label}>
-            {CONSTRAINT_ROWS.map((key) => {
-              const value = assessment.constraints[key] ?? EMPTY_CONSTRAINT;
-              return (
-                <LimitRow
-                  key={key}
-                  name={label(key === "grz2" ? "grz2Short" : key)}
-                  value={value.value === null || !Number.isFinite(value.value) ? null : value.value.toLocaleString(locale, { maximumFractionDigits: 2 })}
-                  numeric
-                  source={value.source}
-                  status={<ReviewStatusBadge status={evidenceStatus(value, invalidKeys.has(key))} />}
-                  action={reviewButton({ kind: "constraint", key })}
-                />
-              );
-            })}
-          </LimitsTable>
-        </Section>
-        <Section title={label("PlanRules")}>
-          <LimitsTable label={label}>
-            {RULE_TOPICS.map(({ topic, items }) =>
-              items.length === 1 ? (
-                ruleRow(items[0]!, label(topic), false, topic)
-              ) : (
-                <Fragment key={topic}>
-                  <TableRow className="site-limits-group"><TableCell colSpan={5}>{label(topic)}</TableCell></TableRow>
-                  {items.map((item) => ruleRow(item, label(item.kind === "fact" ? "RulePlanText" : item.kind === "check" ? "RuleCheck" : "RuleDesign"), true, topic))}
-                </Fragment>
-              ),
-            )}
-          </LimitsTable>
-        </Section>
-        <Section title={label("OtherChecks")}>
-          <LimitsTable label={label}>{OTHER_CHECKS.map((key) => ruleRow({ kind: "check", key }, label(key), false))}</LimitsTable>
-        </Section>
         <BuildingCodePanel jurisdiction={assessment.jurisdiction} />
         <details className="site-secondary" id="site-upside">
           <summary className="text-ui-sm">{label("Upside")}{assessment.upside ? ` · ${label("UpsideOn")}` : ""}</summary>

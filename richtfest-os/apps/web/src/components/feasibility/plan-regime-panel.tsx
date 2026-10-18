@@ -1,4 +1,5 @@
-import { BO58_BUILDING_CLASSES, LAND_USE_ORDINANCES, ORDINANCE_RULES, PLAN_TYPES, ordinanceForAdoption, type PlanRegime, type SiteAssessmentInput } from "@richtfest/shared";
+import { BO58_BUILDING_CLASSES, LAND_USE_ORDINANCES, PLAN_TYPES, type PlanRegime, type SiteAssessmentInput } from "@richtfest/shared";
+import { ORDINANCE_RULES, ordinanceForAdoption } from "@richtfest/shared/planning-regime";
 import { Checkbox } from "../ui/checkbox";
 import { DateInput } from "../ui/date-input";
 import { NativeSelect } from "../ui/native-select";
@@ -10,13 +11,13 @@ const NONE = "_none";
 const EMPTY: PlanRegime = { regime: "b_plan", planType: null, planName: "", adoptedOn: null, ordinance: null, buildingClass: null, courtReview: null, source: "", sourceDate: null, reviewed: false };
 /** The Baunutzungsplan is a scanned map published from 1:5,000; this window around the site stays above that scale. */
 const BNP_HALF_HEIGHT_M = 400;
-const bnpMapUrl = ([x, y]: [number, number]) => {
+export const bnpMapUrl = ([x, y]: [number, number]) => {
   const url = new URL("https://gdi.berlin.de/services/wms/bnp");
   url.search = new URLSearchParams({ service: "WMS", version: "1.3.0", request: "GetMap", layers: "bnp", styles: "", crs: "EPSG:25833", format: "image/png", width: "600", height: "400",
     bbox: [x - BNP_HALF_HEIGHT_M * 1.5, y - BNP_HALF_HEIGHT_M, x + BNP_HALF_HEIGHT_M * 1.5, y + BNP_HALF_HEIGHT_M].map(Math.round).join(",") }).toString();
   return url.href;
 };
-const BNP_LEGEND_URL = "https://gdi.berlin.de/services/wms/bnp?service=WMS&request=GetLegendGraphic&version=1.3.0&layer=bnp&format=image/png&sld_version=1.1.0";
+export const BNP_LEGEND_URL = "https://gdi.berlin.de/services/wms/bnp?service=WMS&request=GetLegendGraphic&version=1.3.0&layer=bnp&format=image/png&sld_version=1.1.0";
 
 /**
  * Planning regime of a B-Plan parcel: plan type, adoption date, BauNVO version or BO 58 with its building class. The version decides

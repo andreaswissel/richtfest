@@ -4,30 +4,9 @@
  * decides whether attic rooms count toward GF and how garages and ancillary structures count toward GRZ.
  * Every value here is a proposal for review, not a legal determination.
  */
-import { z } from "zod";
+import { regimeDate, type Bo58BuildingClass, type LandUseOrdinance, type PlanRegime, type PlanType } from "./planning-regime-model";
 
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => { const d = new Date(v); return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === v; }, "Invalid date");
-
-export const PLAN_TYPES = ["qualified", "simple", "project_specific"] as const;
-export type PlanType = (typeof PLAN_TYPES)[number];
-export const LAND_USE_ORDINANCES = ["baunvo_1962", "baunvo_1968", "baunvo_1977", "baunvo_1990", "bo_58"] as const;
-export type LandUseOrdinance = (typeof LAND_USE_ORDINANCES)[number];
-export const BO58_BUILDING_CLASSES = ["II/1", "II/2", "II/3", "III/3", "IV/3", "V/3", "6"] as const;
-export type Bo58BuildingClass = (typeof BO58_BUILDING_CLASSES)[number];
-
-export const planRegimeSchema = z.object({
-  regime: z.enum(["b_plan", "baunutzungsplan"]),
-  planType: z.enum(PLAN_TYPES).nullable(),
-  planName: z.string().trim().max(300),
-  adoptedOn: date.nullable(),
-  ordinance: z.enum(LAND_USE_ORDINANCES).nullable(),
-  buildingClass: z.enum(BO58_BUILDING_CLASSES).nullable(),
-  courtReview: z.string().trim().max(200).nullable(),
-  source: z.string().trim().max(2000),
-  sourceDate: date.nullable(),
-  reviewed: z.boolean(),
-}).strict();
-export type PlanRegime = z.infer<typeof planRegimeSchema>;
+export * from "./planning-regime-model";
 
 /**
  * What each version means for the capacity:
@@ -52,7 +31,7 @@ export const ORDINANCE_RULES: Record<LandUseOrdinance, { atticRooms: "count" | "
  * Before the first BauNVO there is no version.
  */
 export function ordinanceForAdoption(adoptedOn: string | null): { ordinance: LandUseOrdinance | null; transitional: boolean } {
-  if (!adoptedOn || !date.safeParse(adoptedOn).success) return { ordinance: null, transitional: false };
+  if (!adoptedOn || !regimeDate.safeParse(adoptedOn).success) return { ordinance: null, transitional: false };
   const versions = (["baunvo_1990", "baunvo_1977", "baunvo_1968", "baunvo_1962"] as const);
   for (const ordinance of versions) {
     const from = ORDINANCE_RULES[ordinance].inForceFrom!;

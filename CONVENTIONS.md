@@ -60,7 +60,7 @@ description: The rules every change follows, from API responses to audit events 
 - **Server state** lives in TanStack Query. **Zustand** is for local UI state only.
 - **New screens** register in `richtfest-os/apps/web/src/routes-manifest.ts` with their sidebar section (`group`: the Richtfest
   App they belong to, or `richtfest-os`). The router, the sidebar and the perf bench all read it.
-- **Translations:** every UI string goes into both `src/locales/en.json` and `src/locales/de.json`.
+- **Translations:** every UI string goes into both `src/locales/en.json` and `src/locales/de.json`; feasibility screen strings go into `src/components/feasibility/locales/{en,de}.json`, which load with that screen (`registerMessages` in `src/i18n.ts`).
 - **Dense, keyboard-friendly UI:** compact tables, clickable rows, predictable tab order, no card-in-card layouts.
 - **Density tokens, not raw sizes:** users pick Dense (Richtfest's compact sizing) or Normal (stock shadcn Nova sizing),
   applied as `data-density` on `<html>`. Size text, controls and icons with the tokens from `src/index.css` so both
