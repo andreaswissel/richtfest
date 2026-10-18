@@ -30,7 +30,9 @@ export async function testSiteImages() {
   const originalFetch = window.fetch;
   const endpoints = ["aerial/near", "aerial/far", "rail-noise"];
   window.fetch = (input, init) => {
-    const index = endpoints.findIndex((endpoint) => input === `/api${path}/location/${endpoint}`);
+    const url = new URL(String(input), window.location.href);
+    const index = endpoints.findIndex((endpoint) => url.pathname === `/api${path}/location/${endpoint}`);
+    if (index >= 0 && !url.searchParams.has("v")) throw new Error("Imagery HTTP URL must be versioned");
     return index < 0 ? originalFetch(input, init) : Promise.resolve(new Response(blobs[index]));
   };
   function Images() {

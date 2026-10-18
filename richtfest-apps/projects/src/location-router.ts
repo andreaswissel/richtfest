@@ -1,10 +1,11 @@
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, siteDxfBytes, siteGeoJson, siteExportFormats, AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
+import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, locationImageVersion, railNoiseAttribution, siteDxfBytes, siteGeoJson, siteExportFormats, AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type LocationState, type LocationContext } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
-import { boundedBody, validateLocationAddress } from "./location-context";
+import { validateLocationAddress } from "./location-context";
+import { cachedLocationImage } from "./location-images";
 
 /** Federal rail noise map (EBA), nationwide incl. the extended mapping; open WMS under dl-de/by-2-0. */
 const EBA_RAIL_NOISE = "https://geoinformation.eisenbahn-bundesamt.de/wms/isophonen";
@@ -13,19 +14,26 @@ const AERIAL_WMS = {
   "rlp-dop20": { url: "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", layer: "rp_dop20" },
   "berlin-truedop": { url: "https://gdi.berlin.de/services/wms/truedop_2024", layer: "truedop_2024" },
 } as const;
-const unavailable = (what: string) => failure(`The ${what} service did not return an image`, 502, `${what.replace(/ /g, "_")}_unavailable`);
 
 /** A fixed window around the site from a known WMS, never a caller-chosen URL or extent. */
-async function sendWindow(res: any, base: string, params: Record<string, string>, crs: string, origin: [number, number], halfWidth: number, size: number, format: "image/png" | "image/jpeg", what: string) {
-  const url = new URL(base), [e, n] = origin;
+async function sendWindow(req: Request, res: any, d: AppDeps, projectId: string, context: LocationContext, base: string, params: Record<string, string>, halfWidth: number, size: number, format: "image/png" | "image/jpeg", attribution: string) {
+  res.setHeader("Cache-Control", "private, no-store");
+  const version = z.string().optional().parse(req.query.v);
+  if (version !== undefined && version !== locationImageVersion(context)) throw failure("Location changed; reload the site", 409, "location_changed");
+  const url = new URL(base), [e, n] = context.origin, crs = context.crs ?? "EPSG:25833";
   for (const [key, value] of Object.entries({ SERVICE: "WMS", VERSION: "1.3.0", REQUEST: "GetMap", STYLES: "", CRS: crs, ...params,
     BBOX: [e - halfWidth, n - halfWidth, e + halfWidth, n + halfWidth].map(v => v.toFixed(1)).join(","), WIDTH: String(size), HEIGHT: String(size), FORMAT: format })) url.searchParams.set(key, value);
-  const response = await fetch(url, { signal: AbortSignal.timeout(45000), redirect: "error" }).catch(() => { throw unavailable(what); });
-  if (!response.ok || !response.headers.get("content-type")?.startsWith(format)) throw unavailable(what);
-  const body = await boundedBody(response, 16 * 1024 * 1024);
+  const image = await cachedLocationImage(d, projectId, url, format, attribution).catch(error => {
+    if (error.retryAt) res.setHeader("Retry-After", String(Math.max(1, Math.ceil((error.retryAt.getTime() - Date.now()) / 1000))));
+    throw error;
+  });
   res.setHeader("Content-Type", format);
-  res.setHeader("Cache-Control", "private, max-age=604800");
-  res.end(body);
+  const maxAge = Math.max(0, Math.floor((image.freshUntil.getTime() - Date.now()) / 1000));
+  // Legacy URLs and stale fallback must revalidate, never hide a moved site or a recovery.
+  res.setHeader("Cache-Control", version !== undefined && !image.stale ? `private, max-age=${maxAge}` : "private, no-cache");
+  res.setHeader("X-Imagery-Cache", image.stale ? "stale" : "fresh");
+  res.setHeader("X-Imagery-Fetched-At", image.fetchedAt.toISOString());
+  res.end(image.body);
 }
 
 const vector = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
@@ -100,16 +108,16 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
   // A fixed window around the imported site, never a caller-chosen URL or extent.
   router.get("/projects/:projectId/location/rail-noise", async (req, res, next) => {
     try {
-      const { d, where } = await scope(req, false);
+      const { d, where, projectId } = await scope(req, false);
       const [row] = await d.db.select({ context: locations.context }).from(locations).where(where).limit(1);
       const context = row?.context;
       if (!context) throw failure("Import the location first", 409, "location_missing");
-      await sendWindow(res, EBA_RAIL_NOISE, { LAYERS: "isophonen_ek_lden", TRANSPARENT: "TRUE" }, context.crs ?? "EPSG:25833", context.origin, RAIL_NOISE_HALF_WIDTH_M, 1024, "image/png", "rail noise");
+      await sendWindow(req, res, d, projectId, context, EBA_RAIL_NOISE, { LAYERS: "isophonen_ek_lden", TRANSPARENT: "TRUE" }, RAIL_NOISE_HALF_WIDTH_M, 1024, "image/png", railNoiseAttribution);
     } catch (error) { next(error); }
   });
   router.get("/projects/:projectId/location/aerial/:extent", async (req, res, next) => {
     try {
-      const { d, where } = await scope(req, false);
+      const { d, where, projectId } = await scope(req, false);
       const extent = z.enum(["near", "far"]).parse(req.params.extent);
       const [row] = await d.db.select({ context: locations.context }).from(locations).where(where).limit(1);
       const context = row?.context;
@@ -117,7 +125,7 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       const source = aerialSourceFor(context);
       if (!source) throw failure("No aerial imagery for this site's register", 404, "aerial_unavailable");
       const wms = AERIAL_WMS[source.id];
-      await sendWindow(res, wms.url, { LAYERS: wms.layer }, context.crs ?? "EPSG:25833", context.origin, AERIAL_HALF_WIDTH_M[extent], 2048, "image/jpeg", "aerial imagery");
+      await sendWindow(req, res, d, projectId, context, wms.url, { LAYERS: wms.layer }, AERIAL_HALF_WIDTH_M[extent], 2048, "image/jpeg", source.attribution);
     } catch (error) { next(error); }
   });
   router.put("/projects/:projectId/location", async (req, res, next) => {

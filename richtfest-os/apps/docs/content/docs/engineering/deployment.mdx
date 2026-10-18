@@ -103,7 +103,7 @@ Preparing configuration does not authorize deployment. Purely UI/visual changes 
 
 For every authorized deployment, follow `AGENTS.md`: review the intended changes, update release notes and affected docs, run required checks (including browser verification for visual changes), commit on local `main`, then push that branch to `origin/main`. Do not include unrelated changes. This authorization does not extend to provisioning services or sending live invitations.
 
-Before that commit and docs build, move the included `Unreleased` entries into the deployment's `## YYYY-MM-DD` section in Europe/Berlin time. Reuse an existing section for that day and leave only genuinely undeployed work in `Unreleased`. See [Writing documentation and release notes](/docs/engineering/writing-docs#preparing-a-release) for the release-note lifecycle and historical corrections.
+Before that commit and docs build, move the included `Unreleased` entries into the deployment's `## YYYY-MM-DD` section in Europe/Berlin time. Reuse an existing section for that day. Keep genuinely undeployed work and its notes outside the deployment commit; the production build rejects non-empty `Unreleased` sections. See [Writing documentation and release notes](/docs/engineering/writing-docs#preparing-a-release) for the release-note lifecycle and historical corrections.
 
 After the push, watch the Railway deployment for that commit. If the build or deploy fails, read the logs, fix the cause and push again straight away. Report included database migrations.
 

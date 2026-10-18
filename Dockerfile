@@ -64,7 +64,7 @@ RUN apt-get update \
 
 COPY CHANGELOG.md ./
 COPY richtfest-os/apps/docs ./richtfest-os/apps/docs
-RUN cd richtfest-os/apps/docs && node_modules/.bin/next build --webpack
+RUN cd richtfest-os/apps/docs && REQUIRE_RELEASED_CHANGELOG=1 node_modules/.bin/next build --webpack
 
 FROM bun AS runtime
 
