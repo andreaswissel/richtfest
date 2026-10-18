@@ -14,5 +14,7 @@ export type AppDeps = {
   /** Approved parcel area, Bebauungsplan GRZ/GFZ and existing Geschossfläche from the project's building model. */
   /** Exact Berlin address resolution, supplied by the host. No project geometry is changed. */
   resolveBerlinSite?: (projectId: string, signal: AbortSignal) => Promise<{ address: string; origin: [number, number]; sources: { label: string; url: string }[] }>;
+  /** Berlin TrueDOP orthophoto (JPEG) for a square window around an EPSG:25833 point, cached by the host. */
+  aerialImage?: (projectId: string, origin: [number, number], halfWidth: number) => Promise<{ body: Buffer; stale: boolean; fetchedAt: Date; freshUntil: Date; attribution: string }>;
   siteFigures: (projectId: string) => Promise<FeasibilitySiteFigures>;
 };

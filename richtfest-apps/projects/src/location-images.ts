@@ -11,6 +11,20 @@ const unavailable = (retryAt?: Date | null) => Object.assign(new Error("The imag
   status: 503, code: "imagery_unavailable", retryAt,
 });
 
+/** Official orthophoto WMS per register; both open (RLP dl-de/by-2-0, Berlin dl-de/zero-2-0). */
+export const AERIAL_WMS = {
+  "rlp-dop20": { url: "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", layer: "rp_dop20" },
+  "berlin-truedop": { url: "https://gdi.berlin.de/services/wms/truedop_2024", layer: "truedop_2024" },
+} as const;
+
+/** A square orthophoto window around an EPSG point from an allowlisted register, for other apps through their host. */
+export function aerialWindow(d: AppDeps, projectId: string, source: keyof typeof AERIAL_WMS, crs: "EPSG:25832" | "EPSG:25833", origin: [number, number], halfWidth: number, size: number, attribution: string) {
+  const wms = AERIAL_WMS[source], url = new URL(wms.url), [e, n] = origin;
+  for (const [key, value] of Object.entries({ SERVICE: "WMS", VERSION: "1.3.0", REQUEST: "GetMap", STYLES: "", CRS: crs, LAYERS: wms.layer,
+    BBOX: [e - halfWidth, n - halfWidth, e + halfWidth, n + halfWidth].map(v => v.toFixed(1)).join(","), WIDTH: String(size), HEIGHT: String(size), FORMAT: "image/jpeg" })) url.searchParams.set(key, value);
+  return cachedLocationImage(d, projectId, url, "image/jpeg", attribution);
+}
+
 /** The URL is built by the location router from an allowlisted WMS, never from user input. */
 export async function cachedLocationImage(d: AppDeps, projectId: string, url: URL, mimeType: string, attribution: string) {
   if (d.fileStorage.kind === "unconfigured") throw unavailable();

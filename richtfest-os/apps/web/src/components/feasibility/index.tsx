@@ -96,7 +96,9 @@ export function Feasibility({ projectId }: { projectId: string }) {
   const t = useT(), [params] = useSearchParams();
   const site = params.get("study") === "site";
   const target = (isSite: boolean) => { const next = new URLSearchParams(params); if (isSite) next.set("study", "site"); else next.delete("study"); return `?${next}`; };
-  return <><nav className="site-study-nav text-ui-sm" aria-label={t("siteAssessmentTitle")}><Link to={target(false)} aria-current={!site ? "page" : undefined}>{t("siteAssessmentFinancial")}</Link><Link to={target(true)} aria-current={site ? "page" : undefined}>{t("siteAssessmentTitle")}</Link></nav>{site ? <SiteAssessment key={projectId} projectId={projectId} /> : <FinancialFeasibility key={projectId} projectId={projectId} />}</>;
+  const nav = <nav className="site-study-nav text-ui-sm" aria-label={t("siteAssessmentTitle")}><Link to={target(false)} aria-current={!site ? "page" : undefined}>{t("siteAssessmentFinancial")}</Link><Link to={target(true)} aria-current={site ? "page" : undefined}>{t("siteAssessmentTitle")}</Link></nav>;
+  // The site assessment puts the study switch into its single header row, so the editor is reached without scrolling.
+  return site ? <SiteAssessment key={projectId} projectId={projectId} nav={nav} /> : <>{nav}<FinancialFeasibility key={projectId} projectId={projectId} /></>;
 }
 
 function FinancialFeasibility({ projectId }: { projectId: string }) {

@@ -1,8 +1,9 @@
 import { createFeasibilityEvidenceHost } from "./feasibility-evidence-host";
 import { resolveLocationAddress } from "@richtfest/projects/location-context";
+import { aerialWindow } from "@richtfest/projects/location-images";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
-import { formatProjectAddress } from "@richtfest/shared";
+import { aerialSourceFor, formatProjectAddress } from "@richtfest/shared";
 import type { AppDeps } from "@richtfest/feasibility/deps";
 import { projects } from "@richtfest/projects/schema";
 import { readFeasibilitySiteFigures } from "@richtfest/projects/building-model";
@@ -38,6 +39,11 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
         if (/unavailable|invalid coordinates|retry/i.test(error.message)) throw new HttpError(502, "site_address_service_unavailable", error.message);
         throw new HttpError(422, "site_address_unresolved", error.message);
       }
+    },
+    aerialImage: async (projectId, origin, halfWidth) => {
+      const source = aerialSourceFor({ siteId: "berlin-assessment", crs: "EPSG:25833" })!;
+      const image = await aerialWindow(projectsDeps(db, req), projectId, source.id, "EPSG:25833", origin, halfWidth, 2048, source.attribution);
+      return { ...image, attribution: source.attribution };
     },
     siteFigures: projectId => readFeasibilitySiteFigures(projectsDeps(db, req), projectId),
   };

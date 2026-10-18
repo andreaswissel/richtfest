@@ -120,6 +120,14 @@ export function fullStoreyMeshHeight(building: BuildingGeometry) {
   return Math.max(building.fullStoreys * building.storeyHeight, (building.height ?? 0) - staffelHeight);
 }
 
+const translateRings = (g: GeometryMultiPolygon, dx: number, dy: number): GeometryMultiPolygon => g.map((p) => p.map((r) => r.map(([x, y]) => [x + dx, y + dy] as GeometryPoint)));
+/** Moves a building with its Staffel; the moved footprint is new geometry and needs review again. */
+export const translateBuilding = (b: BuildingGeometry, dx: number, dy: number): BuildingGeometry => ({
+  ...b,
+  footprint: { ...b.footprint, geometry: translateRings(b.footprint.geometry, dx, dy), reviewed: false },
+  staffel: b.staffel.map((s) => ({ ...s, footprint: { ...s.footprint, geometry: translateRings(s.footprint.geometry, dx, dy), reviewed: false } })),
+});
+
 /** A round scale-bar length of roughly a fifth of the visible width. */
 const scaleBar = (metresPerPixel: number, width: number) => {
   const target = (metresPerPixel * width) / 5;
@@ -226,6 +234,10 @@ export function SiteGeometryEditor({
   contextOverride,
   referenceBuildingIds = [],
   emptyAction,
+  scenario = "baseline",
+  onScenario,
+  upsideMassing,
+  upsideStoreys,
 }: {
   projectId: string;
   value: SiteGeometryInput | null;
@@ -239,6 +251,12 @@ export function SiteGeometryEditor({
   referenceBuildingIds?: string[];
   /** Shown on the empty canvas before a parcel exists, e.g. a link to the parcel lookup. */
   emptyAction?: ReactNode;
+  /** "upside" previews the exemption massing read-only; the design itself stays the baseline. */
+  scenario?: "baseline" | "upside";
+  onScenario?: (scenario: "baseline" | "upside") => void;
+  /** Generated massing for the exemption scenario: undefined without a scenario, null when nothing fits. */
+  upsideMassing?: { building: BuildingGeometry; grossFloorArea: number; countableFloorArea: number } | null;
+  upsideStoreys?: number | null;
 }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
@@ -306,11 +324,27 @@ export function SiteGeometryEditor({
     setPast([]);
     setFuture([]);
   }, [projectId]);
-  /** Every edit records undo history, like the 3D location workbench. */
+  /** Every edit records undo history, like the 3D location workbench; a drag is one undo step. */
+  const gesture = useRef(false);
   const commit = (next: SiteGeometryInput) => {
+    if (!gesture.current) {
+      setPast((p) => [...p.slice(-HISTORY_LIMIT + 1), geometry]);
+      setFuture([]);
+    }
+    onChange(next);
+  };
+  const beginGesture = () => {
+    if (gesture.current) return;
     setPast((p) => [...p.slice(-HISTORY_LIMIT + 1), geometry]);
     setFuture([]);
-    onChange(next);
+    gesture.current = true;
+    const end = () => {
+      gesture.current = false;
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("keyup", end);
+    };
+    window.addEventListener("pointerup", end);
+    window.addEventListener("keyup", end);
   };
   const undo = (redo: boolean) => {
     const from = redo ? future : past;
@@ -400,7 +434,7 @@ export function SiteGeometryEditor({
     else if (geometry.buildings.some((b) => b.staffel.some((s) => s.footprint.id === id))) setSelected({ kind: "staffel", id });
     else if (geometry.setbacks.some((e) => e.id === id)) setSelected({ kind: "edge", id });
   };
-  const canDraw = !disabled && !!geometry.parcel && view === "2d";
+  const canDraw = !disabled && !!geometry.parcel && view === "2d" && scenario !== "upside";
   const start = (next: Tool) => {
     setTool(next);
     setPoints([]);
@@ -458,6 +492,40 @@ export function SiteGeometryEditor({
   const shift = (dx: number, dy: number) =>
     selectedEvidence &&
     updateEvidence({ ...selectedEvidence, reviewed: false, geometry: selectedEvidence.geometry.map((p) => p.map((r) => r.map(([x, y]) => [x + dx, y + dy]))) });
+  const planRef = useRef<HTMLDivElement>(null);
+  const siteAt = (event: { clientX: number; clientY: number }) => {
+    const r = planRef.current!.getBoundingClientRect();
+    return unproject({ x: (event.clientX - r.left) / r.width, y: (event.clientY - r.top) / r.height });
+  };
+  /** Drag a building with its Staffel, in 10 cm steps; numbers follow live and moving revokes review. */
+  const dragBuilding = (building: BuildingGeometry, event: React.PointerEvent) => {
+    if (tool !== "select" || disabled || event.button !== 0 || scenario === "upside") return;
+    event.stopPropagation();
+    const origin = siteAt(event), base = geometry, startX = event.clientX, startY = event.clientY;
+    let moved = false, frameRequest = 0;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return;
+      if (!moved) {
+        moved = true;
+        beginGesture();
+        setSelected({ kind: "building", id: building.id });
+      }
+      cancelAnimationFrame(frameRequest);
+      frameRequest = requestAnimationFrame(() => {
+        const p = siteAt(ev);
+        const dx = Math.round((p[0] - origin[0]) * 10) / 10, dy = Math.round((p[1] - origin[1]) * 10) / 10;
+        onChange({ ...base, buildings: base.buildings.map((b) => (b.id === building.id ? translateBuilding(b, dx, dy) : b)) });
+      });
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
   const removeSelected = () => {
     if (!selected) return;
     if (selected.kind === "line") update({ mandatoryLines: geometry.mandatoryLines.filter((l) => l.id !== selected.id) });
@@ -493,6 +561,16 @@ export function SiteGeometryEditor({
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       undo(event.shiftKey);
+      return;
+    }
+    const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+    const arrow = arrows[event.key];
+    if (arrow && selectedEvidence && tool === "select" && !disabled && scenario !== "upside" && !event.metaKey && !event.ctrlKey) {
+      // Arrow keys nudge the selected shape by 10 cm, Shift by 1 m; held keys are one undo step.
+      event.preventDefault();
+      const step = event.shiftKey ? 1 : 0.1;
+      beginGesture();
+      shift(arrow[0] * step, arrow[1] * step);
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
@@ -660,6 +738,13 @@ export function SiteGeometryEditor({
               <PanelRight className="size-icon-sm" />
             </Button>
             <Segmented value={view} onChange={setView} items={[{ value: "2d", label: label("Plan") }, { value: "3d", label: "3D", disabled: !context }]} />
+            {upsideMassing !== undefined && onScenario && (
+              <Segmented
+                value={scenario}
+                onChange={(value) => { start("select"); setSelected(null); onScenario(value as "baseline" | "upside"); }}
+                items={[{ value: "baseline", label: label("ScenarioBaseline") }, { value: "upside", label: label("ScenarioUpside"), disabled: !upsideMassing }]}
+              />
+            )}
             {!context && <span className="text-ui-2xs muted">{label("3DNeedsContext")}</span>}
           </div>
           <div className="geometry-toolbar-group">
@@ -768,11 +853,13 @@ export function SiteGeometryEditor({
           <div className="geometry-canvas-column">
             <div className="geometry-canvas" ref={canvasRef}>
               {view === "3d" && context ? (
-                <Geometry3D context={context} geometry={geometry} onSelect={selectId} />
+                <Geometry3D context={context} geometry={scenario === "upside" ? { ...geometry, buildings: upsideMassing ? [upsideMassing.building] : [] } : geometry} onSelect={selectId} />
               ) : (
                 <div
+                  ref={planRef}
                   className="geometry-plan"
                   data-tool={tool}
+                  data-scenario={scenario}
                   onPointerDown={(e) => {
                     if (tool !== "pan" && e.button !== 1) return;
                     e.preventDefault();
@@ -867,11 +954,18 @@ export function SiteGeometryEditor({
                         }}
                       />
                     ))}
-                    {geometry.buildings.map((b) => (
+                    {scenario === "upside" && upsideMassing && (
+                      <g className="geometry-scenario">
+                        <path className="geometry-building is-scenario" d={pathFor(upsideMassing.building.footprint.geometry, project)} />
+                        {upsideMassing.building.staffel.map((s) => <path key={s.footprint.id} className="geometry-staffel is-scenario" d={pathFor(s.footprint.geometry, project)} />)}
+                      </g>
+                    )}
+                    {scenario === "baseline" && geometry.buildings.map((b) => (
                       <g key={b.id}>
                         <path
                           className="geometry-building"
                           d={pathFor(b.footprint.geometry, project)}
+                          onPointerDown={(event) => dragBuilding(b, event)}
                           onClick={(event) => {
                             if (tool === "select") {
                               event.stopPropagation();
@@ -947,7 +1041,7 @@ export function SiteGeometryEditor({
                       </>
                     )}
                   </svg>
-                  {tool === "select" && selectedRing && !disabled && (
+                  {tool === "select" && selectedRing && !disabled && scenario === "baseline" && (
                     <OutlineEditorLayer
                       draft={{
                         polygon: selectedRing.slice(0, -1).map((p) => {
@@ -957,7 +1051,7 @@ export function SiteGeometryEditor({
                         holes: [],
                       }}
                       labels={{ point: label("Point"), addPoint: label("AddPoint") }}
-                      onBegin={() => {}}
+                      onBegin={beginGesture}
                       onChange={(draft) =>
                         updateEvidence({
                           ...selectedEvidence!,
@@ -981,7 +1075,13 @@ export function SiteGeometryEditor({
                   {emptyAction}
                 </div>
               )}
-              {(drawing || pickingAlignment || tool === "edge" || tool === "reference") && (
+              {scenario === "upside" && upsideMassing && (
+                <div className="geometry-canvas-caption" role="status">
+                  <span>{label("ScenarioHint").replace("{storeys}", String(upsideStoreys ?? "–")).replace("{bgf}", format(upsideMassing.grossFloorArea, 0))}</span>
+                  {onScenario && <Button size="sm" variant="ghost" onClick={() => onScenario("baseline")}>{label("ScenarioBack")}</Button>}
+                </div>
+              )}
+              {scenario === "baseline" && (drawing || pickingAlignment || tool === "edge" || tool === "reference") && (
                 <div className="geometry-canvas-caption" role="status">
                   <span>
                     {pickingAlignment
@@ -1266,7 +1366,9 @@ export function SiteGeometryEditor({
           {result && <Badge variant="outline">{label(result.status)}</Badge>}
           <span>
             {result ? `${label("Usable")} ${format(result.usableArea)} m²` : label("NeedParcelShort")}
-            {result?.buildings.length ? ` · GF ${format(result.buildings.reduce((n, b) => n + b.countableFloorArea, 0))} m² · BGF ${format(result.buildings.reduce((n, b) => n + b.grossFloorArea, 0))} m²` : ""}
+            {scenario === "upside" && upsideMassing
+              ? ` · ${label("ScenarioUpside")}: GF ${format(upsideMassing.countableFloorArea)} m² · BGF ${format(upsideMassing.grossFloorArea)} m²`
+              : result?.buildings.length ? ` · GF ${format(result.buildings.reduce((n, b) => n + b.countableFloorArea, 0))} m² · BGF ${format(result.buildings.reduce((n, b) => n + b.grossFloorArea, 0))} m²` : ""}
           </span>
           <span>{view === "2d" && hover ? `EPSG:25833 · ${hover.map((n) => n.toFixed(2)).join(" / ")}` : "EPSG:25833 · N ↑"}</span>
           <span>{label(view === "2d" ? "StatusHint" : "StatusHint3D")}</span>

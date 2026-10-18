@@ -1,0 +1,168 @@
+import type { SiteAssessmentInput, SiteReference } from "@richtfest/shared";
+import type { MassingOptions } from "@richtfest/shared/site-geometry-model";
+import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
+import type * as Proposals from "@richtfest/shared/site-proposals";
+import { discoveryPolygons, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
+import { planBuildingForm, PLAN_FIGURES, type PlanExtraction } from "./plan-extraction";
+
+type Draft = Omit<SiteAssessmentInput, "baseRevision">;
+export type SummaryStepId = "parcel" | "basis" | "references" | "frame" | "form" | "envelope" | "upside" | "massing";
+export type SummaryStep = { id: SummaryStepId; status: "done" | "kept" | "needs_input" | "failed" | "skipped"; detail?: string; values?: Record<string, string | number> };
+export const SUMMARY_STEPS: SummaryStepId[] = ["parcel", "basis", "references", "frame", "form", "envelope", "upside", "massing"];
+export const MAX_SUMMARY_REFERENCES = 5;
+const STOREY_HEIGHT = 3;
+const round = (n: number, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
+const proposal = (value: number, source: string, kind: "official" | "calculated" | "estimated" | "assessment", sourceDate: string | null = null) => ({ value, source, sourceDate, kind, reviewed: false });
+
+/**
+ * "Address in, frame out": fills what the public lookups and the deterministic proposals can supply, in task
+ * order. Everything it adds is an unreviewed proposal in the draft; reviewed or entered values are never replaced.
+ * A step that needs a person (an ambiguous parcel, missing plan figures) is reported instead of guessed.
+ */
+export function applySiteSummary<T extends Draft>(draft: T, sources: { context: BerlinSiteContext | null; contextError?: string; discovery: SiteDiscovery | null; discoveryError?: string; plan?: PlanExtraction | null }, engine: typeof Proposals, today: string): { draft: T; steps: SummaryStep[] } {
+  let next: T = { ...draft, constraints: { ...draft.constraints } };
+  const steps: SummaryStep[] = [];
+  const step = (id: SummaryStepId, status: SummaryStep["status"], detail?: string, values?: SummaryStep["values"]) => steps.push({ id, status, ...(detail ? { detail } : {}), ...(values ? { values } : {}) });
+  const finish = () => {
+    for (const id of SUMMARY_STEPS) if (!steps.some((s) => s.id === id)) step(id, "skipped", "AfterParcel");
+    return { draft: next, steps };
+  };
+
+  // 1. Parcel: only the single official parcel containing the address point is adopted automatically.
+  const { context, discovery } = sources;
+  let geometry = next.geometry ?? createEmptySiteGeometryInput();
+  if (geometry.parcel) step("parcel", "kept", "ParcelKept", { parcel: geometry.parcel.label });
+  else if (!context) {
+    step("parcel", "failed", "LookupFailed", { message: sources.contextError ?? "" });
+    return finish();
+  } else {
+    const containing = context.parcels.filter((p) => p.containsAddress && p.area !== null);
+    if (containing.length !== 1) {
+      step("parcel", "needs_input", containing.length ? "ParcelAmbiguous" : "ParcelNone");
+      return finish();
+    }
+    const parcel = containing[0]!;
+    geometry = { ...geometry, parcel: { id: parcel.id, label: parcel.label, geometry: parcel.polygons, source: parcel.sourceUrl, sourceDate: parcel.sourceDate, reviewed: false }, setbacks: [] };
+    if (!next.constraints.parcelArea.reviewed)
+      next.constraints.parcelArea = { value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id} · retrieved ${context.retrievedAt}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false };
+    step("parcel", "done", "ParcelAdopted", { parcel: parcel.label, area: round(parcel.area!, 0) });
+  }
+  next = { ...next, geometry };
+
+  // 2. Planning basis from the plan register: an adopted plan covering the address suggests a B-Plan, none suggests § 34.
+  if (next.planningBasis !== "unresolved") step("basis", "kept", next.planningBasis === "b_plan" ? "BasisBPlan" : "BasisSection34");
+  else if (!context || context.planStatus !== "available") step("basis", "needs_input", "BasisUnavailable");
+  else {
+    const covering = context.plans.filter((p) => p.containsAddress);
+    const adopted = covering.find((p) => p.status === "adopted");
+    if (adopted) { next = { ...next, planningBasis: "b_plan" }; step("basis", "done", "BasisBPlanFound", { plan: adopted.name }); }
+    else if (covering.length) step("basis", "needs_input", "BasisInProgress", { plan: covering[0]!.name });
+    else { next = { ...next, planningBasis: "section34" }; step("basis", "done", "BasisSection34"); }
+  }
+
+  // 3. § 34 references: the nearest buildings with measured coverage, outside the site itself. A person still gives each a reason.
+  if (next.planningBasis !== "section34") step("references", "skipped", "ReferencesNotNeeded");
+  else if (next.references.length) step("references", "kept", "ReferencesKept", { count: next.references.length });
+  else if (!discovery) step("references", "failed", "LookupFailed", { message: sources.discoveryError ?? "" });
+  else {
+    const siteParcel = next.geometry?.parcel?.id;
+    const picked: SiteReference[] = discovery.references
+      .filter((r) => r.parcelId !== siteParcel && r.metrics?.grz?.value != null && r.metrics?.gfz?.value != null)
+      .slice(0, MAX_SUMMARY_REFERENCES);
+    if (picked.length) { next = { ...next, references: picked.map((r) => ({ ...r, note: "" })) }; step("references", "done", "ReferencesAdded", { count: picked.length }); }
+    else step("references", "needs_input", "ReferencesNone");
+  }
+
+  // 4. Figures: § 34 proposes the upper end of the reference frame; a B-Plan needs its figures from the plan.
+  const c = next.constraints;
+  if (next.planningBasis === "section34") {
+    const frame = engine.referenceFrame(next.references);
+    const filled: string[] = [];
+    const describe = (name: string, m: { mean: number; max: number; count: number }) => `${engine.siteProposalMethod}: § 34 reference frame ${name} mean ${round(m.mean)} – max ${round(m.max)} of ${m.count} references; comparison only`;
+    if (c.grz.value === null && frame.grz) { c.grz = proposal(round(frame.grz.max), describe("GRZ", frame.grz), "estimated"); filled.push("grz"); }
+    if (c.gfz.value === null && frame.gfz) { c.gfz = proposal(round(frame.gfz.max), describe("GFZ", frame.gfz), "estimated"); filled.push("gfz"); }
+    if (c.maxFullStoreys.value === null && frame.storeys) { c.maxFullStoreys = proposal(Math.max(1, Math.floor(frame.storeys.max)), `${describe("storeys", frame.storeys)}; reported storeys are not legal full storeys`, "estimated"); filled.push("storeys"); }
+    step("frame", filled.length ? "done" : c.grz.value !== null && c.gfz.value !== null && c.maxFullStoreys.value !== null ? "kept" : "needs_input", filled.length ? "FrameFilled" : "FrameMissing", { items: filled.join(", ") });
+  } else if (next.planningBasis === "b_plan") {
+    // A B-Plan sets the figures: take what was read from the plan sheet (cited, unreviewed), never neighbours.
+    const plan = sources.plan, filled: string[] = [];
+    for (const { key, value } of plan?.constraints ?? []) {
+      const k = key as keyof typeof c;
+      if (!(k in c) || c[k].value !== null || typeof value.value !== "number") continue;
+      c[k] = { ...value, value: value.value };
+      if ((PLAN_FIGURES as readonly string[]).includes(k)) filled.push(k === "maxFullStoreys" ? "storeys" : k);
+    }
+    const facts = (plan?.facts ?? []).filter((f) => !next.planningFacts?.[f.key as keyof NonNullable<Draft["planningFacts"]>]?.value);
+    if (facts.length) next = { ...next, planningFacts: { ...next.planningFacts, ...Object.fromEntries(facts.map((f) => [f.key, { ...f.value, value: String(f.value.value) }])) } };
+    const missing = PLAN_FIGURES.filter((k) => c[k].value === null);
+    if (filled.length) step("frame", missing.length ? "needs_input" : "done", "FramePlanExtracted", { items: filled.join(", "), plan: plan!.plan });
+    else if (!missing.length) step("frame", "kept", "FrameKept");
+    else if (plan?.status === "unconfigured") step("frame", "needs_input", "FramePlanUnconfigured", { plan: plan.plan });
+    else if (plan?.status === "failed") step("frame", "needs_input", "FramePlanReadFailed", { plan: plan.plan, message: plan.message ?? "" });
+    else if (plan) step("frame", "needs_input", "FramePlanEmpty", { plan: plan.plan });
+    else step("frame", "needs_input", "FramePlanMissing");
+  } else step("frame", "needs_input", "FrameNeedsBasis");
+  // Area additions default to zero only as visible, unreviewed proposals so the capacity can be shown.
+  for (const key of ["additionalGrossArea", "additionalCountableArea"] as const)
+    if (c[key].value === null) c[key] = proposal(0, `${engine.siteProposalMethod}: no additional area assumed; enter Staffel or attic areas if planned`, "assessment");
+
+  // 5. Building form from neighbours standing on the boundaries.
+  const parcel = next.geometry!.parcel!;
+  let inference: Proposals.BuildingFormInference | null = null;
+  if (!discovery) step("form", "failed", "LookupFailed", { message: sources.discoveryError ?? "" });
+  else {
+    inference = engine.inferBuildingForm(parcel, discovery.buildings.map((b) => ({ id: b.id, label: b.label, polygons: discoveryPolygons(discovery, b) })));
+    const rules = next.designRules;
+    const planFact = next.planningBasis === "b_plan" ? next.planningFacts?.buildingForm : undefined;
+    const planForm = planFact ? planBuildingForm(planFact.value) : null;
+    if (rules && (rules.reviewed || rules.buildingForm !== "unresolved")) step("form", "kept", "FormKept");
+    // The plan's Bauweise wins over what the neighbours suggest.
+    else if (planFact && planForm) {
+      next = { ...next, designRules: { maxHeight: rules?.maxHeight ?? null, heightNotSpecified: rules?.heightNotSpecified ?? false, buildingForm: planForm, source: planFact.source, sourceDate: null, reviewed: false } };
+      step("form", "done", planForm === "closed" ? "FormPlanClosed" : "FormPlanOpen");
+    }
+    else if (inference.form === "unresolved") step("form", "needs_input", `Form_${inference.reason}`);
+    else {
+      const source = `${inference.method}: ${inference.form === "closed" ? `neighbours on ${inference.builtTo.length} parcel boundaries` : `${inference.neighbours} nearby buildings keep a boundary distance`} (public footprints, ±${engine.BOUNDARY_TOLERANCE_M} m); verify on site`;
+      next = { ...next, designRules: { maxHeight: rules?.maxHeight ?? null, heightNotSpecified: rules?.heightNotSpecified ?? false, buildingForm: inference.form, source, sourceDate: null, reviewed: false } };
+      step("form", "done", inference.form === "closed" ? "FormClosed" : "FormOpen", { count: inference.form === "closed" ? inference.builtTo.length : inference.neighbours });
+    }
+  }
+
+  // 6. Setback hull and envelope from the figures so far.
+  // Closed form builds to the boundaries the neighbours actually stand on; other edges keep the standard distance.
+  const envelope = engine.proposeEnvelope(next, inference && next.designRules?.buildingForm === "closed" ? inference : null, STOREY_HEIGHT);
+  if (!envelope.ok) step("envelope", envelope.reason === "needs_height" ? "needs_input" : "failed", envelope.reason === "needs_height" ? "EnvelopeNeedsHeight" : "EnvelopeFailed");
+  else {
+    next = { ...next, geometry: envelope.geometry };
+    if (!next.constraints.buildableFootprint.reviewed)
+      next.constraints.buildableFootprint = proposal(round(envelope.usableArea), `${engine.siteProposalMethod}: ${envelope.envelopeBasis === "traced" ? "traced Baugrenze" : "parcel"} less setbacks (H = ${round(envelope.height)} m)`, "calculated", today);
+    step("envelope", "done", "EnvelopeProposed", { area: round(envelope.usableArea, 0), height: round(envelope.height, 1) });
+  }
+
+  // 7. Exemption scenario: one additional full storey, kept separate from the baseline.
+  const storeys = next.constraints.maxFullStoreys.value;
+  if (next.upside) step("upside", "kept", "UpsideKept");
+  else if (storeys === null) step("upside", "needs_input", "EnvelopeNeedsHeight");
+  else {
+    next = { ...next, upside: { maxFullStoreys: proposal(storeys + 1, `${engine.siteProposalMethod}: one additional full storey by exemption (§ 31 (3) or § 34 (3b) BauGB); requires municipal consent`, "assessment"), note: "" } };
+    step("upside", "done", "UpsideProposed", { storeys: storeys + 1 });
+  }
+
+  // 8. Massing that uses the frame, between the real neighbours.
+  const options = massingOptions(next.constraints);
+  if (next.geometry!.buildings.length) step("massing", "kept", "MassingKept");
+  else if (!options || !envelope.ok) step("massing", "needs_input", "MassingNeedsFigures");
+  else {
+    const best = engine.bestMassing(next.geometry!, options);
+    if (!best) step("massing", "failed", "MassingNone");
+    else { next = { ...next, geometry: { ...next.geometry!, buildings: [best.building] } }; step("massing", "done", "MassingPlaced", { area: round(best.metrics.grossFloorArea, 0) }); }
+  }
+  return { draft: next, steps };
+}
+
+export function massingOptions(constraints: Draft["constraints"], storeys?: number | null): MassingOptions | null {
+  const { grz, gfz, maxFullStoreys } = constraints;
+  const full = storeys ?? maxFullStoreys.value;
+  return grz.value && gfz.value && full ? { grz: grz.value, gfz: gfz.value, maxFullStoreys: full, storeyHeight: STOREY_HEIGHT } : null;
+}

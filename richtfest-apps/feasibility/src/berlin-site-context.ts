@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { resolveAssessmentLocation } from "./site-location";
+import { mapLocationSchema, resolveAssessmentLocation } from "./site-location";
 
 type Point = [number, number];
 type Polygon = Point[][];
@@ -71,12 +71,12 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
     if (!polygons.length) return [];
     return [{ id: text(p.uuid) || text(feature.id), label: `${text(p.namgmk)} · ${text(p.fln)} / ${text(p.zae)}${p.nen ? ` / ${text(p.nen)}` : ""}`,
       area: typeof p.afl === "number" && p.afl > 0 ? p.afl : null, sourceDate: sourceDate(p.beg),
-      sourceUrl: parcelUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }];
+      number: `${text(p.zae)}${p.nen ? `/${text(p.nen)}` : ""}`, district: text(p.namgmk), sourceUrl: parcelUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }];
   }).sort((a, b) => Number(b.containsAddress) - Number(a.containsAddress)) : [];
   const plans = planResults.flatMap((result, index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({
     id: text(feature.id), name: text(feature.properties.planname), status: index === 0 ? "adopted" : "in_progress",
     sourceUrl: planUrls[index]!, documentUrl: publicLink(feature.properties.scan_www), explanationUrl: publicLink(feature.properties.grund_www),
-    effectiveDate: text(feature.properties.festsg_am) || null, containsAddress: containsPoint(polygonsOf(feature), site.origin),
+    effectiveDate: text(feature.properties.festsg_am) || null, polygons: polygonsOf(feature), containsAddress: containsPoint(polygonsOf(feature), site.origin),
   })));
   const hints = hintResults.flatMap((result,index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({id: text(feature.id),kind:index === 0 ? "heritage" : "preservation", label: text(feature.properties.gebietsname) || text(feature.properties.typ) || text(feature.properties.id),sourceUrl:hintUrls[index]!,detailUrl:publicLink(feature.properties.link),effectiveDate:text(feature.properties.ae_inkraft)||text(feature.properties.f_in_kraft)||null,containsAddress:containsPoint(polygonsOf(feature),site.origin)})));
   return { hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
@@ -97,5 +97,24 @@ export function createBerlinSiteContextRouter(getDeps: (req: Request) => AppDeps
       res.json(ok(await lookupBerlinContext(site, signal)));
     } catch (e) { next(e); }
   });
+  // Orthophoto under the parcel map: a fixed window around a Berlin point, snapped so nearby lookups share one cached image.
+  router.get("/projects/:projectId/aerial", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read");
+      const id = z.string().uuid().parse(req.params.projectId);
+      const [e, n] = mapLocationSchema.shape.mapOrigin.parse([Number(req.query.e), Number(req.query.n)]);
+      if (!await d.project(id)) throw Object.assign(new Error("Project not found"), { status: 404, code: "not_found" });
+      if (!d.aerialImage) throw Object.assign(new Error("Aerial imagery is not configured"), { status: 503, code: "imagery_unavailable" });
+      const snap = (v: number) => Math.round(v / AERIAL_SNAP_M) * AERIAL_SNAP_M;
+      const image = await d.aerialImage(id, [snap(e), snap(n)], AERIAL_WINDOW_M);
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", image.stale ? "private, no-cache" : `private, max-age=${Math.max(0, Math.floor((image.freshUntil.getTime() - Date.now()) / 1000))}`);
+      res.setHeader("X-Imagery-Attribution", encodeURIComponent(image.attribution));
+      res.end(image.body);
+    } catch (e) { next(e); }
+  });
   return router;
 }
+/** Half width of the orthophoto window and its grid; the client places the image at the same snapped square. */
+export const AERIAL_WINDOW_M = 200;
+export const AERIAL_SNAP_M = 25;

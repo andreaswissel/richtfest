@@ -9,6 +9,7 @@
     "./schema": "./src/schema.ts",
     "./location-context": "./src/location-context.ts",
     "./location-worker": "./src/location-worker.ts",
+    "./location-images": "./src/location-images.ts",
     "./source-text": "./src/source-text.ts",
     "./source-representations": "./src/source-representations.ts",
     "./source-extraction": "./src/source-extraction.ts",

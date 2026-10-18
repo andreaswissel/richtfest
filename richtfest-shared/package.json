@@ -10,7 +10,8 @@
     "./openui-registry": "./src/openui-registry.generated.ts",
     "./site-geometry": "./src/site-geometry.ts",
     "./site-geometry-model": "./src/site-geometry-model.ts",
-    "./site-design": "./src/site-design.ts"
+    "./site-design": "./src/site-design.ts",
+    "./site-proposals": "./src/site-proposals.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

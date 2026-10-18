@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { compareSiteReferences, SITE_REFERENCE_METRICS, type SiteReference, type SiteReferenceMetric, type SiteAssessmentInput, type LocationContext, type LocationBuilding } from "@richtfest/shared";
+import { compareSiteReferences, SITE_REFERENCE_METRICS, type SiteReference, type SiteReferenceMetric, type SiteAssessmentInput, type LocationContext } from "@richtfest/shared";
 import { api } from "../../api";
+import { discoveryContext, useSiteDiscovery } from "./site-lookups";
 import { useT } from "../../i18n";
 import { usePreferences } from "../../store";
 import { Section } from "../layout";
@@ -15,7 +16,6 @@ import { NativeSelect } from "../ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 
 type Locator = NonNullable<SiteAssessmentInput["siteLocator"]>;
-type Discovery = { address: string; origin: [number, number]; longitude: number; latitude: number; retrievedAt: string; references: SiteReference[]; buildings: LocationBuilding[]; sources: string[]; status: string[] };
 const PAGE = 10;
 
 /** Distance from the address point to the footprint's vertex centre, for orientation only. */
@@ -35,18 +35,12 @@ export function SiteReferencesPanel({ projectId, siteLocator, references, onLoca
   const opener = useRef<HTMLButtonElement | null>(null);
   const locations = useMutation({ mutationFn: () => api<{ requestedAddress: string; candidates: { id: string; label: string; origin: [number, number]; sourceUrl: string; exactMatch: boolean }[] }>(`/feasibility/projects/${projectId}/site-locations`) });
   const locationKey = JSON.stringify([projectId, siteLocator?.origin, siteLocator?.label]);
-  const currentLocation = useRef(locationKey); currentLocation.current = locationKey;
   const previousLocation = useRef(locationKey);
-  const discovery = useMutation({
-    mutationFn: async () => { const requestKey = locationKey; const data = await api<Discovery>(`/feasibility/projects/${projectId}/references/discover`, siteLocator ? { mapOrigin: siteLocator.origin, mapLabel: siteLocator.label } : {}, "POST"); return { ...data, requestKey }; },
-    onSuccess: data => {
-      if (data.requestKey !== currentLocation.current) return;
-      setPage(0);
-      onContext({ siteId: `assessment:${projectId}`, address: data.address, origin: data.origin, longitude: data.longitude, latitude: data.latitude, crs: "EPSG:25833", radius: 200, buildings: data.buildings, trees: [], sources: data.sources.map(url => ({ label: label("PublicSource"), url, surveyedAt: null })), importedAt: data.retrievedAt });
-    },
-  });
-  useEffect(() => { if (previousLocation.current !== locationKey) { previousLocation.current = locationKey; discovery.reset(); locations.reset(); setPage(0); onContext(null); } }, [locationKey]);
-  const discovered = discovery.data?.requestKey === locationKey ? discovery.data : undefined;
+  // Keyed by project and locator, so a changed location never shows another site's buildings.
+  const discovery = useSiteDiscovery(projectId, siteLocator);
+  const discovered = discovery.data;
+  useEffect(() => { setPage(0); onContext(discovered ? discoveryContext(projectId, discovered, label("PublicSource")) : null); }, [discovery.dataUpdatedAt, locationKey]);
+  useEffect(() => { if (previousLocation.current !== locationKey) { previousLocation.current = locationKey; locations.reset(); } }, [locationKey]);
   const candidates = discovered ? [...discovered.references].map(r => ({ reference: r, distance: distanceTo(discovered.origin, r) })).sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity)) : [];
   const ref = references.find(r => r.id === selected), measurement = ref?.metrics?.[field];
   const update = (patch: Partial<SiteReference>) => { if (ref) onReferences(references.map(r => r.id === ref.id ? { ...ref, ...patch } : r)); };
@@ -56,7 +50,7 @@ export function SiteReferencesPanel({ projectId, siteLocator, references, onLoca
   const pages = Math.max(1, Math.ceil(candidates.length / PAGE));
   return <Section title={label("Title")} meta={<div className="inline-actions">
     <Button variant="outline" size="sm" disabled={locations.isPending} onClick={() => locations.mutate()}>{label("FindAddress")}</Button>
-    <Button variant="outline" size="sm" disabled={discovery.isPending} onClick={() => discovery.mutate()}>{discovery.isPending ? label("Loading") : label("Discover")}</Button>
+    <Button variant="outline" size="sm" disabled={discovery.isFetching} onClick={() => void discovery.refetch()}>{discovery.isFetching ? label("Loading") : label("Discover")}</Button>
     {!disabled && <Button variant="ghost" size="sm" disabled={references.length >= 100} onClick={event => { const id = crypto.randomUUID(); opener.current = event.currentTarget; onReferences([...references, { id, label: "", source: "", note: "" }]); setSelected(id); }}>{label("AddManual")}</Button>}
   </div>}>
     {siteLocator && <p className="text-ui-xs">{label("Locator")}: {siteLocator.label} · {label(siteLocator.reviewed ? "Reviewed" : "Unreviewed")}</p>}

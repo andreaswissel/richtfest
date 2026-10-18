@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: max(30rem, calc(100dvh - 23rem));
+  height: max(30rem, calc(100dvh - 14rem));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -492,3 +492,13 @@
 .site-design-rules { display:flex; flex-direction:column; gap:var(--stack); max-width:40rem; padding-block:var(--stack); }
 .site-design-table { width:100%; table-layout:fixed; }
 .site-design-table td { white-space:normal; overflow-wrap:anywhere; }
+.geometry-plan[data-tool="select"] .geometry-building { cursor: move; touch-action: none; }
+/* The exemption scenario is a read-only preview, drawn apart from the editable design. */
+.geometry-building.is-scenario,
+.geometry-staffel.is-scenario {
+  fill: #f59e0b40;
+  stroke: #b45309;
+  stroke-dasharray: 6 4;
+  cursor: default;
+  pointer-events: none;
+}

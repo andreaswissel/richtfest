@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useBlocker } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { Download, Save } from "lucide-react";
@@ -30,6 +30,10 @@ import { SiteDesignResult } from "./site-design-result";
 import { SiteGeometryEditor } from "./site-geometry-editor";
 import { BerlinContext } from "./berlin-context";
 import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
+import { berlinContextQuery, discoveryContext, siteDiscoveryQuery } from "./site-lookups";
+import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
+import { applySiteSummary, massingOptions, type SummaryStep, type SummaryStepId } from "./site-summary";
+import { SiteSummaryPanel } from "./site-summary-panel";
 
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
 type Response = { assessment: Assessment; canWrite: boolean };
@@ -41,6 +45,32 @@ const REVIEW_ITEMS: ReviewItem[] = [
   { kind: "rules", key: "designRules" },
   ...FACT_KEYS.map((key) => ({ kind: "fact" as const, key })),
 ];
+
+type ProposalEngine = typeof import("@richtfest/shared/site-proposals");
+const loadProposals = () => import("@richtfest/shared/site-proposals");
+
+/** The exemption massing is generated, not stored: it follows the envelope, setbacks and the upside storeys. */
+function useUpsideMassing(input: SiteAssessmentInput | undefined) {
+  const [engine, setEngine] = useState<ProposalEngine>();
+  const geometry = input?.geometry;
+  const storeys = input?.upside?.maxFullStoreys.value ?? null;
+  const options = input && storeys !== null ? massingOptions(input.constraints, storeys) : null;
+  const needed = !!geometry?.parcel && !!options;
+  useEffect(() => {
+    if (needed && !engine) void loadProposals().then(setEngine);
+  }, [needed]);
+  // Moving or editing the design's own buildings must not regenerate the scenario.
+  const key = needed ? JSON.stringify([{ ...geometry, buildings: [] }, options]) : "";
+  return useMemo(() => {
+    if (!needed || !engine || !geometry || !options) return needed ? null : undefined;
+    try {
+      const best = engine.bestMassing(geometry, options);
+      return best ? { building: best.building, grossFloorArea: best.metrics.grossFloorArea, countableFloorArea: best.metrics.countableFloorArea } : null;
+    } catch {
+      return null;
+    }
+  }, [key, engine]);
+}
 
 /** The combined design check needs the geometry engine; load it only when the assessment has geometry. */
 function useSiteDesign(input: SiteAssessmentInput | undefined) {
@@ -59,7 +89,7 @@ function useSiteDesign(input: SiteAssessmentInput | undefined) {
   }, [calculate, input]);
 }
 
-export function SiteAssessment({ projectId }: { projectId: string }) {
+export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: ReactNode }) {
   const t = useT(),
     language = usePreferences((s) => s.language);
   const label = (key: string) => t(`siteAssessment${key}` as Parameters<typeof t>[0]);
@@ -71,6 +101,8 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
   const [editor, setEditor] = useState<ReviewItem>();
   const [raw, setRaw] = useState<Record<string, string>>({});
   const [step, setStep] = useState<Step>();
+  const [scenario, setScenario] = useState<"baseline" | "upside">("baseline");
+  const [summarySteps, setSummarySteps] = useState<SummaryStep[] | null>(null);
   const assessment = draft ?? data?.assessment;
   const dirty = !!draft;
   const input = useMemo<SiteAssessmentInput | undefined>(
@@ -95,6 +127,35 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
   const valid = validation?.success;
   const result = useMemo(() => (input && valid ? calculateSiteAssessment(input) : null), [input, valid]);
   const design = useSiteDesign(valid ? input : undefined);
+  const upsideMassing = useUpsideMassing(valid ? input : undefined);
+  const [planProvider, setPlanProvider] = useState<PlanProvider>("openai");
+  const summary = useMutation({
+    mutationFn: async (base: Assessment) => {
+      const locator = base.siteLocator;
+      const [context, discovery, engine] = await Promise.allSettled([
+        queryClient.fetchQuery(berlinContextQuery(projectId, locator)),
+        queryClient.fetchQuery(siteDiscoveryQuery(projectId, locator)),
+        loadProposals(),
+      ]);
+      if (engine.status === "rejected") throw engine.reason;
+      const message = (r: PromiseSettledResult<unknown>) => (r.status === "rejected" ? (r.reason as Error).message : undefined);
+      const { revision, updatedAt, ...current } = base;
+      const found = context.status === "fulfilled" ? context.value : null;
+      // A covering B-Plan is read for its figures before the frame step; § 34 sites skip this.
+      const readPlan = planToRead(current, found);
+      const plan = readPlan ? await extractPlanFigures(projectId, locator, readPlan, planProvider, current) : null;
+      const applied = applySiteSummary(current, { context: found, contextError: message(context), discovery: discovery.status === "fulfilled" ? discovery.value : null, discoveryError: message(discovery), plan }, engine.value, new Date().toISOString().slice(0, 10));
+      if (plan) void queryClient.invalidateQueries({ queryKey: [`/feasibility/projects/${projectId}/evidence`] });
+      return { ...applied, base: { revision, updatedAt } };
+    },
+    onSuccess: ({ draft: next, steps, base }) => {
+      setDraft({ ...next, ...base });
+      setSummarySteps(steps);
+      setScenario("baseline");
+      const parcel = steps.find((s) => s.id === "parcel");
+      setStep(parcel && (parcel.status === "done" || parcel.status === "kept") ? "result" : "site");
+    },
+  });
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
   useEffect(() => {
     setDraft(undefined);
@@ -135,6 +196,35 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
   const hasParcel = !!assessment.geometry?.parcel;
   const currentStep: Step = step ?? (!hasParcel ? "site" : SITE_ASSESSMENT_CONSTRAINT_KEYS.some((key) => assessment.constraints[key].value === null) ? "limits" : "design");
   const openReview = (item: ReviewItem) => setEditor(item);
+  const openUpside = () => {
+    setStep("limits");
+    requestAnimationFrame(() => {
+      const details = document.getElementById("site-upside") as HTMLDetailsElement | null;
+      if (details) { details.open = true; details.scrollIntoView({ block: "center" }); }
+    });
+  };
+  const openSummaryStep = (id: SummaryStepId) => {
+    if (id === "parcel" || id === "references") return setStep("site");
+    if (id === "basis") return setStep("limits");
+    if (id === "frame") return openReview({ kind: "constraint", key: assessment.planningBasis === "b_plan" ? "maxFullStoreys" : "grz" });
+    if (id === "form") return openReview({ kind: "rules", key: "designRules" });
+    if (id === "upside") return openUpside();
+    setScenario("baseline");
+    setStep("design");
+  };
+  const summaryPanel = (
+    <SiteSummaryPanel
+      steps={summarySteps}
+      running={summary.isPending}
+      error={summary.error ? (summary.error as Error).message : null}
+      disabled={!data.canWrite}
+      primary={!hasParcel}
+      onRun={() => summary.mutate(assessment)}
+      onOpen={openSummaryStep}
+      provider={planProvider}
+      onProvider={setPlanProvider}
+    />
+  );
 
   // Open items, grouped by the step where they are resolved.
   type OpenItem = { id: string; step: Step; name: string; issue: string; open: () => void };
@@ -193,25 +283,36 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
         </Modal>
       )}
       <header className="site-header">
+        {nav}
+        <nav className="site-steps" aria-label={label("Steps")}>
+          <Segmented
+            value={currentStep}
+            onChange={(value) => setStep(value as Step)}
+            items={[
+              { value: "site", label: stepLabel("site", "StepSite") },
+              { value: "limits", label: stepLabel("limits", "StepLimits") },
+              { value: "design", label: stepLabel("design", "StepDesign") },
+              { value: "result", label: label("StepResult") },
+            ]}
+          />
+        </nav>
         <dl className="site-summary">
-          <div><dt>{label("parcelArea")}</dt><dd>{area(assessment.constraints.parcelArea.value)}</dd></div>
-          <div><dt>{label("grossFloorArea")}</dt><dd>{area(result?.baseline?.grossFloorArea)}</dd></div>
-          <div><dt>{label("countableFloorArea")}</dt><dd>{area(result?.baseline?.countableFloorArea)}</dd></div>
-          <div><dt>{t("status")}</dt><dd><Badge variant="outline">{result ? label(result.status) : label("InvalidShort")}</Badge></dd></div>
-          <div>
-            <dt>{label("OpenItemsTitle")}</dt>
-            <dd><Button variant="link" size="sm" className="site-open-link" onClick={() => setStep("result")}>{label("OpenItems").replace("{count}", String(openItems.length))}</Button></dd>
-          </div>
+          <div><dt>{label("HeaderParcel")}</dt><dd>{area(assessment.constraints.parcelArea.value)}</dd></div>
+          <div><dt>{label("HeaderBgf")}</dt><dd>{area(result?.baseline?.grossFloorArea)}</dd></div>
+          <div><dt>{label("HeaderGf")}</dt><dd>{area(result?.baseline?.countableFloorArea)}</dd></div>
+          <div><dt className="sr-only">{t("status")}</dt><dd><Badge variant="outline">{result ? label(result.status) : label("InvalidShort")}</Badge></dd></div>
+          <div><dt className="sr-only">{label("OpenItemsTitle")}</dt><dd><Button variant="link" size="sm" className="site-open-link" onClick={() => setStep("result")}>{label("OpenItems").replace("{count}", String(openItems.length))}</Button></dd></div>
         </dl>
         <div className="site-header-actions">
-          <span className="muted text-ui-2xs" role="status">
-            {dirty ? label("UnsavedReport") : assessment.revision ? `r${assessment.revision} · ${t("feasibilitySaved")}` : t("feasibilityNew")}
+          <span className="site-header-status muted text-ui-2xs" role="status" title={dirty ? label("UnsavedReport") : undefined}>
+            {dirty ? t("feasibilityUnsaved") : assessment.revision ? `r${assessment.revision} · ${t("feasibilitySaved")}` : t("feasibilityNew")}
           </span>
           <Button
             size="sm"
             variant="outline"
             disabled={!canReport}
-            title={canReport ? undefined : label(dirty ? "ReportSaveFirst" : "ReportNotSaved")}
+            aria-label={t("feasibilityReport")}
+            title={canReport ? t("feasibilityReport") : label(dirty ? "ReportSaveFirst" : "ReportNotSaved")}
             onClick={() => {
               const a = document.createElement("a");
               a.href = `/api${path}/report.pdf?lang=${language}`;
@@ -220,10 +321,10 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
             }}
           >
             <Download className="size-icon-sm" aria-hidden="true" />
-            {t("feasibilityReport")}
+            <span className="site-header-label">{t("feasibilityReport")}</span>
           </Button>
           {data.canWrite && (
-            <Button size="sm" disabled={!dirty || !valid || save.isPending} onClick={() => save.mutate()}>
+            <Button size="sm" title={dirty ? label("UnsavedReport") : undefined} disabled={!dirty || !valid || save.isPending} onClick={() => save.mutate()}>
               <Save className="size-icon-sm" aria-hidden="true" />
               {save.isPending ? t("saving") : label("Save")}
             </Button>
@@ -233,21 +334,10 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
       {save.error && <Callout tone="error">{save.error instanceof ApiError && save.error.status === 409 ? t("feasibilityConflict") : save.error.message}</Callout>}
       {dirty && data.assessment.revision !== assessment.revision && <Callout>{t("feasibilityConflict")}</Callout>}
       {!valid && <Callout tone="error">{label("Invalid")}</Callout>}
-      <nav className="site-steps" aria-label={label("Steps")}>
-        <Segmented
-          value={currentStep}
-          onChange={(value) => setStep(value as Step)}
-          items={[
-            { value: "site", label: stepLabel("site", "StepSite") },
-            { value: "limits", label: stepLabel("limits", "StepLimits") },
-            { value: "design", label: stepLabel("design", "StepDesign") },
-            { value: "result", label: label("StepResult") },
-          ]}
-        />
-      </nav>
 
       {/* Site and limits stay mounted so lookups and discovered buildings survive switching steps. */}
       <div className="site-step" hidden={currentStep !== "site"}>
+        {summaryPanel}
         <BerlinContext
           siteLocator={assessment.siteLocator}
           projectId={projectId}
@@ -383,7 +473,7 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
             else update({ planningFacts: { ...assessment.planningFacts, [key]: value } });
           }}
         />
-        <details className="site-secondary">
+        <details className="site-secondary" id="site-upside">
           <summary className="text-ui-sm">{label("Upside")}{assessment.upside ? ` · ${label("UpsideOn")}` : ""}</summary>
           <div className="site-upside">
             <p className="muted text-ui-xs">{label("UpsideHint")}</p>
@@ -424,7 +514,11 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
             onChange={(geometry) => update({ geometry })}
             contextOverride={geometryContext}
             referenceBuildingIds={assessment.references.flatMap((r) => (r.buildingId ? [r.buildingId] : []))}
-            emptyAction={<Button size="sm" onClick={() => setStep("site")}>{label("GoToSite")}</Button>}
+            emptyAction={data.canWrite ? <Button size="sm" disabled={summary.isPending} onClick={() => summary.mutate(assessment)}>{t("siteSummaryRun")}</Button> : <Button size="sm" variant="outline" onClick={() => setStep("site")}>{label("GoToSite")}</Button>}
+            scenario={scenario}
+            onScenario={setScenario}
+            upsideMassing={upsideMassing}
+            upsideStoreys={assessment.upside?.maxFullStoreys.value ?? null}
             onUseArea={(value) =>
               update({
                 constraints: {
@@ -461,23 +555,55 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
 
       {currentStep === "result" && (
         <div className="site-step" id="site-assessment-result">
+          {result?.baseline && (
+            <Section title={label("RangeTitle")} meta={<Badge variant="outline">{label("indicative")}</Badge>}>
+              <Table aria-label={label("RangeTitle")}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{label("Scenario")}</TableHead>
+                    <TableHead className="text-right">{label("maxFullStoreys")}</TableHead>
+                    <TableHead className="text-right">{label("RangeFootprint")}</TableHead>
+                    <TableHead className="text-right">GF</TableHead>
+                    <TableHead className="text-right">BGF</TableHead>
+                    <TableHead>{label("RangeLimitedBy")}</TableHead>
+                    <TableHead className="text-right">{label("RangeMassing")}</TableHead>
+                    <TableHead><span className="sr-only">{label("Resolve")}</span></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[
+                    { id: "baseline" as const, name: label("RangeBaseline"), storeys: assessment.constraints.maxFullStoreys.value, capacity: result.baseline, massing: design?.geometry?.buildings.length ? design.geometry.buildings.reduce((n, b) => n + b.grossFloorArea, 0) : null },
+                    ...(result.upside ? [{ id: "upside" as const, name: label("RangeUpside"), storeys: assessment.upside?.maxFullStoreys.value ?? null, capacity: result.upside, massing: upsideMassing?.grossFloorArea ?? null }] : []),
+                  ].map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell>{row.name}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.storeys ?? "–"}</TableCell>
+                      <TableCell className="text-right tabular-nums">{area(row.capacity.footprint)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{area(row.capacity.countableFloorArea)}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">{area(row.capacity.grossFloorArea)}</TableCell>
+                      <TableCell>{row.capacity.bindingConstraints.map((key) => label(key)).join(", ")}</TableCell>
+                      <TableCell className="text-right tabular-nums">{area(row.massing)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="ghost" disabled={row.id === "upside" ? !upsideMassing : !hasParcel} onClick={() => { setScenario(row.id); setStep("design"); }}>{label("RangeShow")}</Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {result.upside ? (
+                <p className="muted text-ui-2xs">{label("RangeHint").replace("{diff}", area(result.upside.grossFloorArea - result.baseline.grossFloorArea))}</p>
+              ) : (
+                <p className="muted text-ui-xs">{label("RangeNoUpside")} <Button variant="link" size="sm" onClick={openUpside}>{label("RangeAddUpside")}</Button></p>
+              )}
+            </Section>
+          )}
           <SiteCapacityVisual
             result={result}
             onEdit={(key) => openReview({ kind: "constraint", key })}
             empty={<><p className="text-ui-sm muted">{label("VisualEmpty")}</p><Button variant="outline" size="sm" onClick={() => setStep("limits")}>{label("GoToLimits")}</Button></>}
           />
           {result?.baseline && <p className="text-ui-xs muted">{label("FinancialHint")} <Link className="underline" to={`/projects/${projectId}?view=feasibility`}>{label("OpenFinancial")}</Link></p>}
-          {result?.upside && (
-            <Section title={label("Upside")} meta={<Badge variant="outline">{label("indicative")}</Badge>}>
-              <p className="text-ui-xs">
-                {label("Explanation")
-                  .replace("{footprint}", area(result.upside.footprint))
-                  .replace("{gf}", area(result.upside.countableFloorArea))
-                  .replace("{unused}", area(result.upside.unusedGfzCapacity))
-                  .replace("{limits}", result.upside.bindingConstraints.map((key) => label(key)).join(", "))}
-              </p>
-            </Section>
-          )}
+          {summarySteps && summaryPanel}
           <Section title={label("OpenItemsTitle")} meta={<Badge variant="outline">{result ? label(result.status) : label("InvalidShort")}</Badge>}>
             {openItems.length === 0 ? (
               <p className="text-ui-xs">{label("NoOpenItems")}</p>

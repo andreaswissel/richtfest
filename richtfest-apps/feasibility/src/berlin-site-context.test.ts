@@ -48,3 +48,20 @@ test("malformed upstream features produce unavailable context rather than a fail
     expect(result.parcels).toEqual([]);
   } finally { globalThis.fetch = original; }
 });
+
+test("aerial window is a fixed snapped square around a Berlin point, never caller-sized", async () => {
+  const express = (await import("express")).default;
+  const { createBerlinSiteContextRouter, AERIAL_WINDOW_M } = await import("./berlin-site-context");
+  const calls: unknown[][] = [];
+  const deps = { requirePermission() {}, project: async () => ({ id: "p" }), aerialImage: async (...args: unknown[]) => { calls.push(args); return { body: Buffer.from("jpeg"), stale: false, fetchedAt: new Date(), freshUntil: new Date(Date.now() + 60_000), attribution: "Geoportal Berlin" }; } };
+  const app = express().use(createBerlinSiteContextRouter(() => deps as any)).use((e: any, _q: any, res: any, _n: any) => res.status(e.status ?? 400).end());
+  const server = app.listen(0), base = `http://localhost:${(server.address() as any).port}/projects/00000000-0000-4000-8000-000000000000/aerial`;
+  try {
+    const ok = await fetch(`${base}?e=397137.4&n=5824112.6&halfWidth=5000`);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("image/jpeg");
+    expect(calls[0]!.slice(1)).toEqual([[397125, 5824125], AERIAL_WINDOW_M]);
+    expect((await fetch(`${base}?e=13.4&n=52.5`)).status).toBe(400);
+    expect(calls).toHaveLength(1);
+  } finally { server.close(); }
+});

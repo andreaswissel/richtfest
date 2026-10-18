@@ -6,16 +6,10 @@ import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, locat
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
 import { validateLocationAddress } from "./location-context";
-import { cachedLocationImage } from "./location-images";
+import { AERIAL_WMS, cachedLocationImage } from "./location-images";
 
 /** Federal rail noise map (EBA), nationwide incl. the extended mapping; open WMS under dl-de/by-2-0. */
 const EBA_RAIL_NOISE = "https://geoinformation.eisenbahn-bundesamt.de/wms/isophonen";
-/** Official orthophoto WMS per register; both open (RLP dl-de/by-2-0, Berlin dl-de/zero-2-0). */
-const AERIAL_WMS = {
-  "rlp-dop20": { url: "https://geo4.service24.rlp.de/wms/rp_dop20.fcgi", layer: "rp_dop20" },
-  "berlin-truedop": { url: "https://gdi.berlin.de/services/wms/truedop_2024", layer: "truedop_2024" },
-} as const;
-
 /** A fixed window around the site from a known WMS, never a caller-chosen URL or extent. */
 async function sendWindow(req: Request, res: any, d: AppDeps, projectId: string, context: LocationContext, base: string, params: Record<string, string>, halfWidth: number, size: number, format: "image/png" | "image/jpeg", attribution: string) {
   res.setHeader("Cache-Control", "private, no-store");
