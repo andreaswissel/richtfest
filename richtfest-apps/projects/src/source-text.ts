@@ -115,6 +115,7 @@ export async function extractSourceVisual(stream: AsyncIterable<Uint8Array>, mim
   try {
     signal?.throwIfAborted();
     let rasterStream = stream;
+    let renderedCrop = false;
     if (pdf) {
       directory = await mkdtemp(join(tmpdir(), "richtfest-visual-"));
       const path = join(directory, "source.pdf"), prefix = join(directory, "page");
@@ -131,20 +132,34 @@ export async function extractSourceVisual(stream: AsyncIterable<Uint8Array>, mim
       const info = await command("pdfinfo", [path], deadline, 65536);
       const pages = Number(info.match(/^Pages:\s+(\d+)/m)?.[1]);
       if (!pages || request.page > pages) return unavailable("The requested original PDF page does not exist.");
+      // Crops render only their region, at the resolution that gives the provider's 1568px image (at most
+      // 600 dpi), so small details on large plan sheets stay legible without decoding the whole sheet.
+      const pageInfo = request.crop ? await command("pdfinfo", ["-f", String(request.page), "-l", String(request.page), path], deadline, 65536) : "";
+      const size = pageInfo.match(/^Page\s+\d+\s+size:\s+([\d.]+)\s+x\s+([\d.]+)/m);
+      const turned = [90, 270].includes(Number(pageInfo.match(/^Page\s+\d+\s+rot:\s+(\d+)/m)?.[1] ?? 0) % 360);
+      const region = request.crop && size ? (() => {
+        const crop = request.crop!, width = Number(size[turned ? 2 : 1]) / 72, height = Number(size[turned ? 1 : 2]) / 72;
+        const inches = Math.max(crop.width * width, crop.height * height);
+        const dpi = Math.max(10, Math.min(600, 1568 / inches));
+        return ["-r", dpi.toFixed(3), "-x", String(Math.floor(crop.x * width * dpi)), "-y", String(Math.floor(crop.y * height * dpi)),
+          "-W", String(Math.max(1, Math.round(crop.width * width * dpi))), "-H", String(Math.max(1, Math.round(crop.height * height * dpi)))];
+      })() : null;
       await ocrSlot(deadline);
       try {
         // A 3000px raster fits the shared 128 MiB decoder budget, including
         // square sheets; crop before downsampling to the provider's 1568px image.
         await command("pdftoppm", ["-f", String(request.page), "-l", String(request.page), "-singlefile",
-          "-scale-to", request.crop ? "3000" : "1568", "-png", path, prefix], deadline, 65536);
+          ...(region ?? ["-scale-to", request.crop ? "3000" : "1568"]), "-png", path, prefix], deadline, 65536);
       } finally { activeOcr--; }
       signal?.throwIfAborted();
       const raster = await readFile(prefix + ".png");
       rasterStream = (async function* () { yield raster; })();
+      // A region raster is already the crop.
+      if (region) renderedCrop = true;
     } else if (!isImageSource(mimeType, name) || request.page !== 1) {
       return unavailable("This source has no requested visual page; images and Publisher previews use page 1 only.");
     }
-    const result = await extractSourceImage(rasterStream, pdf ? "page.png" : name, true, request.crop);
+    const result = await extractSourceImage(rasterStream, pdf ? "page.png" : name, true, renderedCrop ? undefined : request.crop);
     signal?.throwIfAborted();
     if (!result.image) return unavailable(result.content.reason ?? "Visual rendering unavailable.");
     return { ...request, scope, status: "available", image: result.image,

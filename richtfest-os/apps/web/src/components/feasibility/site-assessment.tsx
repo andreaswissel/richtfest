@@ -8,6 +8,7 @@ import {
   SITE_ASSESSMENT_CONSTRAINT_KEYS,
   SITE_ASSESSMENT_CHECK_KEYS,
   type SiteAssessmentInput,
+  type SiteAssessmentConstraint,
   type LocationContext,
 } from "@richtfest/shared";
 import type { SiteDesignResult as DesignResult } from "@richtfest/shared/site-design";
@@ -30,7 +31,7 @@ import { SiteDesignResult } from "./site-design-result";
 import { SiteGeometryEditor } from "./site-geometry-editor";
 import { BerlinContext } from "./berlin-context";
 import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
-import { berlinContextQuery, discoveryContext, siteDiscoveryQuery } from "./site-lookups";
+import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinParcel } from "./site-lookups";
 import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
 import { applySiteSummary, massingOptions, type SummaryStep, type SummaryStepId } from "./site-summary";
 import { SiteSummaryPanel } from "./site-summary-panel";
@@ -303,6 +304,26 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
   const stepLabel = (s: Step, key: string) => (count(s) ? `${label(key)} · ${count(s)}` : label(key));
   const canReport = !dirty && !!assessment.revision && !save.isPending;
 
+  /** One adoption path for the parcel map and the Design editor: the parcel becomes the site geometry and its area the unreviewed parcel area. */
+  const adoptParcel = (value: SiteAssessmentConstraint, parcel: BerlinParcel) => {
+    setRaw((current) => {
+      const next = { ...current };
+      delete next["baseline:parcelArea"];
+      return next;
+    });
+    const current = assessment.geometry ?? createEmptySiteGeometryInput();
+    // A different parcel invalidates the unreviewed envelope and building lines drawn for the previous one; reviewed ones stay for a person to judge.
+    const moved = current.parcel?.id !== parcel.id;
+    update({
+      constraints: { ...assessment.constraints, parcelArea: value },
+      geometry: {
+        ...current,
+        parcel: { id: parcel.id, label: parcel.label, geometry: parcel.polygons, source: parcel.sourceUrl, sourceDate: parcel.sourceDate, reviewed: false },
+        setbacks: [],
+        ...(moved ? { envelope: current.envelope?.reviewed ? current.envelope : null, mandatoryLines: (current.mandatoryLines ?? []).filter((l) => l.reviewed) } : {}),
+      },
+    });
+  };
   const rules = assessment.designRules ?? EMPTY_RULES;
   const checkStatus = (check: Assessment["checks"][keyof Assessment["checks"]]) => (check.status === "unresolved" || !check.note || !check.source ? "unresolved" : check.status);
   const reviewButton = (item: ReviewItem) => (
@@ -397,22 +418,9 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
           siteLocator={assessment.siteLocator}
           projectId={projectId}
           disabled={disabled}
+          onDesign={() => setStep("design")}
           adopted={assessment.geometry?.parcel ? { id: assessment.geometry.parcel.id, label: assessment.geometry.parcel.label, area: assessment.constraints.parcelArea.value, reviewed: assessment.geometry.parcel.reviewed && assessment.constraints.parcelArea.reviewed } : null}
-          onAdopt={(value, parcel) => {
-            setRaw((current) => {
-              const next = { ...current };
-              delete next["baseline:parcelArea"];
-              return next;
-            });
-            update({
-              constraints: { ...assessment.constraints, parcelArea: value },
-              geometry: {
-                ...(assessment.geometry ?? createEmptySiteGeometryInput()),
-                parcel: { id: parcel.id, label: parcel.label, geometry: parcel.polygons, source: parcel.sourceUrl, sourceDate: parcel.sourceDate, reviewed: false },
-                setbacks: [],
-              },
-            });
-          }}
+          onAdopt={adoptParcel}
         />
         <SiteReferencesPanel
           projectId={projectId}
@@ -528,6 +536,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             value={assessment.geometry ?? null}
             disabled={disabled}
             onChange={(geometry) => update({ geometry })}
+            onAdoptParcel={(parcel) => adoptParcel({ value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false }, parcel)}
             contextOverride={geometryContext}
             referenceBuildingIds={assessment.references.flatMap((r) => (r.buildingId ? [r.buildingId] : []))}
             emptyAction={data.canWrite ? <Button size="sm" disabled={summary.isPending} onClick={() => summary.mutate(assessment)}>{t("siteSummaryRun")}</Button> : <Button size="sm" variant="outline" onClick={() => setStep("site")}>{label("GoToSite")}</Button>}

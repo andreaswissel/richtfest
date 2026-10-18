@@ -36,8 +36,16 @@ export type ViewportState = {
     aerial: boolean;
   };
   site: SiteOverlay;
+  /** Cadastral parcels drawn on the ground; the adopted one is part of `assessment`. */
+  parcels?: { items: Array<{ id: string; polygons: Point2[][][] }>; selected: string | null };
+  /** Live Abstandsflächen per draft building: the part that holds and the part in conflict. */
+  setbacks?: Array<{ id: string; clear: Point2[][][]; conflict: Point2[][][] }>;
+  /** Footprint being drawn with the draw tool. */
+  drawing?: { points: Point2[]; hover: Point2 | null } | null;
+  /** Assessment item the planner can drag on the ground and extrude by its top handle. */
+  editable?: { id: string; base: number; height: number; label: string } | null;
   selected: string | null;
-  tool: "select" | "place" | "measure" | "align" | "pan";
+  tool: "select" | "place" | "measure" | "align" | "pan" | "draw";
   treeStyle: "schematic" | "illustrative";
   measurement: SceneVector[];
   clipHeight: number;
@@ -49,7 +57,8 @@ export type ViewportState = {
 export function createViewport(
   host: HTMLElement,
   callbacks: {
-    select: (id: string | null) => void;
+    /** The ground point under the click comes along so callers can pick flat layers such as parcels. */
+    select: (id: string | null, ground?: Point2) => void;
     place: (point: SceneVector) => void;
     measure: (point: SceneVector) => void;
     /** Snaps a measuring point (to building and plan corners); used for clicks and the live preview alike. */
@@ -57,6 +66,15 @@ export function createViewport(
     align: (point: Point2) => void;
     /** Camera distance from its target, reported when it crosses the far-imagery threshold. */
     zoom?: (zoomedOut: boolean) => void;
+    /** Ground point under the pointer while drawing (null when it leaves the ground). */
+    hover?: (point: Point2 | null) => void;
+    /** Click on the ground with the draw tool. */
+    ground?: (point: Point2) => void;
+    /** Dragging the editable item: "move" reports the ground offset since the drag began, "extrude" the new height. */
+    drag?: {
+      begin: (id: string, kind: "move" | "extrude") => void;
+      move: (id: string, kind: "move" | "extrude", value: Point2 | number) => void;
+    };
   },
 ) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -92,13 +110,23 @@ export function createViewport(
   scene.environmentIntensity = 0.35;
   const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 6000);
   const homeDirection = new THREE.Vector3(0.8, 0.95, 1).normalize();
-  const homeTarget = new THREE.Vector3(0, 5, 0);
-  camera.position.copy(homeTarget).addScaledVector(homeDirection, 190);
+  // Plan view by default, north up: the camera looks straight down from a hair south of the target.
+  const topDirection = new THREE.Vector3(0, 1, 0.001).normalize();
+  const homeTarget = new THREE.Vector3(0, 0, 0);
+  camera.position.copy(homeTarget).addScaledVector(topDirection, 190);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(homeTarget);
   controls.maxDistance = 2600;
   controls.minDistance = 1;
   controls.maxPolarAngle = Math.PI * 0.495;
+  // Map navigation: drag pans across the ground, the wheel zooms to the cursor, and orbiting
+  // needs Ctrl/⌘/Shift (OrbitControls' swap) or Option/Alt (handled below), or the right button.
+  controls.screenSpacePanning = false;
+  controls.zoomToCursor = true;
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.2;
+  controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+  controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
   controls.update();
   const fill = new THREE.HemisphereLight(0xdde8f3, 0x777366, 1.2);
   scene.add(fill);
@@ -131,6 +159,10 @@ export function createViewport(
     construction: new THREE.Group(),
     buildingSelection: new THREE.Group(),
     assessment: new THREE.Group(),
+    parcels: new THREE.Group(),
+    setbacks: new THREE.Group(),
+    drawing: new THREE.Group(),
+    handles: new THREE.Group(),
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
@@ -167,7 +199,33 @@ export function createViewport(
   let current: ViewportState | undefined;
   const render = () => renderer.render(scene, camera);
   let initialFrame = true;
-  const frame = (box?: THREE.Box3) => {
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  let flight = 0;
+  /** Glides target and camera along the orbit (radius, tilt and heading eased separately) instead of jumping. */
+  const fly = (target: THREE.Vector3, position: THREE.Vector3, ms = 450) => {
+    cancelAnimationFrame(flight);
+    const fromTarget = controls.target.clone();
+    const from = new THREE.Spherical().setFromVector3(camera.position.clone().sub(fromTarget));
+    const to = new THREE.Spherical().setFromVector3(position.clone().sub(target));
+    let turn = to.theta - from.theta;
+    if (turn > Math.PI) turn -= 2 * Math.PI;
+    if (turn < -Math.PI) turn += 2 * Math.PI;
+    const start = performance.now();
+    const step = (now: number) => {
+      const k = ms <= 0 || reducedMotion ? 1 : Math.min(1, (now - start) / ms), e = 1 - (1 - k) ** 3;
+      controls.target.lerpVectors(fromTarget, target, e);
+      const offset = new THREE.Vector3().setFromSphericalCoords(
+        THREE.MathUtils.lerp(from.radius, to.radius, e), THREE.MathUtils.lerp(from.phi, to.phi, e), from.theta + turn * e);
+      camera.position.copy(controls.target).add(offset);
+      controls.update();
+      if (k < 1) flight = requestAnimationFrame(step);
+    };
+    if (ms <= 0 || reducedMotion) step(start);
+    else flight = requestAnimationFrame(step);
+  };
+  const viewDirection = () => camera.position.clone().sub(controls.target).normalize();
+  /** Fits a box into view along `direction` (default: the current heading and tilt). */
+  const frame = (box?: THREE.Box3, direction = viewDirection(), ms = 450) => {
     const target = box ? box.getCenter(new THREE.Vector3()) : homeTarget;
     const radius = box ? box.getSize(new THREE.Vector3()).length() / 2 : 58;
     const halfFov = Math.atan(
@@ -175,11 +233,26 @@ export function createViewport(
         Math.min(1, camera.aspect),
     );
     const distance = Math.max(12, (radius / Math.sin(halfFov)) * 1.15);
-    camera.position.copy(target).addScaledVector(homeDirection, distance);
-    controls.target.copy(target);
-    controls.update();
+    fly(target, target.clone().addScaledVector(direction, distance), ms);
   };
   controls.addEventListener("change", render);
+  // Damped panning and orbiting coast for a few frames after release.
+  let coast = 0, interacting = false;
+  const tick = () => {
+    coast = 0;
+    if (controls.update() || interacting) coast = requestAnimationFrame(tick);
+  };
+  controls.addEventListener("start", () => {
+    cancelAnimationFrame(flight);
+    interacting = true;
+    renderer.domElement.style.cursor = "grabbing";
+    if (!coast) coast = requestAnimationFrame(tick);
+  });
+  controls.addEventListener("end", () => {
+    interacting = false;
+    renderer.domElement.style.cursor = cursorFor(current);
+    if (!coast) coast = requestAnimationFrame(tick);
+  });
   // Far aerial imagery is only worth loading once the planner zooms out past the neighbourhood.
   let zoomedOut = false;
   const checkZoom = () => {
@@ -199,7 +272,7 @@ export function createViewport(
     });
     if (initialFrame) {
       initialFrame = false;
-      frame();
+      frame(undefined, topDirection, 0);
     }
     render();
   });
@@ -216,7 +289,7 @@ export function createViewport(
         // Sprites share one geometry across the scene.
         if (!(node instanceof THREE.Sprite)) node.geometry.dispose();
         const material = node.material as THREE.Material & { map?: THREE.Texture | null };
-        if (!Array.isArray(material) && material.map !== pointTexture) material.map?.dispose();
+        if (!Array.isArray(material) && material.map !== pointTexture && material.map !== extrudeTexture) material.map?.dispose();
         (Array.isArray(node.material)
           ? node.material
           : [node.material]
@@ -335,6 +408,43 @@ export function createViewport(
     sprite.renderOrder = 12;
     return sprite;
   };
+  /** Translucent flat polygon on the ground (with holes), ordered above imagery and parcels. */
+  const flat = (polygon: Point2[][], color: number, opacity: number, y: number) => {
+    const shape = new THREE.Shape(polygon[0]!.map(([x, z]) => new THREE.Vector2(x, -z)));
+    shape.holes = polygon.slice(1).map((ring) => new THREE.Path(ring.map(([x, z]) => new THREE.Vector2(x, -z))));
+    const geometry = new THREE.ShapeGeometry(shape);
+    geometry.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(geometry, groundLayer(new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }), 6));
+    mesh.position.y = y;
+    mesh.renderOrder = 7;
+    return mesh;
+  };
+  /** Extrude grip: an indigo disc with up/down chevrons. */
+  const extrudeTexture = (() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#ffffff";
+    context.beginPath();
+    context.arc(32, 32, 30, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#4f46e5";
+    context.beginPath();
+    context.arc(32, 32, 25, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = "#ffffff";
+    context.lineWidth = 5;
+    context.lineCap = context.lineJoin = "round";
+    context.beginPath();
+    context.moveTo(22, 26); context.lineTo(32, 16); context.lineTo(42, 26);
+    context.moveTo(22, 38); context.lineTo(32, 48); context.lineTo(42, 38);
+    context.stroke();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  })();
+  const cursorFor = (state?: ViewportState) =>
+    !state || state.tool === "select" || state.tool === "pan" ? "grab" : "crosshair";
   let preview: SceneVector | null = null;
   const drawMeasure = (points: SceneVector[]) => {
     disposeGroup(groups.measure);
@@ -352,6 +462,8 @@ export function createViewport(
   function update(next: ViewportState) {
     if (current?.assessment !== next.assessment) {
       disposeGroup(groups.assessment);
+      // The outline belongs to meshes that are about to be replaced.
+      if (outlinedBuilding?.parent === groups.assessment) outlinedBuilding = undefined;
       for (const item of next.assessment ?? []) {
         const group = new THREE.Group(); group.userData.id = item.id;
         for (const polygon of item.polygons) {
@@ -764,7 +876,9 @@ export function createViewport(
           }
         }
       }
-      const tag = label(locatorLabel, "#0f766e");
+      // Editors that pass no labels (the site assessment's massing view) get no empty pill.
+      const tag = label(locatorLabel || " ", "#0f766e");
+      tag.visible = !!locatorLabel;
       if (constructionBounds.isEmpty()) tag.position.set(0, 1, 0);
       else {
         tag.position.copy(constructionBounds.getCenter(new THREE.Vector3()));
@@ -781,8 +895,8 @@ export function createViewport(
       .find(
         (node) => node.userData.id === next.selected && node.parent?.visible,
       );
-    const building = selected?.parent === groups.buildings ? selected : undefined;
-    if (building !== outlinedBuilding) {
+    const building = selected?.parent === groups.buildings || selected?.parent === groups.assessment ? selected : undefined;
+    if (building !== outlinedBuilding || (building && !groups.buildingSelection.children.length)) {
       disposeGroup(groups.buildingSelection);
       outlinedBuilding = building;
       building?.updateWorldMatrix(true, true);
@@ -806,19 +920,76 @@ export function createViewport(
       selection.box.setFromObject(selected);
       selection.updateMatrixWorld(true);
     }
-    // Pan tool: the left button moves the view instead of orbiting, like the plan editor's hand.
-    controls.mouseButtons.LEFT = next.tool === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
-    renderer.domElement.style.cursor =
-      next.tool === "pan" ? "grab" : next.tool === "select" ? "default" : "crosshair";
+    if (previous?.parcels !== next.parcels) {
+      disposeGroup(groups.parcels);
+      const segments: number[] = [];
+      for (const parcel of next.parcels?.items ?? [])
+        for (const polygon of parcel.polygons)
+          for (const ring of polygon)
+            for (let i = 0; i + 1 < ring.length; i++) segments.push(ring[i]![0], 0.05, ring[i]![1], ring[i + 1]![0], 0.05, ring[i + 1]![1]);
+      if (segments.length) {
+        const material = groundLayer(new LineMaterial({ color: next.dark ? 0xcbd5e1 : 0x475569, linewidth: 1 * renderer.getPixelRatio(), transparent: true, opacity: 0.7, depthWrite: false, toneMapped: false }), 5);
+        material.resolution.set(renderer.domElement.width, renderer.domElement.height);
+        const lines = new LineSegments2(new LineSegmentsGeometry().setPositions(segments), material);
+        lines.renderOrder = 6;
+        groups.parcels.add(lines);
+      }
+      const selectedParcel = next.parcels?.items.find((parcel) => parcel.id === next.parcels?.selected);
+      for (const polygon of selectedParcel?.polygons ?? []) {
+        groups.parcels.add(flat(polygon, 0x5b60b9, 0.18, 0.055));
+        for (const ring of polygon) groups.parcels.add(fatLine(ring.map(([x, z]) => new THREE.Vector3(x, 0.06, z)), 0x5b60b9, 2.5, false, true));
+      }
+    }
+    if (previous?.setbacks !== next.setbacks) {
+      disposeGroup(groups.setbacks);
+      for (const item of next.setbacks ?? []) {
+        for (const polygon of item.clear) groups.setbacks.add(flat(polygon, 0x16a34a, 0.3, 0.07));
+        for (const polygon of item.conflict) {
+          groups.setbacks.add(flat(polygon, 0xdc2626, 0.5, 0.075));
+          for (const ring of polygon) groups.setbacks.add(fatLine(ring.map(([x, z]) => new THREE.Vector3(x, 0.08, z)), 0xdc2626, 2, false, true));
+        }
+      }
+    }
+    if (previous?.drawing !== next.drawing) {
+      disposeGroup(groups.drawing);
+      const drawing = next.drawing;
+      if (drawing?.points.length) {
+        const path = [...drawing.points, ...(drawing.hover ? [drawing.hover] : [])].map(([x, z]) => new THREE.Vector3(x, 0.12, z));
+        if (path.length > 1) groups.drawing.add(fatLine(path, 0x1e293b, 2.5));
+        // The closing edge stays dashed until the footprint is finished.
+        if (path.length > 2) groups.drawing.add(fatLine([path.at(-1)!, path[0]!], 0x1e293b, 1.5, true));
+        path.slice(0, drawing.points.length).forEach((point, index) => {
+          const sprite = handle(point);
+          if (index === 0) screenSized(sprite, 18);
+          groups.drawing.add(sprite);
+        });
+      }
+    }
+    if (previous?.editable !== next.editable || previous?.assessment !== next.assessment) {
+      disposeGroup(groups.handles);
+      const item = next.editable && groups.assessment.children.find((node) => node.userData.id === next.editable!.id);
+      if (item && next.editable) {
+        const box = new THREE.Box3().setFromObject(item);
+        const top = new THREE.Vector3((box.min.x + box.max.x) / 2, next.editable.base + next.editable.height, (box.min.z + box.max.z) / 2);
+        const grip = new THREE.Sprite(new THREE.SpriteMaterial({ map: extrudeTexture, depthTest: false, toneMapped: false, sizeAttenuation: false }));
+        screenSized(grip, 26);
+        grip.position.copy(top);
+        grip.renderOrder = 14;
+        grip.userData.extrude = next.editable.id;
+        const tag = label(next.editable.label, "#3730a3");
+        tag.position.copy(top);
+        tag.center.set(-0.18, 0.5);
+        groups.handles.add(grip, tag);
+      }
+    }
+    renderer.domElement.style.cursor = cursorFor(next);
     render();
   }
   const raycaster = new THREE.Raycaster();
   raycaster.params.Points!.threshold = 0.22;
   let pointer = [0, 0];
-  const down = (e: PointerEvent) => {
-    pointer = [e.clientX, e.clientY];
-  };
-  const aim = (e: PointerEvent) => {
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const aim = (e: { clientX: number; clientY: number }) => {
     const bounds = host.getBoundingClientRect();
     raycaster.setFromCamera(
       new THREE.Vector2(
@@ -828,6 +999,7 @@ export function createViewport(
       camera,
     );
   };
+  const groundPoint = () => raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
   const surfaceHit = () => {
     const targets = [
       groups.buildings,
@@ -847,28 +1019,104 @@ export function createViewport(
   };
   /** A visible surface under the pointer, else the flat ground reference; snapped like a click. */
   const measurePoint = (): SceneVector | null => {
-    const point =
-      surfaceHit()?.point ??
-      raycaster.ray.intersectPlane(
-        new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-        new THREE.Vector3(),
-      );
+    const point = surfaceHit()?.point ?? groundPoint();
     if (!point) return null;
     const raw = point.toArray() as SceneVector;
     return callbacks.snap ? callbacks.snap(raw) : raw;
   };
-  // After the first point the line follows the pointer and measures live.
+  /** What a press on the editable item would grab: its top grip extrudes, its body moves. */
+  const grabTarget = (): "move" | "extrude" | null => {
+    const editable = current?.editable;
+    if (!editable || current?.tool !== "select" || !callbacks.drag) return null;
+    if (raycaster.intersectObjects(groups.handles.children.filter((node) => node.userData.extrude), false).length) return "extrude";
+    const item = groups.assessment.children.find((node) => node.userData.id === editable.id);
+    return item && raycaster.intersectObject(item, true).length ? "move" : null;
+  };
+  // Dragging the editable item takes the press away from the map controls.
+  let drag: { id: string; kind: "move" | "extrude"; start: THREE.Vector3; plane: THREE.Plane; base: number } | null = null;
+  let dragFrame = 0;
+  const dragMove = (e: PointerEvent) => {
+    if (!drag) return;
+    cancelAnimationFrame(dragFrame);
+    dragFrame = requestAnimationFrame(() => {
+      if (!drag) return;
+      aim(e);
+      const point = raycaster.ray.intersectPlane(drag.plane, new THREE.Vector3());
+      if (!point) return;
+      if (drag.kind === "move") callbacks.drag?.move(drag.id, "move", [point.x - drag.start.x, point.z - drag.start.z]);
+      else callbacks.drag?.move(drag.id, "extrude", Math.max(0, point.y - drag.base));
+    });
+  };
+  const dragEnd = () => {
+    drag = null;
+    controls.enabled = true;
+    window.removeEventListener("pointermove", dragMove);
+    window.removeEventListener("pointerup", dragEnd);
+    window.removeEventListener("pointercancel", dragEnd);
+    renderer.domElement.style.cursor = cursorFor(current);
+  };
+  /** Runs before the map controls (capture on the host): picks the orbit modifier and starts item drags. */
+  const press = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    // Option/Alt orbits; Ctrl/⌘/Shift are swapped to orbit by OrbitControls itself.
+    controls.mouseButtons.LEFT = e.altKey && !(e.ctrlKey || e.metaKey || e.shiftKey) ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !current?.editable) return;
+    aim(e);
+    const kind = grabTarget();
+    if (!kind) return;
+    const editable = current.editable;
+    let plane: THREE.Plane, start: THREE.Vector3 | null;
+    if (kind === "move") {
+      plane = groundPlane.clone();
+      start = groundPoint();
+    } else {
+      // A vertical plane through the grip that faces the camera turns pointer height into building height.
+      const grip = groups.handles.children.find((node) => node.userData.extrude)!.position;
+      const facing = camera.position.clone().sub(grip).setY(0);
+      if (facing.lengthSq() < 1e-6) facing.set(0, 0, 1);
+      plane = new THREE.Plane().setFromNormalAndCoplanarPoint(facing.normalize(), grip);
+      start = raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+    }
+    if (!start) return;
+    drag = { id: editable.id, kind, start, plane, base: editable.base };
+    controls.enabled = false;
+    callbacks.drag!.begin(editable.id, kind);
+    renderer.domElement.style.cursor = kind === "move" ? "move" : "ns-resize";
+    window.addEventListener("pointermove", dragMove);
+    window.addEventListener("pointerup", dragEnd);
+    window.addEventListener("pointercancel", dragEnd);
+  };
+  const down = (e: PointerEvent) => {
+    pointer = [e.clientX, e.clientY];
+  };
+  // After the first point the line follows the pointer and measures live; drawing and grab cursors follow it too.
   let moveFrame = 0;
   const move = (e: PointerEvent) => {
-    if (!current || current.tool !== "measure" || current.measurement.length !== 1 || e.buttons) return;
+    if (!current || e.buttons || drag) return;
+    const tool = current.tool;
+    if (!(tool === "measure" && current.measurement.length === 1) && tool !== "draw" && !(tool === "select" && current.editable)) return;
     cancelAnimationFrame(moveFrame);
     moveFrame = requestAnimationFrame(() => {
-      if (!current || current.tool !== "measure" || current.measurement.length !== 1) return;
+      if (!current || drag) return;
       aim(e);
+      if (current.tool === "draw") {
+        const point = groundPoint();
+        callbacks.hover?.(point ? [point.x, point.z] : null);
+        return;
+      }
+      if (current.tool === "select") {
+        const kind = grabTarget();
+        renderer.domElement.style.cursor = kind === "move" ? "move" : kind === "extrude" ? "ns-resize" : cursorFor(current);
+        return;
+      }
+      if (current.tool !== "measure" || current.measurement.length !== 1) return;
       preview = measurePoint();
       drawMeasure(current.measurement);
       render();
     });
+  };
+  const leave = () => {
+    if (current?.tool === "draw") callbacks.hover?.(null);
   };
   const up = (e: PointerEvent) => {
     if (
@@ -877,29 +1125,21 @@ export function createViewport(
       Math.hypot(e.clientX - pointer[0], e.clientY - pointer[1]) > 4
     )
       return;
-    const bounds = host.getBoundingClientRect();
-    raycaster.setFromCamera(
-      new THREE.Vector2(
-        ((e.clientX - bounds.left) / bounds.width) * 2 - 1,
-        -((e.clientY - bounds.top) / bounds.height) * 2 + 1,
-      ),
-      camera,
-    );
+    aim(e);
     if (current.tool === "pan") return;
     if (current.tool === "align") {
-      const point = raycaster.ray.intersectPlane(
-        new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-        new THREE.Vector3(),
-      );
+      const point = groundPoint();
       if (point) callbacks.align([point.x, point.z]);
       return;
     }
     if (current.tool === "place") {
-      const point = raycaster.ray.intersectPlane(
-        new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-        new THREE.Vector3(),
-      );
+      const point = groundPoint();
       if (point) callbacks.place(point.toArray() as SceneVector);
+      return;
+    }
+    if (current.tool === "draw") {
+      const point = groundPoint();
+      if (point) callbacks.ground?.([point.x, point.z]);
       return;
     }
     const hit = surfaceHit();
@@ -910,54 +1150,70 @@ export function createViewport(
     } else {
       let node: THREE.Object3D | null = hit?.object ?? null;
       while (node && !node.userData.id) node = node.parent;
-      callbacks.select(node?.userData.id ?? null);
+      const ground = groundPoint();
+      callbacks.select(node?.userData.id ?? null, ground ? [ground.x, ground.z] : undefined);
     }
   };
+  host.addEventListener("pointerdown", press, true);
   renderer.domElement.addEventListener("pointerdown", down);
   renderer.domElement.addEventListener("pointerup", up);
   renderer.domElement.addEventListener("pointermove", move);
+  renderer.domElement.addEventListener("pointerleave", leave);
   return {
     update,
     view(mode: "perspective" | "top" | "street" | "area") {
       if (mode === "area") {
         // The 2 × 2 km surroundings window from above, centred on the site.
-        controls.target.set(0, 0, 0);
-        camera.position.set(0, 2400, 0.01);
-        controls.update();
-        checkZoom();
-        render();
+        fly(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 2400, 2.4), 600);
         return;
       }
-      const target = controls.target;
-      const offset =
-        mode === "top"
-          ? [0, 150, 0.01]
-          : mode === "street"
-            ? [25, 4, 35]
-            : homeDirection.clone().multiplyScalar(190).toArray();
-      camera.position.copy(target).add(new THREE.Vector3(...offset));
-      controls.update();
-      render();
+      const target = controls.target.clone();
+      const distance = camera.position.distanceTo(target);
+      const position =
+        mode === "street"
+          ? target.clone().add(new THREE.Vector3(25, 4, 35))
+          : target.clone().addScaledVector(mode === "top" ? topDirection : homeDirection, distance);
+      fly(target, position);
+    },
+    /** Zooms towards the view centre by `factor` (> 1 closer). */
+    zoom(factor: number) {
+      const target = controls.target.clone();
+      const offset = camera.position.clone().sub(target);
+      const distance = THREE.MathUtils.clamp(offset.length() / factor, controls.minDistance, controls.maxDistance);
+      fly(target, target.clone().addScaledVector(offset.normalize(), distance), 250);
+    },
+    /** Frames local X/Z points from above ("top"), at the oblique 3D angle, or along the current view; `ms` 0 jumps. */
+    fit(points: Point2[], mode?: "top" | "perspective", ms = 450, height = 0) {
+      const direction = mode === "top" ? topDirection : mode === "perspective" ? homeDirection : viewDirection();
+      if (!points.length) return frame(undefined, direction, ms);
+      const box = new THREE.Box3();
+      for (const [x, z] of points) box.expandByPoint(new THREE.Vector3(x, 0, z)).expandByPoint(new THREE.Vector3(x, height, z));
+      frame(box, direction, ms);
     },
     focus(id?: string | null) {
       const node = id ? Object.values(groups)
         .flatMap((group) => group.children)
         .find((node) => node.userData.id === id) : undefined;
       frame(node ? new THREE.Box3().setFromObject(node) : undefined);
-      render();
     },
     fitConstruction() {
       frame(constructionBounds.isEmpty() ? undefined : constructionBounds);
-      render();
     },
     dispose() {
       resize.disconnect();
+      cancelAnimationFrame(flight);
+      cancelAnimationFrame(coast);
+      cancelAnimationFrame(dragFrame);
+      dragEnd();
       controls.dispose();
+      host.removeEventListener("pointerdown", press, true);
+      renderer.domElement.removeEventListener("pointerleave", leave);
       renderer.domElement.removeEventListener("pointerdown", down);
       renderer.domElement.removeEventListener("pointerup", up);
       renderer.domElement.removeEventListener("pointermove", move);
       cancelAnimationFrame(moveFrame);
       pointTexture.dispose();
+      extrudeTexture.dispose();
       Object.values(groups).forEach(disposeGroup);
       scene.traverse((node) => {
         if (node instanceof THREE.Mesh || node instanceof THREE.LineSegments) {

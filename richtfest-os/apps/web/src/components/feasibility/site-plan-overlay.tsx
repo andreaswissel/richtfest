@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type {
   PlanOverlay,
   GeometryPoint,
+  GeometryEvidence,
 } from "@richtfest/shared/site-geometry-model";
+import { useMutation } from "@tanstack/react-query";
 import { useApi } from "../../query";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -13,6 +15,8 @@ import { Checkbox } from "../ui/checkbox";
 import { Callout, Field } from "../ui/primitives";
 import type { EvidenceSource } from "./site-evidence-panel";
 import type { PdfEvidenceRenderer } from "../building-model/pdf-evidence-renderer";
+import type { PlanProvider } from "./plan-extraction";
+import { traceBuildingLines, type TracedLines } from "./plan-lines";
 import "../building-model/building-model.css";
 
 const EMPTY_LAYERS: Record<string, boolean> = {};
@@ -68,6 +72,9 @@ export function SitePlanAlignment({
   pickedSite,
   onRequestSite,
   onChange,
+  parcel,
+  envelopeReviewed,
+  onTrace,
 }: {
   projectId: string;
   overlay: PlanOverlay | null;
@@ -75,6 +82,11 @@ export function SitePlanAlignment({
   pickedSite: GeometryPoint | null;
   onRequestSite: () => void;
   onChange: (value: PlanOverlay | null) => void;
+  /** Adopted parcel; the tracer crops the plan around it and keeps only lines that touch it. */
+  parcel: GeometryEvidence | null;
+  /** A reviewed envelope is never replaced by a trace. */
+  envelopeReviewed: boolean;
+  onTrace: (traced: TracedLines) => void;
 }) {
   const t = useT(),
     label = (key: string) => t(`sitePlan${key}` as Parameters<typeof t>[0]),
@@ -85,7 +97,13 @@ export function SitePlanAlignment({
     [page, setPage] = useState(overlay?.page ?? 1),
     [imagePoint, setImagePoint] = useState<GeometryPoint | null>(null),
     [points, setPoints] = useState<PlanOverlay["controlPoints"]>([]),
-    [Renderer, setRenderer] = useState<typeof PdfEvidenceRenderer>();
+    [Renderer, setRenderer] = useState<typeof PdfEvidenceRenderer>(),
+    [provider, setProvider] = useState<PlanProvider>("openai");
+  const trace = useMutation({
+    mutationFn: () => traceBuildingLines(projectId, overlay!, parcel!, provider),
+    onSuccess: (traced) => { if (traced.status === "traced") onTrace(traced); },
+  });
+  const traced = trace.data;
   const source = sources.find((s) => s.versionId === sourceId);
   useEffect(() => {
     void import("../building-model/pdf-evidence-renderer").then((module) =>
@@ -243,6 +261,32 @@ export function SitePlanAlignment({
             >
               {label("Remove")}
             </Button>
+            <div className="site-plan-trace">
+              <h4 className="text-ui-sm">{label("TraceTitle")}</h4>
+              <p className="muted text-ui-xs">{label("TraceHint")}</p>
+              <div className="inline-actions">
+                <NativeSelect value={provider} disabled={disabled || trace.isPending} aria-label={label("TraceProvider")} onChange={(e) => setProvider(e.target.value as PlanProvider)}>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                </NativeSelect>
+                <Button size="sm" variant="outline" disabled={disabled || !parcel || envelopeReviewed || trace.isPending} onClick={() => trace.mutate()}>
+                  {label(trace.isPending ? "Tracing" : "Trace")}
+                </Button>
+              </div>
+              {!parcel && <p className="muted text-ui-xs">{label("TraceNoParcel")}</p>}
+              {envelopeReviewed && <p className="muted text-ui-xs">{label("TraceKept")}</p>}
+              {traced?.status === "traced" && (
+                <Callout>
+                  {label("Traced").replace("{windows}", String(traced.envelope?.geometry.length ?? 0)).replace("{lines}", String(traced.lines.length))}
+                </Callout>
+              )}
+              {traced?.status === "empty" && <Callout>{label("TraceEmpty")}</Callout>}
+              {traced?.status === "unconfigured" && <Callout tone="warning">{label("TraceUnconfigured")}</Callout>}
+              {traced?.status === "failed" && <Callout tone="error">{traced.message === "alignment" ? label("TraceAlignment") : `${label("TraceFailed")}${traced.message ? ` ${traced.message}` : ""}`}</Callout>}
+              {!!traced?.limitations.length && (
+                <ul className="site-limitations text-ui-xs muted">{traced.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul>
+              )}
+            </div>
           </>
         )}
       </div>

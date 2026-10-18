@@ -502,3 +502,148 @@
   cursor: default;
   pointer-events: none;
 }
+/* Cadastral parcels: thin outlines under the adopted parcel; picking happens on the canvas, not the path. */
+.geometry-alkis-parcel {
+  fill: transparent;
+  stroke: color-mix(in oklch, var(--foreground) 45%, transparent);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.geometry-alkis-parcel.is-picked {
+  fill: color-mix(in oklch, var(--primary) 16%, transparent);
+  stroke: var(--primary);
+  stroke-width: 2.5;
+}
+.geometry-alkis-label {
+  fill: var(--muted-foreground);
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: var(--background);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+/* Live Abstandsflächen: green holds, red crosses the parcel boundary or overlaps. */
+.geometry-setback path {
+  pointer-events: none;
+}
+.geometry-setback-clear {
+  fill: #16a34a2e;
+  stroke: #16a34a;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.geometry-setback-conflict {
+  fill: #dc262666;
+  stroke: #dc2626;
+  stroke-width: 1.5;
+}
+.geometry-draft {
+  fill: #94a3b855;
+  stroke: none;
+  pointer-events: none;
+}
+.geometry-plan {
+  user-select: none;
+}
+.geometry-plan:active {
+  cursor: grabbing;
+}
+.geometry-massing {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(19rem, calc(100% - 20px));
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  background: var(--background);
+}
+.geometry-massing-steps {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted-foreground);
+}
+.geometry-massing-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.geometry-massing-steps li > span {
+  display: inline-grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.geometry-massing-steps li[data-done="true"] {
+  color: var(--foreground);
+}
+.geometry-massing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.geometry-massing-fields {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.4rem;
+}
+.geometry-massing-times {
+  padding-bottom: 0.35rem;
+  color: var(--muted-foreground);
+}
+.geometry-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.geometry-stepper input {
+  width: 3.25rem;
+  text-align: center;
+}
+.geometry-massing-values {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+}
+.geometry-massing-values dt {
+  color: var(--muted-foreground);
+}
+.geometry-massing-values dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.geometry-massing-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0;
+}
+.geometry-massing-swatch {
+  flex: 0 0 auto;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-top: 0.15rem;
+  border-radius: 2px;
+  background: #16a34a;
+}
+.geometry-massing-check[data-ok="false"] .geometry-massing-swatch {
+  background: #dc2626;
+}
+.geometry-massing-action {
+  align-self: flex-start;
+}

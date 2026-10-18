@@ -52,8 +52,8 @@ export const siteAssessmentRevisions = pgTable("feasibility_site_assessment_revi
 export const siteEvidenceProposals = pgTable("feasibility_site_evidence_proposals", {
   id: uuid("id").primaryKey().defaultRandom(), tenantId: uuid("tenant_id").notNull(), projectId: uuid("project_id").notNull(),
   versionId: uuid("version_id").notNull(), provider: text("provider").notNull(), model: text("model"), status: text("status").notNull(),
-  request: jsonb("request").$type<import("./evidence").EvidenceRequest>().notNull(),
-  payload: jsonb("payload").$type<import("./evidence").EvidenceOutput>(),
+  request: jsonb("request").$type<import("./evidence").EvidenceRequest | ({ kind: "lines" } & import("./evidence").PlanLinesRequest)>().notNull(),
+  payload: jsonb("payload").$type<import("./evidence").EvidenceOutput | import("./evidence").PlanLinesOutput>(),
   dispositions: jsonb("dispositions").$type<Record<string, { decision: "adopted" | "rejected"; actorId: string; at: string }>>().notNull().default({}),
   error: text("error"), createdBy: uuid("created_by").notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, table => ({ project: index("feasibility_site_evidence_proposals_project").on(table.tenantId, table.projectId) }));

@@ -5,16 +5,19 @@ import {
   BookmarkPlus,
   Box,
   Building2,
+  Check,
   CircleHelp,
   Eye,
   EyeOff,
   Hand,
   Layers,
   Map as MapIcon,
+  Minus,
   MousePointer2,
   PanelLeft,
   PanelRight,
   PenLine,
+  Plus,
   Redo2,
   Scan,
   SquareDashed,
@@ -26,7 +29,9 @@ import type {
   LocationContext,
   LocationState,
   LocationBuilding,
+  SiteAssessmentInput,
 } from "@richtfest/shared";
+import type { SetbackAreaCheck } from "@richtfest/shared/site-geometry";
 import {
   createEmptySiteGeometryInput,
   siteGeometryInputSchema,
@@ -55,6 +60,8 @@ import { fromLocal, toLocal } from "../location/site-geometry";
 import type { createViewport, ViewportState } from "../location/viewport";
 import "./site-geometry-editor.css";
 import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
+import { TRACED_LINE_PREFIX } from "./plan-lines";
+import { containsPoint, useBerlinContext, type BerlinParcel } from "./site-lookups";
 
 type Engine = typeof import("@richtfest/shared/site-geometry");
 type SelectionKind = "parcel" | "line" | "envelope" | "exclusion" | "building" | "staffel" | "edge";
@@ -151,25 +158,54 @@ function useElementSize<E extends HTMLElement>() {
   return [ref, size] as const;
 }
 
-function Geometry3D({ context, geometry, onSelect }: { context: LocationContext; geometry: SiteGeometryInput; onSelect: (id: string | null) => void }) {
+type Viewport = ReturnType<typeof createViewport>;
+type Local = (g: GeometryMultiPolygon) => GeometryPoint[][][];
+/** 3D massing view: a map-style camera (drag pans, Ctrl/⌥-drag orbits), parcels, live Abstandsflächen, draw, move and extrude. */
+function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, draft, editable, tool, viewport: handle, onSelect, onGround, onHover, onDrag }: {
+  context: LocationContext;
+  geometry: SiteGeometryInput;
+  selected: string | null;
+  parcels: { items: { id: string; polygons: GeometryPoint[][][] }[]; selected: string | null };
+  setbacks: SetbackAreaCheck[];
+  drawing: { points: GeometryPoint[]; hover: GeometryPoint | null } | null;
+  /** Footprint being drawn, previewed at its default height. */
+  draft: { footprint: GeometryMultiPolygon; height: number } | null;
+  editable: { id: string; height: number; label: string } | null;
+  tool: "select" | "draw";
+  viewport: React.MutableRefObject<Viewport | null>;
+  onSelect: (id: string | null, ground?: GeometryPoint) => void;
+  onGround: (point: GeometryPoint) => void;
+  onHover: (point: GeometryPoint | null) => void;
+  onDrag: { begin: (id: string, kind: "move" | "extrude") => void; move: (id: string, kind: "move" | "extrude", value: GeometryPoint | number) => void };
+}) {
   const t = useT();
   const host = useRef<HTMLDivElement>(null),
-    viewport = useRef<ReturnType<typeof createViewport> | null>(null),
-    select = useRef(onSelect);
-  select.current = onSelect;
+    viewport = handle,
+    handlers = useRef({ onSelect, onGround, onHover, onDrag });
+  handlers.current = { onSelect, onGround, onHover, onDrag };
   const dark = usePreferences((s) => s.theme) === "dark";
   const [ready, setReady] = useState(false),
     [error, setError] = useState(false);
+  const site = (point: GeometryPoint) => fromLocal(context, point);
+  const siteRef = useRef(site);
+  siteRef.current = site;
   useEffect(() => {
     let active = true;
     void import("../location/viewport").then(({ createViewport }) => {
       if (!active || !host.current) return;
       try {
         viewport.current = createViewport(host.current, {
-          select: (id) => select.current(id),
+          select: (id, ground) => handlers.current.onSelect(id, ground && siteRef.current(ground)),
           place: () => {},
           measure: () => {},
           align: () => {},
+          ground: (point) => handlers.current.onGround(siteRef.current(point)),
+          hover: (point) => handlers.current.onHover(point && siteRef.current(point)),
+          drag: {
+            begin: (id, kind) => handlers.current.onDrag.begin(id, kind),
+            // Local Z points south; site Y points north.
+            move: (id, kind, value) => handlers.current.onDrag.move(id, kind, typeof value === "number" ? value : [value[0], -value[1]]),
+          },
         });
         setReady(true);
       } catch {
@@ -182,46 +218,76 @@ function Geometry3D({ context, geometry, onSelect }: { context: LocationContext;
       viewport.current = null;
     };
   }, []);
-  useEffect(() => {
-    if (!ready || !viewport.current) return;
-    const local = (g: GeometryMultiPolygon) => g.map((p) => p.map((r) => r.map((point) => toLocal(context, point))));
-    const assessment: NonNullable<ViewportState["assessment"]> = [];
-    if (geometry.parcel) assessment.push({ id: "parcel", polygons: local(geometry.parcel.geometry), base: 0.05, height: 0, color: 0x64748b });
-    if (geometry.envelope) assessment.push({ id: "envelope", polygons: local(geometry.envelope.geometry), base: 0.1, height: 0, color: 0x10b981 });
-    geometry.exclusions.forEach((x) => assessment.push({ id: x.id, polygons: local(x.geometry), base: 0.15, height: 0, color: 0xef4444 }));
+  const local: Local = (g) => g.map((p) => p.map((r) => r.map((point) => toLocal(context, point))));
+  const assessment = useMemo(() => {
+    const items: NonNullable<ViewportState["assessment"]> = [];
+    if (geometry.parcel) items.push({ id: "parcel", polygons: local(geometry.parcel.geometry), base: 0.05, height: 0, color: 0x64748b });
+    if (geometry.envelope) items.push({ id: "envelope", polygons: local(geometry.envelope.geometry), base: 0.1, height: 0, color: 0x10b981 });
+    geometry.exclusions.forEach((x) => items.push({ id: x.id, polygons: local(x.geometry), base: 0.15, height: 0, color: 0xef4444 }));
     geometry.buildings.forEach((b) => {
       const height = fullStoreyMeshHeight(b);
-      assessment.push({ id: b.id, polygons: local(b.footprint.geometry), base: 0.2, height, color: 0x6366f1 });
+      items.push({ id: b.id, polygons: local(b.footprint.geometry), base: 0.2, height, color: 0x6366f1 });
       let base = height + 0.2;
       b.staffel.forEach((s) => {
-        assessment.push({ id: s.footprint.id, polygons: local(s.footprint.geometry), base, height: s.height, color: 0x818cf8 });
+        items.push({ id: s.footprint.id, polygons: local(s.footprint.geometry), base, height: s.height, color: 0x818cf8 });
         base += s.height;
       });
     });
+    if (draft) items.push({ id: "draft", polygons: local(draft.footprint), base: 0.2, height: draft.height, color: 0x94a3b8 });
+    return items;
+  }, [context, geometry, draft]);
+  const localParcels = useMemo(() => ({ items: parcels.items.map((p) => ({ id: p.id, polygons: local(p.polygons) })), selected: parcels.selected }), [context, parcels]);
+  const localSetbacks = useMemo(() => setbacks.map((c) => ({ id: c.id, clear: local(c.clear), conflict: local(c.conflict) })), [context, setbacks]);
+  const localDrawing = useMemo(() => drawing && { points: drawing.points.map((p) => toLocal(context, p)), hover: drawing.hover && toLocal(context, drawing.hover) }, [context, drawing]);
+  const editableItem = useMemo(() => editable && { ...editable, base: 0.2 }, [editable?.id, editable?.height, editable?.label]);
+  useEffect(() => {
+    if (!ready || !viewport.current) return;
     viewport.current.update({
       context,
       assessment,
+      parcels: localParcels,
+      setbacks: localSetbacks,
+      drawing: localDrawing,
+      editable: editableItem,
       objects: [],
       models: {},
       layers: { buildings: true, trees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
-      site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
-      selected: null,
-      tool: "select",
+      site: EMPTY_OVERLAY,
+      selected,
+      tool,
       treeStyle: "schematic",
       measurement: [],
       clipHeight: 200,
       dark,
       constructionLabel: "",
       projectExtentLabel: "",
-      siteAddressLabel: context.address,
+      siteAddressLabel: "",
     });
-  }, [context, geometry, ready, dark]);
+  }, [context, assessment, localParcels, localSetbacks, localDrawing, editableItem, selected, tool, ready, dark]);
+  // Opens over the plan's framing, then tilts into 3D so the switch reads as one continuous view.
+  useEffect(() => {
+    if (!ready || !viewport.current) return;
+    const rings = geometry.parcel?.geometry.flat(2) ?? geometry.buildings.flatMap((b) => b.footprint.geometry.flat(2));
+    const points = rings.map((p) => toLocal(context, p));
+    const top = Math.max(0, ...geometry.buildings.map((b) => fullStoreyMeshHeight(b)));
+    viewport.current.fit(points, "top", 0);
+    const frame = requestAnimationFrame(() => viewport.current?.fit(points, "perspective", 700, top));
+    return () => cancelAnimationFrame(frame);
+  }, [ready]);
   return (
     <div className="geometry-3d" ref={host} role="region" aria-label={t("siteGeometry3D")}>
       {error && <Callout>{t("siteGeometryWebGLUnavailable")}</Callout>}
     </div>
   );
 }
+const NO_SETBACKS: SetbackAreaCheck[] = [];
+const EMPTY_OVERLAY: ViewportState["site"] = { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] };
+/** Height used for setbacks: the whole building including Staffel, as the engine's "buildings" height source. */
+export const buildingHeight = (b: BuildingGeometry) => Math.max(b.height ?? 0, b.fullStoreys * b.storeyHeight + b.staffel.reduce((h, s) => h + s.height, 0));
+/** Without a 3D location scene, the massing view still works around the parcel on an empty ground. */
+const emptyContext = (origin: GeometryPoint): LocationContext => ({
+  siteId: "assessment", address: "", origin, longitude: 0, latitude: 0, crs: "EPSG:25833", radius: 200, buildings: [], trees: [], sources: [], importedAt: new Date(0).toISOString(),
+});
 
 export function SiteGeometryEditor({
   projectId,
@@ -238,6 +304,7 @@ export function SiteGeometryEditor({
   onScenario,
   upsideMassing,
   upsideStoreys,
+  onAdoptParcel,
 }: {
   projectId: string;
   value: SiteGeometryInput | null;
@@ -257,12 +324,18 @@ export function SiteGeometryEditor({
   /** Generated massing for the exemption scenario: undefined without a scenario, null when nothing fits. */
   upsideMassing?: { building: BuildingGeometry; grossFloorArea: number; countableFloorArea: number } | null;
   upsideStoreys?: number | null;
+  /** Adopts a cadastral parcel picked on the map, including its area constraint; without it only the geometry changes. */
+  onAdoptParcel?: (parcel: BerlinParcel) => void;
 }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
     label = (key: string) => t(`siteGeometry${key}` as Key);
   const location = useApi(`/projects/${projectId}/location`),
     context = contextOverride ?? (location.data as LocationState | undefined)?.context;
+  // Cadastral parcels come from the Site step's lookup (shared query cache); the same locator keeps the key identical.
+  const locator = (useApi(`/feasibility/projects/${projectId}/site-assessment`).data as { assessment?: { siteLocator?: SiteAssessmentInput["siteLocator"] } } | undefined)?.assessment?.siteLocator;
+  const berlin = useBerlinContext(projectId, locator);
+  const alkis = berlin.data?.parcels ?? [];
   const geometry = useMemo(() => {
     const parsed = siteGeometryInputSchema.safeParse(value);
     return parsed.success
@@ -271,7 +344,8 @@ export function SiteGeometryEditor({
   }, [value]);
   const [canvasRef, size] = useElementSize<HTMLDivElement>();
   const [frame, setFrame] = useState({ zoom: 1, x: 0, y: 0 });
-  const panStart = useRef<{ clientX: number; clientY: number; frame: typeof frame } | null>(null);
+  const panStart = useRef<{ clientX: number; clientY: number; frame: typeof frame; moved: boolean } | null>(null),
+    panned = useRef(false);
   const planImage = usePlanRaster(projectId, geometry.planOverlay);
   const [pickingAlignment, setPickingAlignment] = useState(false),
     [pickedSite, setPickedSite] = useState<GeometryPoint | null>(null);
@@ -285,7 +359,8 @@ export function SiteGeometryEditor({
     [view, setView] = useState("2d"),
     [tab, setTab] = useState("properties"),
     [panel, setPanel] = useState<"layers" | "inspector" | null>(null),
-    [layers, setLayers] = useState({ context: true, plan: true }),
+    [layers, setLayers] = useState({ context: true, plan: true, parcels: true, setbacks: true }),
+    [parcelPick, setParcelPick] = useState<string | null>(null),
     [past, setPast] = useState<SiteGeometryInput[]>([]),
     [future, setFuture] = useState<SiteGeometryInput[]>([]);
   const format = (n: number, digits = 2) => n.toLocaleString(language === "de" ? "de-DE" : "en-GB", { maximumFractionDigits: digits });
@@ -307,6 +382,7 @@ export function SiteGeometryEditor({
   const selectedLine = selected?.kind === "line" ? geometry.mandatoryLines.find((l) => l.id === selected.id) : null;
   const selectedStaffel = selected?.kind === "staffel" ? selectedBuilding?.staffel.find((s) => s.footprint.id === selected.id) : null;
   const selectedEdge = selected?.kind === "edge" ? geometry.setbacks.find((e) => e.id === selected.id) : null;
+  const pickedParcel = alkis.find((p) => p.id === parcelPick && p.id !== geometry.parcel?.id) ?? null;
   useEffect(() => {
     void import("@richtfest/shared/site-geometry").then(setEngine);
   }, []);
@@ -378,9 +454,11 @@ export function SiteGeometryEditor({
   // Plan projection: metres to canvas pixels, north up, with a uniform scale so shapes are never distorted.
   const width = Math.max(size.width, 1),
     height = Math.max(size.height, 1);
+  const addressParcels = useMemo(() => alkis.filter((p) => p.containsAddress), [alkis]);
   const extent = useMemo(() => {
     const pts =
       geometry.parcel?.geometry.flat(2) ??
+      (addressParcels.length ? addressParcels.flatMap((p) => p.polygons.flat(2)) : undefined) ??
       context?.buildings.flatMap((b) => b.polygons.flat(2).map((p) => fromLocal(context, p))) ??
       [];
     if (!pts.length) return { cx: 0, cy: 0, w: 100, h: 100 };
@@ -388,7 +466,38 @@ export function SiteGeometryEditor({
       ys = pts.map((p) => p[1]);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: Math.max(10, maxX - minX), h: Math.max(10, maxY - minY) };
-  }, [geometry.parcel, context]);
+  }, [geometry.parcel, context, addressParcels]);
+  /** The 3D scene: the project's location context, else empty ground around the parcel. */
+  const scene = useMemo(
+    () => context ?? (geometry.parcel || addressParcels.length ? emptyContext([Math.round(extent.cx), Math.round(extent.cy)]) : null),
+    [context, !!geometry.parcel || addressParcels.length > 0, Math.round(extent.cx), Math.round(extent.cy)],
+  );
+  /** Neighbouring buildings with a known height and their Abstandsflächen; buildings mostly on the parcel are treated as replaced. */
+  const { neighbours, replaced } = useMemo(() => {
+    const replaced = new Set<string>();
+    if (!engine || !context || !geometry.parcel) return { neighbours: [], replaced };
+    const parcel = geometry.parcel.geometry, reach = 40;
+    const xs = parcel.flat(2).map((p) => p[0]), ys = parcel.flat(2).map((p) => p[1]);
+    const [minX, minY, maxX, maxY] = [Math.min(...xs) - reach, Math.min(...ys) - reach, Math.max(...xs) + reach, Math.max(...ys) + reach];
+    const neighbours = context.buildings.flatMap((b) => {
+      const footprint = b.polygons.map((p) => p.map((r) => r.map((point) => fromLocal(context, point))));
+      if (footprint.flat(2).every(([x, y]) => x < minX || x > maxX || y < minY || y > maxY)) return [];
+      try {
+        const area = engine.geometryArea(footprint);
+        if (!(area > 0)) return [];
+        if (engine.geometryArea(engine.intersectGeometry(footprint, parcel)) > area / 2) {
+          replaced.add(b.id);
+          return [];
+        }
+        return b.height ? [{ footprint, area: engine.berlinSetbackArea(footprint, engine.deriveBerlinSetback("standard", b.height) ?? 3) }] : [];
+      } catch {
+        return [];
+      }
+    });
+    return { neighbours, replaced };
+  }, [engine, context, geometry.parcel]);
+  /** The massing view shows the design instead of the existing buildings it replaces. */
+  const scene3d = useMemo(() => (scene && replaced.size ? { ...scene, buildings: scene.buildings.filter((b) => !replaced.has(b.id)) } : scene), [scene, replaced]);
   const fitScale = Math.max(extent.w / (width * 0.8), extent.h / (height * 0.8));
   const metresPerPixel = fitScale / frame.zoom;
   const cx = extent.cx + frame.x,
@@ -403,16 +512,34 @@ export function SiteGeometryEditor({
     const r = event.currentTarget.getBoundingClientRect();
     return unproject({ x: (event.clientX - r.left) / r.width, y: (event.clientY - r.top) / r.height });
   };
-  const zoomBy = (factor: number) => setFrame((f) => ({ ...f, zoom: Math.min(16, Math.max(0.25, f.zoom * factor)) }));
-  const fit = () => setFrame({ zoom: 1, x: 0, y: 0 });
+  const viewport3d = useRef<Viewport | null>(null);
+  /** Zooms by `factor`, keeping the site point under (fx, fy) — fractions of the canvas — where it is, like a map. */
+  const zoomAt = (factor: number, fx = 0.5, fy = 0.5) =>
+    setFrame((f) => {
+      const zoom = Math.min(16, Math.max(0.25, f.zoom * factor));
+      const ox = (fx - 0.5) * width, oy = (fy - 0.5) * height;
+      const px = extent.cx + f.x + ox * (fitScale / f.zoom), py = extent.cy + f.y - oy * (fitScale / f.zoom);
+      return { zoom, x: px - extent.cx - ox * (fitScale / zoom), y: py - extent.cy + oy * (fitScale / zoom) };
+    });
+  const zoomBy = (factor: number) => (view === "3d" ? viewport3d.current?.zoom(factor) : zoomAt(factor));
+  const fit = () => {
+    if (view !== "3d") return setFrame({ zoom: 1, x: 0, y: 0 });
+    if (!scene) return;
+    const rings = geometry.parcel?.geometry.flat(2) ?? addressParcels.flatMap((p) => p.polygons.flat(2));
+    viewport3d.current?.fit(rings.map((p) => toLocal(scene, p)), undefined, 450, Math.max(0, ...geometry.buildings.map(fullStoreyMeshHeight)));
+  };
+  const wheelZoom = useRef(zoomAt);
+  wheelZoom.current = zoomAt;
   useEffect(() => {
     const element = canvasRef.current;
     if (!element) return;
-    // Wheel zoom stays on the canvas instead of scrolling the page.
+    // Wheel zoom stays on the canvas instead of scrolling the page; it follows trackpad deltas smoothly and zooms to the cursor.
     const wheel = (event: WheelEvent) => {
       if (view !== "2d") return;
       event.preventDefault();
-      zoomBy(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+      const r = element.getBoundingClientRect();
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      wheelZoom.current(Math.exp(-Math.max(-100, Math.min(100, delta)) * 0.002), (event.clientX - r.left) / r.width, (event.clientY - r.top) / r.height);
     };
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
@@ -420,6 +547,7 @@ export function SiteGeometryEditor({
 
   const selectId = (id: string | null) => {
     setTab("properties");
+    setParcelPick(null);
     if (!id) return setSelected(null);
     if (id.startsWith("building:") && context) {
       const b = context.buildings.find((b) => `building:${b.id}` === id);
@@ -434,7 +562,24 @@ export function SiteGeometryEditor({
     else if (geometry.buildings.some((b) => b.staffel.some((s) => s.footprint.id === id))) setSelected({ kind: "staffel", id });
     else if (geometry.setbacks.some((e) => e.id === id)) setSelected({ kind: "edge", id });
   };
-  const canDraw = !disabled && !!geometry.parcel && view === "2d" && scenario !== "upside";
+  /** Clicking a cadastral parcel (other than the adopted one) picks it for adoption. */
+  const pickParcelAt = (point: GeometryPoint) => {
+    if (!layers.parcels) return false;
+    const hit = alkis.find((p) => p.id !== geometry.parcel?.id && containsPoint(p.polygons, point));
+    if (!hit) return false;
+    setSelected(null);
+    setParcelPick(hit.id);
+    return true;
+  };
+  const adoptParcel = (parcel: BerlinParcel) => {
+    if (onAdoptParcel) onAdoptParcel(parcel);
+    else update({ parcel: { id: parcel.id, label: parcel.label, geometry: parcel.polygons, source: parcel.sourceUrl, sourceDate: parcel.sourceDate, reviewed: false }, setbacks: [] });
+    setParcelPick(null);
+    setSelected(null);
+    setFrame({ zoom: 1, x: 0, y: 0 });
+  };
+  // Drawing works in the plan and in 3D; edge decisions and vertex editing stay in the plan.
+  const canDraw = !disabled && !!geometry.parcel && scenario !== "upside";
   const start = (next: Tool) => {
     setTool(next);
     setPoints([]);
@@ -489,6 +634,17 @@ export function SiteGeometryEditor({
     setTool("select");
     setPoints([]);
   };
+  /** Adds a drawn corner, snapped to nearby parcel and building corners; clicking the first corner closes the shape. */
+  const addPoint = (next: GeometryPoint, tolerance: number) => {
+    if (tool !== "line" && points.length >= 3 && Math.hypot(points[0]![0] - next[0], points[0]![1] - next[1]) < tolerance) return finish();
+    const vertices = [...(geometry.parcel?.geometry.flat(2) ?? []), ...geometry.buildings.flatMap((b) => b.footprint.geometry.flat(2))];
+    const nearest = vertices.reduce<GeometryPoint | undefined>(
+      (best, p) =>
+        Math.hypot(p[0] - next[0], p[1] - next[1]) < tolerance && (!best || Math.hypot(p[0] - next[0], p[1] - next[1]) < Math.hypot(best[0] - next[0], best[1] - next[1])) ? p : best,
+      undefined,
+    );
+    setPoints((p) => [...p, nearest ?? next]);
+  };
   const shift = (dx: number, dy: number) =>
     selectedEvidence &&
     updateEvidence({ ...selectedEvidence, reviewed: false, geometry: selectedEvidence.geometry.map((p) => p.map((r) => r.map(([x, y]) => [x + dx, y + dy]))) });
@@ -525,6 +681,58 @@ export function SiteGeometryEditor({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
     window.addEventListener("pointercancel", end);
+  };
+  // Live massing: the footprint being drawn previews at the default height, every building gets its Abstandsflächen.
+  const defaultStoreys = options?.maxFullStoreys ?? 1;
+  const draft = useMemo(() => {
+    const ring = [...points, ...(hover ? [hover] : [])];
+    return tool === "building" && ring.length >= 3 ? { footprint: [[closeRing(ring)]] as GeometryMultiPolygon, height: defaultStoreys * 3 } : null;
+  }, [tool, points, hover, defaultStoreys]);
+  const massingBuildings = useMemo(() => (scenario === "upside" ? (upsideMassing ? [upsideMassing.building] : []) : geometry.buildings), [scenario, upsideMassing, geometry.buildings]);
+  const setbackChecks = useMemo(() => {
+    if (!engine || !geometry.parcel) return [];
+    const buildings = massingBuildings.map((b) => ({ id: b.id, footprint: b.footprint.geometry, height: buildingHeight(b) }));
+    if (draft) buildings.push({ id: "draft", footprint: draft.footprint, height: draft.height });
+    return engine.checkSetbackAreas({ parcel: geometry.parcel.geometry, buildings, neighbours });
+  }, [engine, geometry.parcel, massingBuildings, draft, neighbours]);
+  const shownSetbacks = layers.setbacks ? setbackChecks : NO_SETBACKS;
+  /** The building the massing panel and the 3D grip work on: the selection, else the only building. */
+  const focusBuilding = scenario === "baseline" ? (selectedBuilding ?? (geometry.buildings.length === 1 ? geometry.buildings[0] : undefined)) : undefined;
+  const floorArea = (b: BuildingGeometry) => {
+    if (!engine) return null;
+    try {
+      return engine.geometryArea(b.footprint.geometry) * b.fullStoreys + b.staffel.reduce((sum, s) => sum + engine.geometryArea(s.footprint.geometry), 0);
+    } catch {
+      return null;
+    }
+  };
+  const setStoreys = (b: BuildingGeometry, patch: { fullStoreys?: number; storeyHeight?: number }) =>
+    patchBuilding(b.id, (x) => ({ ...x, ...patch, height: null, storeysReviewed: false }));
+  /** 3D drags: moving follows the ground like the plan drag (10 cm steps), extruding snaps to whole floors. */
+  const drag3d = useRef<{ base: SiteGeometryInput; floors: number } | null>(null);
+  const onDrag3d = {
+    begin: (id: string) => {
+      const building = geometry.buildings.find((b) => b.id === id);
+      if (!building || disabled) return;
+      beginGesture();
+      drag3d.current = { base: geometry, floors: building.fullStoreys };
+      setSelected({ kind: "building", id });
+    },
+    move: (id: string, kind: "move" | "extrude", value: GeometryPoint | number) => {
+      const drag = drag3d.current;
+      if (!drag) return;
+      if (kind === "move") {
+        const [dx, dy] = value as GeometryPoint;
+        onChange({ ...drag.base, buildings: drag.base.buildings.map((b) => (b.id === id ? translateBuilding(b, Math.round(dx * 10) / 10, Math.round(dy * 10) / 10) : b)) });
+        return;
+      }
+      const building = drag.base.buildings.find((b) => b.id === id);
+      if (!building) return;
+      const floors = Math.min(200, Math.max(1, Math.round((value as number) / building.storeyHeight)));
+      if (floors === drag.floors) return;
+      drag.floors = floors;
+      onChange({ ...drag.base, buildings: drag.base.buildings.map((b) => (b.id === id ? { ...b, fullStoreys: floors, height: null, storeysReviewed: false } : b)) });
+    },
   };
   const removeSelected = () => {
     if (!selected) return;
@@ -590,10 +798,11 @@ export function SiteGeometryEditor({
       const next = tools[key]!;
       if (next !== "select" && next !== "pan" && !canDraw) return;
       if (next === "reference" && !onReference) return;
+      if (next === "edge" && view !== "2d") return;
       event.preventDefault();
       start(next);
     } else if (key === "t") setView("2d");
-    else if (key === "3" && context) setView("3d");
+    else if (key === "3" && scene) setView("3d");
     else if (key === "f") fit();
     else if (key === "+" || key === "=") zoomBy(1.5);
     else if (key === "-") zoomBy(1 / 1.5);
@@ -716,6 +925,15 @@ export function SiteGeometryEditor({
     ["reference", BookmarkPlus, "siteGeometryreference", "R"],
   ];
   const drawing = DRAW_TOOLS.includes(tool);
+  const parcelLayer = useMemo(
+    () => ({ items: layers.parcels ? alkis.map((p) => ({ id: p.id, polygons: p.polygons })) : [], selected: pickedParcel?.id ?? null }),
+    [alkis, layers.parcels, pickedParcel?.id],
+  );
+  const drawingPreview = useMemo(() => (drawing && points.length ? { points, hover } : null), [drawing, points, hover]);
+  const focusHeight = focusBuilding ? fullStoreyMeshHeight(focusBuilding) : 0;
+  const editable = focusBuilding && !disabled && !drawing
+    ? { id: focusBuilding.id, height: focusHeight, label: label("MassingGrip").replace("{floors}", String(focusBuilding.fullStoreys)).replace("{height}", format(focusHeight, 1)) }
+    : null;
   const bar = scaleBar(metresPerPixel, width);
   const edgeDecisions = geometry.parcel ? geometry.parcel.geometry.flat().reduce((n, ring) => n + ring.length - 1, 0) : 0;
   const objectRow = (key: string, name: string, kind: SelectionKind, id: string, status?: ReactNode, indent = false) => (
@@ -737,7 +955,7 @@ export function SiteGeometryEditor({
             <Button variant="ghost" size="icon-sm" className="geometry-panel-toggle" aria-label={label("Inspector")} title={label("Inspector")} aria-pressed={panel === "inspector"} onClick={() => setPanel(panel === "inspector" ? null : "inspector")}>
               <PanelRight className="size-icon-sm" />
             </Button>
-            <Segmented value={view} onChange={setView} items={[{ value: "2d", label: label("Plan") }, { value: "3d", label: "3D", disabled: !context }]} />
+            <Segmented value={view} onChange={setView} items={[{ value: "2d", label: label("Plan") }, { value: "3d", label: "3D", disabled: !scene }]} />
             {upsideMassing !== undefined && onScenario && (
               <Segmented
                 value={scenario}
@@ -745,7 +963,7 @@ export function SiteGeometryEditor({
                 items={[{ value: "baseline", label: label("ScenarioBaseline") }, { value: "upside", label: label("ScenarioUpside"), disabled: !upsideMassing }]}
               />
             )}
-            {!context && <span className="text-ui-2xs muted">{label("3DNeedsContext")}</span>}
+            {!scene && <span className="text-ui-2xs muted">{label("3DNeedsContext")}</span>}
           </div>
           <div className="geometry-toolbar-group">
             <Button variant="ghost" size="icon-sm" aria-label={t("locationUndo")} title={`${t("locationUndo")} (⌘Z)`} disabled={!past.length || disabled} onClick={() => undo(false)}>
@@ -798,6 +1016,14 @@ export function SiteGeometryEditor({
                   {layers.context ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
                 </Button>
               </div>
+              {([["parcels", label("LayerParcels"), alkis.length, !alkis.length], ["setbacks", label("LayerSetbacks"), setbackChecks.length, !geometry.parcel]] as const).map(([key, name, count, off]) => (
+                <div key={key} className="geometry-layer-toggle text-ui-xs">
+                  <span>{name} <small className="muted">{count}</small></span>
+                  <Button variant="ghost" size="icon-xs" aria-label={`${name}: ${label(layers[key] ? "HideLayer" : "ShowLayer")}`} aria-pressed={layers[key]} disabled={off} onClick={() => setLayers((l) => ({ ...l, [key]: !l[key] }))}>
+                    {layers[key] ? <Eye className="size-icon-sm" /> : <EyeOff className="size-icon-sm" />}
+                  </Button>
+                </div>
+              ))}
               {referenceBuildingIds.length > 0 && <p className="text-ui-2xs muted">{label("ReferencesOutlined").replace("{count}", String(referenceBuildingIds.length))}</p>}
               <div className="geometry-layer-toggle text-ui-xs">
                 <span>{label("SourcePlan")} <small className="muted">{geometry.planOverlay ? t(geometry.planOverlay.reviewed ? "siteAssessmentReviewedShort" : "siteAssessmentUnreviewed") : label("NotAligned")}</small></span>
@@ -815,8 +1041,8 @@ export function SiteGeometryEditor({
                 label={t(key)}
                 shortcut={shortcut}
                 aria-pressed={tool === value}
-                title={value !== "select" && value !== "pan" && view !== "2d" ? `${t(key)} · ${label("SwitchToPlan")}` : undefined}
-                disabled={(value !== "select" && value !== "pan" && !canDraw) || (value === "reference" && !onReference)}
+                title={value === "edge" && view !== "2d" ? `${t(key)} · ${label("SwitchToPlan")}` : undefined}
+                disabled={(value !== "select" && value !== "pan" && !canDraw) || (value === "reference" && !onReference) || (value === "edge" && view !== "2d")}
                 onClick={() => start(value)}
               >
                 <Icon className="size-icon" aria-hidden="true" />
@@ -826,16 +1052,16 @@ export function SiteGeometryEditor({
               <WorkbenchTool label={label("Plan")} shortcut="T" aria-pressed={view === "2d"} onClick={() => setView("2d")}>
                 <MapIcon className="size-icon" aria-hidden="true" />
               </WorkbenchTool>
-              <WorkbenchTool label="3D" shortcut="3" aria-pressed={view === "3d"} disabled={!context} onClick={() => setView("3d")}>
+              <WorkbenchTool label="3D" shortcut="3" aria-pressed={view === "3d"} disabled={!scene} onClick={() => setView("3d")}>
                 <Box className="size-icon" aria-hidden="true" />
               </WorkbenchTool>
-              <WorkbenchTool label={label("ZoomIn")} shortcut="+" disabled={view !== "2d"} onClick={() => zoomBy(1.5)}>
+              <WorkbenchTool label={label("ZoomIn")} shortcut="+" onClick={() => zoomBy(1.5)}>
                 <ZoomIn className="size-icon" aria-hidden="true" />
               </WorkbenchTool>
-              <WorkbenchTool label={label("ZoomOut")} shortcut="−" aria-keyshortcuts="-" disabled={view !== "2d"} onClick={() => zoomBy(1 / 1.5)}>
+              <WorkbenchTool label={label("ZoomOut")} shortcut="−" aria-keyshortcuts="-" onClick={() => zoomBy(1 / 1.5)}>
                 <ZoomOut className="size-icon" aria-hidden="true" />
               </WorkbenchTool>
-              <WorkbenchTool label={label("Fit")} shortcut="F" disabled={view !== "2d"} onClick={fit}>
+              <WorkbenchTool label={label("Fit")} shortcut="F" onClick={fit}>
                 <Scan className="size-icon" aria-hidden="true" />
               </WorkbenchTool>
               <Popover>
@@ -852,8 +1078,27 @@ export function SiteGeometryEditor({
           </div>
           <div className="geometry-canvas-column">
             <div className="geometry-canvas" ref={canvasRef}>
-              {view === "3d" && context ? (
-                <Geometry3D context={context} geometry={scenario === "upside" ? { ...geometry, buildings: upsideMassing ? [upsideMassing.building] : [] } : geometry} onSelect={selectId} />
+              {view === "3d" && scene ? (
+                <Geometry3D
+                  context={scene3d!}
+                  geometry={scenario === "upside" ? { ...geometry, buildings: massingBuildings } : geometry}
+                  selected={selected?.kind === "edge" ? null : selected?.id ?? null}
+                  parcels={parcelLayer}
+                  setbacks={shownSetbacks}
+                  drawing={drawingPreview}
+                  draft={draft}
+                  editable={editable}
+                  tool={drawing ? "draw" : "select"}
+                  viewport={viewport3d}
+                  onSelect={(id, ground) => {
+                    if (id === "draft") return;
+                    if (!id && ground && tool === "select" && pickParcelAt(ground)) return;
+                    selectId(id);
+                  }}
+                  onGround={(point) => !disabled && addPoint(point, 0.75)}
+                  onHover={setHover}
+                  onDrag={onDrag3d}
+                />
               ) : (
                 <div
                   ref={planRef}
@@ -861,39 +1106,48 @@ export function SiteGeometryEditor({
                   data-tool={tool}
                   data-scenario={scenario}
                   onPointerDown={(e) => {
-                    if (tool !== "pan" && e.button !== 1) return;
-                    e.preventDefault();
-                    panStart.current = { clientX: e.clientX, clientY: e.clientY, frame };
-                    e.currentTarget.setPointerCapture(e.pointerId);
+                    // Dragging the map pans with any tool, like a web map; shapes that drag themselves stop the event first.
+                    if (e.button !== 0 && e.button !== 1) return;
+                    if (e.button === 1) e.preventDefault();
+                    panStart.current = { clientX: e.clientX, clientY: e.clientY, frame, moved: false };
                   }}
                   onPointerMove={(e) => {
                     setHover(pointerSite(e));
-                    if (!panStart.current) return;
                     const begin = panStart.current;
+                    if (!begin) return;
+                    if (!begin.moved) {
+                      if (Math.hypot(e.clientX - begin.clientX, e.clientY - begin.clientY) < 3) return;
+                      begin.moved = true;
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                    }
                     setFrame({ ...begin.frame, x: begin.frame.x - (e.clientX - begin.clientX) * metresPerPixel, y: begin.frame.y + (e.clientY - begin.clientY) * metresPerPixel });
                   }}
                   onPointerLeave={() => setHover(null)}
                   onPointerUp={(e) => {
+                    panned.current = !!panStart.current?.moved;
                     panStart.current = null;
                     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
                   }}
                   onClick={(event) => {
+                    if (panned.current) {
+                      panned.current = false;
+                      return;
+                    }
                     if (pickingAlignment) {
                       setPickedSite(pointerSite(event));
                       setPickingAlignment(false);
                       return;
                     }
-                    if (tool === "select" && event.target === event.currentTarget.querySelector("svg")) return setSelected(null);
+                    const target = event.target as Element;
+                    if (tool === "select" && (target === event.currentTarget.querySelector("svg") || target.classList.contains("geometry-context-building"))) {
+                      if (!pickParcelAt(pointerSite(event))) {
+                        setSelected(null);
+                        setParcelPick(null);
+                      }
+                      return;
+                    }
                     if (!drawing || disabled) return;
-                    const next = pointerSite(event);
-                    const vertices = geometry.parcel?.geometry.flat(2) ?? [];
-                    const tolerance = metresPerPixel * 8;
-                    const nearest = vertices.reduce<GeometryPoint | undefined>(
-                      (best, p) =>
-                        Math.hypot(p[0] - next[0], p[1] - next[1]) < tolerance && (!best || Math.hypot(p[0] - next[0], p[1] - next[1]) < Math.hypot(best[0] - next[0], best[1] - next[1])) ? p : best,
-                      undefined,
-                    );
-                    setPoints((p) => [...p, nearest ?? next]);
+                    addPoint(pointerSite(event), metresPerPixel * 8);
                   }}
                 >
                   <svg viewBox={`0 0 ${width} ${height}`} aria-label={label("Plan")}>
@@ -916,6 +1170,17 @@ export function SiteGeometryEditor({
                           <title>{b.label}</title>
                         </path>
                       ))}
+                    {parcelLayer.items.map((p) => (
+                      <path key={p.id} className={`geometry-alkis-parcel${p.id === parcelLayer.selected ? " is-picked" : ""}`} d={pathFor(p.polygons, project)} />
+                    ))}
+                    {layers.parcels && metresPerPixel < 0.35 &&
+                      alkis.map((p) => {
+                        if (p.id === geometry.parcel?.id || !p.number) return null;
+                        const ring = p.polygons[0]?.[0];
+                        if (!ring?.length) return null;
+                        const [x, y] = project([ring.reduce((n, q) => n + q[0], 0) / ring.length, ring.reduce((n, q) => n + q[1], 0) / ring.length]);
+                        return x < 0 || y < 0 || x > width || y > height ? null : <text key={p.id} className="geometry-alkis-label" x={x} y={y}>{p.number}</text>;
+                      })}
                     {geometry.parcel && (
                       <path
                         className={`geometry-parcel${selected?.kind === "parcel" ? " is-selected" : ""}`}
@@ -953,6 +1218,12 @@ export function SiteGeometryEditor({
                           }
                         }}
                       />
+                    ))}
+                    {shownSetbacks.map((c) => (
+                      <g key={c.id} className="geometry-setback">
+                        {c.clear.length > 0 && <path className="geometry-setback-clear" d={pathFor(c.clear, project)} />}
+                        {c.conflict.length > 0 && <path className="geometry-setback-conflict" d={pathFor(c.conflict, project)} />}
+                      </g>
                     ))}
                     {scenario === "upside" && upsideMassing && (
                       <g className="geometry-scenario">
@@ -1031,6 +1302,7 @@ export function SiteGeometryEditor({
                         }}
                       />
                     ))}
+                    {draft && <path className="geometry-draft" d={pathFor(draft.footprint, project)} />}
                     {points.length > 0 && (
                       <>
                         <polyline className="geometry-drawing" points={[...points, ...(hover ? [hover] : [])].map((p) => project(p).join(",")).join(" ")} />
@@ -1068,12 +1340,130 @@ export function SiteGeometryEditor({
                   </div>
                 </div>
               )}
-              {!geometry.parcel && (
+              {!geometry.parcel && !alkis.length && (
                 <div className="geometry-empty">
                   <p className="text-ui-sm">{label("EmptyTitle")}</p>
                   <p className="text-ui-xs muted">{label("NeedParcel")}</p>
                   {emptyAction}
+                  <Button size="sm" variant="outline" disabled={berlin.isFetching} onClick={() => void berlin.refetch()}>
+                    {label(berlin.isFetching ? "MassingLoadingParcels" : "MassingLoadParcels")}
+                  </Button>
+                  {berlin.isError && <small className="text-ui-2xs muted">{(berlin.error as Error).message}</small>}
                 </div>
+              )}
+              {scenario === "baseline" && (geometry.parcel || alkis.length > 0) && (
+                <section className="geometry-massing" aria-label={label("MassingTitle")}>
+                  <ol className="geometry-massing-steps text-ui-2xs">
+                    {([["Parcel", !!geometry.parcel], ["Footprint", geometry.buildings.length > 0], ["Height", !!focusBuilding]] as const).map(([step, done], i) => (
+                      <li key={step} data-done={done}>
+                        {done ? <Check className="size-icon-sm" aria-hidden="true" /> : <span aria-hidden="true">{i + 1}</span>}
+                        {label(`MassingStep${step}`)}
+                      </li>
+                    ))}
+                  </ol>
+                  {pickedParcel ? (
+                    <div className="geometry-massing-row">
+                      <span className="text-ui-xs"><strong>{pickedParcel.label}</strong>{pickedParcel.area !== null && <span className="muted"> · {format(pickedParcel.area, 0)} m²</span>}</span>
+                      <Button size="sm" variant={geometry.parcel ? "outline" : "default"} disabled={disabled} onClick={() => adoptParcel(pickedParcel)}>
+                        {label(geometry.parcel ? "MassingReplaceParcel" : "MassingUseParcel")}
+                      </Button>
+                    </div>
+                  ) : !geometry.parcel ? (
+                    <p className="text-ui-xs muted">{label("MassingPickParcel")}</p>
+                  ) : drawing && tool === "building" ? (
+                    <p className="text-ui-xs muted">{label("MassingDrawHint")}</p>
+                  ) : !focusBuilding ? (
+                    geometry.buildings.length ? (
+                      <p className="text-ui-xs muted">{label("MassingSelectBuilding")}</p>
+                    ) : (
+                      <div className="geometry-massing-row">
+                        <span className="text-ui-xs muted">{label("MassingDrawPrompt")}</span>
+                        <Button size="sm" disabled={!canDraw} onClick={() => start("building")}>
+                          <Building2 className="size-icon-sm" aria-hidden="true" />
+                          {label("MassingDrawFootprint")}
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
+                  {focusBuilding && !pickedParcel && !(drawing && tool === "building") && (() => {
+                    const check = setbackChecks.find((c) => c.id === focusBuilding.id);
+                    const bgf = floorArea(focusBuilding);
+                    return (
+                      <>
+                        <div className="geometry-massing-fields">
+                          <Field label={label("MassingFloors")}>
+                            <div className="geometry-stepper">
+                              <Button size="icon-sm" variant="outline" aria-label={label("MassingFloorsLess")} disabled={disabled || focusBuilding.fullStoreys <= 1} onClick={() => setStoreys(focusBuilding, { fullStoreys: focusBuilding.fullStoreys - 1 })}>
+                                <Minus className="size-icon-sm" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={200}
+                                step={1}
+                                disabled={disabled}
+                                value={focusBuilding.fullStoreys}
+                                aria-label={label("MassingFloors")}
+                                onChange={(e) => {
+                                  const n = e.target.valueAsNumber;
+                                  if (Number.isInteger(n) && n >= 1 && n <= 200) setStoreys(focusBuilding, { fullStoreys: n });
+                                }}
+                              />
+                              <Button size="icon-sm" variant="outline" aria-label={label("MassingFloorsMore")} disabled={disabled || focusBuilding.fullStoreys >= 200} onClick={() => setStoreys(focusBuilding, { fullStoreys: focusBuilding.fullStoreys + 1 })}>
+                                <Plus className="size-icon-sm" />
+                              </Button>
+                            </div>
+                          </Field>
+                          <span className="geometry-massing-times" aria-hidden="true">×</span>
+                          <Field label={label("MassingFloorHeight")}>
+                            <Input
+                              type="number"
+                              min={2}
+                              max={20}
+                              step={0.1}
+                              disabled={disabled}
+                              value={focusBuilding.storeyHeight}
+                              onChange={(e) => {
+                                const n = e.target.valueAsNumber;
+                                if (Number.isFinite(n) && n > 0 && n <= 20) setStoreys(focusBuilding, { storeyHeight: n });
+                              }}
+                            />
+                          </Field>
+                        </div>
+                        <dl className="geometry-massing-values text-ui-xs">
+                          <dt>{label("MassingHeight")}</dt>
+                          <dd>{format(buildingHeight(focusBuilding), 1)} m</dd>
+                          <dt>BGF</dt>
+                          <dd><strong>{bgf === null ? "–" : `${format(bgf, 0)} m²`}</strong></dd>
+                          {check && (
+                            <>
+                              <dt>{label("MassingSetback")}</dt>
+                              <dd>{label("MassingSetbackDepth").replace("{depth}", format(check.depth, 1))}</dd>
+                            </>
+                          )}
+                        </dl>
+                        {check && (
+                          <p className="geometry-massing-check text-ui-xs" data-ok={check.ok} role="status">
+                            <span className="geometry-massing-swatch" aria-hidden="true" />
+                            {check.ok
+                              ? label("MassingSetbackClear")
+                              : [
+                                  check.outsideParcel > 0.01 && label("MassingSetbackOutside").replace("{area}", format(check.outsideParcel, 0)),
+                                  check.overlap > 0.01 && label("MassingSetbackOverlap").replace("{area}", format(check.overlap, 0)),
+                                ].filter(Boolean).join(" · ") || label("MassingSetbackFailed")}
+                          </p>
+                        )}
+                        {view === "2d" && scene && (
+                          <Button size="sm" variant="outline" className="geometry-massing-action" onClick={() => setView("3d")}>
+                            <Box className="size-icon-sm" aria-hidden="true" />
+                            {label("MassingExtrude3D")}
+                          </Button>
+                        )}
+                        <small className="text-ui-2xs muted">{label(view === "3d" ? "MassingDragHint" : "MassingSetbackNote")}</small>
+                      </>
+                    );
+                  })()}
+                </section>
               )}
               {scenario === "upside" && upsideMassing && (
                 <div className="geometry-canvas-caption" role="status">
@@ -1384,6 +1774,16 @@ export function SiteGeometryEditor({
           setPickingAlignment(true);
         }}
         onChange={(planOverlay) => update({ planOverlay })}
+        parcel={geometry.parcel}
+        envelopeReviewed={!!geometry.envelope?.reviewed}
+        onTrace={(traced) => {
+          // A new trace replaces earlier unreviewed traced lines; lines a person drew or reviewed stay.
+          update({
+            envelope: traced.envelope ?? geometry.envelope,
+            mandatoryLines: [...geometry.mandatoryLines.filter((l) => l.reviewed || !l.id.startsWith(TRACED_LINE_PREFIX)), ...traced.lines],
+          });
+          if (traced.envelope) setSelected({ kind: "envelope", id: "envelope" });
+        }}
       />
     </>
   );

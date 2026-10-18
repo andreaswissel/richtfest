@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { evidenceRequestSchema } from "./evidence";
+import { evidenceRequestSchema, planLinesRequestSchema } from "./evidence";
 import { siteEvidenceProposals } from "./schema";
 import { mapLocationSchema, resolveAssessmentLocation } from "./site-location";
 import { lookupBerlinContext } from "./berlin-site-context";
@@ -47,6 +47,26 @@ export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
         if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
       const [row]=await tx.update(siteEvidenceProposals).set(values).where(and(eq(siteEvidenceProposals.id,proposal.id),eq(siteEvidenceProposals.tenantId,d.tenantId))).returning();
       await d.audit(tx,"feasibility.evidence.completed","site_evidence_proposal",row.id,{projectId,status:row.status});return row;
+    });res.json(ok(saved));
+  }catch(e){next(e);}});
+  // Traces Baugrenzen and Baulinien on an aligned plan page as an unreviewed proposal; the client maps them onto the site and a person corrects the corners.
+  router.post("/projects/:projectId/evidence/lines",async(req,res,next)=>{try{
+    const {d,projectId,host}=await deps(req,true); d.requirePermission("agent:run");
+    if(!host.traceLines)throw error(503,"not_configured","Plan line tracing is unavailable");
+    const input=planLinesRequestSchema.parse(req.body);
+    if(!(await host.listSources(projectId)).some(s=>s.versionId===input.versionId))throw error(404,"not_found","PDF revision not found in project");
+    const proposal=await d.db.transaction(async(tx:any)=>{
+      if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
+      const [row]=await tx.insert(siteEvidenceProposals).values({tenantId:d.tenantId,projectId,versionId:input.versionId,provider:input.provider,status:"running",request:{kind:"lines",...input},createdBy:d.actorId}).returning();
+      await d.audit(tx,"feasibility.plan_lines.started","site_evidence_proposal",row.id,{projectId,versionId:input.versionId,provider:input.provider,page:input.page});return row;
+    });
+    let values:any;
+    try { const result=await host.traceLines(projectId,input); values=result.status==="completed"?{status:result.status,payload:result.output,model:result.model}:{status:"unconfigured",error:"Connect a personal or workspace credential for the selected provider"}; }
+    catch { values={status:"failed",error:"Plan line tracing failed. Check the page and provider connection, then retry. No geometry was changed."}; }
+    const saved=await d.db.transaction(async(tx:any)=>{
+      if (!(await d.project(projectId, tx))) throw error(404, "not_found", "Project not found");
+      const [row]=await tx.update(siteEvidenceProposals).set(values).where(and(eq(siteEvidenceProposals.id,proposal.id),eq(siteEvidenceProposals.tenantId,d.tenantId))).returning();
+      await d.audit(tx,"feasibility.plan_lines.completed","site_evidence_proposal",row.id,{projectId,status:row.status});return row;
     });res.json(ok(saved));
   }catch(e){next(e);}});
   router.post("/projects/:projectId/evidence/proposals/:proposalId/review",async(req,res,next)=>{try{

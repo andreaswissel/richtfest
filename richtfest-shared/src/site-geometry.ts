@@ -41,6 +41,46 @@ const reviewed=(e:{source:string;sourceDate:string|null;reviewed:boolean})=>e.re
 export function createDefaultSetbacks(parcel:GeometryEvidence,distance:number|null=null):EdgeSetback[]{return parcel.geometry.flatMap((p,polygonIndex)=>p.flatMap((r,ringIndex)=>r.slice(0,-1).map((_,edgeIndex)=>({id:`edge-${polygonIndex}-${ringIndex}-${edgeIndex}`,polygonIndex,ringIndex,edgeIndex,distance,source:"",sourceDate:null,reviewed:false,profile:"manual" as const,heightSource:"manual" as const,assessmentHeight:null,reviewedHeight:null}))));}
 /** H is the reviewed §6 wall/roof assessment height, not automatically total model height. */
 export function deriveBerlinSetback(profile:"standard"|"commercial"|"low_class"|"boundary_exception",height:number):number|null {if(!Number.isFinite(height)||height<0)return null;if(profile==="boundary_exception")return null;return profile==="low_class"?3:Math.max(3,height*(profile==="commercial"?.2:.4));}
+/** Berlin Abstandsfläche (§6 BauO Bln): one rectangle of depth `depth` in front of every wall, corners excluded, never over the building itself. */
+export function berlinSetbackArea(footprint:Multi,depth:number):Multi {
+ if(!(depth>0)||!footprint.length)return [];
+ const strips:Multi=[];
+ for(const polygon of footprint)for(const ring of polygon)for(let i=0;i<ring.length-1;i++){
+  const a=ring[i]!,b=ring[i+1]!,length=Math.hypot(b[0]-a[0],b[1]-a[1]);if(length<EPS)continue;
+  // The wall faces away from the polygon interior; probing a centimetre beside its midpoint picks the side for any winding or hole.
+  let nx=(b[1]-a[1])/length,ny=-(b[0]-a[0])/length;const mid:Point=[(a[0]+b[0])/2+nx*.01,(a[1]+b[1])/2+ny*.01];
+  if(inside(mid,polygon[0]!)&&!polygon.slice(1).some(h=>inside(mid,h))){nx=-nx;ny=-ny;}
+  strips.push([[a,b,[b[0]+nx*depth,b[1]+ny*depth],[a[0]+nx*depth,a[1]+ny*depth],a]]);
+ }
+ return strips.length?difference(clip.union(strips[0]!,...strips.slice(1)),footprint):[];
+}
+export type SetbackAreaCheck={id:string;height:number;depth:number;area:Multi;clear:Multi;conflict:Multi;outsideParcel:number;overlap:number;ok:boolean};
+/**
+ * Live Abstandsflächen check for draft massing (standard profile, 0.4 H, min 3 m): areas must stay on the parcel and must not
+ * overlap the areas or footprints of other buildings. Indicative only; the reviewed per-edge setbacks remain the calculation.
+ */
+export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;footprint:Multi;height:number}[];neighbours?:{footprint:Multi;area:Multi}[]}):SetbackAreaCheck[]{
+ // Clipping runs relative to a local origin: raw UTM magnitudes make near-coincident edges fail in the sweep line.
+ const o=input.parcel?.[0]?.[0]?.[0]??input.buildings[0]?.footprint[0]?.[0]?.[0]??[0,0] as Point;
+ const shift=(g:Multi,dx:number,dy:number):Multi=>g.map(p=>p.map(r=>r.map(([x,y])=>[x+dx,y+dy] as Point)));
+ const local=(g:Multi)=>shift(g,-o[0],-o[1]),site=(g:Multi)=>shift(g,o[0],o[1]);
+ /** Unions piece by piece and skips a piece the sweep cannot resolve rather than losing the whole result. */
+ const merge=(pieces:Multi[]):Multi=>pieces.reduce<Multi>((acc,g)=>{if(!acc.length)return g;try{return clip.union(acc,g);}catch{return acc;}},[]);
+ const parcel=input.parcel&&local(input.parcel);
+ const neighbours=(input.neighbours??[]).map(n=>({footprint:local(n.footprint),area:local(n.area)}));
+ const areas=input.buildings.map(b=>{const footprint=local(b.footprint),depth=deriveBerlinSetback("standard",b.height)??3;try{return {...b,footprint,depth,area:berlinSetbackArea(footprint,depth)};}catch{return {...b,footprint,depth,area:[] as Multi};}});
+ return areas.map(b=>{
+  try{
+   const outside=parcel?difference(b.area,parcel):b.area;
+   const others=[...areas.filter(x=>x.id!==b.id).flatMap(x=>[x.area,x.footprint]),...neighbours.flatMap(n=>[n.area,n.footprint])].filter(g=>g.length);
+   const overlaps=others.flatMap(g=>{try{const x=intersection(b.area,g);return geometryArea(x)>.01?[x]:[];}catch{return [];}});
+   const overlap=merge(overlaps),outsideArea=geometryArea(outside);
+   const conflict=merge([...(outsideArea>.01?[outside]:[]),...(overlap.length?[overlap]:[])]);
+   let clear=b.area;try{if(conflict.length)clear=difference(b.area,conflict);}catch{/* keep the full area as drawn */}
+   return {id:b.id,height:b.height,depth:b.depth,area:site(b.area),clear:site(clear),conflict:site(conflict),outsideParcel:outsideArea,overlap:geometryArea(overlap),ok:outsideArea<=.01&&geometryArea(overlap)<=.01};
+  }catch{return {id:b.id,height:b.height,depth:b.depth,area:site(b.area),clear:site(b.area),conflict:[],outsideParcel:0,overlap:0,ok:false};}
+ });
+}
 /** Berlin BauO §2(12), current July 2026: equality at 2/3 qualifies; elevation must exceed 1.40m. */
 export function classifyBerlinStorey(input:{areaAbove230:number|null;referenceArea:number;averageTopAboveTerrain:number|null;reviewed:boolean}):"full"|"not_full"|"unresolved" {
  if(!input.reviewed||input.areaAbove230===null||input.averageTopAboveTerrain===null||(!Number.isFinite(input.referenceArea)||input.referenceArea<=0)||input.areaAbove230<0||!Number.isFinite(input.areaAbove230)||!Number.isFinite(input.averageTopAboveTerrain))return "unresolved";

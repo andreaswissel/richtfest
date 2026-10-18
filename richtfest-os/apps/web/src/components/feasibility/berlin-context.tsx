@@ -13,12 +13,14 @@ import { useBerlinContext, useSiteDiscovery, type BerlinParcel as Parcel } from 
 import { SiteParcelMap } from "./site-parcel-map";
 const VISIBLE_PARCELS = 5;
 
-export function BerlinContext({ projectId, disabled, onAdopt, onParcel, siteLocator, adopted }: {
+export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign, siteLocator, adopted }: {
   projectId: string;
   disabled: boolean;
   siteLocator?: SiteAssessmentInput["siteLocator"];
   onParcel?: (parcel: Parcel) => void;
   onAdopt: (value: SiteAssessmentConstraint, parcel: Parcel) => void;
+  /** Opens the Design step on the parcel; called after adopting it when it is not the site yet. */
+  onDesign?: () => void;
   /** The parcel already in the assessment draft. */
   adopted?: { id: string; label: string; area: number | null; reviewed: boolean } | null;
 }) {
@@ -107,6 +109,9 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, siteLoca
             <div className="site-map-panel-actions">
               {adopted?.id === parcel.id ? <Badge variant="outline">{label("AdoptedShort")}</Badge>
                 : <Button size="sm" disabled={disabled || parcel.area === null} onClick={() => adopt(parcel)}>{label("UseArea")}</Button>}
+              {onDesign && (adopted?.id === parcel.id
+                ? <Button size="sm" variant="outline" onClick={onDesign}>{label("OpenDesign")}</Button>
+                : <Button size="sm" variant="outline" disabled={disabled || parcel.area === null} onClick={() => { adopt(parcel); onDesign(); }}>{label("DesignHere")}</Button>)}
               <a className="text-ui-xs underline" href={parcel.sourceUrl} target="_blank" rel="noreferrer">{label("Source")} ↗</a>
             </div>
           </>} />

@@ -1,5 +1,5 @@
 import {describe,test,expect} from "bun:test";
-import {createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
+import {createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
 const X=392000,Y=5820000;
 const rect=(x:number,y:number,w:number,h:number):GeometryMultiPolygon=>[[[[X+x,Y+y],[X+x+w,Y+y],[X+x+w,Y+y+h],[X+x,Y+y+h],[X+x,Y+y]]]];
 const ev=(geometry:GeometryMultiPolygon,id="p"):GeometryEvidence=>({id,label:id,geometry,source:"Synthetic test survey",sourceDate:"2026-10-19",reviewed:true});
@@ -41,3 +41,31 @@ test("editing full floors recomputes automatic setbacks and revokes height revie
 test("generator yields distinct alternatives on fully usable parcel and none when erased",()=>{const input=fixture();const cs=generateMassingCandidates(input,{grz:1,gfz:3,maxFullStoreys:3,storeyHeight:3});expect(cs.length).toBeGreaterThanOrEqual(2);expect(new Set(cs.map(c=>JSON.stringify(c.building.footprint.geometry))).size).toBe(cs.length);input.exclusions=[input.parcel!];expect(generateMassingCandidates(input,{grz:1,gfz:3,maxFullStoreys:3,storeyHeight:3})).toEqual([]);});
 test("operation budget rejects dense topology before quadratic validation",()=>{const ring:Array<[number,number]>=Array.from({length:2400},(_,i)=>[X+10*Math.cos(i*Math.PI/1200),Y+10*Math.sin(i*Math.PI/1200)]);ring.push(ring[0]!);const g:GeometryMultiPolygon=[[ring]];expect(validateGeometry(g)).toEqual(["geometry_too_complex"]);const input=fixture();const smaller:GeometryMultiPolygon=[[ring.slice(0,1500).concat([ring[0]!])]];input.parcel=ev(smaller);input.envelope=ev(smaller);const r=calculateSiteGeometry(input);expect(r.status).toBe("incomplete");expect(r.issues.map(i=>i.code)).toContain("geometry_too_complex");expect(r.usableGeometry).toEqual([]);});
 test("operation budget accounts for many curved setback cuts",()=>{const ring:Array<[number,number]>=Array.from({length:300},(_,i)=>[X+200*Math.cos(i*Math.PI/150),Y+200*Math.sin(i*Math.PI/150)]);ring.push(ring[0]!);const input=fixture();input.parcel=ev([[ring]]);input.envelope=input.parcel;input.setbacks=createDefaultSetbacks(input.parcel,100);const r=calculateSiteGeometry(input);expect(r.status).toBe("incomplete");expect(r.issues.map(i=>i.code)).toContain("geometry_too_complex");expect(generateMassingCandidates(input,{grz:.5,gfz:1.5,maxFullStoreys:3,storeyHeight:3})).toEqual([]);});
+
+test("Abstandsflächen are wall rectangles of 0.4 H (min 3 m) and turn red only where they leave the parcel or overlap",()=>{
+ // 10 × 6 m footprint, 12.5 m high: depth 5 m on every wall, corners excluded, for either winding.
+ const footprint=rect(10,10,10,6),area=(g:GeometryMultiPolygon)=>Math.round(geometryArea(g)*100)/100;
+ expect(area(berlinSetbackArea(footprint,5))).toBe(2*10*5+2*6*5);
+ expect(area(berlinSetbackArea([[[...footprint[0]![0]!].reverse()]],5))).toBe(160);
+ // L-shape: the inner corner walls face outwards too, and nothing lands on the building.
+ const l:GeometryMultiPolygon=[[[[X,Y],[X+10,Y],[X+10,Y+4],[X+4,Y+4],[X+4,Y+10],[X,Y+10],[X,Y]]]];
+ expect(geometryArea(berlinSetbackArea(l,3))).toBeGreaterThan(0);
+ expect(geometryArea(intersectGeometry(berlinSetbackArea(l,3),l))).toBeLessThan(1e-6);
+ const parcel=rect(0,0,40,30);
+ // Low building in the middle: 3 m minimum fits.
+ let [check]=checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:6}]});
+ expect(check!.depth).toBe(3);expect(check!.ok).toBe(true);expect(check!.conflict).toEqual([]);
+ // 30 m high: 12 m deep areas cross the west (x<0) and south (y<0) boundaries by 2 m each, over the wall width only.
+ [check]=checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:30}]});
+ expect(check!.depth).toBe(12);expect(check!.ok).toBe(false);
+ expect(Math.round(check!.outsideParcel*100)/100).toBe(2*6+2*10);
+ expect(Math.round(geometryArea(check!.clear)*100)/100).toBe(Math.round((2*10*12+2*6*12-32)*100)/100);
+ // Two buildings whose 3 m areas overlap by 1 m between them: both are flagged.
+ const checks=checkSetbackAreas({parcel,buildings:[{id:"a",footprint:rect(5,10,6,6),height:6},{id:"b",footprint:rect(16,10,6,6),height:6}]});
+ expect(checks.map(c=>c.ok)).toEqual([false,false]);expect(Math.round(checks[0]!.overlap*100)/100).toBe(6);
+ // A neighbour's area only matters where it meets ours.
+ const neighbour=rect(-20,10,10,6);
+ expect(checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:6}],neighbours:[{footprint:neighbour,area:berlinSetbackArea(neighbour,3)}]})[0]!.ok).toBe(true);
+ const close=rect(25,10,6,6);
+ expect(checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:6}],neighbours:[{footprint:close,area:berlinSetbackArea(close,3)}]})[0]!.ok).toBe(false);
+});

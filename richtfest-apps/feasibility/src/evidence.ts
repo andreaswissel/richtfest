@@ -27,4 +27,19 @@ export type EvidenceHost = {
   listSources(projectId: string): Promise<EvidenceSource[]>;
   importOfficialPdf(projectId: string, url: string): Promise<EvidenceSource>;
   interpret(projectId: string, input: EvidenceRequest): Promise<{ status: "completed"; output: EvidenceOutput; model: string } | { status: "unconfigured" }>;
-};
+} & Partial<PlanLinesHost>;
+
+/** Baugrenze/Baulinie tracing: one plan page cropped around the aligned parcel; coordinates are crop-normalised (x right, y down). */
+const crop = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().min(0.01).max(1), height: z.number().min(0.01).max(1) }).strict()
+  .refine(c => c.x + c.width <= 1.0001 && c.y + c.height <= 1.0001, "Crop must stay on the page");
+const unit = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]);
+/** `site` is the aligned parcel outline in the same crop coordinates, so the model knows which window matters. */
+export const planLinesRequestSchema = z.object({ versionId: z.string().uuid(), page: z.number().int().min(1).max(10000), provider: z.enum(["openai", "anthropic"]), crop, site: z.array(z.tuple([z.number().min(-1).max(2), z.number().min(-1).max(2)])).min(3).max(200) }).strict();
+export type PlanLinesRequest = z.infer<typeof planLinesRequestSchema>;
+export const planLinesOutputSchema = z.object({
+  baugrenzen: z.array(z.object({ points: z.array(unit).min(3).max(200), reason: z.string().trim().min(1).max(1000) }).strict()).max(10),
+  baulinien: z.array(z.object({ points: z.array(unit).min(2).max(200), reason: z.string().trim().min(1).max(1000) }).strict()).max(10),
+  limitations: z.array(z.string().max(1000)).max(20),
+}).strict();
+export type PlanLinesOutput = z.infer<typeof planLinesOutputSchema>;
+export type PlanLinesHost = { traceLines(projectId: string, input: PlanLinesRequest): Promise<{ status: "completed"; output: PlanLinesOutput; model: string } | { status: "unconfigured" }> };
