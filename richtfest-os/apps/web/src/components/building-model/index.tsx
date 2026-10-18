@@ -17,6 +17,7 @@ import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
+import { ZoningCheck } from "./zoning-check";
 import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
@@ -432,7 +433,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   // The agreed sound insulation level belongs to the building; it is a requirement, not an observation.
   const saveBuildingProperty = useMutation({
     mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
-      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
+      // Zoning check areas are observed facts of the site and buildings; everything else here is a requirement.
+      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: save.key === "parcelArea" || save.key === "footprintArea" ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -463,6 +465,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const saveStoreyLevel = useMutation({
     mutationFn: ({ storeyId, level }: { storeyId: string; level: number | null }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       entityType: "storey", entityId: storeyId, propertyKey: "level", value: level, unit: null, provenance: "manual", evidence: [] }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const saveStoreyProperty = useMutation({
+    mutationFn: ({ storeyId, save }: { storeyId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+      entityType: "storey", entityId: storeyId, propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -818,6 +827,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onSave={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
               <BebauungsplanReader documents={((componentSources.data as { documents?: ComponentSourceDocument[] } | undefined)?.documents) ?? []} t={t} pending={readBebauungsplan.isPending}
                 result={readBebauungsplan.data?.summary} onRead={(sourceVersionId) => readBebauungsplan.mutate(sourceVersionId)} />
+              {model.buildings[0].componentProperties.bebauungsplan?.value === "applies" && model.buildings[0].componentProperties.bebauungsplan.reviewStatus !== "rejected" && <>
+                <h2 className="building-model-panel-title">{t("buildingZoningCheck")}</h2>
+                <ZoningCheck model={model} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} t={t}
+                  pending={saveBuildingProperty.isPending || saveStoreyProperty.isPending || reviewComponentProperty.isPending}
+                  onSaveBuilding={(buildingId, save) => saveBuildingProperty.mutate({ buildingId, save })} onSaveStorey={(storeyId, save) => saveStoreyProperty.mutate({ storeyId, save })}
+                  onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+              </>}
             </>}
             <h2 className="building-model-panel-title">{t("noiseNav")}</h2>
             <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise`}>{t("buildingExteriorNoiseOpen")} →</Link>

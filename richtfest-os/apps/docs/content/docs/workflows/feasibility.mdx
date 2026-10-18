@@ -1,0 +1,51 @@
+---
+title: Feasibility
+description: Compare keeping, densifying or rebuilding a site by residual land value, and export the study as a PDF report.
+---
+
+The project view **Feasibility** answers the first economic question for a site: what may the land cost, if we keep the building, densify it or build new? It is an indicative residual land value calculation, not a market valuation, lending value (BelWertV) or permit planning.
+
+## Site
+
+Enter the **parcel area**, the **asking price** (optional) and the **acquisition costs** in percent (Grunderwerbsteuer, notary, land registry, broker). An approved parcel area from the building model's [zoning check](/docs/workflows/project-onboarding#sound-insulation-preparation) is filled in for a new study. The approved GRZ and GFZ are shown with a link to the building model.
+
+## Scenarios
+
+The table has one column per scenario. Choose **Sale** (units sold) or **Rental** (net rent capitalised) for each one. Rows run in task order: areas, costs, revenue and profit, then the result.
+
+| Scenario | Uses |
+| --- | --- |
+| Keep existing | Existing living area and renovation cost |
+| Densify & renovate | Existing living area and renovation cost, plus new floor area, living area ratio, construction cost and contingency |
+| New build | New floor area, living area ratio, construction cost, contingency and demolition |
+
+All scenarios use other costs, financing (percent of costs), marketing (percent of revenue), subsidies and developer profit (percent of revenue). Inputs a scenario does not use show "—". Demolition, other costs and subsidies may stay empty; any other missing input makes the scenario **incomplete** and names what is missing.
+
+**Where values come from.** A new study starts with:
+
+- **Model**: new floor area for a new build as GFZ × parcel area, and for densification that maximum minus the approved Geschossfläche of existing or retained buildings. Only approved building-model values are used.
+- **Standard**: construction cost KG 300–700 (3,000 €/m² living area), contingency 20 % and capitalisation rate 3.8 %, from Richtfest's calculation standards (May 2026). These are experience values to check for each project.
+
+Both carry a badge and stay unreviewed until you tick **reviewed**. A value you type is yours and counts as reviewed. The result line says how many inputs used are still unreviewed.
+
+## Result
+
+For each scenario: living area, revenue, total costs excluding land, developer profit, **residual land value**, the value per m² of parcel and, with an asking price, the **headroom** (residual land value minus asking price; negative means the price is not covered).
+
+The calculation (`residual_land_value_v1`) is deterministic: revenue is living area × sale price, or living area × monthly rent × 12 × (1 − operating costs) ÷ capitalisation rate. Costs are renovation and construction per m² living area (contingency on construction only), demolition and other costs, financing on those and marketing on revenue, less subsidies. Residual land value = (revenue − costs − profit) ÷ (1 + acquisition costs). The table recalculates as you type.
+
+**Save study** stores the inputs. Every save is kept as an immutable revision and recorded in the audit log with each scenario's result. If someone else saved in the meantime, reload instead of overwriting.
+
+## Report
+
+**Download report** creates a PDF of the saved study: the scenario comparison, missing inputs, the approved planning-law figures, every input with its source and review state, notes and a disclaimer on each page. Unsaved changes are not in the report; save first. The file name carries the revision.
+
+## Access and API
+
+The view follows project access: project readers can open it and download the report; project writers can edit and save. The app lives in `richtfest-apps/feasibility` and is mounted at `/api/feasibility`:
+
+- `GET /api/feasibility/projects/:id/study` returns the study (or an unsaved starting point with revision 0), the results per scenario, the approved site figures and the method.
+- `PUT /api/feasibility/projects/:id/study` saves `{ baseRevision, site, scenarios, notes }`.
+- `GET /api/feasibility/projects/:id/study/report.pdf?lang=de|en` returns the PDF.
+
+Migration `0048_feasibility_studies` adds the study and revision tables.

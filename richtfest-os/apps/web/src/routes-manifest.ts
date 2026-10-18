@@ -44,6 +44,7 @@ export const performanceRoutes = [
   "/projects/:id?view=analytics",
   "/projects/:id?view=inquiries",
   "/projects/:id?view=noise",
+  "/projects/:id?view=feasibility",
   "/settings",
   "/settings/models",
   "/settings/agents",

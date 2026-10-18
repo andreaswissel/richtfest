@@ -1,0 +1,14 @@
+/* Feasibility: a dense input matrix, one column per scenario, results last. */
+.feasibility { display: flex; flex-direction: column; gap: var(--section); }
+.feasibility-site { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 16px; }
+.feasibility-site-field { display: flex; flex-direction: column; gap: 2px; }
+.feasibility-table { table-layout: fixed; width: 100%; min-width: 640px; }
+.feasibility-table td, .feasibility-table th { vertical-align: top; padding-block: 4px; }
+.feasibility-table col.feasibility-label-col { width: 28%; }
+.feasibility-scenario-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.feasibility-group { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); font-size: var(--ui-2xs); }
+.feasibility-cell { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.feasibility-cell input { text-align: right; min-width: 0; font-variant-numeric: tabular-nums; }
+.feasibility-proposal { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.feasibility-proposal label { display: inline-flex; align-items: center; gap: 4px; }
+.feasibility-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

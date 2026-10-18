@@ -13,6 +13,8 @@ import { componentsDeps } from "./components-host";
 import { createRouter as createProjectsRouter } from "@richtfest/projects";
 import { createRouter as createKnowledgeRouter } from "@richtfest/knowledge";
 import { createRouter as createSupportRouter } from "@richtfest/support";
+import { createRouter as createFeasibilityRouter } from "@richtfest/feasibility";
+import { feasibilityDeps } from "./feasibility-host";
 import { supportDeps } from "./support-host";
 import { createRouter as createPublicDataRouter } from "@richtfest/public-data";
 import { publicDataDeps } from "./public-data-host";
@@ -74,6 +76,7 @@ export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; 
   app.use("/api/knowledge", createKnowledgeRouter((req) => knowledgeDeps(db, req, options.providerFetch, options.supervisorRuntime)));
   app.use("/api/support", createSupportRouter((req) => supportDeps(db, req, options.providerFetch)));
   app.use("/api/public-data", createPublicDataRouter((req) => publicDataDeps(db, req)));
+  app.use("/api/feasibility", createFeasibilityRouter((req) => feasibilityDeps(db, req)));
   app.get("/api/agent/readiness", async (req, res, next) => {
     try {
       const actor = (req as any).actor;

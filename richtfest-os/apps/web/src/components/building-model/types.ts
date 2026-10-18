@@ -237,10 +237,10 @@ export type BuildingModel = {
   automaticPlanProcessing: BuildingAutomaticPlanProcessing[];
   /** Plan sets replaced by another revision; hidden from the model, restorable. */
   supersededSources: BuildingSupersededSource[];
-  storeys: Array<{ id: string; name?: string; levelIndex?: number | null; componentProperties?: Record<string, BuildingComponentPropertyState> }>;
+  storeys: Array<{ id: string; name?: string; levelIndex?: number | null; buildingId?: string; componentProperties?: Record<string, BuildingComponentPropertyState> }>;
   /** Sent component data requests and what has been answered since. */
   /** Buildings with their shared properties, such as the agreed sound insulation level. */
-  buildings: Array<{ id: string; name: string; componentProperties: Record<string, BuildingComponentPropertyState> }>;
+  buildings: Array<{ id: string; name: string; constructionState?: string; componentProperties: Record<string, BuildingComponentPropertyState> }>;
   states: Record<BuildingModelState, BuildingRegion[]>;
   updatedAt?: string;
 };
@@ -564,11 +564,12 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
       if (!item || typeof item !== "object") return [];
       const row = item as RecordData;
       return typeof row.id === "string" ? [{ id: row.id, name: typeof row.name === "string" ? row.name : undefined, levelIndex: typeof row.levelIndex === "number" ? row.levelIndex : null,
+        buildingId: typeof row.buildingId === "string" ? row.buildingId : undefined,
         componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "storey" && property.entityId === row.id)) }] : [];
     }) : [],
     buildings: Array.isArray(raw.buildings) ? raw.buildings.flatMap((item: unknown) => {
       const row = item && typeof item === "object" ? item as RecordData : null;
-      return row && typeof row.id === "string" ? [{ id: row.id, name: asString(row.name), componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "building" && property.entityId === row.id)) }] : [];
+      return row && typeof row.id === "string" ? [{ id: row.id, name: asString(row.name), constructionState: typeof row.constructionState === "string" ? row.constructionState : undefined, componentProperties: componentStates(properties.filter((property: RecordData) => property.entityType === "building" && property.entityId === row.id)) }] : [];
     }) : [],
     states: {
       existing: withPlanSourcePage(source.states?.existing ? regions(source.states.existing) : entityRowsForState("existing")),

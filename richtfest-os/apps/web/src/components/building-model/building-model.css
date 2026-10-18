@@ -354,3 +354,8 @@
 .building-model-role-swatch.is-none { background: transparent; border: 1px dashed oklch(.7 0 0); }
 .building-model-description-row { display: flex; width: 100%; align-items: center; gap: 6px; }
 .building-model-description-row [data-slot="native-select-wrapper"], .building-model-description-row > :first-child { flex: 1 1 auto; min-width: 0; }
+
+/* Zoning check: one dense line per ratio, limit and status. */
+.building-model-zoning-results { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.building-model-zoning-result { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.building-model-zoning-result > .muted { flex-basis: 100%; }

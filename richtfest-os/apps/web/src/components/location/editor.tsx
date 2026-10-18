@@ -20,6 +20,7 @@ import {
   Hand,
   Save,
   Layers,
+  Download,
 } from "lucide-react";
 import type {
   LocationState,
@@ -1201,6 +1202,17 @@ export function LocationEditor({
                 </>
               )}
               <EnvironmentSurveyButton projectId={projectId} />
+              <div className="location-export" role="group" aria-label={t("locationExport")}>
+                <span className="text-ui-xs font-medium">{t("locationExport")}</span>
+                {(["dxf", "geojson"] as const).map((format) => (
+                  <Button key={format} asChild variant="outline" size="xs">
+                    <a href={`/api/projects/${projectId}/location/export?format=${format}`} download title={t("locationExportHint")}>
+                      <Download aria-hidden="true" />
+                      {format === "dxf" ? "DXF" : "GeoJSON"}
+                    </a>
+                  </Button>
+                ))}
+              </div>
               {!!state.data?.context?.publicReleases?.length && (
                 <PublicDataStatus projectId={projectId} state={state.data} address={address} />
               )}

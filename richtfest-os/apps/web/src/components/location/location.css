@@ -316,3 +316,6 @@
     border-left: 0;
   }
 }
+
+/* Site export: a labeled row of format downloads. */
+.location-export { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

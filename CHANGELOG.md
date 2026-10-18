@@ -24,6 +24,14 @@
 
 ## 2026-10-18
 
+- **Feasibility**: a new project view compares keeping the building, densifying it or building new by residual land value, with sale or rental per scenario. Floor areas start from the approved GFZ and parcel area, cost standards are marked until reviewed, missing inputs are named, and **Download report** creates a PDF of the saved study for banks or investors. Includes database migration 0048.
+
+- Building model: a **zoning check** compares GRZ, GFZ and Vollgeschosse with the approved Bebauungsplan limits once parcel area, Grundfläche and Geschossfläche per Vollgeschoss are entered and approved.
+
+- 3D location: **Export site** downloads the surrounding buildings, trees, massing boxes and address point as DXF or GeoJSON in the official UTM grid, for CAD and GIS.
+
+- Building model: **Read Bebauungsplan** now also proposes the Art und Maß der baulichen Nutzung from the plan's text (Baugebiet, GRZ, GFZ, Vollgeschosse, heights, Bauweise), each quoting its sentence and approved per value. Values drawn only in the Planzeichnung are not read.
+
 - Exterior noise suggests the mapped roads and railways near the building, using class-based screening radii measured from the placed plan or the official footprint. Each suggestion can be added individually, or all at once. 3D location shows the same suggestions in a new Suggestions panel and highlights them on the map; later planning domains will add their own suggestions there.
 - 3D location: when taking over a measurement, mapped roads and railways near the measured points are offered directly and the nearest is preselected; choosing one adds it as a noise source with the distance.
 

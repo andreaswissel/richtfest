@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { bebauungsplanSchema, componentConstructionSchema, componentInputGaps, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, componentConstructionSchema, fullStoreySchema, componentInputGaps, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -10,16 +10,16 @@ import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
 
 type T = ReturnType<typeof useT>;
 // Statements rather than values: shown in full.
-const longText = new Set(["bebauungsplanNoise"]);
+const longText = new Set(["bebauungsplanNoise", "bebauungsplanGrz", "bebauungsplanHeight"]);
 type Key = Parameters<T>[0];
 export type ComponentPropertySave = { key: string; value: string | number | null; unit: string | null };
 
 const enumOptions: Record<string, readonly string[]> = {
   componentType: componentTypeSchema.options, construction: componentConstructionSchema.options,
   wallRole: wallRoleSchema.options, spaceType: spaceTypeSchema.options, soundInsulationLevel: soundInsulationLevelSchema.options,
-  federalState: federalStateSchema.options, bebauungsplan: bebauungsplanSchema.options,
+  federalState: federalStateSchema.options, bebauungsplan: bebauungsplanSchema.options, fullStorey: fullStoreySchema.options,
 };
-const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³" };
+const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const roomKeys = ["apartmentUnit", "spaceType"];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
@@ -78,10 +78,10 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
             <option value="">{placeholder ? `${t("buildingComponentInferredPrefix")} ${optionLabel(propertyKey, placeholder, t)}` : t("buildingModelUnknownValue")}</option>
             {options.map((option) => <option key={option} value={option}>{optionLabel(propertyKey, option, t)}</option>)}
           </NativeSelect>
-        : longText.has(propertyKey) ? <Textarea aria-label={label} rows={3} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
+        : longText.has(propertyKey) ? <Textarea aria-label={label} rows={propertyKey === "bebauungsplanNoise" ? 3 : 2} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) commit(event.currentTarget.value); }} />
-        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending}
+        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />}
       <StatusLine state={state} t={t} pending={pending} onReview={onReview} />

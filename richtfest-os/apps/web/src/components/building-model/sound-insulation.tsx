@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { componentDataRequest, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup, type DataRequestProgress } from "@richtfest/shared";
+import { componentDataRequest, developmentPlanZoningKeys, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup, type DataRequestProgress } from "@richtfest/shared";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
@@ -146,7 +146,10 @@ export function StoreyLevels({ storeys, t, pending, onSave, onReview }: {
   </>;
 }
 
-/** Which law and editions apply, checked first: federal state, Bebauungsplan, Landesbauordnung, VVTB and DIN 4109. Approving a value confirms it. */
+/**
+ * Which law and editions apply, checked first: federal state, Bebauungsplan, Landesbauordnung, VVTB and DIN 4109. Approving a value confirms it.
+ * When a plan applies, its Art und Maß der baulichen Nutzung follow; they are not part of the sound insulation basis and are not checked yet.
+ */
 export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { properties: Record<string, BuildingComponentPropertyState>; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void }) {
   const live = (key: string) => properties[key] && properties[key].reviewStatus !== "rejected" ? properties[key].value : null;
@@ -157,14 +160,22 @@ export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { 
         <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
     </dl>
     <p className="muted text-ui-2xs">{gaps.length ? `${t("buildingRegulatoryOpen")}: ${gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingRegulatoryUnconfirmed")})`).join(", ")}` : t("buildingRegulatoryConfirmed")}</p>
+    {live("bebauungsplan") === "applies" && <>
+      <p className="text-ui-xs font-medium">{t("buildingZoningTitle")}</p>
+      <dl className="building-model-component-rows">
+        {developmentPlanZoningKeys.map((key) =>
+          <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
+      </dl>
+      <p className="muted text-ui-2xs">{t("buildingZoningHint")}</p>
+    </>}
   </>;
 }
 
 export type ComponentSourceDocument = { fileId: string; name: string; sourceVersionId: string; version: number; likelyConstructionDescription: boolean;
   documentType?: { documentType: string | null; provenance: "manual" | "inferred" | null } | null };
-export type BebauungsplanReadResult = { statements: unknown[]; summary: string | null; proposals: number };
+export type BebauungsplanReadResult = { statements: unknown[]; summary: string | null; proposals: number; zoning?: { statements: unknown[] } };
 
-/** Reads the noise requirements a Bebauungsplan's text states into the regulatory basis, as quoted proposals. */
+/** Reads the noise requirements and the Art und Maß der baulichen Nutzung a Bebauungsplan's text states into the regulatory basis, as quoted proposals. */
 export function BebauungsplanReader({ documents, t, pending, result, onRead }: { documents: ComponentSourceDocument[]; t: T; pending: boolean; result?: BebauungsplanReadResult; onRead: (sourceVersionId: string) => void }) {
   const plans = documents.filter((document) => document.documentType?.documentType === "development_plan");
   const [chosen, setChosen] = useState("");
@@ -177,9 +188,11 @@ export function BebauungsplanReader({ documents, t, pending, result, onRead }: {
       </NativeSelect>
       <Button size="xs" variant="outline" disabled={pending || !selected} onClick={() => selected && onRead(selected.sourceVersionId)}>{t("buildingBebauungsplanRead")}</Button>
     </div>
-    <p className="muted text-ui-2xs" role="status">{!result ? t("buildingBebauungsplanHint")
-      : result.summary ? t("buildingBebauungsplanResult").replace("{statements}", String(result.statements.length)).replace("{proposals}", String(result.proposals))
-      : t("buildingBebauungsplanNothing")}</p>
+    <p className="muted text-ui-2xs" role="status">{!result ? t("buildingBebauungsplanHint") : [
+      t("buildingBebauungsplanResult").replace("{statements}", String(result.statements.length + (result.zoning?.statements.length ?? 0))).replace("{proposals}", String(result.proposals)),
+      ...(result.summary ? [] : [t("buildingBebauungsplanNoNoise")]),
+      ...(result.zoning?.statements.length ? [] : [t("buildingBebauungsplanNoZoning")]),
+    ].join(" · ")}</p>
   </div>;
 }
 export type DescriptionReadResult = { statements: number; proposals: number; groups: Array<{ componentType: "wall" | "ceiling"; wallRole: string | null; conflicts: string[]; components: number; proposed: number }> };

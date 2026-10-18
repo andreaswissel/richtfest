@@ -48,6 +48,23 @@
         "typescript": "^5.7.2",
       },
     },
+    "richtfest-apps/feasibility": {
+      "name": "@richtfest/feasibility",
+      "version": "0.1.0",
+      "dependencies": {
+        "@richtfest/shared": "workspace:*",
+        "dejavu-fonts-ttf": "^2.37.3",
+        "drizzle-orm": "^0.38.4",
+        "express": "^4.21.2",
+        "pdfkit": "^0.20.2",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/express": "^5.0.0",
+        "@types/pdfkit": "^0.17.6",
+        "typescript": "^5.7.2",
+      },
+    },
     "richtfest-apps/knowledge": {
       "name": "@richtfest/knowledge",
       "version": "0.1.0",
@@ -127,6 +144,7 @@
         "@richtfest/acoustics": "workspace:*",
         "@richtfest/components": "workspace:*",
         "@richtfest/crm": "workspace:*",
+        "@richtfest/feasibility": "workspace:*",
         "@richtfest/knowledge": "workspace:*",
         "@richtfest/projects": "workspace:*",
         "@richtfest/public-data": "workspace:*",
@@ -778,6 +796,8 @@
     "@richtfest/crm": ["@richtfest/crm@workspace:richtfest-apps/crm"],
 
     "@richtfest/docs": ["@richtfest/docs@workspace:richtfest-os/apps/docs"],
+
+    "@richtfest/feasibility": ["@richtfest/feasibility@workspace:richtfest-apps/feasibility"],
 
     "@richtfest/knowledge": ["@richtfest/knowledge@workspace:richtfest-apps/knowledge"],
 

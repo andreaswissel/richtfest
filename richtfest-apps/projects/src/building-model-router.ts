@@ -20,7 +20,12 @@ import {
   soundInsulationChecks,
   regulatoryBasisGaps,
   regulatoryBasisKeys,
+  developmentPlanZoningKeys,
+  zoningLimits,
+  zoningChecks,
+  zoningCheckMethod,
   validateBuildingComponentProperty,
+  type FeasibilitySiteFigures,
   type BuildingComponentRecord,
 } from "@richtfest/shared";
 import {
@@ -57,7 +62,7 @@ import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
 import { planStoreyLevels, storeyLevelFromText, type StoreyLevelReading } from "./storey-levels";
 import { sourcePages } from "./schema";
 import { documentTypesFor } from "./document-types";
-import { developmentPlanNoiseMethod, readDevelopmentPlanNoise } from "./development-plan";
+import { developmentPlanNoiseMethod, developmentPlanZoningMethod, readDevelopmentPlanNoise, readDevelopmentPlanZoning } from "./development-plan";
 import { constructionDescriptionMethod, mergeComponentStatements, readConstructionDescription } from "./construction-description";
 
 type GetDeps = (req: Request) => AppDeps;
@@ -336,6 +341,21 @@ export async function readComponentRecords(d: AppDeps, projectId: string) {
 const componentGaps = (projectId: string, data: any, objectId?: string) => componentRecords(data).filter(record => !objectId || record.id === objectId)
   .flatMap(record => componentInputGaps(record.componentType, record.properties).map(gap => ({ entityType: "element" as const, entityId: record.id, ...gap, deepLink: buildingDeepLink(projectId, "element", record.id) })));
 
+/** Reviewed property states of one entity, keyed by property, for shared checks. */
+const statesOf = (data: any, entityType: string, entityId: string) => Object.fromEntries((data.properties as any[])
+  .filter(property => property.entityType === entityType && property.entityId === entityId && property.current)
+  .map(property => [property.propertyKey, { value: property.current.value, reviewStatus: property.current.reviewStatus }]));
+
+/** GRZ, GFZ and Vollgeschosse against the approved Bebauungsplan limits; demolished buildings and their storeys do not count. */
+const zoningCheckFor = (data: any, limits: ReturnType<typeof zoningLimits>) => {
+  const site = (data.buildings as any[])[0];
+  const buildings = (data.buildings as any[]).filter(building => building.constructionState !== "demolished");
+  const active = new Set(buildings.map(building => building.id));
+  return zoningChecks({ limits, site: site ? { id: site.id, properties: statesOf(data, "building", site.id) } : null,
+    buildings: buildings.map(building => ({ id: building.id, properties: statesOf(data, "building", building.id) })),
+    storeys: (data.storeys as any[]).filter(storey => active.has(storey.buildingId)).map(storey => ({ id: storey.id, buildingId: storey.buildingId, properties: statesOf(data, "storey", storey.id) })) });
+};
+
 /**
  * Sound insulation preparation for agents: the agreed requirement level, which
  * separating walls and ceilings need a verification and whether their inputs
@@ -348,12 +368,17 @@ const soundInsulationContext = async (d: AppDeps, projectId: string, data: any) 
   const level = buildingProperty("soundInsulationLevel");
   const regulatory = Object.fromEntries(regulatoryBasisKeys.map(key => { const current = buildingProperty(key)?.current;
     return [key, current ? { value: current.value, reviewStatus: current.reviewStatus } : null]; }));
+  const zoning = Object.fromEntries(developmentPlanZoningKeys.map(key => { const current = buildingProperty(key)?.current;
+    return [key, current && current.reviewStatus !== "rejected" ? { value: current.value, reviewStatus: current.reviewStatus } : null]; }));
   const checks = soundInsulationChecks(records);
   const levelOf = (storeyId: string) => (data.properties as any[]).find(property => property.entityType === "storey" && property.entityId === storeyId && property.propertyKey === "level");
   return {
     storeys: (data.storeys as any[]).slice(0, 100).map(storey => { const level = levelOf(storey.id)?.current;
       return { id: storey.id, name: storey.name, level: level && level.reviewStatus !== "rejected" ? { value: level.value, reviewStatus: level.reviewStatus, provenance: level.provenance } : storey.levelIndex === null ? null : { value: storey.levelIndex, reviewStatus: "approved", provenance: "manual" } }; }),
-    regulatoryBasis: { ...Object.fromEntries(Object.entries(regulatory).filter(([, state]) => state && state.reviewStatus !== "rejected")), gaps: regulatoryBasisGaps(regulatory) },
+    regulatoryBasis: { ...Object.fromEntries(Object.entries(regulatory).filter(([, state]) => state && state.reviewStatus !== "rejected")), gaps: regulatoryBasisGaps(regulatory),
+      // Art und Maß der baulichen Nutzung; limits are approved single values only, checked against approved parcel, footprint and storey inputs.
+      developmentPlanZoning: { ...Object.fromEntries(Object.entries(zoning).filter(([, state]) => state)), limits: zoningLimits(zoning),
+        compliance: { method: zoningCheckMethod, checks: zoningCheckFor(data, zoningLimits(zoning)) } } },
     requirementLevel: level?.current && level.current.reviewStatus !== "rejected" ? { value: level.current.value, reviewStatus: level.current.reviewStatus } : null,
     checks: { total: checks.length, ready: checks.filter(check => check.ready).length,
       items: checks.slice(0, 500).map(check => ({ ...check, deepLink: buildingDeepLink(projectId, "element", check.componentId) })) },
@@ -444,6 +469,27 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
 }
 
 export const readBuildingModelAgentContext = readBuildingModelContext;
+
+/**
+ * Approved figures a feasibility study starts from: parcel area, single-value
+ * GRZ/GFZ and the Geschossfläche of approved Vollgeschosse in existing or
+ * retained buildings. Unreviewed values are null, never passed on.
+ */
+export async function readFeasibilitySiteFigures(d: AppDeps, projectId: string): Promise<FeasibilitySiteFigures> {
+  const modelRow = await modelForProject(d, projectId);
+  if (!modelRow) return { parcelArea: null, grz: null, gfz: null, existingGrossFloorArea: null };
+  const data = await readModel(d, modelRow.model);
+  const site = (data.buildings as any[])[0];
+  const siteStates = site ? statesOf(data, "building", site.id) : {};
+  const limits = zoningLimits(siteStates);
+  const approvedNumber = (states: Record<string, any>, key: string) => states[key]?.reviewStatus === "approved" && typeof states[key].value === "number" ? states[key].value as number : null;
+  const existing = new Set((data.buildings as any[]).filter(building => building.constructionState === "existing" || building.constructionState === "retained").map(building => building.id));
+  const fullStoreys = (data.storeys as any[]).filter(storey => existing.has(storey.buildingId)).map(storey => statesOf(data, "storey", storey.id))
+    .filter(states => states.fullStorey?.reviewStatus === "approved" && states.fullStorey.value === "full");
+  const areas = fullStoreys.map(states => approvedNumber(states, "grossFloorArea"));
+  return { parcelArea: approvedNumber(siteStates, "parcelArea"), grz: limits.grz, gfz: limits.gfz,
+    existingGrossFloorArea: areas.length && areas.every(area => area !== null) ? areas.reduce((sum: number, area) => sum + area!, 0) : null };
+}
 
 /** Create an inspectable proposal without mutating the reviewed model. */
 export async function proposeBuildingModelChange(d: AppDeps, projectId: string, input: BuildingModelProposalInput, execution: BuildingModelProposalExecution = { runId: "unknown", agentId: d.actorId }, tx = d.db) {
@@ -880,8 +926,9 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     } catch (e) { return next(e); }
   });
 
-  // Reads a Bebauungsplan's noise requirements into the regulatory basis of every building, as unreviewed proposals
-  // quoting each statement. Reading one also proposes that a Bebauungsplan applies. People's values are kept.
+  // Reads a Bebauungsplan's noise requirements and its Art und Maß der baulichen Nutzung into the regulatory basis of
+  // every building, as unreviewed proposals quoting each statement. Reading one also proposes that a Bebauungsplan
+  // applies. People's values are kept. Zoning values are not checked against the building (no parcel area yet).
   router.post("/projects/:projectId/building-model/regulatory-sources", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId));
@@ -894,18 +941,23 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const pages = await d.db.select({ page: sourcePages.page, text: sql<string>`left(coalesce(${sourcePages.content}->>'text',''), 60000)` }).from(sourcePages)
         .where(and(eq(sourcePages.versionId, input.sourceVersionId), eq(sourcePages.tenantId, d.tenantId))).orderBy(asc(sourcePages.page)).limit(300);
       if (!(pages as any[]).some(row => String(row.text).trim())) return send(res, 422, { data: null, error: { code: "no_source_text" }, message: "No text has been read from this document yet" });
-      const noise = readDevelopmentPlanNoise((pages as any[]).map(row => ({ page: Number(row.page), text: String(row.text) })));
+      const pageTexts = (pages as any[]).map(row => ({ page: Number(row.page), text: String(row.text) }));
+      const noise = readDevelopmentPlanNoise(pageTexts);
+      const zoning = readDevelopmentPlanZoning(pageTexts);
       const data = await readModel(d, modelRow.model);
       const props = new Map((data.properties as any[]).filter(property => property.entityType === "building").map(property => [`${property.entityId}:${property.propertyKey}`, property]));
       const first = (pages as any[]).find(row => String(row.text).trim());
       const planEvidence = buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: Number(first.page), quote: String(first.text).trim().split("\n")[0].slice(0, 240) });
       // One evidence item per quoted sentence, even when it states several requirements.
-      const noiseEvidence = [...new Map(noise.statements.map(statement => [`${statement.page}:${statement.quote}`, statement])).values()].slice(0, 20).map(statement => buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: statement.page, quote: statement.quote }));
+      const evidenceOf = (statements: Array<{ page: number; quote: string }>) => [...new Map(statements.map(statement => [`${statement.page}:${statement.quote}`, statement])).values()].slice(0, 20)
+        .map(statement => buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: input.sourceVersionId, page: statement.page, quote: statement.quote }));
+      const proposed: Array<readonly [string, string | null, unknown[]]> = [["bebauungsplan", "applies", [planEvidence]], ["bebauungsplanNoise", noise.summary, evidenceOf(noise.statements)],
+        ...Object.entries(zoning.values).map(([key, value]) => [key, value ?? null, evidenceOf(zoning.statements.filter(statement => statement.key === key))] as const)];
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         let proposals = 0;
         for (const building of data.buildings as any[]) {
-          for (const [key, value, evidence] of [["bebauungsplan", "applies", [planEvidence]], ["bebauungsplanNoise", noise.summary, noiseEvidence]] as const) {
+          for (const [key, value, evidence] of proposed) {
             if (value === null || !derivedWritable(props.get(`${building.id}:${key}`), value)) continue;
             await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "building", entityId: building.id, propertyKey: key, claimKind: "requirement", value, unit: null, provenance: "inferred", evidence: [...evidence] });
             proposals++;
@@ -913,8 +965,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         }
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
         await d.audit(tx, "projects.building.regulatory.bebauungsplan_read", "building_model", modelRow.model.id, { projectId, modelRevision: revision, sourceVersionId: input.sourceVersionId,
-          method: developmentPlanNoiseMethod, statements: noise.statements.length, proposals });
-        return { revision, summary: { ...noise, proposals, method: developmentPlanNoiseMethod } };
+          method: developmentPlanNoiseMethod, statements: noise.statements.length, zoningMethod: developmentPlanZoningMethod, zoningStatements: zoning.statements.length, proposals });
+        return { revision, summary: { ...noise, zoning, proposals, method: developmentPlanNoiseMethod, zoningMethod: developmentPlanZoningMethod } };
       });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict);
       return res.json(ok(result));

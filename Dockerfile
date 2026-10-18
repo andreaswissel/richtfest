@@ -17,6 +17,7 @@ COPY richtfest-os/apps/web/package.json ./richtfest-os/apps/web/package.json
 COPY richtfest-apps/acoustics/package.json ./richtfest-apps/acoustics/package.json
 COPY richtfest-apps/components/package.json ./richtfest-apps/components/package.json
 COPY richtfest-apps/crm/package.json ./richtfest-apps/crm/package.json
+COPY richtfest-apps/feasibility/package.json ./richtfest-apps/feasibility/package.json
 COPY richtfest-apps/knowledge/package.json ./richtfest-apps/knowledge/package.json
 COPY richtfest-apps/projects/package.json ./richtfest-apps/projects/package.json
 COPY richtfest-apps/public-data/package.json ./richtfest-apps/public-data/package.json

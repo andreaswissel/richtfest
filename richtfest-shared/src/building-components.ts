@@ -20,9 +20,17 @@ export const soundInsulationLevelSchema = z.enum(["statutory_minimum", "elevated
 export const federalStateSchema = z.enum(["BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH"]);
 /** Whether a Bebauungsplan covers the site; it is checked first and binds the assessment. */
 export const bebauungsplanSchema = z.enum(["applies", "none"]);
+/** Whether a storey is a Vollgeschoss under the Landesbauordnung. */
+export const fullStoreySchema = z.enum(["full", "not_full"]);
 /** Regulatory basis keys, in the order the specialist checks them. */
 export const regulatoryBasisKeys = ["federalState", "bebauungsplan", "bebauungsplanNoise", "stateBuildingCodeEdition", "vvtbEdition", "din4109Edition"] as const;
 export type SoundInsulationLevel = z.infer<typeof soundInsulationLevelSchema>;
+/**
+ * Art und Maß der baulichen Nutzung a Bebauungsplan states, as quoted text per
+ * value. Asked only when a plan applies and not part of the sound insulation
+ * basis, so they never block it.
+ */
+export const developmentPlanZoningKeys = ["bebauungsplanAreaType", "bebauungsplanGrz", "bebauungsplanGfz", "bebauungsplanStoreys", "bebauungsplanHeight", "bebauungsplanBauweise"] as const;
 
 type PropertySpec = { value: z.ZodTypeAny; unit: string | null };
 export const buildingComponentProperties = {
@@ -43,10 +51,23 @@ export const buildingComponentProperties = {
     stateBuildingCodeEdition: { value: z.string().trim().min(1).max(120), unit: null },
     vvtbEdition: { value: z.string().trim().min(1).max(120), unit: null },
     din4109Edition: { value: z.string().trim().min(1).max(120), unit: null },
+    // Art und Maß der baulichen Nutzung, as the plan states them, e.g. "0,4 (WA 1) · 0,35 (WA 2)".
+    bebauungsplanAreaType: { value: z.string().trim().min(1).max(300), unit: null },
+    bebauungsplanGrz: { value: z.string().trim().min(1).max(300), unit: null },
+    bebauungsplanGfz: { value: z.string().trim().min(1).max(300), unit: null },
+    bebauungsplanStoreys: { value: z.string().trim().min(1).max(300), unit: null },
+    bebauungsplanHeight: { value: z.string().trim().min(1).max(300), unit: null },
+    bebauungsplanBauweise: { value: z.string().trim().min(1).max(300), unit: null },
+    // Zoning check inputs: the parcel (Grundstück) area on the site building, each building's Grundfläche.
+    parcelArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
+    footprintArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
   },
   /** 0 is the ground floor; upper storeys count up, basements down. */
   storey: {
     level: { value: z.number().int().min(-9).max(99), unit: null },
+    // Vollgeschoss per Landesbauordnung, decided by a person; its Geschossfläche counts towards the GFZ.
+    fullStorey: { value: fullStoreySchema, unit: null },
+    grossFloorArea: { value: z.number().positive().max(1_000_000), unit: "m²" },
   },
   room: {
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
@@ -208,6 +229,80 @@ export function regulatoryBasisGaps(properties: Record<string, ComponentProperty
     if (!state || state.value === null || state.value === undefined || state.reviewStatus === "rejected") return [{ field, status: "missing" }];
     return state.reviewStatus === "approved" ? [] : [{ field, status: "unreviewed" }];
   });
+}
+
+export type ZoningLimits = { grz: number | null; gfz: number | null; maxFullStoreys: number | null };
+const germanDecimal = (value: string) => /^\d,\d{1,2}$/.test(value) ? Number(value.replace(",", ".")) : null;
+const storeyNumerals = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+
+/**
+ * The Bebauungsplan limits a person approved, as numbers, for zoningChecks.
+ * Only a single plain value counts ("0,4", "höchstens III"); values per
+ * Baufeld, ranges or unreviewed proposals stay null so a check asks instead of guessing.
+ */
+export function zoningLimits(properties: Record<string, ComponentPropertyState | null | undefined>): ZoningLimits {
+  const approved = (key: string) => { const state = properties[key]; return state?.reviewStatus === "approved" && typeof state.value === "string" ? state.value.trim() : null; };
+  const storeys = approved("bebauungsplanStoreys")?.match(/^(?:höchstens\s+)?([IVX]+)$/)?.[1];
+  return {
+    grz: germanDecimal(approved("bebauungsplanGrz") ?? ""),
+    gfz: germanDecimal(approved("bebauungsplanGfz") ?? ""),
+    maxFullStoreys: storeys && storeyNumerals.includes(storeys) ? storeyNumerals.indexOf(storeys) + 1 : null,
+  };
+}
+
+/** Inputs the zoning check needs, as reviewed building-model values. Areas are entered from the Lageplan or calculation, not derived from room outlines. */
+export const zoningCheckBuildingKeys = ["parcelArea", "footprintArea"] as const;
+export const zoningCheckStoreyKeys = ["fullStorey", "grossFloorArea"] as const;
+export const zoningCheckMethod = "zoning_check_v1";
+export type ZoningCheckKey = "grz" | "gfz" | "fullStoreys";
+export type ZoningInputGap = { field: string; entityType: "building" | "storey"; entityId: string; status: "missing" | "unreviewed" };
+export type ZoningCheck = { key: ZoningCheckKey; limit: number | null; actual: number | null; status: "within" | "exceeds" | "incomplete"; gaps: ZoningInputGap[] };
+export type ZoningCheckInput = {
+  limits: ZoningLimits;
+  /** The site building carries the parcel area (the same building that holds the regulatory basis). */
+  site: { id: string; properties: Record<string, ComponentPropertyState> } | null;
+  buildings: Array<{ id: string; properties: Record<string, ComponentPropertyState> }>;
+  /** buildingId groups storeys: the Vollgeschoss limit applies to each building on its own. */
+  storeys: Array<{ id: string; buildingId?: string | null; properties: Record<string, ComponentPropertyState> }>;
+};
+
+/**
+ * GRZ, GFZ and Vollgeschosse of the planned buildings against the approved
+ * Bebauungsplan limits. Deterministic arithmetic on approved inputs only:
+ * GRZ = Grundfläche (§ 19 Abs. 2 BauNVO, main buildings) / parcel area; GFZ =
+ * Geschossfläche of the Vollgeschosse (§ 20 Abs. 3 BauNVO, outer dimensions) /
+ * parcel area. Vollgeschosse are counted per building and the highest count
+ * is checked. Whether a storey is a Vollgeschoss follows the Landesbauordnung
+ * and is a person's decision. Any missing or unreviewed input makes a check
+ * incomplete instead of guessing; § 19 Abs. 4 overruns (garages, access) are not assessed.
+ */
+export function zoningChecks(input: ZoningCheckInput): ZoningCheck[] {
+  const gapOf = (entityType: "building" | "storey", entityId: string, properties: Record<string, ComponentPropertyState>, field: string): ZoningInputGap | null => {
+    const state = properties[field];
+    if (!state || state.value === null || state.value === undefined || state.reviewStatus === "rejected") return { field, entityType, entityId, status: "missing" };
+    return state.reviewStatus === "approved" ? null : { field, entityType, entityId, status: "unreviewed" };
+  };
+  const number = (properties: Record<string, ComponentPropertyState>, field: string) => typeof properties[field]?.value === "number" ? properties[field]!.value as number : 0;
+  const parcelGap = input.site ? gapOf("building", input.site.id, input.site.properties, "parcelArea") : null;
+  const parcel = input.site && !parcelGap ? number(input.site.properties, "parcelArea") : null;
+  const ratio = (area: number | null, gaps: ZoningInputGap[]) => gaps.length || !parcel || area === null ? null : area / parcel;
+  const result = (key: ZoningCheckKey, limit: number | null, actual: number | null, gaps: ZoningInputGap[]): ZoningCheck => ({ key, limit, actual, gaps,
+    status: limit === null || actual === null || gaps.length ? "incomplete" : actual > limit + 1e-9 ? "exceeds" : "within" });
+
+  const footprintGaps = [...(parcelGap ? [parcelGap] : []), ...input.buildings.flatMap(building => gapOf("building", building.id, building.properties, "footprintArea") ?? [])];
+  const footprint = input.buildings.reduce((sum, building) => sum + number(building.properties, "footprintArea"), 0);
+  const storeyStatusGaps = input.storeys.flatMap(storey => gapOf("storey", storey.id, storey.properties, "fullStorey") ?? []);
+  const full = input.storeys.filter(storey => storey.properties.fullStorey?.reviewStatus === "approved" && storey.properties.fullStorey.value === "full");
+  const floorGaps = [...(parcelGap ? [parcelGap] : []), ...storeyStatusGaps, ...full.flatMap(storey => gapOf("storey", storey.id, storey.properties, "grossFloorArea") ?? [])];
+  const floorArea = full.reduce((sum, storey) => sum + number(storey.properties, "grossFloorArea"), 0);
+  const perBuilding = new Map<string, number>();
+  for (const storey of full) perBuilding.set(storey.buildingId ?? "", (perBuilding.get(storey.buildingId ?? "") ?? 0) + 1);
+  const mostFullStoreys = Math.max(0, ...perBuilding.values());
+  return [
+    result("grz", input.limits.grz, ratio(footprint, footprintGaps), footprintGaps),
+    result("gfz", input.limits.gfz, ratio(floorArea, floorGaps), floorGaps),
+    result("fullStoreys", input.limits.maxFullStoreys, storeyStatusGaps.length || !input.storeys.length ? null : mostFullStoreys, storeyStatusGaps),
+  ];
 }
 
 export type DataRequestProgress = { total: number; answered: number; outstanding: ComponentRequestGroup[] };

@@ -262,14 +262,17 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'B-Plan 12.pdf','upload',$4)", [plan, tenant, project, actor]);
     await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [planVersion, tenant, plan, actor]);
     await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,2,$3)", [planVersion, tenant,
-      JSON.stringify({ status: "available", text: "Textliche Festsetzungen\n6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989).\n6.2 Flachdächer sind zu begrünen." })]);
+      JSON.stringify({ status: "available", text: "Textliche Festsetzungen\n6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989).\n6.2 Flachdächer sind zu begrünen.\n2.1 Die Grundflächenzahl (GRZ) wird auf 0,4 festgesetzt." })]);
     expect((await (await fetch(base + "/component-sources")).json()).data.documents.find((doc: any) => doc.name === "B-Plan 12.pdf").documentType.documentType).toBe("development_plan");
     const planRead = await post("/regulatory-sources", { baseRevision: await revision(), sourceVersionId: planVersion });
     expect(planRead.status).toBe(200);
-    expect(planRead.body.data.summary).toMatchObject({ summary: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", proposals: 1 });
+    expect(planRead.body.data.summary).toMatchObject({ summary: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", proposals: 2, zoning: { values: { bebauungsplanGrz: "0,4" } } });
     const planNoise = (await (await fetch(base + "/agent-context")).json()).data.soundInsulation.regulatoryBasis;
     expect(planNoise.bebauungsplanNoise).toEqual({ value: "Lärmpegelbereich IV · verweist auf DIN 4109 (1989)", reviewStatus: "unreviewed" });
     expect(planNoise.bebauungsplan).toEqual({ value: "applies", reviewStatus: "unreviewed" });
+    // Zoning values are proposals too: unreviewed, so no limit is usable and nothing is checked.
+    expect(planNoise.developmentPlanZoning).toEqual({ bebauungsplanGrz: { value: "0,4", reviewStatus: "unreviewed" }, limits: { grz: null, gfz: null, maxFullStoreys: null },
+      compliance: { available: false, reason: expect.any(String) } });
     const noiseEvidence = (await pool.query(`select v.evidence, v.provenance from projects_building_properties p join projects_building_property_versions v on v.property_id=p.id where p.property_key='bebauungsplanNoise'`)).rows;
     expect(noiseEvidence).toEqual([{ provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: planVersion, page: 2, quote: "6.1 Im WA 2 gilt Lärmpegelbereich IV nach DIN 4109 (Ausgabe November 1989)." }] }]);
     expect((await post("/regulatory-sources", { baseRevision: await revision(), sourceVersionId: planVersion })).body.data.summary.proposals).toBe(0);

@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, eq, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
-import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
+import { ok, projectAddressInput, locationMatchesAddress, aerialSourceFor, siteDxf, siteGeoJson, siteExportFormats, AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type LocationState } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { projectLocations as locations, projects, files, fileVersions } from "./schema";
 import { boundedBody, validateLocationAddress } from "./location-context";
@@ -66,6 +66,27 @@ export function createLocationRouter(getDeps: (req: Request) => AppDeps) {
       const state = locationState(row);
       if (d.publicDataUpdates) state.availableContextUpdates = await d.publicDataUpdates(state.context?.publicReleases?.map(r => r.releaseId) ?? []);
       res.json(ok(state));
+    } catch (error) { next(error); }
+  });
+  // Site context for CAD/GIS: imported buildings, trees, planning masses and the address point in the context's UTM grid.
+  router.get("/projects/:projectId/location/export", async (req, res, next) => {
+    try {
+      const format = z.enum(siteExportFormats).parse(req.query.format);
+      const { d, where } = await scope(req, false);
+      const [row] = await d.db.select(stateColumns).from(locations).where(where).limit(1);
+      const state = locationState(row);
+      if (!state.context) throw failure("Load the site context before exporting it", 409, "no_site_context");
+      const name = `richtfest-site-${state.context.crs ?? "EPSG:25833"}`.replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+      res.setHeader("Cache-Control", "private, no-store");
+      if (format === "geojson") {
+        res.setHeader("Content-Type", "application/geo+json; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${name}.geojson"`);
+        return res.end(siteGeoJson(state.context, state.scene));
+      }
+      res.setHeader("Content-Type", "application/dxf");
+      res.setHeader("Content-Disposition", `attachment; filename="${name}.dxf"`);
+      // DXF R12 declares ANSI_1252; latin1 bytes keep umlauts and ß readable in CAD.
+      return res.end(Buffer.from(siteDxf(state.context, state.scene), "latin1"));
     } catch (error) { next(error); }
   });
   // A fixed window around the imported site, never a caller-chosen URL or extent.
