@@ -1,6 +1,7 @@
 import polygonClipping from "polygon-clipping";
 import { siteGeometryInputSchema, type GeometryPoint as Point, type GeometryMultiPolygon as Multi, type GeometryEvidence, type EdgeSetback, type SiteGeometryInput, type SiteGeometryResult, type MassingOptions, type MassingCandidate, type BuildingGeometry, type PlanOverlay } from "./site-geometry-model";
 export * from "./site-geometry-model";
+import { BUILDING_CODES, setbackDepth } from "./building-codes";
 const EPS = 1e-7;
 const MAX_GEOMETRY_WORK = 5_000_000;
 const vertexCount=(g:Multi)=>g.reduce((n,p)=>n+p.reduce((n,r)=>n+r.length,0),0);
@@ -41,12 +42,17 @@ const reviewed=(e:{source:string;sourceDate:string|null;reviewed:boolean})=>e.re
 export function createDefaultSetbacks(parcel:GeometryEvidence,distance:number|null=null):EdgeSetback[]{return parcel.geometry.flatMap((p,polygonIndex)=>p.flatMap((r,ringIndex)=>r.slice(0,-1).map((_,edgeIndex)=>({id:`edge-${polygonIndex}-${ringIndex}-${edgeIndex}`,polygonIndex,ringIndex,edgeIndex,distance,source:"",sourceDate:null,reviewed:false,profile:"manual" as const,heightSource:"manual" as const,assessmentHeight:null,reviewedHeight:null}))));}
 /** H is the reviewed §6 wall/roof assessment height, not automatically total model height. */
 export function deriveBerlinSetback(profile:"standard"|"commercial"|"low_class"|"boundary_exception",height:number):number|null {if(!Number.isFinite(height)||height<0)return null;if(profile==="boundary_exception")return null;return profile==="low_class"?3:Math.max(3,height*(profile==="commercial"?.2:.4));}
-/** Berlin Abstandsfläche (§6 BauO Bln): one rectangle of depth `depth` in front of every wall, corners excluded, never over the building itself. */
-export function berlinSetbackArea(footprint:Multi,depth:number):Multi {
+/** A wall lying on one of the segments (within 0.5 m of its line and inside its extent), e.g. built to a parcel boundary. */
+const onSegment=(a:Point,b:Point,segments:[Point,Point][])=>segments.some(([c,d])=>{const length=Math.hypot(d[0]-c[0],d[1]-c[1]);if(length<EPS)return false;const off=(p:Point)=>Math.abs(cross(c,d,p))/length,along=(p:Point)=>((p[0]-c[0])*(d[0]-c[0])+(p[1]-c[1])*(d[1]-c[1]))/length;return off(a)<=.5&&off(b)<=.5&&Math.min(along(a),along(b))>=-.5&&Math.max(along(a),along(b))<=length+.5;});
+/**
+ * Abstandsfläche (§ 6 BauO Bln and the other LBO): one rectangle of depth `depth` in front of every wall, corners excluded, never over
+ * the building itself. Walls on an `exempt` segment (a boundary the building may stand on) keep none.
+ */
+export function berlinSetbackArea(footprint:Multi,depth:number,exempt:[Point,Point][]=[]):Multi {
  if(!(depth>0)||!footprint.length)return [];
  const strips:Multi=[];
  for(const polygon of footprint)for(const ring of polygon)for(let i=0;i<ring.length-1;i++){
-  const a=ring[i]!,b=ring[i+1]!,length=Math.hypot(b[0]-a[0],b[1]-a[1]);if(length<EPS)continue;
+  const a=ring[i]!,b=ring[i+1]!,length=Math.hypot(b[0]-a[0],b[1]-a[1]);if(length<EPS||(exempt.length&&onSegment(a,b,exempt)))continue;
   // The wall faces away from the polygon interior; probing a centimetre beside its midpoint picks the side for any winding or hole.
   let nx=(b[1]-a[1])/length,ny=-(b[0]-a[0])/length;const mid:Point=[(a[0]+b[0])/2+nx*.01,(a[1]+b[1])/2+ny*.01];
   if(inside(mid,polygon[0]!)&&!polygon.slice(1).some(h=>inside(mid,h))){nx=-nx;ny=-ny;}
@@ -59,7 +65,7 @@ export type SetbackAreaCheck={id:string;height:number;depth:number;upperDepth:nu
  * Live Abstandsflächen check for draft massing (standard profile, 0.4 H, min 3 m): areas must stay on the parcel and must not
  * overlap the areas or footprints of other buildings. Indicative only; the reviewed per-edge setbacks remain the calculation.
  */
-export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;footprint:Multi;height:number;upper?:{footprint:Multi;height:number}[]}[];neighbours?:{footprint:Multi;area:Multi}[]}):SetbackAreaCheck[]{
+export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;footprint:Multi;height:number;upper?:{footprint:Multi;height:number}[]}[];neighbours?:{footprint:Multi;area:Multi}[];setback?:{factor:number;minimum:number};exemptWalls?:[Point,Point][]}):SetbackAreaCheck[]{
  // Clipping runs relative to a local origin: raw UTM magnitudes make near-coincident edges fail in the sweep line.
  const o=input.parcel?.[0]?.[0]?.[0]??input.buildings[0]?.footprint[0]?.[0]?.[0]??[0,0] as Point;
  const shift=(g:Multi,dx:number,dy:number):Multi=>g.map(p=>p.map(r=>r.map(([x,y])=>[x+dx,y+dy] as Point)));
@@ -67,9 +73,11 @@ export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;
  /** Unions piece by piece and skips a piece the sweep cannot resolve rather than losing the whole result. */
  const merge=(pieces:Multi[]):Multi=>pieces.reduce<Multi>((acc,g)=>{if(!acc.length)return g;try{return clip.union(acc,g);}catch{return acc;}},[]);
  const parcel=input.parcel&&local(input.parcel);
+ const rule=input.setback??{factor:.4,minimum:3},depthFor=(h:number)=>Number.isFinite(h)&&h>=0?setbackDepth(rule,h):rule.minimum;
+ const exempt=(input.exemptWalls??[]).map(([a,b])=>[[a[0]-o[0],a[1]-o[1]],[b[0]-o[0],b[1]-o[1]]] as [Point,Point]);
  const neighbours=(input.neighbours??[]).map(n=>({footprint:local(n.footprint),area:local(n.area)}));
  // A recessed Staffelgeschoss has its own walls: its area is measured from those walls with its top height, and only the part beyond the main footprint lies on the ground.
- const areas=input.buildings.map(b=>{const footprint=local(b.footprint),depth=deriveBerlinSetback("standard",b.height)??3,upper=(b.upper??[]).map(u=>({footprint:local(u.footprint),depth:deriveBerlinSetback("standard",u.height)??3})),upperDepth=upper.length?Math.max(...upper.map(u=>u.depth)):null;try{const area=merge([berlinSetbackArea(footprint,depth),...upper.map(u=>{try{return difference(berlinSetbackArea(u.footprint,u.depth),footprint);}catch{return [] as Multi;}})].filter(g=>g.length));return {...b,footprint,depth,upperDepth,area};}catch{return {...b,footprint,depth,upperDepth,area:[] as Multi};}});
+ const areas=input.buildings.map(b=>{const footprint=local(b.footprint),depth=depthFor(b.height),upper=(b.upper??[]).map(u=>({footprint:local(u.footprint),depth:depthFor(u.height)})),upperDepth=upper.length?Math.max(...upper.map(u=>u.depth)):null;try{const area=merge([berlinSetbackArea(footprint,depth,exempt),...upper.map(u=>{try{return difference(berlinSetbackArea(u.footprint,u.depth,exempt),footprint);}catch{return [] as Multi;}})].filter(g=>g.length));return {...b,footprint,depth,upperDepth,area};}catch{return {...b,footprint,depth,upperDepth,area:[] as Multi};}});
  return areas.map(b=>{
   try{
    const outside=parcel?difference(b.area,parcel):b.area;
@@ -97,12 +105,13 @@ export function proposeStaffel(footprint:Multi,maxShare=2/3,minInset=1.5):Multi{
  return geometryArea(best)>base*maxShare?[]:shift(best,o[0],o[1]);
 }
 /**
- * Staffelgeschoss rule of the Landesbauordnung: from `threshold` of the floor below (area with at least 2.30 m clear height) a
- * recessed top storey counts as a Vollgeschoss. Only rules verified for the supported jurisdictions are listed; others stay unknown.
+ * Staffelgeschoss rule of the Landesbauordnung: from `threshold` of the floor below (area with the state's storey height) a recessed
+ * top storey counts as a Vollgeschoss. Only verified rules measured against the floor below are listed: where a state measures every
+ * storey against its own area or counts every storey, recessing the top storey does not keep it below a full storey.
  */
-export const STAFFEL_RULES:Record<string,{threshold:number;rule:string}>={BE:{threshold:2/3,rule:"BauO Bln § 2 Abs. 12"}};
-/** Suggested Staffel share for a jurisdiction: just below its full-storey threshold (equality already counts), or null when unknown. */
-export function suggestedStaffelShare(jurisdiction:string):{share:number;threshold:number;rule:string}|null{const r=STAFFEL_RULES[jurisdiction];return r?{share:r.threshold-.01,threshold:r.threshold,rule:r.rule}:null;}
+export const STAFFEL_RULES:Record<string,{threshold:number;rule:string;equalityCounts:boolean}>=Object.fromEntries(Object.values(BUILDING_CODES).flatMap(c=>c.storey?.verified&&!c.storey.unsupported&&c.storey.basis==="floor_below"&&c.storey.share!==null?[[c.jurisdiction,{threshold:c.storey.share,rule:c.storey.cite,equalityCounts:c.storey.equalityCounts}]]:[]));
+/** Suggested Staffel share for a jurisdiction: below its full-storey threshold (just below where equality already counts), or null when unknown. */
+export function suggestedStaffelShare(jurisdiction:string):{share:number;threshold:number;rule:string;equalityCounts:boolean}|null{const r=STAFFEL_RULES[jurisdiction];return r?{share:r.equalityCounts?r.threshold-.01:r.threshold,threshold:r.threshold,rule:r.rule,equalityCounts:r.equalityCounts}:null;}
 /** Berlin BauO §2(12), current July 2026: equality at 2/3 qualifies; elevation must exceed 1.40m. */
 export function classifyBerlinStorey(input:{areaAbove230:number|null;referenceArea:number;averageTopAboveTerrain:number|null;reviewed:boolean}):"full"|"not_full"|"unresolved" {
  if(!input.reviewed||input.areaAbove230===null||input.averageTopAboveTerrain===null||(!Number.isFinite(input.referenceArea)||input.referenceArea<=0)||input.areaAbove230<0||!Number.isFinite(input.areaAbove230)||!Number.isFinite(input.averageTopAboveTerrain))return "unresolved";
@@ -182,6 +191,122 @@ export function generateMassingCandidates(input:SiteGeometryInput,options:Massin
  if(options.staffelRatio&&options.staffelRatio>0&&options.staffelRatio<=1){const sb=bounds(s.geometry);let lo=0,hi=sb.maxX-sb.minX,sg:Multi=[];for(let i=0;i<35;i++){const m=(lo+hi)/2,g=intersection(s.geometry,rect(sb.minX-1,sb.minY-1,m+1,sb.maxY-sb.minY+2));if(geometryArea(g)<=geometryArea(s.geometry)*options.staffelRatio){lo=m;sg=g;}else hi=m;}if(sg.length)building.staffel=[{footprint:{...e,id:`${id}-staffel`,geometry:sg},countable:true,height:options.storeyHeight,areaAbove230:null,averageTopAboveTerrain:null,classificationReviewed:false}];}
  const evaluated=calculateSiteGeometry({...input,buildings:[building]});const metrics=evaluated.buildings[0];if(!metrics)return null;const grz=metrics.footprintArea/result.parcelArea,gfz=metrics.countableFloorArea/result.parcelArea;return {id,strategy:s.strategy,building,metrics,grz,gfz,violations:[...(grz>options.grz+EPS?["grz_exceeded"]:[]),...(gfz>options.gfz+EPS?["gfz_exceeded"]:[]),...(!metrics.validPlacement?["placement_invalid"]:[]),...evaluated.issues.filter(i=>i.code==="mandatory_line_unmet").map(i=>i.code)]};}).filter((c):c is NonNullable<typeof c>=>c!==null&&!c.violations.length).sort((a,b)=>b.metrics.grossFloorArea-a.metrics.grossFloorArea);
  const unique:MassingCandidate[]=[];for(const candidate of evaluatedCandidates){if(unique.some(c=>Math.abs(c.metrics.footprintArea-candidate.metrics.footprintArea)<.001&&geometryArea(difference(c.building.footprint.geometry,candidate.building.footprint.geometry))<.001))continue;unique.push(candidate);if(unique.length===3)break;}return unique;
+}
+
+export const footprintProposalMethod = "footprint_proposal_v1" as const;
+export type FootprintStrategy = "setback_hull" | "band_front" | "band_back" | "band_left" | "band_right" | "compact";
+export type FootprintCandidate = { id: string; strategy: FootprintStrategy; footprint: Multi; area: number; grz: number; gfz: number };
+export type FootprintProposal = {
+  method: typeof footprintProposalMethod;
+  /** Main wall height (full storeys × storey height) and the Abstandsfläche depth it needs. */
+  height: number;
+  depth: number;
+  /** Area where a wall keeps its Abstandsfläche on the parcel, clear of neighbours, inside the Baugrenze. */
+  region: Multi;
+  regionArea: number;
+  target: number;
+  binding: "setbacks" | "grz" | "gfz";
+  candidates: FootprintCandidate[];
+};
+export type FootprintProposalInput = {
+  parcel: Multi;
+  envelope?: Multi | null;
+  exclusions?: Multi[];
+  /** Parcel edges the building may stand on without an Abstandsfläche (closed building form). */
+  boundaryEdges?: [Point, Point][];
+  /** Neighbouring main buildings and their Abstandsflächen; ours may overlap neither. */
+  neighbours?: { footprint: Multi; area: Multi }[];
+  fullStoreys: number;
+  storeyHeight: number;
+  setback: { factor: number; minimum: number };
+  grz?: number | null;
+  gfz?: number | null;
+  /** Official parcel area for GRZ/GFZ; the drawn parcel area otherwise. */
+  parcelArea?: number | null;
+};
+/**
+ * Base footprint proposal: the largest footprint whose own Abstandsflächen (H = full storeys × storey height) stay on the parcel and clear
+ * of neighbouring buildings and their areas, inside the Baugrenze, capped by GRZ and GFZ. Walls at least the setback depth away from every
+ * open boundary keep their whole area on the parcel, so the region is the parcel inset by that depth. Up to three shapes are offered: the
+ * region itself, bands from each side of the parcel's main axis, and the largest compact rectangle. Every candidate is re-checked with the
+ * live Abstandsflächen check. Deterministic and unreviewed; Abstandsflächen on public roads up to their centre are not used.
+ */
+export function proposeFootprint(input: FootprintProposalInput): FootprintProposal | null {
+  const ring0 = input.parcel[0]?.[0];
+  if (!ring0 || !(input.fullStoreys >= 1) || !(input.storeyHeight > 0)) return null;
+  const o = ring0[0]!;
+  const shift = (g: Multi, dx: number, dy: number): Multi => g.map((p) => p.map((r) => r.map(([x, y]) => [x + dx, y + dy] as Point)));
+  const local = (g: Multi) => shift(g, -o[0], -o[1]), site = (g: Multi) => shift(g, o[0], o[1]);
+  const at = (p: Point): Point => [p[0] - o[0], p[1] - o[1]];
+  const height = input.fullStoreys * input.storeyHeight, depth = setbackDepth(input.setback, height);
+  const parcel = local(input.parcel), exempt = (input.boundaryEdges ?? []).map(([a, b]) => [at(a), at(b)] as [Point, Point]);
+  let region = input.envelope?.length ? intersection(parcel, local(input.envelope)) : parcel;
+  for (const e of input.exclusions ?? []) region = difference(region, local(e));
+  for (const polygon of parcel) for (const ring of polygon) for (let i = 0; i < ring.length - 1 && region.length; i++) {
+    const a = ring[i]!, b = ring[i + 1]!;
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < EPS || onSegment(a, b, exempt)) continue;
+    region = difference(region, capsule(a, b, depth));
+  }
+  // Neighbouring buildings or their Abstandsflächen reaching onto the parcel block the ground and keep our areas at a distance.
+  // Slivers along a shared boundary (cadastral offsets under a metre) are ignored, so building to a neighbour's fire wall stays possible.
+  for (const n of input.neighbours ?? []) {
+    let reach: Multi = [];
+    try { reach = intersection(unionGeometry(local(n.footprint), local(n.area)), parcel); } catch { continue; }
+    for (const polygon of reach) {
+      const area = geometryArea([polygon]), perimeter = polygon[0]!.slice(0, -1).reduce((sum, p, i) => sum + Math.hypot(polygon[0]![i + 1]![0] - p[0], polygon[0]![i + 1]![1] - p[1]), 0);
+      if (area < 1 || (perimeter > 0 && (2 * area) / perimeter < 1)) continue;
+      region = difference(region, [polygon]);
+      for (let i = 0; i < polygon[0]!.length - 1 && region.length; i++) region = difference(region, capsule(polygon[0]![i]!, polygon[0]![i + 1]!, depth));
+    }
+  }
+  const regionArea = geometryArea(region), basis = input.parcelArea && input.parcelArea > 0 ? input.parcelArea : geometryArea(parcel);
+  const limits: [FootprintProposal["binding"], number][] = [["setbacks", regionArea], ["grz", input.grz != null ? input.grz * basis : Infinity], ["gfz", input.gfz != null ? (input.gfz * basis) / input.fullStoreys : Infinity]];
+  const [binding, target] = limits.reduce((best, l) => (l[1] < best[1] - EPS ? l : best));
+  const result: FootprintProposal = { method: footprintProposalMethod, height, depth, region: site(region), regionArea, target, binding, candidates: [] };
+  if (regionArea < 1) return result;
+  // Work in a frame along the parcel's longest edge, so bands and rectangles follow the plot rather than the grid.
+  let angle = 0, longest = 0;
+  for (let i = 0; i < ring0.length - 1; i++) { const a = ring0[i]!, b = ring0[i + 1]!, l = Math.hypot(b[0] - a[0], b[1] - a[1]); if (l > longest) { longest = l; angle = Math.atan2(b[1] - a[1], b[0] - a[0]); } }
+  const rotate = (g: Multi, t: number): Multi => { const c = Math.cos(t), s = Math.sin(t); return g.map((p) => p.map((r) => r.map(([x, y]) => [x * c - y * s, x * s + y * c] as Point))); };
+  const framed = rotate(region, -angle), b = bounds(framed), w = b.maxX - b.minX, h = b.maxY - b.minY;
+  const shapes: { strategy: FootprintStrategy; geometry: Multi }[] = [];
+  if (regionArea <= target + EPS) shapes.push({ strategy: "setback_hull", geometry: framed });
+  else for (const strategy of ["band_front", "band_back", "band_left", "band_right"] as const) {
+    const vertical = strategy === "band_left" || strategy === "band_right";
+    let lo = 0, hi = vertical ? w : h, best: Multi = [];
+    for (let n = 0; n < 40; n++) {
+      const mid = (lo + hi) / 2;
+      const box = strategy === "band_front" ? rect(b.minX - 1, b.minY - 1, w + 2, mid + 1) : strategy === "band_back" ? rect(b.minX - 1, b.maxY - mid, w + 2, mid + 1) : strategy === "band_left" ? rect(b.minX - 1, b.minY - 1, mid + 1, h + 2) : rect(b.maxX - mid, b.minY - 1, mid + 1, h + 2);
+      const g = intersection(framed, box);
+      if (geometryArea(g) <= target) { best = g; lo = mid; } else hi = mid;
+    }
+    if (best.length) shapes.push({ strategy, geometry: best });
+  }
+  // Largest axis-aligned rectangle (in the plot frame) inside the region, up to the target area.
+  let compact: Multi = [], compactArea = 0;
+  for (const ratio of [0.33, 0.5, 1, 2, 3]) for (let ix = 1; ix < 6; ix++) for (let iy = 1; iy < 6; iy++) {
+    const cx = b.minX + (w * ix) / 6, cy = b.minY + (h * iy) / 6;
+    let lo = 0, hi = Math.sqrt(target / ratio);
+    for (let n = 0; n < 18; n++) {
+      const rh = (lo + hi) / 2, rw = rh * ratio, g = rect(cx - rw / 2, cy - rh / 2, rw, rh);
+      if (geometryArea(difference(g, framed)) < 1e-4) { lo = rh; if (rw * rh > compactArea) { compact = g; compactArea = rw * rh; } } else hi = rh;
+    }
+  }
+  if (compactArea >= 1) shapes.push({ strategy: "compact", geometry: compact });
+  const neighbours = input.neighbours ?? [];
+  for (const shape of shapes) {
+    const footprint = site(rotate(shape.geometry, angle)), area = geometryArea(footprint);
+    if (area < 1 || validateGeometry(footprint).length) continue;
+    if (result.candidates.some((c) => Math.abs(c.area - area) < 0.5 && geometryArea(difference(c.footprint, footprint)) < 0.5)) continue;
+    const [check] = checkSetbackAreas({ parcel: input.parcel, buildings: [{ id: "proposal", footprint, height }], neighbours, setback: input.setback, exemptWalls: input.boundaryEdges });
+    if (!check?.ok) continue;
+    result.candidates.push({ id: `footprint-${shape.strategy}`, strategy: shape.strategy, footprint, area, grz: area / basis, gfz: (area * input.fullStoreys) / basis });
+  }
+  // Fullest first; among equals the more compact (rectangular) shape.
+  const rectangularity = (c: FootprintCandidate) => { const r = bounds(rotate(c.footprint, -angle)); return c.area / ((r.maxX - r.minX) * (r.maxY - r.minY)); };
+  result.candidates.sort((x, y) => (Math.abs(y.area - x.area) > target * 0.02 ? y.area - x.area : rectangularity(y) - rectangularity(x)));
+  result.candidates = result.candidates.slice(0, 3);
+  return result;
 }
 
 /** Affine image (normalised x/y) -> EPSG:25833, solved from three non-collinear controls. */

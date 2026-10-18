@@ -32,6 +32,7 @@ import { SiteEvidencePanel } from "./site-evidence-panel";
 import { SiteDesignResult } from "./site-design-result";
 import { SiteGeometryEditor } from "./site-geometry-editor";
 import { BerlinContext } from "./berlin-context";
+import { BuildingCodePanel } from "./building-code-panel";
 import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
 import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinParcel } from "./site-lookups";
 import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
@@ -539,6 +540,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
         <Section title={label("OtherChecks")}>
           <LimitsTable label={label}>{OTHER_CHECKS.map((key) => ruleRow({ kind: "check", key }, label(key), false))}</LimitsTable>
         </Section>
+        <BuildingCodePanel jurisdiction={assessment.jurisdiction} />
         <details className="site-secondary" id="site-upside">
           <summary className="text-ui-sm">{label("Upside")}{assessment.upside ? ` · ${label("UpsideOn")}` : ""}</summary>
           <div className="site-upside">

@@ -7,7 +7,7 @@ import {
   type SiteGeometryInput,
   type GeometryEvidence,
 } from "@richtfest/shared/site-geometry-model";
-import { createDefaultSetbacks } from "@richtfest/shared/site-geometry";
+import { createDefaultSetbacks, geometryArea } from "@richtfest/shared/site-geometry";
 import { SiteGeometryEditor, fullStoreyMeshHeight } from "../src/components/feasibility/site-geometry-editor";
 import { queryClient } from "../src/query";
 import { usePreferences } from "../src/store";
@@ -162,6 +162,15 @@ export async function testSiteGeometry() {
     flushSync(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     flushSync(() => button("Use usable area as capacity input").click());
     check(adopted === 1296, "Usable area adoption is explicit and calculated");
+    // 3 storeys × 3 m: Abstandsflächen 3.6 m keep 32.8² m² free, GRZ 0.4 of 1,600 m² caps the footprint at 640 m².
+    flushSync(() => button("Propose footprint").click());
+    await wait(() => state.buildings[0]!.footprint.source.includes("footprint_proposal_v1"));
+    const proposed = state.buildings[0]!, proposedArea = geometryArea(proposed.footprint.geometry);
+    check(
+      state.buildings.length === 1 && proposed.id === "building-a" && !proposed.footprint.reviewed && proposedArea <= 640 + 1e-6 && proposedArea > 600 && proposed.fullStoreys === 3,
+      "Footprint proposal reshapes the only building up to the GRZ limit, unreviewed",
+    );
+    await wait(() => host.querySelector(".geometry-proposal")?.textContent?.includes("limited by GRZ"));
     flushSync(() => host.querySelector<HTMLButtonElement>('.workbench-tool[aria-label="Draw building line (Baulinie, open)"]')!.click());
     const canvas = host.querySelector<HTMLElement>(".geometry-plan")!,
       box = canvas.getBoundingClientRect();
@@ -194,7 +203,7 @@ export async function testSiteGeometry() {
     const withStaffel = { ...edited, height: 30, staffel: [{ footprint: building.footprint, height: 3, countable: false, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }] };
     if (fullStoreyMeshHeight(withStaffel) + 3 !== 30) throw new Error("Explicit total height must not double-count Staffel");
     if (fullStoreyMeshHeight({ ...withStaffel, height: 12 }) + 3 !== 27) throw new Error("Computed total height must include Staffel above full storeys");
-    return { passed: true, checks: 10 };
+    return { passed: true, checks: 11 };
   } finally {
     root.unmount();
     host.remove();

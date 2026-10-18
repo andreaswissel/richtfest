@@ -1,5 +1,5 @@
 import {describe,test,expect} from "bun:test";
-import {suggestedStaffelShare,proposeStaffel,createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
+import {proposeFootprint,suggestedStaffelShare,proposeStaffel,createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
 const X=392000,Y=5820000;
 const rect=(x:number,y:number,w:number,h:number):GeometryMultiPolygon=>[[[[X+x,Y+y],[X+x+w,Y+y],[X+x+w,Y+y+h],[X+x,Y+y+h],[X+x,Y+y]]]];
 const ev=(geometry:GeometryMultiPolygon,id="p"):GeometryEvidence=>({id,label:id,geometry,source:"Synthetic test survey",sourceDate:"2026-10-19",reviewed:true});
@@ -97,4 +97,58 @@ test("the suggested Staffel share stays just below the state's full-storey thres
  // At exactly 2/3 Berlin counts a Vollgeschoss; the proposal must not land there.
  expect(classifyBerlinStorey({areaAbove230:geometryArea(proposeStaffel(rect(0,0,40,40),be.share)),referenceArea:1600,averageTopAboveTerrain:10,reviewed:true})).toBe("not_full");
  expect(suggestedStaffelShare("XX")).toBeNull();
+});
+
+describe("base footprint proposal",()=>{
+ const BE={factor:.4,minimum:3};
+ const rot=(g:GeometryMultiPolygon,t:number):GeometryMultiPolygon=>g.map(p=>p.map(r=>r.map(([x,y])=>{const dx=x-X,dy=y-Y;return [X+dx*Math.cos(t)-dy*Math.sin(t),Y+dx*Math.sin(t)+dy*Math.cos(t)] as [number,number];})));
+ test("insets the parcel by the Abstandsfläche of the proposed height on every open side",()=>{
+  // 3 × 3 m = 9 m, 0.4 H = 3.6 m (above the 3 m minimum): (30 − 7.2) × (40 − 7.2) = 747.84 m².
+  const r=proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:3,storeyHeight:3,setback:BE})!;
+  expect(r.depth).toBeCloseTo(3.6,6);expect(r.binding).toBe("setbacks");
+  expect(r.candidates[0]!.strategy).toBe("setback_hull");
+  expect(r.candidates[0]!.area).toBeLessThanOrEqual(747.84);expect(r.candidates[0]!.area).toBeGreaterThan(747.6);
+  // One storey less: H = 6 m, the 3 m minimum applies: 24 × 34.
+  expect(proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:2,storeyHeight:3,setback:BE})!.regionArea).toBeCloseTo(24*34,0);
+ });
+ test("GRZ and GFZ cap the footprint and every candidate keeps its Abstandsflächen on the parcel",()=>{
+  const grz=proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:3,storeyHeight:3,setback:BE,grz:.4})!;
+  expect(grz.binding).toBe("grz");expect(grz.target).toBeCloseTo(480,6);
+  expect(grz.candidates.length).toBeGreaterThan(1);
+  for(const c of grz.candidates){expect(c.area).toBeLessThanOrEqual(480+1e-6);expect(c.area).toBeGreaterThan(470);expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:c.footprint,height:9}]})[0]!.ok).toBe(true);}
+  // GFZ 0.9 over 3 storeys allows 360 m² of footprint, tighter than GRZ 0.4; the official parcel area is the basis.
+  const gfz=proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:3,storeyHeight:3,setback:BE,grz:.4,gfz:.9,parcelArea:1200})!;
+  expect(gfz.binding).toBe("gfz");expect(gfz.target).toBeCloseTo(360,6);expect(gfz.candidates[0]!.gfz).toBeLessThanOrEqual(.9+1e-9);
+ });
+ test("a boundary the building may stand on keeps no Abstandsfläche",()=>{
+  // West edge built to (closed form): only 3.6 m off the east side, (30 − 3.6) × 32.8 = 865.92 m².
+  const west:[[number,number],[number,number]]=[[X,Y+40],[X,Y]];
+  const r=proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:3,storeyHeight:3,setback:BE,boundaryEdges:[west]})!;
+  expect(r.candidates[0]!.area).toBeGreaterThan(865.5);expect(r.candidates[0]!.area).toBeLessThanOrEqual(865.92);
+  // The same footprint without the exemption fails the live check, so the exemption is what makes it valid.
+  expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:r.candidates[0]!.footprint,height:9}]})[0]!.ok).toBe(false);
+  expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:r.candidates[0]!.footprint,height:9}],exemptWalls:[west]})[0]!.ok).toBe(true);
+ });
+ test("a neighbour's Abstandsfläche reaching onto the parcel pushes the footprint away from it",()=>{
+  // Neighbour 1 m east of the parcel, 12 m high: its 4.8 m area reaches 3.8 m in; ours must not overlap it, so the east inset is 3.8 + 3.6.
+  const footprint=rect(31,5,10,30),neighbour={footprint,area:berlinSetbackArea(footprint,4.8)};
+  const r=proposeFootprint({parcel:rect(0,0,30,40),fullStoreys:3,storeyHeight:3,setback:BE,neighbours:[neighbour]})!;
+  // Beside the neighbour (the round corners of its area leave a little more room at its ends).
+  const east=Math.max(...intersectGeometry(r.candidates[0]!.footprint,rect(0,10,30,20)).flat(2).map(p=>p[0]))-X;
+  expect(east).toBeLessThanOrEqual(30-7.4+1e-3);expect(east).toBeGreaterThan(30-7.5);
+  expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:r.candidates[0]!.footprint,height:9}],neighbours:[neighbour]})[0]!.ok).toBe(true);
+ });
+ test("a rotated parcel yields the same footprint area, and bands follow the plot axis",()=>{
+  const r=proposeFootprint({parcel:rot(rect(0,0,30,40),Math.PI/5),fullStoreys:3,storeyHeight:3,setback:BE,grz:.4})!;
+  const compact=r.candidates.find(c=>c.strategy==="compact")??r.candidates[0]!;
+  expect(compact.area).toBeGreaterThan(470);expect(compact.area).toBeLessThanOrEqual(480+1e-6);
+  // In the plot frame a band is a rectangle: its area fills its own bounding box.
+  const band=r.candidates.find(c=>c.strategy.startsWith("band"))!;const local=rot(band.footprint,-Math.PI/5).flat(2);
+  const w=Math.max(...local.map(p=>p[0]))-Math.min(...local.map(p=>p[0])),h=Math.max(...local.map(p=>p[1]))-Math.min(...local.map(p=>p[1]));
+  expect(band.area/(w*h)).toBeGreaterThan(.99);
+ });
+ test("the state's setback rule sets the depth",()=>{
+  expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:rect(3,3,24,34),height:15}]})[0]!.depth).toBeCloseTo(6,6);
+  expect(checkSetbackAreas({parcel:rect(0,0,30,40),buildings:[{id:"c",footprint:rect(3,3,24,34),height:15}],setback:{factor:.2,minimum:3}})[0]!.ok).toBe(true);
+ });
 });

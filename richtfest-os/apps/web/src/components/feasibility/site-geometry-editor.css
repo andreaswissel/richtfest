@@ -625,6 +625,17 @@
   justify-content: space-between;
   gap: 0.5rem;
 }
+.geometry-massing-actions {
+  flex-wrap: wrap;
+  display: flex;
+  gap: 0.375rem;
+}
+.geometry-proposal {
+  display: grid;
+  gap: 0.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
 .geometry-massing-fields {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr);

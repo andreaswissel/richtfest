@@ -18,6 +18,7 @@ import {
   PanelLeft,
   PanelRight,
   Slash,
+  WandSparkles,
   Plus,
   Redo2,
   Scan,
@@ -33,17 +34,18 @@ import type {
   LocationBuilding,
   SiteAssessmentInput,
 } from "@richtfest/shared";
-import type { SetbackAreaCheck } from "@richtfest/shared/site-geometry";
+import type { FootprintProposal, SetbackAreaCheck } from "@richtfest/shared/site-geometry";
+import { buildingCodeRule, setbackDepth } from "@richtfest/shared/building-codes";
 import {
   createEmptySiteGeometryInput,
   siteGeometryInputSchema,
   type SiteGeometryInput,
   type BuildingGeometry,
   type GeometryEvidence,
+  type EdgeSetback,
   type GeometryMultiPolygon,
   type GeometryPoint,
   type SiteGeometryResult,
-  type MassingCandidate,
   type MassingOptions,
 } from "@richtfest/shared/site-geometry-model";
 import { useApi } from "../../query";
@@ -74,6 +76,10 @@ type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
 const DRAW_TOOLS: Tool[] = ["envelope", "line", "exclusion", "building", "staffel"];
 const HISTORY_LIMIT = 50;
+/** A footprint proposal run: the variants, the one applied, the building it drives and edges it marked as built to. */
+type FootprintRun = { result: FootprintProposal; index: number; buildingId: string; setbacks: EdgeSetback[] | null; builtTo: number };
+/** Live check depth where the state's setback rule is not captured: the Musterbauordnung standard, 0.4 H, at least 3 m. */
+const DEFAULT_SETBACK = { factor: 0.4, minimum: 3 };
 
 const evidence = (label: string, ring: GeometryPoint[]): GeometryEvidence => ({
   id: crypto.randomUUID(),
@@ -389,7 +395,7 @@ export function SiteGeometryEditor({
     [pickedSite, setPickedSite] = useState<GeometryPoint | null>(null);
   const [engine, setEngine] = useState<Engine>(),
     [result, setResult] = useState<SiteGeometryResult>(),
-    [candidates, setCandidates] = useState<MassingCandidate[]>([]),
+    [proposal, setProposal] = useState<FootprintRun | null>(null),
     [selected, setSelected] = useState<Selection>(null),
     [tool, setTool] = useState<Tool>("select"),
     [points, setPoints] = useState<GeometryPoint[]>([]),
@@ -432,7 +438,6 @@ export function SiteGeometryEditor({
         setResult(undefined);
       }
     }
-    setCandidates([]);
   }, [engine, value]);
   useEffect(() => {
     setPast([]);
@@ -510,11 +515,24 @@ export function SiteGeometryEditor({
     () => context ?? (geometry.parcel || addressParcels.length ? emptyContext([Math.round(extent.cx), Math.round(extent.cy)]) : null),
     [context, !!geometry.parcel || addressParcels.length > 0, Math.round(extent.cx), Math.round(extent.cy)],
   );
+  /** Abstandsfläche depth from the state's building code (verified rules only). */
+  const setbackRule = buildingCodeRule(jurisdiction, "setback");
+  /** Parcel edges marked as built to (closed building form): walls on them keep no Abstandsfläche. */
+  const exemptWalls = useMemo(() => {
+    const parcel = geometry.parcel?.geometry;
+    if (!parcel) return [];
+    return geometry.setbacks.flatMap((e) => {
+      const ring = parcel[e.polygonIndex]?.[e.ringIndex];
+      const a = ring?.[e.edgeIndex], b = ring?.[e.edgeIndex + 1];
+      return e.profile === "boundary_exception" && a && b ? [[a, b] as [GeometryPoint, GeometryPoint]] : [];
+    });
+  }, [geometry.parcel, geometry.setbacks]);
   /** Neighbouring buildings with a known height and their Abstandsflächen; buildings mostly on the parcel are treated as replaced. */
   const { neighbours, replaced } = useMemo(() => {
     const replaced = new Set<string>();
     if (!engine || !context || !geometry.parcel) return { neighbours: [], replaced };
     const parcel = geometry.parcel.geometry, reach = 40;
+    const boundary = parcel.flatMap((p) => p.flatMap((r) => r.slice(0, -1).map((a, i) => [a, r[i + 1]!] as [GeometryPoint, GeometryPoint])));
     const xs = parcel.flat(2).map((p) => p[0]), ys = parcel.flat(2).map((p) => p[1]);
     const [minX, minY, maxX, maxY] = [Math.min(...xs) - reach, Math.min(...ys) - reach, Math.max(...xs) + reach, Math.max(...ys) + reach];
     const neighbours = context.buildings.flatMap((b) => {
@@ -527,15 +545,16 @@ export function SiteGeometryEditor({
           replaced.add(b.id);
           return [];
         }
-        // Nebengebäude (garages, sheds) may stand in setback areas and keep none of their own (§ 6 (7) BauO Bln).
+        // Nebengebäude (garages, sheds) may stand in setback areas and keep none of their own (§ 6 (8) BauO Bln).
         if (b.ancillary) return [];
-        return b.height ? [{ footprint, area: engine.berlinSetbackArea(footprint, engine.deriveBerlinSetback("standard", b.height) ?? 3) }] : [];
+        // A neighbour's wall on a boundary of the parcel (a fire wall built to it) keeps no Abstandsfläche onto the parcel.
+        return b.height ? [{ footprint, area: engine.berlinSetbackArea(footprint, setbackDepth(setbackRule ?? DEFAULT_SETBACK, b.height), boundary) }] : [];
       } catch {
         return [];
       }
     });
     return { neighbours, replaced };
-  }, [engine, context, geometry.parcel]);
+  }, [engine, context, geometry.parcel, setbackRule]);
   /** The massing view shows the design instead of the existing buildings it replaces. */
   const scene3d = useMemo(() => (scene && replaced.size ? { ...scene, buildings: scene.buildings.filter((b) => !replaced.has(b.id)) } : scene), [scene, replaced]);
   const fitScale = Math.max(extent.w / (width * 0.8), extent.h / (height * 0.8));
@@ -784,8 +803,8 @@ export function SiteGeometryEditor({
       return { id: b.id, footprint: b.footprint.geometry, height: top, upper: b.staffel.map((s) => ({ footprint: s.footprint.geometry, height: (top += s.height) })) };
     });
     if (draft) buildings.push({ id: "draft", footprint: draft.footprint, height: draft.height });
-    return engine.checkSetbackAreas({ parcel: geometry.parcel.geometry, buildings, neighbours });
-  }, [engine, geometry.parcel, massingBuildings, draft, neighbours]);
+    return engine.checkSetbackAreas({ parcel: geometry.parcel.geometry, buildings, neighbours, setback: setbackRule ?? DEFAULT_SETBACK, exemptWalls });
+  }, [engine, geometry.parcel, massingBuildings, draft, neighbours, setbackRule, exemptWalls]);
   const shownSetbacks = layers.setbacks ? setbackChecks : NO_SETBACKS;
   /** The building the massing panel and the 3D grip work on: the selection, else the only building. */
   const focusBuilding = scenario === "baseline" ? (selectedBuilding ?? (geometry.buildings.length === 1 ? geometry.buildings[0] : undefined)) : undefined;
@@ -825,7 +844,90 @@ export function SiteGeometryEditor({
   // The state's building code sets from which share of the floor below a Staffel is a Vollgeschoss; the proposal stays just below it.
   const staffelRule = engine?.suggestedStaffelShare(jurisdiction) ?? null;
   const shareText = (share: number) => (Math.abs(share - 2 / 3) < 1e-6 ? "⅔" : `${format(share * 100, 0)} %`);
-  const fullStorey = (share: number) => (staffelRule ? share >= staffelRule.threshold - 1e-6 : true);
+  const fullStorey = (share: number) => (staffelRule ? (staffelRule.equalityCounts ? share >= staffelRule.threshold - 1e-6 : share > staffelRule.threshold + 1e-6) : true);
+  /**
+   * Base footprint proposal from the state's setback rule, the planning limits and the neighbours: applied as an unreviewed building
+   * (replacing the previous proposal), so it is dragged and reshaped like any outline. Variants switch in place.
+   */
+  const applyProposal = (run: FootprintRun, index: number) => {
+    const { result, buildingId } = run;
+    const candidate = result.candidates[index];
+    if (!candidate || !options) return;
+    const name = label("ObjectProposedBuilding");
+    const source = label("FootprintSource")
+      .replace("{depth}", format(result.depth, 1))
+      .replace("{height}", format(result.height, 1))
+      .replace("{rule}", setbackRule?.cite ?? "")
+      .replace("{binding}", label(`FootprintBinding_${result.binding}`));
+    const existing = geometry.buildings.find((b) => b.id === buildingId);
+    const b: BuildingGeometry = {
+      ...(existing ?? { staffel: [], height: null }),
+      id: buildingId,
+      label: existing?.label ?? name,
+      footprint: { id: existing?.footprint.id ?? crypto.randomUUID(), label: existing?.label ?? name, geometry: candidate.footprint, source, sourceDate: null, reviewed: false },
+      fullStoreys: options.maxFullStoreys,
+      storeyHeight: options.storeyHeight,
+      storeysSource: label("FootprintStoreysSource"),
+      storeysReviewed: false,
+      // A Staffel drawn on an earlier variant may not fit the new footprint; it is added again from the building.
+      staffel: [],
+    };
+    update({ buildings: existing ? geometry.buildings.map((x) => (x.id === buildingId ? b : x)) : [...geometry.buildings, b], ...(run.setbacks ? { setbacks: run.setbacks } : {}) });
+    setSelected({ kind: "building", id: buildingId });
+    setProposal({ ...run, index });
+  };
+  const proposeFootprint = async () => {
+    if (!engine || !geometry.parcel || !options || !setbackRule) return;
+    const parcel = geometry.parcel;
+    // The selected building is re-proposed in place; otherwise the previous proposal, otherwise a new building.
+    const keep = focusBuilding?.id ?? (proposal && geometry.buildings.some((b) => b.id === proposal.buildingId) ? proposal.buildingId : crypto.randomUUID());
+    // Other buildings of the design count as neighbours, so a second building keeps clear of the first.
+    const others = geometry.buildings.filter((b) => b.id !== keep).map((b) => ({ footprint: b.footprint.geometry, area: engine.berlinSetbackArea(b.footprint.geometry, setbackDepth(setbackRule, buildingHeight(b)), exemptWalls) }));
+    // With no edge marked as built to yet, closed building form is inferred from neighbours standing on the boundaries,
+    // and those edges are proposed (unreviewed) as built to. Reviewed edge setbacks are never overridden.
+    let boundaryEdges = exemptWalls, setbacks: EdgeSetback[] | null = null, builtTo = 0;
+    if (!exemptWalls.length && context) {
+      const proposals = await import("@richtfest/shared/site-proposals");
+      const buildings = context.buildings.filter((b) => !b.ancillary).map((b) => ({ id: b.id, label: b.label, polygons: b.polygons.map((p) => p.map((r) => r.map((point) => fromLocal(context, point)))) }));
+      const form = proposals.inferBuildingForm(parcel, buildings);
+      const reviewed = (e: { polygonIndex: number; ringIndex: number; edgeIndex: number }) => geometry.setbacks.some((x) => x.reviewed && x.polygonIndex === e.polygonIndex && x.ringIndex === e.ringIndex && x.edgeIndex === e.edgeIndex);
+      const edges = form.form === "closed" ? form.edges.filter((e) => form.builtTo.includes(e.id) && !reviewed(e)) : [];
+      if (edges.length) {
+        const height = options.maxFullStoreys * options.storeyHeight;
+        setbacks = proposals.proposeSetbacks(parcel, geometry.setbacks, height, new Set(edges.map((e) => e.id)), `H = ${options.maxFullStoreys} full storeys × ${options.storeyHeight} m`);
+        boundaryEdges = edges.map((e) => { const ring = parcel.geometry[e.polygonIndex]![e.ringIndex]!; return [ring[e.edgeIndex]!, ring[e.edgeIndex + 1]!] as [GeometryPoint, GeometryPoint]; });
+        builtTo = edges.length;
+      }
+    }
+    const result = engine.proposeFootprint({
+      parcel: parcel.geometry,
+      envelope: geometry.envelope?.geometry ?? null,
+      exclusions: geometry.exclusions.map((e) => e.geometry),
+      boundaryEdges,
+      neighbours: [...neighbours, ...others],
+      fullStoreys: options.maxFullStoreys,
+      storeyHeight: options.storeyHeight,
+      setback: setbackRule,
+      grz: options.grz,
+      gfz: options.gfz,
+      parcelArea,
+    });
+    if (!result) return;
+    const run: FootprintRun = { result, index: -1, buildingId: keep, setbacks, builtTo };
+    if (result.candidates.length) applyProposal(run, 0);
+    else setProposal(run);
+  };
+  /** Compass side a band variant sits on, from its centre relative to the whole buildable region. */
+  const proposalShape = (result: FootprintProposal, index: number) => {
+    const c = result.candidates[index];
+    if (!c) return "";
+    if (c.strategy === "setback_hull") return label("FootprintHull");
+    if (c.strategy === "compact") return label("compact_rectangle");
+    const centre = (g: GeometryMultiPolygon) => { const pts = g.flatMap((p) => p[0]!.slice(0, -1)); return [pts.reduce((n, p) => n + p[0], 0) / pts.length, pts.reduce((n, p) => n + p[1], 0) / pts.length]; };
+    const [ax, ay] = centre(c.footprint), [bx, by] = centre(result.region);
+    const dx = ax! - bx!, dy = ay! - by!;
+    return label(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "east_band" : "west_band") : dy > 0 ? "north_band" : "south_band");
+  };
   const addStaffel = (b: BuildingGeometry, share = staffelRule?.share ?? 2 / 3) => {
     const e = staffelProposal(b, share, label("ObjectStaffel").replace("{n}", String(b.staffel.length + 1)));
     if (!e) return;
@@ -1563,13 +1665,21 @@ export function SiteGeometryEditor({
                     geometry.buildings.length ? (
                       <p className="text-ui-xs muted">{label("MassingSelectBuilding")}</p>
                     ) : (
-                      <div className="geometry-massing-row">
-                        <span className="text-ui-xs muted">{label("MassingDrawPrompt")}</span>
-                        <Button size="sm" disabled={!canDraw} onClick={() => start("building")}>
-                          <Building2 className="size-icon-sm" aria-hidden="true" />
-                          {label("MassingDrawFootprint")}
-                        </Button>
-                      </div>
+                      <>
+                        <p className="text-ui-xs muted">{label("MassingDrawPrompt")}</p>
+                        <div className="geometry-massing-actions">
+                          <Button size="sm" variant="outline" disabled={disabled || !engine || !options || !setbackRule} onClick={proposeFootprint}>
+                            <WandSparkles className="size-icon-sm" aria-hidden="true" />
+                            {label("ProposeFootprint")}
+                          </Button>
+                          <Button size="sm" disabled={!canDraw} onClick={() => start("building")}>
+                            <Building2 className="size-icon-sm" aria-hidden="true" />
+                            {label("MassingDrawFootprint")}
+                          </Button>
+                        </div>
+                        {!options ? <p className="text-ui-2xs muted">{label("CandidatesNeed")}</p> : !setbackRule && <p className="text-ui-2xs muted">{label("FootprintNoRule")}</p>}
+                        {proposal && proposal.index < 0 && <Callout>{label("FootprintNone").replace("{storeys}", String(options?.maxFullStoreys ?? ""))}</Callout>}
+                      </>
                     )
                   ) : null}
                   {siteFigures && !pickedParcel && (
@@ -1592,6 +1702,30 @@ export function SiteGeometryEditor({
                     const bgf = floorArea(focusBuilding);
                     return (
                       <>
+                        {/* Shown while the building still has the proposed outline; once reshaped it is the person's own. */}
+                        {proposal && proposal.buildingId === focusBuilding.id && JSON.stringify(proposal.result.candidates[proposal.index]?.footprint) === JSON.stringify(focusBuilding.footprint.geometry) && (
+                          <div className="geometry-proposal" aria-label={label("FootprintProposalTitle")}>
+                            <strong className="text-ui-xs" id="footprint-variants">{label("FootprintProposalTitle")}</strong>
+                            {proposal.result.candidates.length > 1 && (
+                              <Segmented
+                                value={String(proposal.index)}
+                                onChange={(v) => applyProposal(proposal, Number(v))}
+                                items={proposal.result.candidates.map((_, i) => ({ value: String(i), label: label("FootprintVariant").replace("{n}", String(i + 1)) }))}
+                                aria-labelledby="footprint-variants"
+                              />
+                            )}
+                            <p className="text-ui-xs">
+                              {label("FootprintSummary")
+                                .replace("{shape}", proposalShape(proposal.result, proposal.index))
+                                .replace("{area}", format(proposal.result.candidates[proposal.index]!.area, 0))
+                                .replace("{binding}", label(`FootprintBinding_${proposal.result.binding}`))}
+                            </p>
+                            <p className="text-ui-2xs muted">
+                              {label("FootprintHint").replace("{depth}", format(proposal.result.depth, 1)).replace("{height}", format(proposal.result.height, 1)).replace("{rule}", setbackRule?.cite ?? "")}
+                              {proposal.builtTo > 0 && ` ${label("FootprintBuiltTo").replace("{count}", String(proposal.builtTo))}`}
+                            </p>
+                          </div>
+                        )}
                         <div className="geometry-massing-fields">
                           <Field label={label("MassingFloors")}>
                             <div className="geometry-stepper">
@@ -1768,31 +1902,13 @@ export function SiteGeometryEditor({
                     )}
                     {engine && geometry.parcel && (
                       <div className="geometry-review">
-                        <h3>{label("CandidatesTitle")}</h3>
-                        <Button variant="outline" size="sm" disabled={disabled || !options} onClick={() => options && setCandidates(engine.generateMassingCandidates(geometry, options))}>
-                          {label("Candidates")}
+                        <h3>{label("FootprintProposalTitle")}</h3>
+                        <Button variant="outline" size="sm" disabled={disabled || !options || !setbackRule} onClick={proposeFootprint}>
+                          <WandSparkles className="size-icon-sm" aria-hidden="true" />
+                          {label(proposal && geometry.buildings.some((b) => b.id === proposal.buildingId) ? "ProposeFootprintAgain" : "ProposeFootprint")}
                         </Button>
-                        {!options && <small className="muted">{label("CandidatesNeed")}</small>}
-                        {candidates.map((candidate, i) => {
-                          const name = `${label("Variant")} ${i + 1} · ${label(candidate.strategy)}`;
-                          return (
-                            <div key={candidate.id} className="geometry-candidate text-ui-xs">
-                              <strong>{name}</strong>
-                              <span>GF {format(candidate.metrics.countableFloorArea)} m² · BGF {format(candidate.metrics.grossFloorArea)} m²</span>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={disabled}
-                                onClick={() => {
-                                  update({ buildings: [{ ...candidate.building, label: name, footprint: { ...candidate.building.footprint, label: name } }] });
-                                  setSelected({ kind: "building", id: candidate.building.id });
-                                }}
-                              >
-                                {label("UseVariant")}
-                              </Button>
-                            </div>
-                          );
-                        })}
+                        {!options ? <small className="muted">{label("CandidatesNeed")}</small> : !setbackRule ? <small className="muted">{label("FootprintNoRule")}</small> : <small className="muted">{label("FootprintAbout")}</small>}
+                        {proposal && proposal.index < 0 && <Callout>{label("FootprintNone").replace("{storeys}", String(options?.maxFullStoreys ?? ""))}</Callout>}
                       </div>
                     )}
                     <p className="text-ui-2xs muted">{label("SelectHint")}</p>

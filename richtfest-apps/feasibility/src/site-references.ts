@@ -77,7 +77,7 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
    metrics:{footprint:metric(b.area,source,date),storeys:metric(storeys,source,null,"official"),ridgeHeight:metric(number(p.hoehe),source,null,"official"),eaveHeight:metric(null,source,null,"estimated"),depth:metric(dimensions.depth,source,date,"estimated"),frontage:metric(dimensions.frontage,source,date,"estimated"),boundaryDistance:metric(boundaryDistance,`${source} · ${parcelId??""}`,null),buildingLineOffset:metric(null,source,null,"estimated"),grz:metric(ratios?.grz??null,ratios?.grz2!=null?coverageSource:ratioSource,null),grz2:metric(ratios?.grz2??null,coverageSource,null,"estimated"),gfz:metric(ratios?.gfz??null,ratioSource,null,"estimated")},
    ...(cad&&text(cad.f.properties.bezbaw)?{buildingForm:{value:text(cad.f.properties.bezbaw),source:`${urls[2]} · ${text(cad.f.properties.uuid)}`,sourceDate:null,reviewed:false}}:{})};
  });
- // § 6 (7) BauO Bln: garages and sheds may stand in setback areas. Classified by the best-overlapping ALKIS building's function, or a height under 3 m.
+ // § 6 (8) BauO Bln: garages and sheds may stand in setback areas. Classified by the best-overlapping ALKIS building's function, or a height under 3 m.
  const isAncillary=(b:{g:Multi;area:number;box:ReturnType<typeof bbox>;f:{properties:Record<string,unknown>}})=>{
   const height=number(b.f.properties.hoehe);if(height!==null&&height>0&&height<3)return true;
   let best:{share:number;cls:"main"|"ancillary"}|null=null;

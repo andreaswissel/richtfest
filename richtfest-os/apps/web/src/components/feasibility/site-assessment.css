@@ -533,3 +533,4 @@
 .site-assessment.is-design > .site-step.is-workbench { flex: 1; min-height: 0; gap: 0; }
 .site-assessment.is-design .geometry-workbench { flex: 1; height: auto; min-height: 0; border: 0; border-radius: 0; }
 .site-map > svg[data-picking] { cursor: crosshair; }
+.building-code-cite { width: 15rem; }
