@@ -2,6 +2,9 @@
 
 ## 2026-10-18
 
+- **§ 34 reference plots:** On the parcel map, add any neighbouring plot as a § 34 reference and remove it again; chosen plots are outlined. Each shows its built footprint, GRZ, GFZ and storeys, plus the measured building height with the storeys it implies. Where listed storeys disagree with the height, one click uses the height-based count and scales the plot's GFZ with it. The unreviewed GRZ, GFZ and storey limits follow the chosen plots, so Design measures against them; entered or reviewed values stay.
+- **Staffelgeschoss:** Add a Staffelgeschoss from the building in Layers or the live preview. It is proposed as the footprint set back at least 1.5 m to at most ⅔ or 75 % of the floor below, adjustable in its details. It gets its own Abstandsfläche (0.4 H to its top, measured from its own walls) instead of raising the main walls' setback.
+- **Design:** The live preview shows Grundfläche, GRZ and GFZ against their limits while you draw. Layers have a delete button per object (Delete/Backspace also removes the selection), and the layer list, inspector and live preview can be resized by dragging their edges. The step bar now stays attached under the project tabs while scrolling.
 - **Parcel map:** Looking up parcels now also loads the surrounding buildings, so every parcel shows GRZ 1/GRZ 2, GFZ and its storeys straight away, and the § 34 comparison lists the storey range of the neighbours.
 - **Feasibility:** Opens directly on the site assessment; the financial study is paused and no longer shown.
 - **Design:** Double-click closes a footprint outline in the plan and in 3D. The footprint tool is now called "Draw building footprint", the building-line tool has its own line icon, and in 3D the selected building stands out while the others turn grey.

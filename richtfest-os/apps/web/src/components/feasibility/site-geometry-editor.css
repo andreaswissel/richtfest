@@ -30,7 +30,7 @@
 .geometry-body {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(200px, 14rem) auto minmax(0, 1fr) minmax(260px, 20rem);
+  grid-template-columns: var(--layers-w, 14rem) auto minmax(0, 1fr) var(--inspector-w, 20rem);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -83,8 +83,34 @@
   text-align: left;
   font-size: var(--ui-xs);
 }
-.geometry-object-row.is-child {
+.geometry-object-item {
+  position: relative;
+}
+.geometry-object-item.is-child .geometry-object-row {
   padding-left: 1.2rem;
+}
+/* The delete button sits over the row's status, so names keep the full width; it shows on hover, focus or selection. */
+.geometry-object-delete {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  transform: translateY(-50%);
+  background: var(--muted);
+  opacity: 0;
+}
+.geometry-object-item:hover .geometry-object-delete,
+.geometry-object-delete:focus-visible,
+.geometry-object-item:has([aria-pressed="true"]) .geometry-object-delete {
+  opacity: 1;
+}
+.geometry-object-item:hover > .geometry-object-row > small,
+.geometry-object-item:has([aria-pressed="true"]) > .geometry-object-row > small {
+  visibility: hidden;
+}
+@media (hover: none) {
+  .geometry-object-delete { opacity: 1; background: transparent; position: static; transform: none; }
+  .geometry-object-item { display: flex; align-items: center; }
+  .geometry-object-item > .geometry-object-row > small { visibility: visible; }
 }
 .geometry-object-row > span {
   min-width: 0;
@@ -455,6 +481,9 @@
   .geometry-body {
     grid-template-columns: auto minmax(0, 1fr);
   }
+  .geometry-resize {
+    display: none;
+  }
   .geometry-layers,
   .geometry-inspector {
     position: absolute;
@@ -557,7 +586,9 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  width: min(19rem, calc(100% - 20px));
+  width: min(var(--massing-w, 19rem), calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  overflow: auto;
   padding: 0.6rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -647,3 +678,21 @@
 .geometry-massing-action {
   align-self: flex-start;
 }
+.geometry-massing-site {
+  padding-bottom: var(--stack);
+  border-bottom: 1px solid var(--border);
+}
+.geometry-massing-site dd[data-over="true"] strong {
+  text-decoration: underline wavy var(--destructive);
+}
+.geometry-object-add {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.4rem 0.3rem 1.2rem;
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+}
+.geometry-object-add:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+.geometry-staffel-share { display: grid; gap: var(--stack); }

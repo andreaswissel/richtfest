@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createEmptySiteAssessmentInput } from "@richtfest/shared";
 import * as engine from "@richtfest/shared/site-proposals";
-import { applySiteSummary } from "../src/components/feasibility/site-summary";
+import { applySiteSummary, correctReferenceStoreys, parcelReference, proposeFrameFigures, storeysFromHeight } from "../src/components/feasibility/site-summary";
 import { planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "../src/components/feasibility/site-lookups";
 
 const X = 397000, Y = 5824000;
@@ -109,4 +109,33 @@ describe("one-click site summary", () => {
     expect(planningLawAt(c, [X + 10, Y + 15])).toMatchObject({ kind: "section34", landUse: { label: "Wohnbaufläche, W1" } });
     expect(applySiteSummary(empty, { context: c, discovery: discovery([]) }, engine, "2026-10-18").draft.planningBasis).toBe("section34");
   });
+  test("reference plots picked on the map drive the frame; a measured height corrects listed storeys and GFZ", () => {
+    const d = discovery([]);
+    // Two buildings on parcel 145: GRZ/GFZ are per parcel, storeys and height take the tallest building, footprints add up.
+    d.references.push({ id: "r2b", label: "Falkenberger Straße 145 Hof", source: "s", note: "", parcelId: "145", metrics: { grz: metric(0.46), gfz: metric(1.46), storeys: metric(2), footprint: metric(80), ridgeHeight: metric(10.2) } });
+    d.references[2]!.metrics!.footprint = metric(200);
+    const plot = { ...parcel("145", 40, false) };
+    const ref = parcelReference(plot, d)!;
+    expect(ref).toMatchObject({ id: "parcel:145", parcelId: "145", metrics: { grz: { value: 0.46 }, storeys: { value: 3.5 }, footprint: { value: 280 }, ridgeHeight: { value: 10.2 } } });
+    expect(parcelReference(parcel("7", 60, false), d)).toBeNull();
+    // Listed 2 storeys but 10.2 m measured: about 3; GFZ observed as GRZ × storeys scales from 0.76 to 1.14.
+    expect(storeysFromHeight(10.2)).toBe(3);
+    const listed = { id: "parcel:9", label: "9", source: "s", note: "", parcelId: "9", metrics: { grz: metric(0.38), gfz: metric(0.76), storeys: metric(2) } };
+    const corrected = correctReferenceStoreys(listed, 3, "height");
+    expect(corrected.metrics).toMatchObject({ storeys: { value: 3, kind: "estimated", reviewed: false }, gfz: { value: 1.14 }, grz: { value: 0.38 } });
+
+    const c = structuredClone(empty.constraints);
+    c.gfz = { value: 1.0, source: "Vorbescheid", sourceDate: "2026-05-01", kind: "official", reviewed: false };
+    proposeFrameFigures(c, [corrected], engine);
+    expect(c.grz).toMatchObject({ value: 0.38, kind: "estimated", reviewed: false });
+    expect(c.maxFullStoreys.value).toBe(3);
+    // An entered figure is never replaced by the frame, even unreviewed.
+    expect(c.gfz.value).toBe(1.0);
+    // A changed selection replaces the earlier frame proposal; removing every reference clears it.
+    proposeFrameFigures(c, [corrected, ref], engine);
+    expect(c.grz.value).toBe(0.46);
+    proposeFrameFigures(c, [], engine);
+    expect(c.grz.value).toBeNull();
+  });
 });
+

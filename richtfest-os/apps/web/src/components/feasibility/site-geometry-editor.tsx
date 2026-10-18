@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { create } from "zustand";
 import {
   ArrowLeftRight,
   Ban,
@@ -21,6 +22,7 @@ import {
   Redo2,
   Scan,
   SquareDashed,
+  Trash2,
   Undo2,
   ZoomIn,
   ZoomOut,
@@ -52,6 +54,7 @@ import { Checkbox } from "../ui/checkbox";
 import { DateInput } from "../ui/date-input";
 import { Input } from "../ui/input";
 import { Badge, Callout, Field, Segmented } from "../ui/primitives";
+import { ResizeHandle } from "../ui/resize-handle";
 import { NativeSelect } from "../ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { WorkbenchTool } from "../ui/workbench-tool";
@@ -289,6 +292,9 @@ function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, d
 const NO_SETBACKS: SetbackAreaCheck[] = [];
 const EMPTY_OVERLAY: ViewportState["site"] = { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] };
 /** Height used for setbacks: the whole building including Staffel, as the engine's "buildings" height source. */
+/** Panel widths the user dragged to, in CSS pixels; view state only, kept while the app is open. */
+type PanelWidths = { layers: number; inspector: number; massing: number };
+const usePanelWidths = create<PanelWidths & { set: (patch: Partial<PanelWidths>) => void }>((set) => ({ layers: 224, inspector: 320, massing: 304, set: (patch) => set(patch) }));
 export const buildingHeight = (b: BuildingGeometry) => Math.max(b.height ?? 0, b.fullStoreys * b.storeyHeight + b.staffel.reduce((h, s) => h + s.height, 0));
 /** Without a 3D location scene, the massing view still works around the parcel on an empty ground. */
 const emptyContext = (origin: GeometryPoint): LocationContext => ({
@@ -311,6 +317,7 @@ export function SiteGeometryEditor({
   upsideMassing,
   upsideStoreys,
   onAdoptParcel,
+  parcelArea,
 }: {
   projectId: string;
   value: SiteGeometryInput | null;
@@ -332,10 +339,13 @@ export function SiteGeometryEditor({
   upsideStoreys?: number | null;
   /** Adopts a cadastral parcel picked on the map, including its area constraint; without it only the geometry changes. */
   onAdoptParcel?: (parcel: BerlinParcel) => void;
+  /** Entered parcel area for GRZ/GFZ, as in the design check; the drawn parcel is the fallback. */
+  parcelArea?: number | null;
 }) {
   const t = useT(),
     language = usePreferences((s) => s.language),
     label = (key: string) => t(`siteGeometry${key}` as Key);
+  const widths = usePanelWidths();
   const location = useApi(`/projects/${projectId}/location`),
     context = contextOverride ?? (location.data as LocationState | undefined)?.context;
   // Cadastral parcels come from the Site step's lookup (shared query cache); the same locator keeps the key identical.
@@ -699,7 +709,12 @@ export function SiteGeometryEditor({
   const massingBuildings = useMemo(() => (scenario === "upside" ? (upsideMassing ? [upsideMassing.building] : []) : geometry.buildings), [scenario, upsideMassing, geometry.buildings]);
   const setbackChecks = useMemo(() => {
     if (!engine || !geometry.parcel) return [];
-    const buildings = massingBuildings.map((b) => ({ id: b.id, footprint: b.footprint.geometry, height: buildingHeight(b) }));
+    // Staffel volumes stack on the main body; each gets its own setback from its walls at its top height.
+    const buildings: { id: string; footprint: GeometryMultiPolygon; height: number; upper?: { footprint: GeometryMultiPolygon; height: number }[] }[] = massingBuildings.map((b) => {
+      if (!b.staffel.length) return { id: b.id, footprint: b.footprint.geometry, height: buildingHeight(b) };
+      let top = fullStoreyMeshHeight(b);
+      return { id: b.id, footprint: b.footprint.geometry, height: top, upper: b.staffel.map((s) => ({ footprint: s.footprint.geometry, height: (top += s.height) })) };
+    });
     if (draft) buildings.push({ id: "draft", footprint: draft.footprint, height: draft.height });
     return engine.checkSetbackAreas({ parcel: geometry.parcel.geometry, buildings, neighbours });
   }, [engine, geometry.parcel, massingBuildings, draft, neighbours]);
@@ -714,8 +729,47 @@ export function SiteGeometryEditor({
       return null;
     }
   };
+  /** Live site figures for the massing overlay: combined footprint, GRZ and GFZ, including the outline being drawn. */
+  const siteFigures = useMemo(() => {
+    if (!engine || !geometry.parcel) return null;
+    const shapes = [...massingBuildings.map((b) => b.footprint.geometry), ...(draft ? [draft.footprint] : [])];
+    if (!shapes.length) return null;
+    try {
+      const basis = parcelArea && parcelArea > 0 ? parcelArea : engine.geometryArea(geometry.parcel.geometry);
+      const footprint = engine.geometryArea(engine.unionGeometry(...shapes));
+      const countable =
+        massingBuildings.reduce((n, b) => n + engine.geometryArea(b.footprint.geometry) * b.fullStoreys + b.staffel.reduce((m, st) => m + (st.countable ? engine.geometryArea(st.footprint.geometry) : 0), 0), 0) +
+        (draft ? engine.geometryArea(draft.footprint) * defaultStoreys : 0);
+      return basis > 0 ? { footprint, grz: footprint / basis, gfz: countable / basis } : null;
+    } catch {
+      return null;
+    }
+  }, [engine, geometry.parcel, massingBuildings, draft, parcelArea, defaultStoreys]);
   const setStoreys = (b: BuildingGeometry, patch: { fullStoreys?: number; storeyHeight?: number }) =>
     patchBuilding(b.id, (x) => ({ ...x, ...patch, height: null, storeysReviewed: false }));
+  /** Proposes a Staffelgeschoss on top of the building: the footprint inset until it covers at most `share` of the floor below. */
+  const staffelProposal = (b: BuildingGeometry, share: number, name: string): GeometryEvidence | null => {
+    if (!engine) return null;
+    const footprint = engine.proposeStaffel(b.footprint.geometry, share);
+    return footprint.length ? { ...evidence(name, []), geometry: footprint, source: label("StaffelProposalSource").replace("{share}", format(share * 100, 0)) } : null;
+  };
+  // Below the full-storey threshold (2/3) the Staffel is not a Vollgeschoss; its classification stays for review.
+  const addStaffel = (b: BuildingGeometry, share = 2 / 3) => {
+    const e = staffelProposal(b, share, label("ObjectStaffel").replace("{n}", String(b.staffel.length + 1)));
+    if (!e) return;
+    patchBuilding(b.id, (x) => ({
+      ...x,
+      height: null,
+      staffel: [...x.staffel, { footprint: e, countable: share > 2 / 3 + 1e-6, height: b.storeyHeight, areaAbove230: null, averageTopAboveTerrain: null, classificationReviewed: false }],
+    }));
+    setSelected({ kind: "staffel", id: e.id });
+  };
+  /** Re-proposes the selected Staffel's outline for another share of the floor below, keeping its id, name and height. */
+  const reshapeStaffel = (b: BuildingGeometry, staffel: BuildingGeometry["staffel"][number], share: number) => {
+    const e = staffelProposal(b, share, staffel.footprint.label);
+    if (!e) return;
+    patchBuilding(b.id, (x) => ({ ...x, staffel: x.staffel.map((st) => (st === staffel ? { ...st, footprint: { ...e, id: st.footprint.id }, countable: share > 2 / 3 + 1e-6, classificationReviewed: false } : st)) }));
+  };
   /** 3D drags: moving follows the ground like the plan drag (10 cm steps), extruding snaps to whole floors. */
   const drag3d = useRef<{ base: SiteGeometryInput; floors: number } | null>(null);
   const onDrag3d = {
@@ -742,16 +796,18 @@ export function SiteGeometryEditor({
       onChange({ ...drag.base, buildings: drag.base.buildings.map((b) => (b.id === id ? { ...b, fullStoreys: floors, height: null, storeysReviewed: false } : b)) });
     },
   };
+  const removeObject = (kind: SelectionKind, id: string) => {
+    if (kind === "line") update({ mandatoryLines: geometry.mandatoryLines.filter((l) => l.id !== id) });
+    if (kind === "parcel") update({ parcel: null, setbacks: [] });
+    if (kind === "envelope") update({ envelope: null });
+    if (kind === "exclusion") update({ exclusions: geometry.exclusions.filter((e) => e.id !== id), exclusionsReviewed: false });
+    if (kind === "building") update({ buildings: geometry.buildings.filter((b) => b.id !== id) });
+    if (kind === "staffel") update({ buildings: geometry.buildings.map((b) => ({ ...b, staffel: b.staffel.filter((s) => s.footprint.id !== id) })) });
+    if (kind === "edge") update({ setbacks: geometry.setbacks.filter((e) => e.id !== id) });
+    if (selected?.kind === kind && selected.id === id) setSelected(null);
+  };
   const removeSelected = () => {
-    if (!selected) return;
-    if (selected.kind === "line") update({ mandatoryLines: geometry.mandatoryLines.filter((l) => l.id !== selected.id) });
-    if (selected.kind === "parcel") update({ parcel: null, setbacks: [] });
-    if (selected.kind === "envelope") update({ envelope: null });
-    if (selected.kind === "exclusion") update({ exclusions: geometry.exclusions.filter((e) => e.id !== selected.id), exclusionsReviewed: false });
-    if (selected.kind === "building") update({ buildings: geometry.buildings.filter((b) => b.id !== selected.id) });
-    if (selected.kind === "staffel") update({ buildings: geometry.buildings.map((b) => ({ ...b, staffel: b.staffel.filter((s) => s.footprint.id !== selected.id) })) });
-    if (selected.kind === "edge") update({ setbacks: geometry.setbacks.filter((e) => e.id !== selected.id) });
-    setSelected(null);
+    if (selected) removeObject(selected.kind, selected.id);
   };
   const openEdge = (pi: number, ri: number, ei: number) => {
     let edge = geometry.setbacks.find((e) => e.polygonIndex === pi && e.ringIndex === ri && e.edgeIndex === ei);
@@ -798,6 +854,11 @@ export function SiteGeometryEditor({
     if (points.length && event.key === "Backspace") {
       event.preventDefault();
       setPoints((p) => p.slice(0, -1));
+      return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && !points.length && selected && !disabled && scenario === "baseline") {
+      event.preventDefault();
+      removeSelected();
       return;
     }
     const key = event.key.toLowerCase();
@@ -944,11 +1005,19 @@ export function SiteGeometryEditor({
     : null;
   const bar = scaleBar(metresPerPixel, width);
   const edgeDecisions = geometry.parcel ? geometry.parcel.geometry.flat().reduce((n, ring) => n + ring.length - 1, 0) : 0;
+  // Each layer row selects its object; the trash button deletes it (one undo step, like Delete on the selection).
   const objectRow = (key: string, name: string, kind: SelectionKind, id: string, status?: ReactNode, indent = false) => (
-    <button key={key} type="button" className={`geometry-object-row${indent ? " is-child" : ""}`} aria-pressed={selected?.kind === kind && selected.id === id} onClick={() => selectId(id)}>
-      <span>{name}</span>
-      {status}
-    </button>
+    <div key={key} className={`geometry-object-item${indent ? " is-child" : ""}`}>
+      <button type="button" className="geometry-object-row" aria-pressed={selected?.kind === kind && selected.id === id} onClick={() => selectId(id)}>
+        <span>{name}</span>
+        {status}
+      </button>
+      {!disabled && scenario === "baseline" && (
+        <Button variant="ghost" size="icon-xs" className="geometry-object-delete" aria-label={label("DeleteObject").replace("{name}", name)} title={label("DeleteObject").replace("{name}", name)} onClick={() => removeObject(kind, id)}>
+          <Trash2 className="size-icon-sm" aria-hidden="true" />
+        </Button>
+      )}
+    </div>
   );
   const smallStatus = (reviewed: boolean) => <small className="muted">{t(reviewed ? "siteAssessmentReviewedShort" : "siteAssessmentUnreviewed")}</small>;
 
@@ -982,7 +1051,9 @@ export function SiteGeometryEditor({
             </Button>
           </div>
         </div>
-        <div className={`geometry-body${panel ? ` show-${panel}` : ""}`}>
+        <div className={`geometry-body${panel ? ` show-${panel}` : ""}`} style={{ "--layers-w": `${widths.layers}px`, "--inspector-w": `${widths.inspector}px` } as CSSProperties}>
+          <ResizeHandle className="geometry-resize" edge="right" value={widths.layers} min={180} max={480} onChange={(layers) => widths.set({ layers })} label={label("ResizeLayers")} style={{ left: widths.layers }} />
+          <ResizeHandle className="geometry-resize" edge="left" value={widths.inspector} min={300} max={640} onChange={(inspector) => widths.set({ inspector })} label={label("ResizeInspector")} style={{ left: `calc(100% - ${widths.inspector}px)` }} />
           <aside className="geometry-layers" aria-label={label("Layers")}>
             <h2><Layers className="size-icon-sm" aria-hidden="true" />{label("Layers")}</h2>
             <div className="geometry-layer-section">
@@ -1013,6 +1084,12 @@ export function SiteGeometryEditor({
                 <div key={b.id}>
                   {objectRow(b.id, buildingName(b, i), "building", b.id, smallStatus(b.footprint.reviewed && b.storeysReviewed))}
                   {b.staffel.map((s, si) => objectRow(s.footprint.id, staffelName(s, si), "staffel", s.footprint.id, smallStatus(s.footprint.reviewed && s.classificationReviewed), true))}
+                  {!disabled && scenario === "baseline" && (
+                    <button type="button" className="geometry-object-add text-ui-xs" disabled={!engine} onClick={() => addStaffel(b)}>
+                      <Plus className="size-icon-sm" aria-hidden="true" />
+                      {label("MassingAddStaffel")}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -1362,7 +1439,8 @@ export function SiteGeometryEditor({
                 </div>
               )}
               {scenario === "baseline" && (geometry.parcel || alkis.length > 0) && (
-                <section className="geometry-massing" aria-label={label("MassingTitle")}>
+                <section className="geometry-massing" aria-label={label("MassingTitle")} style={{ "--massing-w": `${widths.massing}px` } as CSSProperties}>
+                  <ResizeHandle edge="left" value={widths.massing} min={240} max={560} onChange={(massing) => widths.set({ massing })} label={label("ResizeMassing")} style={{ left: 0 }} />
                   <ol className="geometry-massing-steps text-ui-2xs">
                     {([["Parcel", !!geometry.parcel], ["Footprint", geometry.buildings.length > 0], ["Height", !!focusBuilding]] as const).map(([step, done], i) => (
                       <li key={step} data-done={done}>
@@ -1395,6 +1473,21 @@ export function SiteGeometryEditor({
                       </div>
                     )
                   ) : null}
+                  {siteFigures && !pickedParcel && (
+                    <dl className="geometry-massing-values geometry-massing-site text-ui-xs" aria-label={label("MassingSiteFigures")}>
+                      <dt>{label("MassingFootprintArea")}</dt>
+                      <dd>{format(siteFigures.footprint, 0)} m²</dd>
+                      {([["GRZ", siteFigures.grz, options?.grz], ["GFZ", siteFigures.gfz, options?.gfz]] as const).map(([name, value, limit]) => (
+                        <Fragment key={name}>
+                          <dt>{name}</dt>
+                          <dd data-over={limit != null && value > limit + 1e-6}>
+                            <strong>{format(value, 2)}</strong>
+                            {limit != null && <span className="muted"> / {label("MassingLimit").replace("{value}", format(limit, 2))}</span>}
+                          </dd>
+                        </Fragment>
+                      ))}
+                    </dl>
+                  )}
                   {focusBuilding && !pickedParcel && !(drawing && tool === "building") && (() => {
                     const check = setbackChecks.find((c) => c.id === focusBuilding.id);
                     const bgf = floorArea(focusBuilding);
@@ -1451,7 +1544,19 @@ export function SiteGeometryEditor({
                               <dd>{label("MassingSetbackDepth").replace("{depth}", format(check.depth, 1))}</dd>
                             </>
                           )}
+                          {check?.upperDepth != null && (
+                            <>
+                              <dt>{label("MassingSetbackStaffel")}</dt>
+                              <dd>{label("MassingSetbackStaffelDepth").replace("{depth}", format(check.upperDepth, 1))}</dd>
+                            </>
+                          )}
                         </dl>
+                        {!disabled && (
+                          <Button size="sm" variant="outline" className="geometry-massing-action" disabled={!engine} onClick={() => addStaffel(focusBuilding)}>
+                            <Plus className="size-icon-sm" aria-hidden="true" />
+                            {label("MassingAddStaffel")}
+                          </Button>
+                        )}
                         {check && (
                           <p className="geometry-massing-check text-ui-xs" data-ok={check.ok} role="status">
                             <span className="geometry-massing-swatch" aria-hidden="true" />
@@ -1648,6 +1753,24 @@ export function SiteGeometryEditor({
                 {selectedStaffel && selectedBuilding && (
                   <>
                     <h3>{label("StaffelTitle")}</h3>
+                    {(() => {
+                      const area = engine ? engine.geometryArea(selectedStaffel.footprint.geometry) : 0, below = engine ? engine.geometryArea(selectedBuilding.footprint.geometry) : 0;
+                      const share = below > 0 ? area / below : 0;
+                      return (
+                        <div className="geometry-staffel-share">
+                          <p className="text-ui-xs">{label("StaffelArea").replace("{area}", format(area, 0)).replace("{share}", format(share * 100, 0))}</p>
+                          {!disabled && (
+                            <Field label={label("MassingStaffelShare")}>
+                              <Segmented
+                                value={share > 0.7 ? "0.75" : share > 0.6 ? String(2 / 3) : ""}
+                                onChange={(v) => reshapeStaffel(selectedBuilding, selectedStaffel, Number(v))}
+                                items={[{ value: String(2 / 3), label: "⅔" }, { value: "0.75", label: "75 %" }]}
+                              />
+                            </Field>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {numberField(label("StaffelHeight"), selectedStaffel.height, (n) => n !== null && n > 0 && patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, height: n, classificationReviewed: false } : x)) })))}
                     {(["areaAbove230", "averageTopAboveTerrain"] as const).map((key) => (
                       <div key={key}>{numberField(label(key), selectedStaffel[key], (n) => patchBuilding(selectedBuilding.id, (b) => ({ ...b, staffel: b.staffel.map((x) => (x === selectedStaffel ? { ...x, [key]: n, classificationReviewed: false } : x)) })))}</div>

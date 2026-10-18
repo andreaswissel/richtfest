@@ -1,5 +1,5 @@
 import {describe,test,expect} from "bun:test";
-import {createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
+import {proposeStaffel,createEmptySiteGeometryInput,calculateSiteGeometry,createDefaultSetbacks,geometryArea,validateGeometry,generateMassingCandidates,classifyBerlinStorey,deriveBerlinSetback,berlinSetbackArea,checkSetbackAreas,intersectGeometry,affineFromControlPoints,transformPlanPoint,type GeometryEvidence,type GeometryMultiPolygon,type BuildingGeometry,type SiteGeometryInput} from "./site-geometry";
 const X=392000,Y=5820000;
 const rect=(x:number,y:number,w:number,h:number):GeometryMultiPolygon=>[[[[X+x,Y+y],[X+x+w,Y+y],[X+x+w,Y+y+h],[X+x,Y+y+h],[X+x,Y+y]]]];
 const ev=(geometry:GeometryMultiPolygon,id="p"):GeometryEvidence=>({id,label:id,geometry,source:"Synthetic test survey",sourceDate:"2026-10-19",reviewed:true});
@@ -68,4 +68,25 @@ test("Abstandsflächen are wall rectangles of 0.4 H (min 3 m) and turn red only 
  expect(checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:6}],neighbours:[{footprint:neighbour,area:berlinSetbackArea(neighbour,3)}]})[0]!.ok).toBe(true);
  const close=rect(25,10,6,6);
  expect(checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:6}],neighbours:[{footprint:close,area:berlinSetbackArea(close,3)}]})[0]!.ok).toBe(false);
+});
+test("a Staffelgeschoss gets its own setback area: recessed walls stay inside the main area, flush walls reach further",()=>{
+ const parcel=rect(0,0,40,40),footprint=rect(10,10,20,20);
+ // Whole building treated as 12 m: 0.4 × 12 = 4.8 m on every wall, 4 × 20 × 4.8 = 384 m².
+ const [whole]=checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:12}]});
+ expect(geometryArea(whole!.area)).toBeCloseTo(384,1);
+ // 3 floors (9 m → 3.6 m: 4 × 20 × 3.6 = 288 m²) plus a Staffel recessed 4 m on all sides, top at 12 m: its 4.8 m reach only 0.8 m past the main walls.
+ const [recessed]=checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:9,upper:[{footprint:rect(14,14,12,12),height:12}]}]});
+ expect(recessed!.depth).toBeCloseTo(3.6);expect(recessed!.upperDepth).toBeCloseTo(4.8);
+ expect(geometryArea(recessed!.area)).toBeCloseTo(288,1);
+ // Staffel flush with the west and east walls over 12 m: those strips are 4.8 m deep, 1.2 m beyond the main area: 288 + 2 × 12 × 1.2.
+ const [flush]=checkSetbackAreas({parcel,buildings:[{id:"a",footprint,height:9,upper:[{footprint:rect(10,14,20,12),height:12}]}]});
+ expect(geometryArea(flush!.area)).toBeCloseTo(288+28.8,1);
+});
+test("Staffel proposal insets the footprint to at most two thirds of the floor below, at least 1.5 m",()=>{
+ const s=proposeStaffel(rect(0,0,20,10));
+ expect(geometryArea(s)).toBeLessThanOrEqual(200*2/3+1e-6);
+ // A small inset that just meets 2/3: (20-2d)(10-2d) = 133.33 → d ≈ 0.88, so the 1.5 m minimum applies: 17 × 7 = 119.
+ expect(geometryArea(s)).toBeCloseTo(17*7,1);
+ // A wide plate needs more than 1.5 m: 40 × 40, (40-2d)² ≤ 1066.7 → d ≥ 3.67.
+ const w=proposeStaffel(rect(0,0,40,40));expect(geometryArea(w)).toBeLessThanOrEqual(1600*2/3+1e-6);expect(geometryArea(w)).toBeGreaterThan(1600*2/3-5);
 });

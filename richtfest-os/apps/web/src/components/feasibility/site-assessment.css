@@ -155,15 +155,16 @@
 
 /* Header: key facts first, decisions (report, save) on the right — mirrors the financial study. */
 .site-header {
+  /* Sticks flush under the project tabs: Chrome insets sticky elements by the scroller's padding, so offset by it and span the page gutters. */
   position: sticky;
-  top: 0;
+  top: calc(var(--stack) * -1);
   z-index: 9;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--stack) calc(var(--stack) * 2);
-  margin-top: calc(var(--stack) * -1);
-  padding-block: var(--stack);
+  margin: calc(var(--stack) * -1) calc(var(--page) * -1) 0;
+  padding: var(--stack) var(--page);
   border-bottom: 1px solid var(--border);
   background: var(--background);
 }
@@ -289,6 +290,7 @@
   stroke-width: 3;
 }
 .site-map svg .site-map-parcel[data-adopted="true"] { stroke: #10b981; stroke-opacity: 1; stroke-width: 3; }
+.site-map svg .site-map-parcel[data-reference="true"] { stroke: #f59e0b; stroke-opacity: 1; stroke-width: 2.5; stroke-dasharray: 6 3; }
 .site-map-label,
 .site-map-plan-label {
   fill: var(--foreground);
@@ -510,3 +512,7 @@
 .site-limits-table [data-slot="table-cell"] { padding-block: calc(var(--cell) / 2); }
 .site-plan-trace { display: flex; flex-direction: column; gap: var(--stack); padding-top: var(--stack); border-top: 1px solid var(--border); }
 .site-map-panel-actions > a { margin-left: auto; }
+
+.site-map-reference { display: grid; gap: var(--stack-gap, .375rem); }
+.site-map-reference-check { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
+.site-reference-frame { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem; }

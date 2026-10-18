@@ -54,12 +54,12 @@ export function berlinSetbackArea(footprint:Multi,depth:number):Multi {
  }
  return strips.length?difference(clip.union(strips[0]!,...strips.slice(1)),footprint):[];
 }
-export type SetbackAreaCheck={id:string;height:number;depth:number;area:Multi;clear:Multi;conflict:Multi;outsideParcel:number;overlap:number;ok:boolean};
+export type SetbackAreaCheck={id:string;height:number;depth:number;upperDepth:number|null;area:Multi;clear:Multi;conflict:Multi;outsideParcel:number;overlap:number;ok:boolean};
 /**
  * Live Abstandsflächen check for draft massing (standard profile, 0.4 H, min 3 m): areas must stay on the parcel and must not
  * overlap the areas or footprints of other buildings. Indicative only; the reviewed per-edge setbacks remain the calculation.
  */
-export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;footprint:Multi;height:number}[];neighbours?:{footprint:Multi;area:Multi}[]}):SetbackAreaCheck[]{
+export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;footprint:Multi;height:number;upper?:{footprint:Multi;height:number}[]}[];neighbours?:{footprint:Multi;area:Multi}[]}):SetbackAreaCheck[]{
  // Clipping runs relative to a local origin: raw UTM magnitudes make near-coincident edges fail in the sweep line.
  const o=input.parcel?.[0]?.[0]?.[0]??input.buildings[0]?.footprint[0]?.[0]?.[0]??[0,0] as Point;
  const shift=(g:Multi,dx:number,dy:number):Multi=>g.map(p=>p.map(r=>r.map(([x,y])=>[x+dx,y+dy] as Point)));
@@ -68,7 +68,8 @@ export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;
  const merge=(pieces:Multi[]):Multi=>pieces.reduce<Multi>((acc,g)=>{if(!acc.length)return g;try{return clip.union(acc,g);}catch{return acc;}},[]);
  const parcel=input.parcel&&local(input.parcel);
  const neighbours=(input.neighbours??[]).map(n=>({footprint:local(n.footprint),area:local(n.area)}));
- const areas=input.buildings.map(b=>{const footprint=local(b.footprint),depth=deriveBerlinSetback("standard",b.height)??3;try{return {...b,footprint,depth,area:berlinSetbackArea(footprint,depth)};}catch{return {...b,footprint,depth,area:[] as Multi};}});
+ // A recessed Staffelgeschoss has its own walls: its area is measured from those walls with its top height, and only the part beyond the main footprint lies on the ground.
+ const areas=input.buildings.map(b=>{const footprint=local(b.footprint),depth=deriveBerlinSetback("standard",b.height)??3,upper=(b.upper??[]).map(u=>({footprint:local(u.footprint),depth:deriveBerlinSetback("standard",u.height)??3})),upperDepth=upper.length?Math.max(...upper.map(u=>u.depth)):null;try{const area=merge([berlinSetbackArea(footprint,depth),...upper.map(u=>{try{return difference(berlinSetbackArea(u.footprint,u.depth),footprint);}catch{return [] as Multi;}})].filter(g=>g.length));return {...b,footprint,depth,upperDepth,area};}catch{return {...b,footprint,depth,upperDepth,area:[] as Multi};}});
  return areas.map(b=>{
   try{
    const outside=parcel?difference(b.area,parcel):b.area;
@@ -77,9 +78,23 @@ export function checkSetbackAreas(input:{parcel:Multi|null;buildings:{id:string;
    const overlap=merge(overlaps),outsideArea=geometryArea(outside);
    const conflict=merge([...(outsideArea>.01?[outside]:[]),...(overlap.length?[overlap]:[])]);
    let clear=b.area;try{if(conflict.length)clear=difference(b.area,conflict);}catch{/* keep the full area as drawn */}
-   return {id:b.id,height:b.height,depth:b.depth,area:site(b.area),clear:site(clear),conflict:site(conflict),outsideParcel:outsideArea,overlap:geometryArea(overlap),ok:outsideArea<=.01&&geometryArea(overlap)<=.01};
-  }catch{return {id:b.id,height:b.height,depth:b.depth,area:site(b.area),clear:site(b.area),conflict:[],outsideParcel:0,overlap:0,ok:false};}
+   return {id:b.id,height:b.height,depth:b.depth,upperDepth:b.upperDepth,area:site(b.area),clear:site(clear),conflict:site(conflict),outsideParcel:outsideArea,overlap:geometryArea(overlap),ok:outsideArea<=.01&&geometryArea(overlap)<=.01};
+  }catch{return {id:b.id,height:b.height,depth:b.depth,upperDepth:b.upperDepth,area:site(b.area),clear:site(b.area),conflict:[],outsideParcel:0,overlap:0,ok:false};}
  });
+}
+/**
+ * Staffelgeschoss proposal: the footprint inset on every side, at least `minInset`, until it covers at most `maxShare` of the floor
+ * below (2/3 is the Berlin full-storey threshold). Geometric proposal only; classification still needs the reviewed clear-height area.
+ */
+export function proposeStaffel(footprint:Multi,maxShare=2/3,minInset=1.5):Multi{
+ const o=footprint[0]?.[0]?.[0];if(!o)return [];
+ const shift=(g:Multi,dx:number,dy:number):Multi=>g.map(p=>p.map(r=>r.map(([x,y])=>[x+dx,y+dy] as Point)));
+ const local=shift(footprint,-o[0],-o[1]),base=geometryArea(local);if(!(base>0))return [];
+ const inset=(d:number):Multi=>{let g=local;for(const p of local)for(const r of p)for(let i=0;i<r.length-1;i++){g=difference(g,capsule(r[i]!,r[i+1]!,d));if(!g.length)return g;}return g;};
+ let lo=minInset,hi=Math.sqrt(base),best=inset(lo);
+ if(!best.length)return [];
+ if(geometryArea(best)>base*maxShare){for(let n=0;n<24;n++){const mid=(lo+hi)/2,g=inset(mid);if(g.length&&geometryArea(g)<=base*maxShare){best=g;hi=mid;}else if(!g.length)hi=mid;else lo=mid;}}
+ return geometryArea(best)>base*maxShare?[]:shift(best,o[0],o[1]);
 }
 /** Berlin BauO §2(12), current July 2026: equality at 2/3 qualifies; elevation must exceed 1.40m. */
 export function classifyBerlinStorey(input:{areaAbove230:number|null;referenceArea:number;averageTopAboveTerrain:number|null;reviewed:boolean}):"full"|"not_full"|"unresolved" {

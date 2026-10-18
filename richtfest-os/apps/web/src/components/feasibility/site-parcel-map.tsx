@@ -47,12 +47,14 @@ const labelPoint = (polygons: Point[][][]): Point | null => {
  * ALKIS parcels labelled with their number and observed GRZ/GFZ, B-Plan areas by name and nearby building
  * footprints. Selecting a parcel opens its record on the left; adopting it stays an explicit action.
  */
-export function SiteParcelMap({ projectId, context, discovery, selected, adoptedId, onSelect, renderPanel }: {
+export function SiteParcelMap({ projectId, context, discovery, selected, adoptedId, referenceIds, onSelect, renderPanel }: {
   projectId: string;
   context: BerlinSiteContext;
   discovery?: SiteDiscovery;
   selected?: string;
   adoptedId?: string;
+  /** Parcels chosen as § 34 references, outlined on the map. */
+  referenceIds?: Set<string>;
   onSelect: (id: string | undefined) => void;
   renderPanel: (parcel: BerlinParcel, facts: ParcelFacts) => ReactNode;
 }) {
@@ -176,7 +178,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
       {layers.buildings && buildings.map(b => <path key={b.id} className="site-map-building" d={b.d} />)}
       {layers.plans && plans.map(({ plan, d }) => <path key={plan.id} className="site-map-plan" data-status={plan.status} d={d}><title>{plan.name}</title></path>)}
       {parcels.map(({ parcel, d, law }) => <path key={parcel.id} className="site-map-parcel" d={d} data-parcel={parcel.id} data-law={layers.law ? law?.kind : undefined}
-        data-selected={selected === parcel.id} data-adopted={adoptedId === parcel.id} data-address={parcel.containsAddress}>
+        data-selected={selected === parcel.id} data-adopted={adoptedId === parcel.id} data-reference={referenceIds?.has(parcel.id) || undefined} data-address={parcel.containsAddress}>
         <title>{parcel.label}</title>
       </path>)}
       {layers.labels && parcels.map(({ parcel, at, bounds }) => {

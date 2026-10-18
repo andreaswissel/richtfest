@@ -7,13 +7,14 @@ import { Section } from "../layout";
 import { Button } from "../ui/button";
 import { Badge, Callout } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import type { SiteAssessmentConstraint, SiteAssessmentInput } from "@richtfest/shared";
+import { compareSiteReferences, type SiteAssessmentConstraint, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
 
 import { useBerlinContext, useSiteDiscovery, type BerlinParcel as Parcel } from "./site-lookups";
 import { SiteParcelMap } from "./site-parcel-map";
+import { correctReferenceStoreys, parcelReference, storeysFromHeight } from "./site-summary";
 const VISIBLE_PARCELS = 5;
 
-export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign, siteLocator, adopted }: {
+export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign, siteLocator, adopted, references = [], onReferences }: {
   projectId: string;
   disabled: boolean;
   siteLocator?: SiteAssessmentInput["siteLocator"];
@@ -23,6 +24,9 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   onDesign?: () => void;
   /** The parcel already in the assessment draft. */
   adopted?: { id: string; label: string; area: number | null; reviewed: boolean } | null;
+  /** § 34 references; parcels picked on the map join them with their observed GRZ, GFZ and storeys. */
+  references?: SiteReference[];
+  onReferences?: (references: SiteReference[]) => void;
 }) {
   const t = useT(), language = usePreferences(s => s.language);
   const label = (key: string) => t(`berlinContext${key}` as Parameters<typeof t>[0]);
@@ -52,6 +56,17 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   const num = (n: number) => n.toLocaleString(locale, { maximumFractionDigits: 2 });
   const range = (r: { mean: number; max: number } | null) => r ? `${r.mean.toLocaleString(locale, { maximumFractionDigits: 2 })} – ${r.max.toLocaleString(locale, { maximumFractionDigits: 2 })}` : "–";
   const area = (n: number | null) => n === null ? "–" : `${n.toLocaleString(locale)} m²`;
+  const referenceIds = new Set(references.flatMap(r => r.parcelId ? [r.parcelId] : []));
+  const frame = compareSiteReferences(references);
+  const toggleReference = (parcel: Parcel, storeys?: number) => {
+    if (!onReferences || !discovery) return;
+    const kept = references.filter(r => r.parcelId !== parcel.id);
+    if (referenceIds.has(parcel.id) && storeys === undefined) return onReferences(kept);
+    const existing = references.find(r => r.id === `parcel:${parcel.id}`), proposed = existing ?? parcelReference(parcel, discovery);
+    if (!proposed) return;
+    const height = proposed.metrics?.ridgeHeight?.value;
+    onReferences([...kept, storeys === undefined ? proposed : correctReferenceStoreys(proposed, storeys, `${label("HeightStoreysSource").replace("{height}", num(height ?? 0))} · ${proposed.metrics?.ridgeHeight?.source ?? ""}`.slice(0, 2000))]);
+  };
   const adopt = (parcel: Parcel) => {
     setSelected(parcel.id);
     setJustAdopted(parcel.id);
@@ -76,8 +91,13 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
     {context && <>
       <p className="text-ui-xs">{context.address} · {label("Retrieved")} {new Date(context.retrievedAt).toLocaleString(locale)}</p>
       {context.parcelStatus !== "available" && <Callout>{label("ParcelsUnavailable")}</Callout>}
+      {onReferences && references.length > 0 && <p className="site-reference-frame text-ui-xs" role="status">
+        <strong>{label("ReferencesChosen").replace("{count}", String(references.length))}</strong>
+        <span>GRZ {range(frame.grz)}</span><span>GFZ {range(frame.gfz)}</span><span>{label("Storeys")} {range(frame.storeys)}</span>
+        <span className="muted">{label("ReferencesFrameHint")}</span>
+      </p>}
       {parcels.length > 0 ? <div className="berlin-parcels">
-        <SiteParcelMap projectId={projectId} context={context} discovery={discovery} selected={selected} adoptedId={adopted?.id} onSelect={setSelected}
+        <SiteParcelMap projectId={projectId} context={context} discovery={discovery} selected={selected} adoptedId={adopted?.id} referenceIds={referenceIds} onSelect={setSelected}
           renderPanel={(parcel, facts) => <>
             <dl className="site-map-facts text-ui-xs">
               <dt>{label("Area")}</dt><dd className="tabular-nums">{area(parcel.area)}</dd>
@@ -89,6 +109,31 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
               <dt>{label("Storeys")}</dt><dd className="tabular-nums">{facts.storeys != null ? facts.storeys : "–"}</dd></>}
             </dl>
             {facts.grz != null && <p className="muted text-ui-2xs">{label("RatiosHint")}</p>}
+            {(() => {
+              // Reference plot: observed figures plus a height cross-check, since reported storeys can be wrong.
+              const own = adopted?.id === parcel.id || parcel.containsAddress;
+              const chosen = references.find(r => r.parcelId === parcel.id && r.id === `parcel:${parcel.id}`) ?? references.find(r => r.parcelId === parcel.id);
+              // Footprint and height always describe the whole parcel; storeys and GFZ follow the chosen reference, which may be corrected.
+              const observed = discovery ? parcelReference(parcel, discovery) : null, ref = chosen ?? observed;
+              if (own || !ref || !onReferences) return null;
+              const height = observed?.metrics?.ridgeHeight?.value ?? ref.metrics?.ridgeHeight?.value ?? null, estimate = storeysFromHeight(height), reported = ref.metrics?.storeys?.value ?? null;
+              const built = observed?.metrics?.footprint?.value ?? ref.metrics?.footprint?.value ?? null;
+              return <div className="site-map-reference text-ui-xs">
+                <dl className="site-map-facts">
+                  <dt>{label("BuiltFootprint")}</dt><dd className="tabular-nums">{built === null ? "–" : `${built.toLocaleString(locale, { maximumFractionDigits: 0 })} m²`}</dd>
+                  {chosen && <><dt>GFZ</dt><dd className="tabular-nums">{ref.metrics?.gfz?.value != null ? num(ref.metrics.gfz.value) : "–"}</dd>
+                  <dt>{label("Storeys")}</dt><dd className="tabular-nums">{reported ?? "–"}</dd></>}
+                  {height != null && <><dt>{label("MeasuredHeight")}</dt><dd className="tabular-nums">{label("HeightStoreys").replace("{height}", num(height)).replace("{n}", String(estimate))}</dd></>}
+                </dl>
+                {estimate != null && reported != null && estimate !== reported && <div className="site-map-reference-check" role="status">
+                  <span>{label("StoreysMismatch").replace("{reported}", String(reported)).replace("{n}", String(estimate))}</span>
+                  <Button size="sm" variant="outline" disabled={disabled || !discovery} onClick={() => toggleReference(parcel, estimate)}>{label("UseHeightStoreys").replace("{n}", String(estimate))}</Button>
+                </div>}
+                <Button size="sm" variant={chosen ? "outline" : "default"} disabled={disabled || !discovery} aria-pressed={!!chosen} onClick={() => toggleReference(parcel)}>
+                  {label(chosen ? "RemoveReference" : "AddReference")}
+                </Button>
+              </div>;
+            })()}
             {facts.law && <div className="site-map-basis text-ui-xs" data-law={facts.law.kind}>
               <p className="muted text-ui-2xs">{label("PlanningLaw")}</p>
               <p className="text-ui-sm font-semibold">{label(`Law_${facts.law.kind}`)}</p>

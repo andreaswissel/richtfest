@@ -10,7 +10,9 @@ import {
   type SiteAssessmentInput,
   type SiteAssessmentConstraint,
   type LocationContext,
+  type SiteReference,
 } from "@richtfest/shared";
+import type * as Proposals from "@richtfest/shared/site-proposals";
 import type { SiteDesignResult as DesignResult } from "@richtfest/shared/site-design";
 import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import { api, ApiError } from "../../api";
@@ -33,7 +35,7 @@ import { BerlinContext } from "./berlin-context";
 import { EMPTY_RULES, EvidenceEditor, ReviewStatusBadge, SiteReviewPanel, evidenceStatus, type ReviewItem } from "./site-review-panel";
 import { berlinContextQuery, discoveryContext, siteDiscoveryQuery, type BerlinParcel } from "./site-lookups";
 import { extractPlanFigures, planToRead, type PlanProvider } from "./plan-extraction";
-import { applySiteSummary, massingOptions, type SummaryStep, type SummaryStepId } from "./site-summary";
+import { applySiteSummary, massingOptions, proposeFrameFigures, proposeGrz2Default, type SummaryStep, type SummaryStepId } from "./site-summary";
 import { SiteSummaryPanel } from "./site-summary-panel";
 
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & { revision: number; updatedAt: string | null };
@@ -204,6 +206,11 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
       setStep(parcel && (parcel.status === "done" || parcel.status === "kept") ? "result" : "site");
     },
   });
+  // Proposal engine for re-deriving the § 34 frame when references change; loaded off the boot path.
+  const [proposals, setProposals] = useState<typeof Proposals>();
+  useEffect(() => {
+    void import("@richtfest/shared/site-proposals").then(setProposals);
+  }, []);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
   useEffect(() => {
     setDraft(undefined);
@@ -239,6 +246,14 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
         ? { checks: { ...assessment.checks, planningBasis: { ...assessment.checks.planningBasis, status: "unresolved" as const } } }
         : {}),
     });
+  /** New reference selection; under § 34 (or an open basis) the unreviewed frame figures follow it, so Design measures against the chosen plots. */
+  const setReferences = (references: SiteReference[]) => {
+    if (!proposals || assessment.planningBasis === "b_plan" || assessment.planningBasis === "section35") return update({ references });
+    const constraints = { ...assessment.constraints };
+    proposeFrameFigures(constraints, references, proposals);
+    proposeGrz2Default(constraints, proposals);
+    update({ references, constraints });
+  };
   const area = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "–" : `${n.toLocaleString(locale, { maximumFractionDigits: 2 })} m²`);
   const invalidKeys = new Set(validation && !validation.success ? validation.error.issues.flatMap((issue) => issue.path.map(String)) : []);
   const hasParcel = !!assessment.geometry?.parcel;
@@ -421,6 +436,8 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
           onDesign={() => setStep("design")}
           adopted={assessment.geometry?.parcel ? { id: assessment.geometry.parcel.id, label: assessment.geometry.parcel.label, area: assessment.constraints.parcelArea.value, reviewed: assessment.geometry.parcel.reviewed && assessment.constraints.parcelArea.reviewed } : null}
           onAdopt={adoptParcel}
+          references={assessment.references}
+          onReferences={setReferences}
         />
         <SiteReferencesPanel
           projectId={projectId}
@@ -428,7 +445,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
           siteLocator={assessment.siteLocator}
           references={assessment.references}
           onLocator={(siteLocator) => update({ siteLocator })}
-          onReferences={(references) => update({ references })}
+          onReferences={setReferences}
           onContext={setGeometryContext}
         />
       </div>
@@ -536,6 +553,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             value={assessment.geometry ?? null}
             disabled={disabled}
             onChange={(geometry) => update({ geometry })}
+            parcelArea={assessment.constraints.parcelArea.value}
             onAdoptParcel={(parcel) => adoptParcel({ value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false }, parcel)}
             contextOverride={geometryContext}
             referenceBuildingIds={assessment.references.flatMap((r) => (r.buildingId ? [r.buildingId] : []))}
@@ -554,8 +572,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             }
             onReference={(building, context) => {
               if (assessment.references.some((r) => r.buildingId === building.id)) return;
-              update({
-                references: [
+              setReferences([
                   ...assessment.references,
                   {
                     id: crypto.randomUUID(),
@@ -565,8 +582,7 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
                     note: "",
                     polygons: building.polygons.map((p) => p.map((r) => r.map(([x, z]) => [x + context.origin[0], context.origin[1] - z]))),
                   },
-                ],
-              });
+                ]);
             }}
             options={
               assessment.constraints.grz.value !== null && assessment.constraints.gfz.value !== null && assessment.constraints.maxFullStoreys.value !== null

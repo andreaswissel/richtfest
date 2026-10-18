@@ -2,7 +2,7 @@ import type { SiteAssessmentInput, SiteReference } from "@richtfest/shared";
 import type { MassingOptions } from "@richtfest/shared/site-geometry-model";
 import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import type * as Proposals from "@richtfest/shared/site-proposals";
-import { discoveryPolygons, planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
+import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
 import { planBuildingForm, PLAN_FIGURES, PLAN_LISTED, type PlanExtraction } from "./plan-extraction";
 import { SITE_ASSESSMENT_CONSTRAINT_KEYS, SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS } from "@richtfest/shared";
 const CONSTRAINT_KEYS: string[] = [...SITE_ASSESSMENT_CONSTRAINT_KEYS, ...SITE_ASSESSMENT_OPTIONAL_CONSTRAINT_KEYS];
@@ -15,6 +15,70 @@ export const MAX_SUMMARY_REFERENCES = 5;
 const STOREY_HEIGHT = 3;
 const round = (n: number, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
 const proposal = (value: number, source: string, kind: "official" | "calculated" | "estimated" | "assessment", sourceDate: string | null = null) => ({ value, source, sourceDate, kind, reviewed: false });
+
+type Constraints = Draft["constraints"];
+const FRAME = "§ 34 reference frame", GRZ2_DEFAULT = "§ 19 (4) BauNVO default";
+/** Empty, or an unreviewed proposal of this kind: a changed reference selection may replace it; entered and reviewed values stay. */
+const replaceable = (value: { value: number | null; source: string; reviewed: boolean } | undefined, method: string, kind: string) => !value || value.value === null || (!value.reviewed && value.source.startsWith(`${method}: ${kind}`));
+
+/**
+ * § 34 figures from the selected references: the upper end of their frame for GRZ, GFZ and storeys. Replaces only empty
+ * figures and earlier frame proposals, and clears a frame proposal when no reference carries that figure any more.
+ * Returns the figures it set.
+ */
+export function proposeFrameFigures(c: Constraints, references: SiteReference[], engine: Pick<typeof Proposals, "referenceFrame" | "siteProposalMethod">): string[] {
+  const frame = engine.referenceFrame(references), method = engine.siteProposalMethod, filled: string[] = [];
+  const describe = (name: string, m: { mean: number; max: number; count: number }) => `${method}: ${FRAME} ${name} mean ${round(m.mean)} – max ${round(m.max)} of ${m.count} references; comparison only`;
+  const set = (key: "grz" | "gfz" | "maxFullStoreys", name: string, m: { mean: number; max: number; count: number } | null, value: (max: number) => number, note = "") => {
+    if (!replaceable(c[key], method, FRAME)) return;
+    if (!m) { if (c[key].value !== null) c[key] = { ...c[key], value: null, source: "" }; return; }
+    const next = value(m.max);
+    if (c[key].value !== next || !c[key].source.startsWith(`${method}: ${FRAME}`)) filled.push(name);
+    c[key] = proposal(next, `${describe(name === "storeys" ? "storeys" : name.toUpperCase(), m)}${note}`, "estimated");
+  };
+  set("grz", "grz", frame.grz, (max) => round(max));
+  set("gfz", "gfz", frame.gfz, (max) => round(max));
+  set("maxFullStoreys", "storeys", frame.storeys, (max) => Math.max(1, Math.floor(max)), "; reported storeys are not legal full storeys");
+  return filled;
+}
+
+/** GRZ 2: § 19 (4) BauNVO lets garages, parking, access and ancillary structures exceed GRZ by 50 %, up to 0.8, unless the plan says otherwise. */
+export function proposeGrz2Default(c: Constraints, engine: Pick<typeof Proposals, "siteProposalMethod">) {
+  if (c.grz.value === null || !replaceable(c.grz2, engine.siteProposalMethod, GRZ2_DEFAULT)) return;
+  c.grz2 = proposal(round(Math.max(c.grz.value, Math.min(0.8, c.grz.value * 1.5))), `${engine.siteProposalMethod}: ${GRZ2_DEFAULT} (GRZ + 50 %, at most 0.8); replace with the plan's figure if it deviates`, "assessment");
+}
+
+/** Storeys implied by a measured building height, at about 3.4 m per storey (ceiling and slab): a cross-check for reported storeys, which can be wrong. */
+export const storeysFromHeight = (height: number | null | undefined) => (height != null && height > 0 ? Math.max(1, Math.round(height / 3.4)) : null);
+
+/**
+ * A § 34 reference for one cadastral parcel from the nearby-buildings lookup: the parcel's observed GRZ, GRZ 2 and GFZ,
+ * the summed footprint, the most storeys reported on it and the tallest measured height. Null without observed coverage.
+ */
+export function parcelReference(parcel: BerlinParcel, discovery: SiteDiscovery): SiteReference | null {
+  const buildings = discovery.references.filter((r) => r.parcelId === parcel.id);
+  const base = buildings.find((r) => r.metrics?.grz?.value != null);
+  if (!base?.metrics) return null;
+  const tallest = <K extends "storeys" | "ridgeHeight">(key: K) => buildings.map((r) => r.metrics?.[key]).filter((m) => m?.value != null).sort((a, b) => b!.value! - a!.value!)[0];
+  const footprint = buildings.reduce((sum, r) => sum + (r.metrics?.footprint?.value ?? 0), 0);
+  const { grz, grz2, gfz } = base.metrics;
+  return {
+    id: `parcel:${parcel.id}`, parcelId: parcel.id, label: parcel.label, source: `${parcel.sourceUrl} · ${base.source}`.slice(0, 2000), note: "", polygons: parcel.polygons,
+    metrics: {
+      ...(grz ? { grz } : {}), ...(grz2 ? { grz2 } : {}), ...(gfz ? { gfz } : {}),
+      ...(footprint > 0 ? { footprint: { value: round(footprint, 1), source: base.metrics.footprint?.source ?? base.source, sourceDate: base.metrics.footprint?.sourceDate ?? null, kind: "calculated" as const, reviewed: false } } : {}),
+      ...(tallest("storeys") ? { storeys: tallest("storeys")! } : {}), ...(tallest("ridgeHeight") ? { ridgeHeight: tallest("ridgeHeight")! } : {}),
+    },
+  };
+}
+
+/** Corrects a reference's storeys (e.g. from its measured height); GFZ, observed as GRZ × reported storeys, scales with it. */
+export function correctReferenceStoreys(reference: SiteReference, storeys: number, source: string): SiteReference {
+  const m = reference.metrics ?? {}, before = m.storeys?.value ?? null;
+  const gfz = m.gfz?.value != null && before ? { ...m.gfz, value: round((m.gfz.value * storeys) / before), source: `${m.gfz.source} · scaled to ${storeys} storeys`.slice(0, 2000), kind: "estimated" as const, reviewed: false }
+    : m.gfz?.value == null && m.grz?.value != null ? { value: round(m.grz.value * storeys), source: `${m.grz.source} · GRZ × ${storeys} storeys`.slice(0, 2000), sourceDate: null, kind: "estimated" as const, reviewed: false } : m.gfz;
+  return { ...reference, metrics: { ...m, storeys: { value: storeys, source, sourceDate: null, kind: "estimated", reviewed: false }, ...(gfz ? { gfz } : {}) } };
+}
 
 /**
  * "Address in, frame out": fills what the public lookups and the deterministic proposals can supply, in task
@@ -80,12 +144,7 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   // 4. Figures: § 34 proposes the upper end of the reference frame; a B-Plan needs its figures from the plan.
   const c = next.constraints;
   if (next.planningBasis === "section34") {
-    const frame = engine.referenceFrame(next.references);
-    const filled: string[] = [];
-    const describe = (name: string, m: { mean: number; max: number; count: number }) => `${engine.siteProposalMethod}: § 34 reference frame ${name} mean ${round(m.mean)} – max ${round(m.max)} of ${m.count} references; comparison only`;
-    if (c.grz.value === null && frame.grz) { c.grz = proposal(round(frame.grz.max), describe("GRZ", frame.grz), "estimated"); filled.push("grz"); }
-    if (c.gfz.value === null && frame.gfz) { c.gfz = proposal(round(frame.gfz.max), describe("GFZ", frame.gfz), "estimated"); filled.push("gfz"); }
-    if (c.maxFullStoreys.value === null && frame.storeys) { c.maxFullStoreys = proposal(Math.max(1, Math.floor(frame.storeys.max)), `${describe("storeys", frame.storeys)}; reported storeys are not legal full storeys`, "estimated"); filled.push("storeys"); }
+    const filled = proposeFrameFigures(c, next.references, engine);
     step("frame", filled.length ? "done" : c.grz.value !== null && c.gfz.value !== null && c.maxFullStoreys.value !== null ? "kept" : "needs_input", filled.length ? "FrameFilled" : "FrameMissing", { items: filled.join(", ") });
   } else if (next.planningBasis === "b_plan") {
     // A B-Plan sets the figures: take what was read from the plan sheet (cited, unreviewed), never neighbours.
@@ -107,8 +166,7 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
     else step("frame", "needs_input", "FramePlanMissing");
   } else step("frame", "needs_input", next.planningBasis === "section35" ? "FrameSection35" : "FrameNeedsBasis");
   // GRZ 2: § 19 (4) BauNVO lets garages, parking, access and ancillary structures exceed GRZ by 50 %, up to 0.8, unless the plan says otherwise.
-  if (next.planningBasis !== "section35" && c.grz.value !== null && (c.grz2?.value ?? null) === null)
-    c.grz2 = proposal(round(Math.max(c.grz.value, Math.min(0.8, c.grz.value * 1.5))), `${engine.siteProposalMethod}: § 19 (4) BauNVO default (GRZ + 50 %, at most 0.8); replace with the plan's figure if it deviates`, "assessment");
+  if (next.planningBasis !== "section35") proposeGrz2Default(c, engine);
   // Area additions default to zero only as visible, unreviewed proposals so the capacity can be shown.
   for (const key of ["additionalGrossArea", "additionalCountableArea"] as const)
     if (c[key].value === null) c[key] = proposal(0, `${engine.siteProposalMethod}: no additional area assumed; enter Staffel or attic areas if planned`, "assessment");
