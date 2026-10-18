@@ -2,15 +2,17 @@ import { lockProject } from "./project-lock";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, type EnvironmentSurvey } from "@richtfest/shared";
+import { environmentSurveySchema, locationMatchesAddress, projectAddressInput, toUtm, type EnvironmentSurvey } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { files, fileVersions, projects, projectLocations } from "./schema";
-import { berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, inBerlin, groupMappedSources, hessenAttribution, hessenMappedAxis, HESSEN_ATKIS, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, type GmlFeature, type MappedAxis } from "./noise-geodata";
+import { atkisMappedAxis, ATKIS_SF_STATES, berlinAttribution, berlinRailAxis, berlinRoadAxis, berlinTraffic, BERLIN_WFS, BW_ATKIS, bwAttribution, bwMappedAxis, inBerlin, groupMappedSources, hessenAttribution, HESSEN_ATKIS, latLonPairs, readGmlFeatures, resolveHessenAddress, rlpMappedAxis, TH_ATKIS, thAttribution, thMappedAxis, utmPairs, type AtkisSfState, type GmlFeature, type MappedAxis, type StateCode } from "./noise-geodata";
 
 /** Sites with an imported location use the Berlin connector inside Berlin and the RLP connector elsewhere; other addresses are resolved in Hessen. */
 const CONNECTOR = "rlp-basis-dlm-framap-spatial-v5";
 const BERLIN_CONNECTOR = "be-detailnetz-stratlaerm2022-framap-v1";
-const HESSEN_CONNECTOR = "he-basis-dlm-hako-framap-v1";
+const HESSEN_CONNECTOR = ATKIS_SF_STATES.HE!.connector;
+const BW_CONNECTOR = "bw-basis-dlm-v1";
+const TH_CONNECTOR = "th-basis-dlm-v1";
 const LIMIT = 500;
 const ROAD_LIMIT = 2000;
 const BASE = "https://www.geoportal.rlp.de/spatial-objects/606/collections/vermkv:";
@@ -156,21 +158,39 @@ async function berlinCategories(site: { latitude: number; longitude: number }, b
   return [roads, rail, unchecked("industry"), unchecked("ground_aviation")];
 }
 
-const atkisUrl = (params: Record<string, string>) => `${HESSEN_ATKIS}?${new URLSearchParams({ SERVICE: "WFS", VERSION: "2.0.0", REQUEST: "GetFeature", ...params })}`;
-async function atkisFeatures(url: string, types: string[], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+const wfsUrl = (base: string, params: Record<string, string>) => `${base}?${new URLSearchParams({ SERVICE: "WFS", VERSION: "2.0.0", REQUEST: "GetFeature", ...params })}`;
+/** `attempts` > 1 retries a server's transient InternalServerError report (NRW answers one in a few requests with it). */
+async function atkisFeatures(url: string, types: string[], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal, attempts = 1) {
   signal?.throwIfAborted();
-  const body = await boundedResponse(await fetch(url, { signal: timeout(signal, 30000), redirect: "error" }));
+  let body = await boundedResponse(await fetch(url, { signal: timeout(signal, 30000), redirect: "error" }));
+  for (let attempt = 1; attempt < attempts && /exceptionCode="InternalServerError"/.test(body.slice(0, 2000)); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+    signal?.throwIfAborted();
+    body = await boundedResponse(await fetch(url, { signal: timeout(signal, 30000), redirect: "error" }));
+  }
   if (!/<wfs:FeatureCollection[\s>]/.test(body)) throw fail("environment_invalid_response");
   const sha256 = hash(body);
   rawResponses.push({ url, retrievedAt, sha256, body });
   return { features: readGmlFeatures(body, types), source: { url, retrievedAt, sha256 } };
 }
+type Bbox = [number, number, number, number];
+/** The WGS84 search rectangle as an ETRS89 / UTM rectangle that contains it. */
+const utmBox = (bbox: Bbox, zone: 32 | 33) => {
+  const corners = [[bbox[0], bbox[1]], [bbox[0], bbox[3]], [bbox[2], bbox[1]], [bbox[2], bbox[3]]].map(([lon, lat]) => toUtm(lon!, lat!, zone));
+  return [Math.min(...corners.map(c => c[0])), Math.min(...corners.map(c => c[1])), Math.max(...corners.map(c => c[0])), Math.max(...corners.map(c => c[1]))].map(value => value.toFixed(2));
+};
 
-/** Hessen: Basis-DLM via HVBG's WFS (GML). Road names and dedication live on AX_Strasse, fetched by id. */
-async function hessenCategories(site: { latitude: number; longitude: number }, bbox: [number, number, number, number], retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+/**
+ * ATKIS Basis-DLM on a state's AdV "aaa-suite" WFS (GML, Hessen schema), configured per state in ATKIS_SF_STATES.
+ * Road names, dedication and designation live on AX_Strasse, fetched by id.
+ */
+async function atkisSfCategories(config: AtkisSfState, site: { latitude: number; longitude: number }, bbox: Bbox, retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
   const categories: Category[] = [];
-  // GML 3.2 with EPSG:4326 takes latitude first.
-  const box = `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]},urn:ogc:def:crs:EPSG::4326`;
+  const atkisUrl = (params: Record<string, string>) => wfsUrl(config.url, { ...config.params, ...params });
+  const zone = config.crs.utmZone;
+  // GML 3.2 with a geographic CRS takes latitude first; UTM takes easting first.
+  const box = zone ? `${utmBox(bbox, zone).join(",")},${config.crs.srs}` : `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]},${config.crs.srs}`;
+  const pairs = zone ? utmPairs(zone) : latLonPairs;
   const definitions = [
     ["roads", ["AX_Strassenachse", "AX_Fahrbahnachse"]],
     ["rail", ["AX_Bahnstrecke"]],
@@ -184,9 +204,9 @@ async function hessenCategories(site: { latitude: number; longitude: number }, b
       const features: GmlFeature[] = [];
       let truncated = false;
       for (const type of types) {
-        const url = atkisUrl({ TYPENAMES: `adv:${type}`, COUNT: String(limit + 1), SRSNAME: "urn:ogc:def:crs:EPSG::4326", BBOX: box });
+        const url = atkisUrl({ TYPENAMES: `adv:${type}`, COUNT: String(limit + 1), SRSNAME: config.crs.srs, BBOX: box });
         item.sources.push({ url, retrievedAt, sha256: null });
-        const result = await atkisFeatures(url, [type], retrievedAt, rawResponses, signal);
+        const result = await atkisFeatures(url, [type], retrievedAt, rawResponses, signal, config.attempts);
         item.sources[item.sources.length - 1] = result.source;
         if (result.features.length > limit) truncated = true;
         features.push(...result.features.slice(0, limit));
@@ -195,8 +215,9 @@ async function hessenCategories(site: { latitude: number; longitude: number }, b
       if (category === "roads") {
         const ids = [...new Set(features.flatMap(feature => feature.refs.istTeilVon ?? []))].filter(id => /^[A-Za-z0-9]{16}$/.test(id));
         for (let i = 0; i < ids.length; i += 100) {
-          const url = atkisUrl({ RESOURCEID: ids.slice(i, i + 100).join(",") });
-          const result = await atkisFeatures(url, ["AX_Strasse"], retrievedAt, rawResponses, signal);
+          const resource = ids.slice(i, i + 100).join(",");
+          const url = atkisUrl(config.strasseTypenames ? { TYPENAMES: "adv:AX_Strasse", RESOURCEID: resource } : { RESOURCEID: resource });
+          const result = await atkisFeatures(url, ["AX_Strasse"], retrievedAt, rawResponses, signal, config.attempts);
           item.sources.push(result.source);
           for (const road of result.features) roads.set(road.id, road);
         }
@@ -207,7 +228,7 @@ async function hessenCategories(site: { latitude: number; longitude: number }, b
       item.coverage = { limit, returned: features.length, matched: truncated ? null : features.length, truncated };
       item.status = features.length ? "findings" : truncated ? "unavailable" : "no_features_in_query";
       if (category === "roads" || category === "rail") {
-        const grouped = groupMappedSources(features.map(feature => hessenMappedAxis(feature, roads)).filter((axis): axis is MappedAxis => !!axis), site);
+        const grouped = groupMappedSources(features.map(feature => atkisMappedAxis(feature, roads, pairs)).filter((axis): axis is MappedAxis => !!axis), site);
         item.mapped = category === "roads" ? grouped.roads : grouped.rail;
         item.limitations.push(mappedLimitation, "Counts describe mapped axis segments, not distinct roads, rail lines or traffic movements.");
       }
@@ -218,6 +239,99 @@ async function hessenCategories(site: { latitude: number; longitude: number }, b
     categories.push(item);
   }
   return categories;
+}
+
+/** Roads or rail from a flat Basis-DLM layer (name and class on the axis itself, no AX_Strasse lookup). */
+async function flatAxisCategory(category: "roads" | "rail", requests: Array<{ url: string; types: string[] }>, map: (feature: GmlFeature) => MappedAxis | null, kindOf: (feature: GmlFeature) => string,
+  site: { latitude: number; longitude: number }, retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal): Promise<Category> {
+  const limit = category === "roads" ? ROAD_LIMIT : LIMIT;
+  const item: Category = { category, status: "unavailable", featureCount: 0, observations: [], coverage: { limit, returned: 0, matched: null, truncated: true }, sources: [], limitations: ["Mapped objects are observations only; activity, traffic volume and noise levels are unknown."] };
+  try {
+    const features: GmlFeature[] = [];
+    let truncated = false;
+    for (const { url, types } of requests) {
+      item.sources.push({ url, retrievedAt, sha256: null });
+      const result = await atkisFeatures(url, types, retrievedAt, rawResponses, signal);
+      item.sources[item.sources.length - 1] = result.source;
+      if (result.features.length > limit) truncated = true;
+      features.push(...result.features.slice(0, limit));
+    }
+    const axes = features.map(map).filter((axis): axis is MappedAxis => !!axis && axis.kind === (category === "roads" ? "road" : "rail"));
+    item.featureCount = axes.length;
+    item.observations = features.slice(0, 50).map(feature => { const axis = map(feature); return { id: axis?.id ?? feature.id, kind: kindOf(feature), name: axis?.name ?? null }; });
+    item.coverage = { limit, returned: features.length, matched: truncated ? null : features.length, truncated };
+    item.status = axes.length ? "findings" : truncated ? "unavailable" : "no_features_in_query";
+    const grouped = groupMappedSources(axes, site);
+    item.mapped = category === "roads" ? grouped.roads : grouped.rail;
+    item.limitations.push(mappedLimitation, "Counts describe mapped axis segments, not distinct roads, rail lines or traffic movements.");
+    if (truncated) item.limitations.push("The bounded query is incomplete; missing objects cannot be excluded.");
+    if (features.length > 50) item.limitations.push("Observation summary limited to 50 objects; full retrieved data is in the private receipt.");
+  } catch { signal?.throwIfAborted(); item.status = "unavailable"; item.limitations.push("Official source query unavailable, unrecognized or over the retrieval bound."); }
+  return item;
+}
+const notConnected = (category: Category["category"], reason: string): Category => ({ category, status: "not_checked", featureCount: 0, observations: [], coverage: { limit: 0, returned: 0, matched: null, truncated: false }, sources: [], limitations: [reason] });
+
+/** Baden-Württemberg: LGL's NOrA Basis-DLM view, one flat layer filtered by object type, EPSG:25832 (its EPSG:4326 output is rounded to ~1 km). */
+async function bwCategories(site: { latitude: number; longitude: number }, bbox: Bbox, retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+  const [minE, minN, maxE, maxN] = utmBox(bbox, 32);
+  const request = (kinds: string[], limit: number) => {
+    const either = kinds.map(kind => `<fes:PropertyIsEqualTo><fes:ValueReference>nora:objektart</fes:ValueReference><fes:Literal>${kind}</fes:Literal></fes:PropertyIsEqualTo>`).join("");
+    const filter = `<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0" xmlns:nora="http://nora-prod.lgl.bwl.de/nora" xmlns:gml="http://www.opengis.net/gml/3.2"><fes:And><fes:BBOX><fes:ValueReference>nora:geom</fes:ValueReference><gml:Envelope srsName="urn:ogc:def:crs:EPSG::25832"><gml:lowerCorner>${minE} ${minN}</gml:lowerCorner><gml:upperCorner>${maxE} ${maxN}</gml:upperCorner></gml:Envelope></fes:BBOX>${kinds.length > 1 ? `<fes:Or>${either}</fes:Or>` : either}</fes:And></fes:Filter>`;
+    return [{ url: wfsUrl(BW_ATKIS, { TYPENAMES: "nora:v_verkehrslinie", COUNT: String(limit + 1), SRSNAME: "urn:ogc:def:crs:EPSG::25832", FILTER: filter }), types: ["v_verkehrslinie"] }];
+  };
+  const kindOf = (feature: GmlFeature) => `AX_${feature.fields.objektart?.[0] ?? "Verkehrslinie"}`;
+  const roads = await flatAxisCategory("roads", request(["Strassenachse", "Fahrbahnachse"], ROAD_LIMIT), bwMappedAxis, kindOf, site, retrievedAt, rawResponses, signal);
+  const rail = await flatAxisCategory("rail", request(["Bahnstrecke"], LIMIT), bwMappedAxis, kindOf, site, retrievedAt, rawResponses, signal);
+  rail.limitations.push("This Basis-DLM view carries no VzG route numbers; rail lines are grouped by category.");
+  const reason = "No Baden-Württemberg source is connected for this category yet.";
+  return [roads, rail, notConnected("industry", reason), notConnected("ground_aviation", reason)];
+}
+
+/** Thüringen: GDI-Th's flat Basis-DLM (deegree). Its EPSG:4326 bbox returns nothing, so query and answer in EPSG:25832. */
+async function thCategories(site: { latitude: number; longitude: number }, bbox: Bbox, retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal) {
+  const box = `${utmBox(bbox, 32).join(",")},urn:ogc:def:crs:EPSG::25832`;
+  const request = (type: string, limit: number) => ({ url: wfsUrl(TH_ATKIS, { TYPENAMES: `dlm:${type}`, NAMESPACES: "xmlns(dlm,http://www.adv-online.de/namespaces/adv/gid/7.1/dlm)", COUNT: String(limit + 1), SRSNAME: "urn:ogc:def:crs:EPSG::25832", BBOX: box }), types: [type] });
+  const kindOf = (feature: GmlFeature) => feature.fields.ObjektartText?.[0] ?? feature.type;
+  const roads = await flatAxisCategory("roads", [request("AX_STRASSENACHSE", ROAD_LIMIT), request("AX_FAHRBAHNACHSE", ROAD_LIMIT)], thMappedAxis, kindOf, site, retrievedAt, rawResponses, signal);
+  const rail = await flatAxisCategory("rail", [request("AX_BAHNSTRECKE", LIMIT)], thMappedAxis, kindOf, site, retrievedAt, rawResponses, signal);
+  const reason = "No Thüringen source is connected for this category yet.";
+  return [roads, rail, notConnected("industry", reason), notConnected("ground_aviation", reason)];
+}
+
+/**
+ * Connector version recorded on a survey for a state's road and rail sources; null where no open source
+ * with road classes is connected yet (Hamburg, Sachsen, Saarland).
+ */
+export function stateConnectorVersion(state: StateCode): string | null {
+  if (state === "BE") return BERLIN_CONNECTOR;
+  if (state === "RP") return CONNECTOR;
+  if (state === "BW") return BW_CONNECTOR;
+  if (state === "TH") return TH_CONNECTOR;
+  return ATKIS_SF_STATES[state]?.connector ?? null;
+}
+/** Licence attribution for a state's road and rail data; null where no connector exists. */
+export function stateAttribution(state: StateCode, year = new Date().getFullYear()): string | null {
+  if (state === "BE") return berlinAttribution;
+  if (state === "RP") return "©GeoBasis-DE / LVermGeoRP, dl-de/by-2-0; selected, grouped and measured by Richtfest.";
+  if (state === "BW") return bwAttribution(year);
+  if (state === "TH") return thAttribution(year);
+  return ATKIS_SF_STATES[state]?.attribution(year) ?? null;
+}
+
+/**
+ * Roads, rail, industry and aviation categories around a resolved site point, from the state's official
+ * Basis-DLM source. The single entry point once the site's state is known; Berlin and Rheinland-Pfalz keep
+ * their existing connectors. States without a connector return "not_checked" categories.
+ */
+export async function stateCategories(state: StateCode, site: { latitude: number; longitude: number }, bbox: Bbox, retrievedAt: string, rawResponses: RawResponse[], signal?: AbortSignal): Promise<Category[]> {
+  if (state === "BE") return berlinCategories(site, bbox, retrievedAt, rawResponses, signal);
+  if (state === "RP") return rlpCategories(site, bbox, retrievedAt, rawResponses, signal);
+  if (state === "BW") return bwCategories(site, bbox, retrievedAt, rawResponses, signal);
+  if (state === "TH") return thCategories(site, bbox, retrievedAt, rawResponses, signal);
+  const config = ATKIS_SF_STATES[state];
+  if (config) return atkisSfCategories(config, site, bbox, retrievedAt, rawResponses, signal);
+  const reason = "No open official road and rail source with road classes is connected for this state yet.";
+  return (["roads", "rail", "industry", "ground_aviation"] as const).map(category => notConnected(category, reason));
 }
 
 /** Fraport FRAMAP: published contour catalog and geometry extents; never a site level. */
@@ -312,7 +426,8 @@ export async function researchProjectEnvironment(d: AppDeps, projectId: string, 
   const categories = berlin ? await berlinCategories(site, bbox, retrievedAt, rawResponses, options.signal)
     : scoped.kind === "location"
     ? await rlpCategories(site, bbox, retrievedAt, rawResponses, options.signal)
-    : await hessenCategories(site, bbox, retrievedAt, rawResponses, options.signal);
+    // Hook: once the site point and its state are resolved for any state, this becomes stateCategories(state, ...).
+    : await stateCategories("HE", site, bbox, retrievedAt, rawResponses, options.signal);
   await checkFraport(categories, rawResponses, retrievedAt, longitude, latitude, options);
   const connector = berlin ? BERLIN_CONNECTOR : scoped.kind === "location" ? CONNECTOR : HESSEN_CONNECTOR;
   const fileId = randomUUID(), versionId = randomUUID();

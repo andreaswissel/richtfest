@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection numberReturned="200" numberMatched="unknown" xmlns="http://www.adv-online.de/namespaces/adv/gid/7.1" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<wfs:member>
+<AX_Strassenachse gml:id="DEBYBDLMaR000FxS">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEBYBDLMaR000FxS</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<istTeilVon xlink:href="urn:adv:oid:DEBYBDLMaR000CCV"/>
+<position>
+<gml:LineString gml:id="o42003.id.6937884.position.Geom_0" srsName="urn:ogc:def:crs:EPSG::4326" srsDimension="2">
+<gml:posList>48.1462315358259 11.5363100209448 48.1463216732128 11.5363920969793</gml:posList>
+</gml:LineString>
+</position>
+<besondereVerkehrsbedeutung>1000</besondereVerkehrsbedeutung>
+<besondereFahrstreifen>1000</besondereFahrstreifen>
+<breiteDerFahrbahn uom="m">7.0</breiteDerFahrbahn>
+<anzahlDerFahrstreifen>2</anzahlDerFahrstreifen>
+<fahrtrichtung>true</fahrtrichtung>
+</AX_Strassenachse>
+</wfs:member>
+<wfs:member>
+<AX_Strassenachse gml:id="DEBYBDLMaR0002qS">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEBYBDLMaR0002qS</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<istTeilVon xlink:href="urn:adv:oid:DEBYBDLMaR000CCV"/>
+<position>
+<gml:LineString gml:id="o42003.id.7077322.position.Geom_0" srsName="urn:ogc:def:crs:EPSG::4326" srsDimension="2">
+<gml:posList>48.1505040714003 11.5372478306105 48.1511014302848 11.5373029794055 48.1513937005673 11.5373233401939 48.1516718847554 11.537350415442</gml:posList>
+</gml:LineString>
+</position>
+<besondereVerkehrsbedeutung>1000</besondereVerkehrsbedeutung>
+<besondereFahrstreifen>1000</besondereFahrstreifen>
+<breiteDerFahrbahn uom="m">9.0</breiteDerFahrbahn>
+<anzahlDerFahrstreifen>3</anzahlDerFahrstreifen>
+<fahrtrichtung>true</fahrtrichtung>
+</AX_Strassenachse>
+</wfs:member>
+</wfs:FeatureCollection>

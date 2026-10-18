@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" numberMatched="981" numberReturned="981">
+<wfs:member>
+    <dlm:AX_STRASSENACHSE xmlns:dlm="http://www.adv-online.de/namespaces/adv/gid/7.1/dlm" gml:id="ID_AX_STRASSENACHSE.DETHTL25000056dAL">
+      <gml:name>DETHTL25000056dA</gml:name>
+      <dlm:Landeskennung>TH</dlm:Landeskennung>
+      <dlm:Modellartenkennung>Basis-DLM#DTK10#DTK25</dlm:Modellartenkennung>
+      <dlm:Objektart>42003</dlm:Objektart>
+      <dlm:ObjektartText>AX_Strassenachse</dlm:ObjektartText>
+      <dlm:eindeutigerObjektidentifikator>DETHTL25000056dA</dlm:eindeutigerObjektidentifikator>
+      <dlm:hatDirektUntenExistiert>1</dlm:hatDirektUntenExistiert>
+      <dlm:FachdatenverbindungExistiert>0</dlm:FachdatenverbindungExistiert>
+      <dlm:FachdatenverbindungExistiertFuerZUSO>0</dlm:FachdatenverbindungExistiertFuerZUSO>
+      <dlm:LebenszeitintervallBeginnt>2024-03-07T13:48:50Z</dlm:LebenszeitintervallBeginnt>
+      <dlm:ObjektartdesZUSO>42002</dlm:ObjektartdesZUSO>
+      <dlm:ObjektIDdesZUSO>DETHTL25000056XQ</dlm:ObjektIDdesZUSO>
+      <dlm:Funktion>1808</dlm:Funktion>
+      <dlm:AnzahlDerFahrstreifen>0.0</dlm:AnzahlDerFahrstreifen>
+      <dlm:StrassenSchluessel>1605100001023</dlm:StrassenSchluessel>
+      <dlm:BreiteDerFahrbahn>3.0</dlm:BreiteDerFahrbahn>
+      <dlm:BreiteDesVerkehrsweges>-9998.0</dlm:BreiteDesVerkehrsweges>
+      <dlm:Fahrtrichtung>-9998.0</dlm:Fahrtrichtung>
+      <dlm:Name>Krämerbrücke</dlm:Name>
+      <dlm:Widmung>1307</dlm:Widmung>
+      <dlm:geom>
+        <gml:LineString gml:id="ID_AX_STRASSENACHSE.DETHTL25000056dAL_DLM_GEOM" srsName="urn:ogc:def:crs:EPSG::25832">
+          <gml:posList>642535.390 5649422.310 642536.725 5649422.478 642551.280 5649423.560 642573.160 5649425.160</gml:posList>
+        </gml:LineString>
+      </dlm:geom>
+    </dlm:AX_STRASSENACHSE>
+  </wfs:member>
+<wfs:member>
+    <dlm:AX_STRASSENACHSE xmlns:dlm="http://www.adv-online.de/namespaces/adv/gid/7.1/dlm" gml:id="ID_AX_STRASSENACHSE.DETHTL250000565qL">
+      <gml:name>DETHTL250000565q</gml:name>
+      <dlm:Landeskennung>TH</dlm:Landeskennung>
+      <dlm:Modellartenkennung>Basis-DLM#DTK10#DTK25</dlm:Modellartenkennung>
+      <dlm:Objektart>42003</dlm:Objektart>
+      <dlm:ObjektartText>AX_Strassenachse</dlm:ObjektartText>
+      <dlm:eindeutigerObjektidentifikator>DETHTL250000565q</dlm:eindeutigerObjektidentifikator>
+      <dlm:hatDirektUntenExistiert>0</dlm:hatDirektUntenExistiert>
+      <dlm:FachdatenverbindungExistiert>0</dlm:FachdatenverbindungExistiert>
+      <dlm:FachdatenverbindungExistiertFuerZUSO>0</dlm:FachdatenverbindungExistiertFuerZUSO>
+      <dlm:LebenszeitintervallBeginnt>2024-04-04T09:28:09Z</dlm:LebenszeitintervallBeginnt>
+      <dlm:ObjektartdesZUSO>42002</dlm:ObjektartdesZUSO>
+      <dlm:ObjektIDdesZUSO>DETHTL250000577e</dlm:ObjektIDdesZUSO>
+      <dlm:AnzahlDerFahrstreifen>3.0</dlm:AnzahlDerFahrstreifen>
+      <dlm:BreiteDerFahrbahn>7.0</dlm:BreiteDerFahrbahn>
+      <dlm:BreiteDesVerkehrsweges>-9998.0</dlm:BreiteDesVerkehrsweges>
+      <dlm:besondereVerkehrsbedeutung>1000</dlm:besondereVerkehrsbedeutung>
+      <dlm:Fahrtrichtung>1.0</dlm:Fahrtrichtung>
+      <dlm:Widmung>1306</dlm:Widmung>
+      <dlm:Bezeichnung>K16</dlm:Bezeichnung>
+      <dlm:geom>
+        <gml:LineString gml:id="ID_AX_STRASSENACHSE.DETHTL250000565qL_DLM_GEOM" srsName="urn:ogc:def:crs:EPSG::25832">
+          <gml:posList>643626.766 5648859.682 643611.977 5648858.261 643598.801 5648856.832 643563.490 5648847.030</gml:posList>
+        </gml:LineString>
+      </dlm:geom>
+    </dlm:AX_STRASSENACHSE>
+  </wfs:member>
+</wfs:FeatureCollection>

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection numberReturned="33" numberMatched="33" xmlns="http://www.adv-online.de/namespaces/adv/gid/7.1" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<wfs:member>
+<AX_Strassenachse gml:id="DEMVLM25100071e0">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEMVLM25100071e0</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK10</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<istTeilVon xlink:href="urn:adv:oid:DEMVLM25100070q9"/>
+<position>
+<gml:LineString gml:id="o42003.id.625205.position.Geom_0" srsName="urn:ogc:def:crs:EPSG::25833" srsDimension="2">
+<gml:posList>312845.554 5997218.811 312925.047 5997224.455 312956.137 5997226.576</gml:posList>
+</gml:LineString>
+</position>
+<funktion>1808</funktion>
+<anzahlDerFahrstreifen>1</anzahlDerFahrstreifen>
+</AX_Strassenachse>
+</wfs:member>
+<wfs:member>
+<AX_Strassenachse gml:id="DEMVLM25100071AC">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEMVLM25100071AC</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK10</advStandardModell>
+</AA_Modellart>
+</modellart>
+<istTeilVon xlink:href="urn:adv:oid:DEMVLM25100070yS"/>
+<position>
+<gml:LineString gml:id="o42003.id.625250.position.Geom_0" srsName="urn:ogc:def:crs:EPSG::25833" srsDimension="2">
+<gml:posList>312820.415 5997087.214 312867.426 5997102.023</gml:posList>
+</gml:LineString>
+</position>
+<anzahlDerFahrstreifen>2</anzahlDerFahrstreifen>
+</AX_Strassenachse>
+</wfs:member>
+</wfs:FeatureCollection>

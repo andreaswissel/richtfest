@@ -184,8 +184,8 @@ export const HESSEN_ATKIS = "https://www.gds.hessen.de/wfs2/aaa-suite/cgi-bin/at
 export const HESSEN_HOUSE_COORDINATES = "https://www.gds-srv.hessen.de/cgi-bin/lika-services/ogc-free-data.ows";
 export const hessenAttribution = "Geobasisdaten © Hessische Verwaltung für Bodenmanagement und Geoinformation (HVBG), dl-de/zero-2-0; selected, grouped and measured by Richtfest.";
 
-/** ETRS89 / UTM zone 32N -> longitude/latitude. Same accuracy note as toUtm: display and search geometry, not setting out. */
-export function fromUtm32(easting: number, northing: number): [number, number] {
+/** ETRS89 / UTM (zone 32N or 33N) -> longitude/latitude. Same accuracy note as toUtm: display and search geometry, not setting out. */
+export function fromUtm(easting: number, northing: number, zone: number): [number, number] {
   const a = 6378137, e2 = 0.00669438002290, k0 = 0.9996, ep = e2 / (1 - e2);
   const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
   const mu = northing / k0 / (a * (1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256));
@@ -195,9 +195,10 @@ export function fromUtm32(easting: number, northing: number): [number, number] {
   const r1 = a * (1 - e2) / (1 - e2 * Math.sin(p1) ** 2) ** 1.5, d = (easting - 500000) / (n1 * k0);
   const latitude = p1 - (n1 * Math.tan(p1) / r1) * (d ** 2 / 2 - (5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * ep) * d ** 4 / 24
     + (61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * ep - 3 * c1 ** 2) * d ** 6 / 720);
-  const longitude = 9 * Math.PI / 180 + (d - (1 + 2 * t1 + c1) * d ** 3 / 6 + (5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ep + 24 * t1 ** 2) * d ** 5 / 120) / Math.cos(p1);
+  const longitude = (zone * 6 - 183) * Math.PI / 180 + (d - (1 + 2 * t1 + c1) * d ** 3 / 6 + (5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * ep + 24 * t1 ** 2) * d ** 5 / 120) / Math.cos(p1);
   return [longitude * 180 / Math.PI, latitude * 180 / Math.PI];
 }
+export const fromUtm32 = (easting: number, northing: number) => fromUtm(easting, northing, 32);
 
 export type GmlFeature = { type: string; id: string; fields: Record<string, string[]>; refs: Record<string, string[]>; parts: number[][]; points: number[][] };
 
@@ -234,20 +235,42 @@ export function readGmlFeatures(xml: string, types: string[]): GmlFeature[] {
   return features;
 }
 
-/** EPSG:4326 in GML 3.2 is latitude first; returns [longitude, latitude] pairs. */
-const latLonPairs = (values: number[]) => {
+/** EPSG:4326 / 4258 in GML 3.2 are latitude first; returns [longitude, latitude] pairs. */
+export const latLonPairs = (values: number[]) => {
   const pairs: Array<[number, number]> = [];
   for (let i = 0; i + 1 < values.length; i += 2) if (Number.isFinite(values[i]) && Number.isFinite(values[i + 1])) pairs.push([values[i + 1]!, values[i]!]);
   return pairs;
 };
+/** ETRS89 / UTM easting-northing pairs -> [longitude, latitude] pairs. */
+export const utmPairs = (zone: number) => (values: number[]) => {
+  const pairs: Array<[number, number]> = [];
+  for (let i = 0; i + 1 < values.length; i += 2) if (Number.isFinite(values[i]) && Number.isFinite(values[i + 1])) pairs.push(fromUtm(values[i]!, values[i + 1]!, zone));
+  return pairs;
+};
 
-export function hessenMappedAxis(feature: GmlFeature, roads: Map<string, GmlFeature>): MappedAxis | null {
+/**
+ * Road designations as signposted: "B80" -> "B 80", "B2R" -> "B 2R", "St2345" -> "St 2345"; "K 16" and "K M 3" stay.
+ * Several designations ("B27#B10", "B27;B10") are normalised one by one and joined with ", ".
+ */
+export function normaliseDesignation(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const items = value.split(/[#;,]/).map(item => item.trim().replace(/\s+/g, " ")).filter(Boolean)
+    .map(item => item.replace(/^([A-Z][A-Za-z]{0,2})\s*(\d+[A-Za-z]?)$/, "$1 $2"));
+  return items.length ? [...new Set(items)].join(", ").slice(0, 80) : null;
+}
+
+/**
+ * AdV ATKIS Basis-DLM GML (AAA "sf" or full NAS schema; same element names) -> mapped axis. Road name,
+ * dedication and designation live on the parent AX_Strasse (`istTeilVon`), fetched separately by id.
+ * `pairs` turns a posList into [longitude, latitude] for the CRS the service answered in.
+ */
+export function atkisMappedAxis(feature: GmlFeature, roads: Map<string, GmlFeature>, pairs: (values: number[]) => Array<[number, number]> = latLonPairs): MappedAxis | null {
   const value = (key: string, source = feature) => source.fields[key]?.[0] ?? null;
-  const parts = feature.parts.map(latLonPairs).filter(part => part.length);
+  const parts = feature.parts.map(pairs).filter(part => part.length);
   if (feature.type === "AX_Strassenachse" || feature.type === "AX_Fahrbahnachse") {
     const group = feature.refs.istTeilVon?.[0] ?? null, road = group ? roads.get(group) : undefined;
     return { id: feature.id, kind: "road", group, name: road ? value("name", road)?.slice(0, 300) ?? null : null, dedication: road ? value("widmung", road) : null,
-      designation: road ? value("bezeichnung", road)?.slice(0, 80) ?? null : null, lanes: finiteOrNull(value("anzahlDerFahrstreifen")), widthM: finiteOrNull(value("breiteDerFahrbahn")),
+      designation: road ? normaliseDesignation(value("bezeichnung", road)) : null, lanes: finiteOrNull(value("anzahlDerFahrstreifen")), widthM: finiteOrNull(value("breiteDerFahrbahn")),
       categories: [], routeNumbers: [], lines: [], tracks: null, electrified: null, parts };
   }
   if (feature.type === "AX_Bahnstrecke") {
@@ -255,6 +278,120 @@ export function hessenMappedAxis(feature: GmlFeature, roads: Map<string, GmlFeat
     const electrified = value("elektrifizierung");
     return { id: feature.id, kind: "rail", group: railGroup(routeNumbers, categories, lines), name: value("name")?.slice(0, 300) ?? null, dedication: null, designation: null, lanes: null, widthM: null,
       categories, routeNumbers, lines, tracks: value("anzahlDerStreckengleise"), electrified: electrified === "1000" ? true : electrified === "2000" ? false : null, parts };
+  }
+  return null;
+}
+/** Hessen answers in EPSG:4326 (latitude first). */
+export const hessenMappedAxis = (feature: GmlFeature, roads: Map<string, GmlFeature>) => atkisMappedAxis(feature, roads);
+
+// --- Per-state Basis-DLM road and rail connectors ---
+
+export type StateCode = "BW" | "BY" | "BE" | "BB" | "HB" | "HH" | "HE" | "MV" | "NI" | "NW" | "RP" | "SL" | "SN" | "ST" | "SH" | "TH";
+export const STATE_CODES: readonly StateCode[] = ["BW", "BY", "BE", "BB", "HB", "HH", "HE", "MV", "NI", "NW", "RP", "SL", "SN", "ST", "SH", "TH"];
+
+/** A state's ATKIS Basis-DLM on the AdV "aaa-suite" WFS (same GML schema as Hessen). */
+export type AtkisSfState = {
+  state: StateCode;
+  url: string;
+  connector: string;
+  /** Request and response CRS. Geographic CRS (4326, 4258) answer latitude first; UTM answers easting first. */
+  crs: { srs: string; utmZone?: 32 | 33 };
+  /** Extra parameters on every request, e.g. Bayern's namespace declaration for the `adv:` prefix. */
+  params?: Record<string, string>;
+  /** Send TYPENAMES=adv:AX_Strasse with the RESOURCEID lookup; required behind the LGLN, Bayern and Sachsen-Anhalt proxies. */
+  strasseTypenames: boolean;
+  /** Tries per request when the server answers with a transient InternalServerError report; default 1. */
+  attempts?: number;
+  attribution: (year: number) => string;
+};
+const RICHTFEST = "selected, grouped and measured by Richtfest.";
+const EPSG4326 = { srs: "urn:ogc:def:crs:EPSG::4326" };
+const ADV_NAMESPACES = { NAMESPACES: "xmlns(adv,http://www.adv-online.de/namespaces/adv/gid/7.1)" };
+
+export const ATKIS_SF_STATES: Partial<Record<StateCode, AtkisSfState>> = {
+  HE: { state: "HE", url: HESSEN_ATKIS, connector: "he-basis-dlm-hako-framap-v1", crs: EPSG4326, strasseTypenames: false, attribution: () => hessenAttribution },
+  NW: { state: "NW", url: "https://www.wfs.nrw.de/geobasis/wfs_nw_atkis-basis-dlm_aaa-modell-basiert", connector: "nw-basis-dlm-v1",
+    // NRW rejects EPSG:4326; ETRS89 geographic is also latitude first and differs from WGS84 by well under a metre.
+    // Its XtraServer answers roughly one request in three with a transient InternalServerError.
+    crs: { srs: "urn:ogc:def:crs:EPSG::4258" }, strasseTypenames: true, attempts: 3, attribution: () => `Geobasisdaten © Land NRW (Geobasis NRW), dl-de/zero-2-0; ${RICHTFEST}` },
+  NI: { state: "NI", url: "https://opendata.lgln.niedersachsen.de/doorman/noauth/atkisbdlm_wfs_sf", connector: "ni-basis-dlm-v1", crs: EPSG4326, strasseTypenames: true,
+    attribution: year => `LGLN (${year}) Creative Commons Namensnennung – 4.0 International (CC BY 4.0); ${RICHTFEST}` },
+  HB: { state: "HB", url: "https://opendata.lgln.niedersachsen.de/doorman/noauth/atkisbdlm_hb_wfs_sf", connector: "hb-basis-dlm-v1", crs: EPSG4326, strasseTypenames: true,
+    attribution: year => `GeoBremen (${year}) Creative Commons Namensnennung – 4.0 International (CC BY 4.0); ${RICHTFEST}` },
+  BY: { state: "BY", url: "https://geoservices.bayern.de/wfs/v1/ogc_atkis_basisdlm.cgi", connector: "by-basis-dlm-v1", crs: EPSG4326, params: ADV_NAMESPACES, strasseTypenames: true,
+    attribution: () => `Geobasisdaten © Bayerische Vermessungsverwaltung, CC BY 4.0; ${RICHTFEST}` },
+  ST: { state: "ST", url: "https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_ATKIS_WFS_BDLM_OpenData/guest", connector: "st-basis-dlm-v1", crs: EPSG4326, strasseTypenames: true,
+    attribution: () => `© GeoBasis-DE / LVermGeo LSA, dl-de/by-2-0; ${RICHTFEST}` },
+  BB: { state: "BB", url: "https://isk.geobasis-bb.de/ows/atkisbdlm_sf_wfs", connector: "bb-basis-dlm-v1", crs: EPSG4326, strasseTypenames: true,
+    attribution: () => `© GeoBasis-DE/LGB, dl-de/by-2-0; ${RICHTFEST}` },
+  MV: { state: "MV", url: "https://www.geodaten-mv.de/dienste/atkis_bdlm_wfs_sf", connector: "mv-basis-dlm-v1",
+    // Only EPSG:25833 and 5650 are offered.
+    crs: { srs: "urn:ogc:def:crs:EPSG::25833", utmZone: 33 }, strasseTypenames: true, attribution: year => `© GeoBasis-DE/M-V ${year}; ${RICHTFEST}` },
+  SH: { state: "SH", url: "https://dienste.gdi-sh.de/WFS_SH_ATKIS_BDLM_SF_OpenGBD", connector: "sh-basis-dlm-v1", crs: EPSG4326, strasseTypenames: true,
+    attribution: () => `© GeoBasis-DE/LVermGeo SH/CC BY 4.0; ${RICHTFEST}` },
+};
+
+/** AdV Bahnkategorie code list, for services that publish the category as text. */
+const RAIL_CATEGORY_CODES: Record<string, string> = {
+  "eisenbahn": "1100", "personenverkehr": "1101", "güterverkehr": "1102", "betriebsgleis": "1103", "s-bahn": "1104",
+  "stadtbahn": "1200", "straßenbahn": "1201", "u-bahn": "1202", "seilbahn, bergbahn": "1300", "zahnradbahn": "1301", "standseilbahn": "1302",
+  "museumsbahn": "1400", "bahn im freizeitpark": "1500", "magnetschwebebahn": "1600",
+};
+/** "1307", "1307.0" -> "1307"; placeholders (-9998) and blanks -> null. */
+const advCode = (value: string | null | undefined) => { const match = /^(\d+)(?:\.0+)?$/.exec(value?.trim() ?? ""); return match && Number(match[1]) > 0 ? match[1]! : null; };
+const codes = (value: string | null | undefined) => unique(split(value ?? "").map(item => advCode(item)).filter((item): item is string => !!item));
+
+// --- Baden-Württemberg: LGL NOrA view of the Basis-DLM (flat GML), dl-de/by-2-0 ---
+
+export const BW_ATKIS = "https://owsproxy.lgl-bw.de/owsproxy/wfs/WFS_LGL-BW_ATKIS_Basis-DLM";
+export const bwAttribution = (year: number) => `LGL-BW (${year}) Datenlizenz Deutschland – Namensnennung – Version 2.0, www.lgl-bw.de; ${RICHTFEST}`;
+/**
+ * nora:v_verkehrslinie: one flat layer for roads, carriageways, paths and rail (`objektart`). Requested in
+ * EPSG:25832 because its EPSG:4326 output is rounded to two decimals. Road name in gml:name, `klasse_org`
+ * dedication, `nummer` designation, `anzahl` lanes or tracks, `breite` width, `kennung` street key.
+ * Rail has its category as text and no VzG route number in this view.
+ */
+export function bwMappedAxis(feature: GmlFeature): MappedAxis | null {
+  const value = (key: string) => feature.fields[key]?.[0] ?? null;
+  const id = value("id") ?? feature.id;
+  const kind = value("objektart");
+  if (!id) return null;
+  const parts = feature.parts.map(utmPairs(32)).filter(part => part.length);
+  const name = (value("name") ?? value("zweitname"))?.slice(0, 300) ?? null;
+  if (kind === "Strassenachse" || kind === "Fahrbahnachse")
+    return { id, kind: "road", group: value("kennung"), name, dedication: advCode(value("klasse_org")), designation: normaliseDesignation(value("nummer")),
+      lanes: finiteOrNull(value("anzahl")), widthM: finiteOrNull(value("breite")), categories: [], routeNumbers: [], lines: [], tracks: null, electrified: null, parts };
+  if (kind === "Bahnstrecke") {
+    const raw = value("klasse") ?? "";
+    let labels: string[] = [raw];
+    if (raw.startsWith("[")) try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) labels = parsed.map(String); } catch { /* keep the raw text */ }
+    const categories = unique(labels.map(label => RAIL_CATEGORY_CODES[label.trim().toLowerCase()] ?? "").filter(Boolean));
+    const electrified = value("typ");
+    return { id, kind: "rail", group: railGroup([], categories, []), name, dedication: null, designation: null, lanes: null, widthM: null,
+      categories, routeNumbers: [], lines: [], tracks: advCode(value("anzahl")), electrified: electrified === "1000" ? true : electrified === "2000" ? false : null, parts };
+  }
+  return null;
+}
+
+// --- Thüringen: GDI-Th deegree WFS, flat Basis-DLM (dlm: namespace, PascalCase fields), CC BY 4.0 ---
+
+export const TH_ATKIS = "https://www.geoproxy.geoportal-th.de/geoproxy/services/adv_atkis_wfs";
+export const thAttribution = (year: number) => `© GDI-Th (${year}), CC BY 4.0; ${RICHTFEST}`;
+/** dlm:AX_STRASSENACHSE / AX_FAHRBAHNACHSE / AX_BAHNSTRECKE with name, dedication and designation inline; multi-values '#'-joined; -9998 means unset. */
+export function thMappedAxis(feature: GmlFeature): MappedAxis | null {
+  const value = (key: string) => feature.fields[key]?.[0] ?? null;
+  const id = value("eindeutigerObjektidentifikator") ?? feature.id;
+  if (!id) return null;
+  const parts = feature.parts.map(utmPairs(32)).filter(part => part.length);
+  const name = value("Name")?.slice(0, 300) ?? null;
+  if (feature.type === "AX_STRASSENACHSE" || feature.type === "AX_FAHRBAHNACHSE")
+    return { id, kind: "road", group: value("ObjektIDdesZUSO"), name, dedication: advCode(value("Widmung")), designation: normaliseDesignation(value("Bezeichnung")),
+      lanes: finiteOrNull(value("AnzahlDerFahrstreifen")), widthM: finiteOrNull(value("BreiteDerFahrbahn")), categories: [], routeNumbers: [], lines: [], tracks: null, electrified: null, parts };
+  if (feature.type === "AX_BAHNSTRECKE") {
+    const categories = codes(value("Bahnkategorie")), routeNumbers = unique(split(value("NummerDerBahnstrecke"))), lines = unique(split(value("NummerDerLinie")));
+    const electrified = advCode(value("Elektrifizierung"));
+    return { id, kind: "rail", group: railGroup(routeNumbers, categories, lines), name, dedication: null, designation: null, lanes: null, widthM: null,
+      categories, routeNumbers, lines, tracks: advCode(value("AnzahlDerStreckengleise")), electrified: electrified === "1000" ? true : electrified === "2000" ? false : null, parts };
   }
   return null;
 }

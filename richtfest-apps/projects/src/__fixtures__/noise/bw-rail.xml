@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:nora="http://nora-prod.lgl.bwl.de/nora" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" numberMatched="69" numberReturned="69">
+<wfs:member>
+    <nora:v_verkehrslinie gml:id="v_verkehrslinie.4e9b4cf2-5f27-4c58-9bc3-4cfed5e44a71">
+      <nora:id>DEBWB001000164RW</nora:id>
+      <nora:objektart>Bahnstrecke</nora:objektart>
+      <nora:klasse>Eisenbahn</nora:klasse>
+      <nora:anzahl>2000</nora:anzahl>
+      <nora:spurweite>1000</nora:spurweite>
+      <nora:spurweite_name>Normalspur (Regelspur, Vollspur)</nora:spurweite_name>
+      <nora:typ>1000</nora:typ>
+      <nora:typ_name>Elektrifiziert</nora:typ_name>
+      <nora:ebene>0</nora:ebene>
+      <nora:geom>
+        <gml:LineString srsName="urn:ogc:def:crs:EPSG::25832" srsDimension="2" gml:id="v_verkehrslinie.4e9b4cf2-5f27-4c58-9bc3-4cfed5e44a71.geom">
+          <gml:posList>513389.85 5403578.45 513421.36 5403631.28 513451.86 5403689.13 513524.76 5403808.73</gml:posList>
+        </gml:LineString>
+      </nora:geom>
+    </nora:v_verkehrslinie>
+  </wfs:member>
+<wfs:member>
+    <nora:v_verkehrslinie gml:id="v_verkehrslinie.a90f696e-e9de-41d6-80f3-58880f7a5f27">
+      <nora:id>DEBWB0010000CbAr</nora:id>
+      <nora:objektart>Bahnstrecke</nora:objektart>
+      <nora:klasse>S-Bahn</nora:klasse>
+      <nora:anzahl>2000</nora:anzahl>
+      <nora:spurweite>1000</nora:spurweite>
+      <nora:spurweite_name>Normalspur (Regelspur, Vollspur)</nora:spurweite_name>
+      <nora:typ>1000</nora:typ>
+      <nora:typ_name>Elektrifiziert</nora:typ_name>
+      <nora:bauwerk>AX_BauwerkImVerkehrsbereich</nora:bauwerk>
+      <nora:bauwerk_name>Tunnel, Unterführung</nora:bauwerk_name>
+      <nora:ebene>-1</nora:ebene>
+      <nora:geom>
+        <gml:LineString srsName="urn:ogc:def:crs:EPSG::25832" srsDimension="2" gml:id="v_verkehrslinie.a90f696e-e9de-41d6-80f3-58880f7a5f27.geom">
+          <gml:posList>513273.33 5403431.02 513278.08 5403438.34 513344.32 5403547.77 513424.54 5403681.23</gml:posList>
+        </gml:LineString>
+      </nora:geom>
+    </nora:v_verkehrslinie>
+  </wfs:member>
+</wfs:FeatureCollection>

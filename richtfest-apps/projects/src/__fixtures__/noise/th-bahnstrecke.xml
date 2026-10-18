@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" numberMatched="11" numberReturned="11">
+<wfs:member>
+    <dlm:AX_BAHNSTRECKE xmlns:dlm="http://www.adv-online.de/namespaces/adv/gid/7.1/dlm" gml:id="ID_AX_BAHNSTRECKE.DETHTL250000582BL">
+      <gml:name>DETHTL250000582B</gml:name>
+      <dlm:Landeskennung>TH</dlm:Landeskennung>
+      <dlm:Modellartenkennung>Basis-DLM#DTK10#DTK25</dlm:Modellartenkennung>
+      <dlm:Objektart>42014</dlm:Objektart>
+      <dlm:ObjektartText>AX_Bahnstrecke</dlm:ObjektartText>
+      <dlm:eindeutigerObjektidentifikator>DETHTL250000582B</dlm:eindeutigerObjektidentifikator>
+      <dlm:hatDirektUntenExistiert>0</dlm:hatDirektUntenExistiert>
+      <dlm:FachdatenverbindungExistiert>0</dlm:FachdatenverbindungExistiert>
+      <dlm:LebenszeitintervallBeginnt>2017-04-27T16:01:12Z</dlm:LebenszeitintervallBeginnt>
+      <dlm:Bahnkategorie>1100</dlm:Bahnkategorie>
+      <dlm:Spurweite>1000</dlm:Spurweite>
+      <dlm:Elektrifizierung>1000</dlm:Elektrifizierung>
+      <dlm:AnzahlDerStreckengleise>2000</dlm:AnzahlDerStreckengleise>
+      <dlm:NummerDerBahnstrecke>6291#6340</dlm:NummerDerBahnstrecke>
+      <dlm:geom>
+        <gml:LineString gml:id="ID_AX_BAHNSTRECKE.DETHTL250000582BL_DLM_GEOM" srsName="urn:ogc:def:crs:EPSG::25832">
+          <gml:posList>642617.858 5648460.836 642816.190 5648560.640 643033.180 5648670.670</gml:posList>
+        </gml:LineString>
+      </dlm:geom>
+    </dlm:AX_BAHNSTRECKE>
+  </wfs:member>
+<wfs:member>
+    <dlm:AX_BAHNSTRECKE xmlns:dlm="http://www.adv-online.de/namespaces/adv/gid/7.1/dlm" gml:id="ID_AX_BAHNSTRECKE.DETHTL250000586IL">
+      <gml:name>DETHTL250000586I</gml:name>
+      <dlm:Landeskennung>TH</dlm:Landeskennung>
+      <dlm:Modellartenkennung>Basis-DLM#DTK10#DTK25</dlm:Modellartenkennung>
+      <dlm:Objektart>42014</dlm:Objektart>
+      <dlm:ObjektartText>AX_Bahnstrecke</dlm:ObjektartText>
+      <dlm:eindeutigerObjektidentifikator>DETHTL250000586I</dlm:eindeutigerObjektidentifikator>
+      <dlm:hatDirektUntenExistiert>0</dlm:hatDirektUntenExistiert>
+      <dlm:FachdatenverbindungExistiert>0</dlm:FachdatenverbindungExistiert>
+      <dlm:LebenszeitintervallBeginnt>2024-03-07T13:48:50Z</dlm:LebenszeitintervallBeginnt>
+      <dlm:Bahnkategorie>1200</dlm:Bahnkategorie>
+      <dlm:NummerDerLinie>2#3#6</dlm:NummerDerLinie>
+      <dlm:Spurweite>2000</dlm:Spurweite>
+      <dlm:Elektrifizierung>1000</dlm:Elektrifizierung>
+      <dlm:AnzahlDerStreckengleise>2000</dlm:AnzahlDerStreckengleise>
+      <dlm:geom>
+        <gml:LineString gml:id="ID_AX_BAHNSTRECKE.DETHTL250000586IL_DLM_GEOM" srsName="urn:ogc:def:crs:EPSG::25832">
+          <gml:posList>642566.060 5649207.050 642574.253 5649202.709 642581.020 5649199.760 642596.420 5649196.350</gml:posList>
+        </gml:LineString>
+      </dlm:geom>
+    </dlm:AX_BAHNSTRECKE>
+  </wfs:member>
+</wfs:FeatureCollection>

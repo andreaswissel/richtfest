@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:nora="http://nora-prod.lgl.bwl.de/nora" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" numberMatched="69" numberReturned="69">
+<wfs:member>
+    <nora:v_verkehrslinie gml:id="v_verkehrslinie.2b01d642-dc50-4579-9d01-4343fb0c832d">
+      <gml:name>Heilbronner Straße</gml:name>
+      <nora:id>DEBWB0010000SE3U</nora:id>
+      <nora:objektart>Fahrbahnachse</nora:objektart>
+      <nora:klasse>Bundesstraße</nora:klasse>
+      <nora:klasse_org>1303</nora:klasse_org>
+      <nora:name_kurz>Heilbronner Str.</nora:name_kurz>
+      <nora:nummer>B27</nora:nummer>
+      <nora:europastrasse>0</nora:europastrasse>
+      <nora:anzahl>3</nora:anzahl>
+      <nora:fahrbahn>2000</nora:fahrbahn>
+      <nora:fahrbahn_name>Getrennt</nora:fahrbahn_name>
+      <nora:breite>11.0</nora:breite>
+      <nora:kennung>0811100021540</nora:kennung>
+      <nora:fahrbahnachse>1</nora:fahrbahnachse>
+      <nora:ebene>0</nora:ebene>
+      <nora:geom>
+        <gml:LineString srsName="urn:ogc:def:crs:EPSG::25832" srsDimension="2" gml:id="v_verkehrslinie.2b01d642-dc50-4579-9d01-4343fb0c832d.geom">
+          <gml:posList>513246.13 5403695.99 513246.97 5403701.75</gml:posList>
+        </gml:LineString>
+      </nora:geom>
+    </nora:v_verkehrslinie>
+  </wfs:member>
+<wfs:member>
+    <nora:v_verkehrslinie gml:id="v_verkehrslinie.0e208708-98b0-4c8c-8882-c43df258d7ec">
+      <gml:name>Kriegerstraße</gml:name>
+      <nora:id>DEBWB0010001dJdG</nora:id>
+      <nora:objektart>Strassenachse</nora:objektart>
+      <nora:klasse>Gemeindestraße</nora:klasse>
+      <nora:klasse_org>1307</nora:klasse_org>
+      <nora:name_kurz>Kriegerstr.</nora:name_kurz>
+      <nora:europastrasse>0</nora:europastrasse>
+      <nora:anzahl>2</nora:anzahl>
+      <nora:kennung>0811100031800</nora:kennung>
+      <nora:ebene>0</nora:ebene>
+      <nora:geom>
+        <gml:LineString srsName="urn:ogc:def:crs:EPSG::25832" srsDimension="2" gml:id="v_verkehrslinie.0e208708-98b0-4c8c-8882-c43df258d7ec.geom">
+          <gml:posList>513240.42 5403822.52 513242.02 5403822.35 513250.96 5403821.36</gml:posList>
+        </gml:LineString>
+      </nora:geom>
+    </nora:v_verkehrslinie>
+  </wfs:member>
+</wfs:FeatureCollection>

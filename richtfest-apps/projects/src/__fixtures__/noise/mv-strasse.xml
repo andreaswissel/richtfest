@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection numberReturned="20" numberMatched="20" xmlns="http://www.adv-online.de/namespaces/adv/gid/7.1" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<wfs:member>
+<AX_Strasse gml:id="DEMVLM25100070q9">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEMVLM25100070q9</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK10</advStandardModell>
+</AA_Modellart>
+</modellart>
+<bestehtAus xlink:href="urn:adv:oid:DEMVLM25100071e0"/>
+<bestehtAus xlink:href="urn:adv:oid:DEMVLM253OV0017B"/>
+<name>Bei der Marienkirche</name>
+<widmung>1307</widmung>
+<strassenschluessel>1300300001210</strassenschluessel>
+</AX_Strasse>
+</wfs:member>
+<wfs:member>
+<AX_Strasse gml:id="DEMVLM25100070yS">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEMVLM25100070yS</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK10</advStandardModell>
+</AA_Modellart>
+</modellart>
+<bestehtAus xlink:href="urn:adv:oid:DEMVLM25100071AC"/>
+<name>Garbräterstraße</name>
+<widmung>1307</widmung>
+<strassenschluessel>1300300002720</strassenschluessel>
+</AX_Strasse>
+</wfs:member>
+</wfs:FeatureCollection>

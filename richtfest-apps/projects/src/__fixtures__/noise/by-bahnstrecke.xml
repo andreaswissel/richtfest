@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wfs:FeatureCollection numberReturned="10" numberMatched="unknown" xmlns="http://www.adv-online.de/namespaces/adv/gid/7.1" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<wfs:member>
+<AX_Bahnstrecke gml:id="DEBYBDLMaR000AJb">
+<gml:identifier codeSpace="http://www.adv-online.de/">urn:adv:oid:DEBYBDLMaR000AJb</gml:identifier>
+<modellart>
+<AA_Modellart>
+<advStandardModell>Basis-DLM</advStandardModell>
+</AA_Modellart>
+</modellart>
+<modellart>
+<AA_Modellart>
+<advStandardModell>DTK25</advStandardModell>
+</AA_Modellart>
+</modellart>
+<hatDirektUnten xlink:href="urn:adv:oid:DEBYBDLMaR000Ba0"/>
+<position>
+<gml:LineString gml:id="o42014.id.7776284.position.Geom_0" srsName="urn:ogc:def:crs:EPSG::4326" srsDimension="2">
+<gml:posList>48.1372357701903 11.5751031495366 48.1370259436208 11.5758504842741 48.1370005525716 11.575938298336 48.1368260375486 11.57653641956</gml:posList>
+</gml:LineString>
+</position>
+<bahnkategorie>1104</bahnkategorie>
+<elektrifizierung>1000</elektrifizierung>
+<anzahlDerStreckengleise>2000</anzahlDerStreckengleise>
+<nummerDerBahnstrecke>5550</nummerDerBahnstrecke>
+<spurweite>1000</spurweite>
+<nummerDerLinie>S1</nummerDerLinie>
+<nummerDerLinie>S2</nummerDerLinie>
+<nummerDerLinie>S3</nummerDerLinie>
+<nummerDerLinie>S4</nummerDerLinie>
+<nummerDerLinie>S5</nummerDerLinie>
+<nummerDerLinie>S6</nummerDerLinie>
+<nummerDerLinie>S8</nummerDerLinie>
+</AX_Bahnstrecke>
+</wfs:member>
+</wfs:FeatureCollection>
