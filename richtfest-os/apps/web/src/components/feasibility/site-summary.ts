@@ -2,7 +2,7 @@ import type { SiteAssessmentInput, SiteReference } from "@richtfest/shared";
 import type { MassingOptions } from "@richtfest/shared/site-geometry-model";
 import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import type * as Proposals from "@richtfest/shared/site-proposals";
-import { discoveryPolygons, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
+import { discoveryPolygons, planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
 import { planBuildingForm, PLAN_FIGURES, type PlanExtraction } from "./plan-extraction";
 
 type Draft = Omit<SiteAssessmentInput, "baseRevision">;
@@ -53,11 +53,13 @@ export function applySiteSummary<T extends Draft>(draft: T, sources: { context: 
   if (next.planningBasis !== "unresolved") step("basis", "kept", next.planningBasis === "b_plan" ? "BasisBPlan" : "BasisSection34");
   else if (!context || context.planStatus !== "available") step("basis", "needs_input", "BasisUnavailable");
   else {
-    const covering = context.plans.filter((p) => p.containsAddress);
-    const adopted = covering.find((p) => p.status === "adopted");
+    // B-Plan register first, then the land-use plan: open land points to § 35, which the assessment cannot model.
+    const law = planningLawAt(context, context.origin);
+    const adopted = law.plans.find((p) => p.status === "adopted");
     if (adopted) { next = { ...next, planningBasis: "b_plan" }; step("basis", "done", "BasisBPlanFound", { plan: adopted.name }); }
-    else if (covering.length) step("basis", "needs_input", "BasisInProgress", { plan: covering[0]!.name });
-    else { next = { ...next, planningBasis: "section34" }; step("basis", "done", "BasisSection34"); }
+    else if (law.kind === "in_progress") step("basis", "needs_input", "BasisInProgress", { plan: law.plans[0]!.name });
+    else if (law.kind === "section35") step("basis", "needs_input", "BasisSection35", { landUse: law.landUse!.label });
+    else { next = { ...next, planningBasis: "section34" }; step("basis", "done", law.landUse ? "BasisSection34Fnp" : "BasisSection34", law.landUse ? { landUse: law.landUse.label } : undefined); }
   }
 
   // 3. § 34 references: the nearest buildings with measured coverage, outside the site itself. A person still gives each a reason.

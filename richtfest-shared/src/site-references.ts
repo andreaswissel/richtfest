@@ -1,5 +1,5 @@
 import { z } from "zod";
-export const SITE_REFERENCE_METRICS = ["footprint", "storeys", "eaveHeight", "ridgeHeight", "depth", "frontage", "boundaryDistance", "buildingLineOffset", "grz", "gfz"] as const;
+export const SITE_REFERENCE_METRICS = ["footprint", "storeys", "eaveHeight", "ridgeHeight", "depth", "frontage", "boundaryDistance", "buildingLineOffset", "grz", "grz2", "gfz"] as const;
 export type SiteReferenceMetric = typeof SITE_REFERENCE_METRICS[number];
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => { const d = new Date(v); return Number.isFinite(d.getTime()) && d.toISOString().slice(0,10) === v; });
 const measurement = z.object({ value:z.number().finite().nonnegative().max(1e9).nullable(), source:z.string().max(2000), sourceDate:date.nullable(), kind:z.enum(["official","calculated","estimated","assessment"]), reviewed:z.boolean() }).strict();

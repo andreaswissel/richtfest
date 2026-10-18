@@ -33,3 +33,28 @@ test('skipped invalid building geometry cannot produce complete parcel ratios',a
  try{const result=await discoverSiteReferences({address:'test',origin:[0,0],sources:[]},new AbortController().signal);expect(result.references).toHaveLength(1);expect(result.status[0]).toBe('unavailable');expect(result.references[0]?.metrics?.grz?.value).toBeNull();expect(result.references[0]?.metrics?.ridgeHeight?.sourceDate).toBeNull();}finally{globalThis.fetch=original;}
 });
 test('reference labels do not repeat a house number already in the street name',()=>{expect(referenceLabel('Giersstraße 20','20')).toBe('Giersstraße 20');expect(referenceLabel('Giersstraße','20')).toBe('Giersstraße 20');expect(referenceLabel('Giersstraße 120','20')).toBe('Giersstraße 120 20');expect(referenceLabel('Hauptstraße 4a','4A')).toBe('Hauptstraße 4a');});
+
+test('GRZ 1 counts main buildings only; GRZ 2 adds garages and underground structures from ALKIS functions',async()=>{
+ const original=globalThis.fetch;
+ const rect=(x:number,y:number,w:number,h:number)=>({type:'Polygon',coordinates:[[[x,y],[x+w,y],[x+w,y+h],[x,y+h],[x,y]]]});
+ const cadastral=[
+  {id:'house',properties:{uuid:'house',bezeich:'AX_Gebaeude',gfk:1010,bezgfk:'Wohnhaus'},geometry:rect(0,0,20,10)},
+  {id:'garage',properties:{uuid:'garage',bezeich:'AX_Gebaeude',gfk:2463,bezgfk:'Garage'},geometry:rect(25,0,5,10)},
+  // Underground garage under half the house and beyond it: only the part outside the house adds to GRZ 2.
+  {id:'tg',properties:{uuid:'tg',bezeich:'AX_Gebaeude',gfk:2465,ofl:1200},geometry:rect(10,-10,10,20)},
+  {id:'part',properties:{uuid:'part',bezeich:'AX_Bauteil',bat:2100},geometry:rect(0,0,5,5)},
+ ];
+ globalThis.fetch=(async(url:unknown)=>{const u=String(url);
+  if(u.includes('alkis_gebaeude'))return Response.json({numberMatched:cadastral.length,features:cadastral});
+  if(u.includes('alkis_flurstuecke'))return Response.json({numberMatched:1,features:[{id:'p',properties:{uuid:'p',afl:2000},geometry:rect(-10,-20,50,40)}]});
+  return Response.json({numberMatched:1,features:[{id:'b1',properties:{gml_id:'b1',geschosse:'3',hoehe:10},geometry:rect(0,0,20,10)}]});}) as unknown as typeof fetch;
+ try{
+  const r=await discoverSiteReferences({address:'test',origin:[0,0],sources:[]},new AbortController().signal);
+  const m=r.references[0]!.metrics!;
+  expect(m.grz!.value).toBeCloseTo(200/2000,9);
+  // House 200 + garage 50 + underground outside the house 100 = 350 m².
+  expect(m.grz2!.value).toBeCloseTo(350/2000,9);
+  expect(m.grz2!.source).toContain('lower bound');
+  expect(m.grz2!.reviewed).toBe(false);
+ }finally{globalThis.fetch=original;}
+});

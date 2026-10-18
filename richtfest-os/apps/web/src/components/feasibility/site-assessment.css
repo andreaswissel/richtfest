@@ -464,3 +464,15 @@
 .site-map-frame > summary { cursor: pointer; margin-bottom: 6px; }
 .site-map-links { display: flex; flex-wrap: wrap; gap: var(--stack); }
 .site-map-links a { text-decoration: underline; }
+/* Planning-law tint: a hint layer, deliberately faint so parcel lines and the aerial stay readable. */
+.site-map-parcel[data-law="b_plan"] { fill: rgb(16 185 129 / .24); }
+.site-map-parcel[data-law="in_progress"] { fill: rgb(124 58 237 / .14); }
+.site-map-parcel[data-law="section34"] { fill: rgb(59 130 246 / .16); }
+.site-map-parcel[data-law="section35"] { fill: rgb(245 158 11 / .2); }
+.site-map-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; padding-left: 2px; }
+.site-map-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.site-map-legend i { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--border); }
+.site-map-legend i[data-law="b_plan"] { background: rgb(16 185 129 / .5); }
+.site-map-legend i[data-law="in_progress"] { background: rgb(124 58 237 / .45); }
+.site-map-legend i[data-law="section34"] { background: rgb(59 130 246 / .4); }
+.site-map-legend i[data-law="section35"] { background: rgb(245 158 11 / .55); }

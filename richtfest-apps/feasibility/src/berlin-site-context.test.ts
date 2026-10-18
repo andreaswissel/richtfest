@@ -65,3 +65,12 @@ test("aerial window is a fixed snapped square around a Berlin point, never calle
     expect(calls).toHaveLength(1);
   } finally { server.close(); }
 });
+
+test("FNP land use is only a planning-law hint by category", async () => {
+  const { landUseCategory } = await import("./berlin-site-context");
+  expect(landUseCategory("Wohnbaufläche, W1 (GFZ über 1,5)")).toBe("building");
+  expect(landUseCategory("Gemischte Baufläche, M2")).toBe("building");
+  expect(landUseCategory("Wald")).toBe("open");
+  expect(landUseCategory("Grünfläche")).toBe("open");
+  expect(landUseCategory("Fläche für Ver- und Entsorgung")).toBe("other");
+});

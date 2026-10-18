@@ -6,7 +6,9 @@ type Point = [number, number];
 type Locator = NonNullable<SiteAssessmentInput["siteLocator"]>;
 export type BerlinParcel = { id: string; label: string; number?: string; district?: string; area: number | null; sourceDate: string | null; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
 export type BerlinPlan = { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; polygons?: Point[][][]; containsAddress: boolean };
+export type BerlinLandUse = { id: string; label: string; purpose: string | null; category: "building" | "open" | "other"; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
 export type BerlinSiteContext = {
+  landUse?: BerlinLandUse[]; landUseStatus?: string;
   hints?: { id: string; kind: string; label: string; sourceUrl: string; detailUrl: string | null; containsAddress: boolean }[];
   hintStatus?: string; address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: BerlinParcel[]; plans: BerlinPlan[];
 };
@@ -42,3 +44,31 @@ export const discoveryContext = (projectId: string, data: SiteDiscovery, sourceL
 /** Local X/Z (x east, z south) back to EPSG:25833. */
 export const discoveryPolygons = (data: Pick<SiteDiscovery, "origin">, building: LocationBuilding): Point[][][] =>
   building.polygons.map((polygon) => polygon.map((ring) => ring.map(([x, z]) => [x + data.origin[0], data.origin[1] - z] as Point)));
+
+/** Even-odd point test on outer rings minus holes (EPSG:25833). */
+export const containsPoint = (polygons: Point[][][], point: Point) => polygons.some(([outer, ...holes]) => {
+  const inRing = (ring: Point[]) => {
+    let result = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i]!, b = ring[j]!;
+      if ((a[1] > point[1]) !== (b[1] > point[1]) && point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / (b[1] - a[1]) + a[0]) result = !result;
+    }
+    return result;
+  };
+  return !!outer && inRing(outer) && !holes.some(inRing);
+});
+export type PlanningLaw = { kind: "b_plan" | "in_progress" | "section34" | "section35" | "unresolved"; plans: BerlinPlan[]; landUse: BerlinLandUse | null };
+/**
+ * Planning-law hint for a point: an adopted B-Plan decides; otherwise the land-use plan suggests § 34 (building land)
+ * or § 35 (forest, green or farmland). Always a proposal for review, never a legal determination.
+ */
+export function planningLawAt(context: BerlinSiteContext, point: Point): PlanningLaw {
+  // Cached responses from before plan outlines were returned only know whether a plan covers the address.
+  const plans = context.plans.filter((p) => (p.polygons?.length ? containsPoint(p.polygons, point) : p.containsAddress && point[0] === context.origin[0] && point[1] === context.origin[1]));
+  const landUse = (context.landUse ?? []).find((l) => containsPoint(l.polygons, point)) ?? null;
+  if (plans.some((p) => p.status === "adopted")) return { kind: "b_plan", plans, landUse };
+  if (plans.length) return { kind: "in_progress", plans, landUse };
+  if (context.planStatus !== "available") return { kind: "unresolved", plans, landUse };
+  if (landUse?.category === "open") return { kind: "section35", plans, landUse };
+  return { kind: landUse?.category === "building" ? "section34" : "unresolved", plans, landUse };
+}

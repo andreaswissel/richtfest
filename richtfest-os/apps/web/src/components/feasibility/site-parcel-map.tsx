@@ -6,16 +6,16 @@ import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
-import { discoveryPolygons, type BerlinParcel, type BerlinPlan, type BerlinSiteContext, type SiteDiscovery } from "./site-lookups";
+import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinSiteContext, type PlanningLaw, type SiteDiscovery } from "./site-lookups";
 
 type Point = [number, number];
 type Bounds = [number, number, number, number];
 type View = { cx: number; cy: number; half: number };
 type Range = { mean: number; max: number };
 /** What the map knows about one parcel: observed ratios, covering plans and the § 34 frame of its neighbours. */
-export type ParcelFacts = { grz: number | null; gfz: number | null; plans: BerlinPlan[]; frame: { grz: Range | null; gfz: Range | null; count: number } };
+export type ParcelFacts = { grz: number | null; grz2: number | null; gfz: number | null; law: PlanningLaw | null; frame: { grz: Range | null; grz2: Range | null; gfz: Range | null; count: number } };
 const FRAME_RADIUS_M = 100;
-type LayerKey = "aerial" | "plans" | "buildings" | "labels";
+type LayerKey = "aerial" | "law" | "plans" | "buildings" | "labels" | "ratios";
 /** Must match the server's orthophoto window (AERIAL_WINDOW_M / AERIAL_SNAP_M in the feasibility app). */
 const AERIAL_WINDOW_M = 200, AERIAL_SNAP_M = 25;
 const MIN_HALF = 12, MAX_HALF = AERIAL_WINDOW_M;
@@ -41,15 +41,6 @@ const labelPoint = (polygons: Point[][][]): Point | null => {
   }
   return best?.point ?? null;
 };
-const inside = (polygons: Point[][][], point: Point) => polygons.some(polygon => {
-  const ring = polygon[0] ?? [];
-  let result = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i]!, b = ring[j]!;
-    if ((a[1] > point[1]) !== (b[1] > point[1]) && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]) result = !result;
-  }
-  return result;
-});
 
 /**
  * Parcel map for the Site step, in the spirit of the 3D location viewer: Berlin TrueDOP orthophoto underneath,
@@ -69,7 +60,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   const label = (key: string) => t(`berlinMap${key}` as Parameters<typeof t>[0]);
   const frame = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<[number, number]>([800, 480]);
-  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, plans: true, buildings: true, labels: true });
+  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ aerial: true, law: true, plans: true, buildings: true, labels: true, ratios: true });
   const [aerialFailed, setAerialFailed] = useState(false);
   const fit = useMemo(() => {
     const own = context.parcels.filter(p => p.containsAddress);
@@ -143,13 +134,13 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
   });
 
   const ratios = useMemo(() => {
-    const byParcel = new Map<string, { grz: number | null; gfz: number | null }>();
+    const byParcel = new Map<string, { grz: number | null; grz2: number | null; gfz: number | null }>();
     for (const r of discovery?.references ?? []) if (r.parcelId && !byParcel.has(r.parcelId))
-      byParcel.set(r.parcelId, { grz: r.metrics?.grz?.value ?? null, gfz: r.metrics?.gfz?.value ?? null });
+      byParcel.set(r.parcelId, { grz: r.metrics?.grz?.value ?? null, grz2: r.metrics?.grz2?.value ?? null, gfz: r.metrics?.gfz?.value ?? null });
     return byParcel;
   }, [discovery]);
   const buildings = useMemo(() => discovery ? discovery.buildings.map(b => ({ id: b.id, d: path(discoveryPolygons(discovery, b), aerial) })) : [], [discovery, aerial]);
-  const parcels = useMemo(() => context.parcels.map(p => ({ parcel: p, d: path(p.polygons, aerial), at: labelPoint(p.polygons), bounds: boundsOf(p.polygons) })), [context, aerial]);
+  const parcels = useMemo(() => context.parcels.map(p => { const at = labelPoint(p.polygons); return { parcel: p, d: path(p.polygons, aerial), at, bounds: boundsOf(p.polygons), law: at ? planningLawAt(context, at) : null }; }), [context, aerial]);
   const plans = useMemo(() => context.plans.filter(p => p.polygons?.length).map(p => ({ plan: p, d: path(p.polygons!, aerial), bounds: boundsOf(p.polygons!) })), [context, aerial]);
   const visible: Bounds = [view.cx - view.half, view.cy - (view.half * h) / w, view.cx + view.half, view.cy + (view.half * h) / w];
   const px = (n: number) => n * m;
@@ -161,9 +152,9 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
     const near = at ? parcels.filter(p => p.parcel.id !== parcel.id && p.at && Math.hypot(p.at[0] - at[0], p.at[1] - at[1]) <= FRAME_RADIUS_M).map(p => ratios.get(p.parcel.id)).filter(r => r?.grz != null) : [];
     const range = (values: number[]): Range | null => values.length ? { mean: values.reduce((a, b) => a + b, 0) / values.length, max: Math.max(...values) } : null;
     return {
-      ...(ratios.get(parcel.id) ?? { grz: null, gfz: null }),
-      plans: at ? context.plans.filter(p => p.polygons && inside(p.polygons, at)) : [],
-      frame: { grz: range(near.map(r => r!.grz!)), gfz: range(near.flatMap(r => r!.gfz != null ? [r!.gfz] : [])), count: near.length },
+      ...(ratios.get(parcel.id) ?? { grz: null, grz2: null, gfz: null }),
+      law: parcels.find(p => p.parcel.id === parcel.id)?.law ?? null,
+      frame: { grz: range(near.map(r => r!.grz!)), grz2: range(near.flatMap(r => r!.grz2 != null ? [r!.grz2] : [])), gfz: range(near.flatMap(r => r!.gfz != null ? [r!.gfz] : [])), count: near.length },
     };
   };
   // A scale bar of a round length about a sixth of the map width.
@@ -179,7 +170,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
         preserveAspectRatio="none" onError={() => setAerialFailed(true)} />}
       {layers.buildings && buildings.map(b => <path key={b.id} className="site-map-building" d={b.d} />)}
       {layers.plans && plans.map(({ plan, d }) => <path key={plan.id} className="site-map-plan" data-status={plan.status} d={d}><title>{plan.name}</title></path>)}
-      {parcels.map(({ parcel, d }) => <path key={parcel.id} className="site-map-parcel" d={d} data-parcel={parcel.id}
+      {parcels.map(({ parcel, d, law }) => <path key={parcel.id} className="site-map-parcel" d={d} data-parcel={parcel.id} data-law={layers.law ? law?.kind : undefined}
         data-selected={selected === parcel.id} data-adopted={adoptedId === parcel.id} data-address={parcel.containsAddress}>
         <title>{parcel.label}</title>
       </path>)}
@@ -189,7 +180,9 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
         const r = ratios.get(parcel.id), small = (bounds[2] - bounds[0]) / m < 90;
         return <text key={parcel.id} className="site-map-label" x={lx(at[0])} y={ly(at[1])} fontSize={px(12)} data-selected={selected === parcel.id}>
           <tspan x={lx(at[0])} fontWeight={600}>{parcel.number || parcel.label}</tspan>
-          {!small && r?.grz != null && <tspan x={lx(at[0])} dy={px(14)} fontSize={px(11)}>GRZ {fmt(r.grz)}{r.gfz != null ? ` · GFZ ${fmt(r.gfz)}` : ""}</tspan>}
+          {/* GRZ 1 / GRZ 2 like the planning map convention; GFZ on its own line. */}
+          {layers.ratios && !small && r?.grz != null && <tspan x={lx(at[0])} dy={px(14)} fontSize={px(11)}>GRZ {fmt(r.grz)}{r.grz2 != null ? ` / ${fmt(r.grz2)}` : ""}</tspan>}
+          {layers.ratios && !small && r?.gfz != null && <tspan x={lx(at[0])} dy={px(13)} fontSize={px(11)}>GFZ {fmt(r.gfz)}</tspan>}
         </text>;
       })}
       {layers.plans && layers.labels && plans.map(({ plan, bounds }) => {
@@ -225,10 +218,13 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
           <PopoverTrigger asChild><WorkbenchTool tooltipSide="left" label={label("Layers")}><Layers className="size-icon-sm" /></WorkbenchTool></PopoverTrigger>
           <PopoverContent side="left" align="start" className="site-map-layers w-56">
             <p className="text-ui-sm font-medium">{label("Layers")}</p>
-            {(["aerial", "plans", "buildings", "labels"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
-              <span>{label(`Layer_${key}`)}{key === "buildings" && !discovery && <span className="muted text-ui-2xs"> · {label("BuildingsAfterDiscovery")}</span>}</span>
+            {(["aerial", "law", "plans", "buildings", "labels", "ratios"] as const).map(key => <label key={key} className="site-map-layer text-ui-sm">
+              <span>{label(`Layer_${key}`)}{(key === "buildings" || key === "ratios") && !discovery && <span className="muted text-ui-2xs"> · {label("BuildingsAfterDiscovery")}</span>}</span>
               <Switch checked={layers[key]} onCheckedChange={() => toggle(key)} />
             </label>)}
+            {layers.law && <p className="site-map-legend muted text-ui-2xs">
+              {(["b_plan", "in_progress", "section34", "section35"] as const).map(kind => <span key={kind}><i data-law={kind} />{t(`berlinContextLaw_${kind}` as Parameters<typeof t>[0])}</span>)}
+            </p>}
           </PopoverContent>
         </Popover>
         <Link className="workbench-tool" to={`/projects/${projectId}?view=location`} aria-label={label("Open3d")} title={label("Open3d")}><Box className="size-icon-sm" /></Link>

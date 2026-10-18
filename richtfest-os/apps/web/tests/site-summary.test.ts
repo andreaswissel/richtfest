@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createEmptySiteAssessmentInput } from "@richtfest/shared";
 import * as engine from "@richtfest/shared/site-proposals";
 import { applySiteSummary } from "../src/components/feasibility/site-summary";
-import type { BerlinSiteContext, SiteDiscovery } from "../src/components/feasibility/site-lookups";
+import { planningLawAt, type BerlinSiteContext, type SiteDiscovery } from "../src/components/feasibility/site-lookups";
 
 const X = 397000, Y = 5824000;
 const ring = (x: number, y: number, w: number, h: number): [number, number][] => [[X + x, Y + y], [X + x + w, Y + y], [X + x + w, Y + y + h], [X + x, Y + y + h], [X + x, Y + y]];
@@ -87,5 +87,21 @@ describe("one-click site summary", () => {
     const { draft, steps } = applySiteSummary(empty, { context: context(undefined, [plan]), discovery: discovery([]), plan: { plan: "IV-2c", status: "unconfigured", constraints: [], facts: [] } }, engine, "2026-10-18");
     expect(steps.find((s) => s.id === "frame")).toMatchObject({ status: "needs_input", detail: "FramePlanUnconfigured" });
     expect(draft.constraints.grz.value).toBeNull();
+  });
+  test("open land in the land-use plan stops at a likely § 35 instead of assuming § 34", () => {
+    const forest = { id: "f", label: "Wald", purpose: null, category: "open" as const, sourceUrl: "fnp", polygons: [[ring(-100, -100, 300, 300)]], containsAddress: true };
+    const { draft, steps } = applySiteSummary(empty, { context: { ...context(), landUse: [forest] }, discovery: discovery([]) }, engine, "2026-10-18");
+    expect(steps.find((s) => s.id === "basis")).toMatchObject({ status: "needs_input", detail: "BasisSection35", values: { landUse: "Wald" } });
+    expect(draft.planningBasis).toBe("unresolved");
+    expect(draft.references).toEqual([]);
+  });
+  test("planning law is decided per point from plan outlines, not from the address flag", () => {
+    // The plan covers only the eastern parcel, not the address point in the western one.
+    const plan = { id: "IV-2c", name: "IV-2c", status: "adopted", sourceUrl: "s", documentUrl: null, explanationUrl: null, effectiveDate: null, containsAddress: false, polygons: [[ring(20, 0, 20, 30)]] };
+    const housing = { id: "w", label: "Wohnbaufläche, W1", purpose: null, category: "building" as const, sourceUrl: "fnp", polygons: [[ring(-100, -100, 300, 300)]], containsAddress: true };
+    const c = { ...context(undefined, [plan]), landUse: [housing] };
+    expect(planningLawAt(c, [X + 30, Y + 15]).kind).toBe("b_plan");
+    expect(planningLawAt(c, [X + 10, Y + 15])).toMatchObject({ kind: "section34", landUse: { label: "Wohnbaufläche, W1" } });
+    expect(applySiteSummary(empty, { context: c, discovery: discovery([]) }, engine, "2026-10-18").draft.planningBasis).toBe("section34");
   });
 });

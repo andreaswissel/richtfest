@@ -63,7 +63,9 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
   const planUrls = [serviceUrl("bplan", "b_bp_fs", site.origin), serviceUrl("bplan", "a_bp_iv", site.origin)];
   const hintLayers = [["denkmale", "denkmale"], ["erhaltungsverordnungsgebiete", "erhaltgeb_em"], ["erhaltungsverordnungsgebiete", "erhaltgeb_es"]] as const;
   const hintUrls = hintLayers.map(([service,layer]) => serviceUrl(service,layer,site.origin));
-  const [parcelResult, adoptedPlan, draftPlan, ...hintResults] = await Promise.allSettled([features(parcelUrl, signal), ...planUrls.map(url => features(url, signal)), ...hintUrls.map(url => features(url, signal))]);
+  // Land-use plan (FNP): building land suggests § 34 where no B-Plan applies; forest, green or farmland suggests § 35.
+  const landUseUrl = serviceUrl("fnp_ak", "fnp_ak_vektor", site.origin);
+  const [parcelResult, adoptedPlan, draftPlan, landUseResult, ...hintResults] = await Promise.allSettled([features(parcelUrl, signal), ...planUrls.map(url => features(url, signal)), features(landUseUrl, signal), ...hintUrls.map(url => features(url, signal))]);
   const planResults = [adoptedPlan!, draftPlan!];
   const retrievedAt = new Date().toISOString();
   const parcels = parcelResult.status === "fulfilled" ? parcelResult.value.flatMap(feature => {
@@ -79,10 +81,20 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
     effectiveDate: text(feature.properties.festsg_am) || null, polygons: polygonsOf(feature), containsAddress: containsPoint(polygonsOf(feature), site.origin),
   })));
   const hints = hintResults.flatMap((result,index) => result.status !== "fulfilled" ? [] : result.value.map(feature => ({id: text(feature.id),kind:index === 0 ? "heritage" : "preservation", label: text(feature.properties.gebietsname) || text(feature.properties.typ) || text(feature.properties.id),sourceUrl:hintUrls[index]!,detailUrl:publicLink(feature.properties.link),effectiveDate:text(feature.properties.ae_inkraft)||text(feature.properties.f_in_kraft)||null,containsAddress:containsPoint(polygonsOf(feature),site.origin)})));
-  return { hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
+  const landUse = landUseResult!.status !== "fulfilled" ? [] : landUseResult!.value.flatMap(feature => {
+    const polygons = polygonsOf(feature), label = text(feature.properties.nutzungsart);
+    return polygons.length && label ? [{ id: text(feature.properties.gisid) || text(feature.id), label, purpose: text(feature.properties.zweckbestimmung) || null, category: landUseCategory(label), sourceUrl: landUseUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }] : [];
+  });
+  return { landUse, landUseStatus: landUseResult!.status === "fulfilled" ? "available" : "unavailable", hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
     parcelStatus: parcelResult.status === "fulfilled" ? "available" : "unavailable",
     planStatus: planResults.every(r => r.status === "fulfilled") ? "available" : "unavailable",
     sources: [...site.sources, { label: "ALKIS Berlin · dl-de/zero-2-0", url: parcelUrl }, ...planUrls.map(url => ({ label: "Berlin B-Plan register", url }))] };
+}
+/** FNP land use as a planning-law hint, never a determination: building land → § 34 likely, open land → § 35 likely. */
+export function landUseCategory(label: string): "building" | "open" | "other" {
+  if (/baufläche|bauflaeche/i.test(label)) return "building";
+  if (/wald|grünfläche|gruenflaeche|landwirtschaft|parkanlage|kleingarten|friedhof|wasserfläche|feld|wiese|naturschutz/i.test(label)) return "open";
+  return "other";
 }
 export function createBerlinSiteContextRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();

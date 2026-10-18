@@ -46,7 +46,7 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
  const buildings=list(0).flatMap(f=>{const g=checked(f);if(!g.length)return[];return[{f,g,area:polygonArea(g),box:bbox(g)}];});
  const parcels=list(1).flatMap(f=>{const g=checked(f);if(!g.length)return[];return[{f,g,area:number(f.properties.afl),box:bbox(g)}];});
  const cadastral=list(2).flatMap(f=>{const g=checked(f);return g.length?[{f,g,box:bbox(g)}]:[];});
- const parcelMetrics=new Map<string,{grz:number|null;gfz:number|null}>();
+ const parcelMetrics=new Map<string,{grz:number|null;grz2:number|null;gfz:number|null}>();
  const references:SiteReference[]=buildings.map(b=>{
   const p=b.f.properties,id=text(p.gml_id)||text(b.f.id),source=`${urls[0]} · ${id}`,rawDate=text(p.grundrissaktualitaet),date=/^\d{4}-\d{2}-\d{2}$/.test(rawDate)&&Number.isFinite(Date.parse(rawDate))&&new Date(rawDate).toISOString().slice(0,10)===rawDate?rawDate:null;
   const matches=parcels.filter(parcel=>touches(b.box,parcel.box)&&polygonArea(intersection(b.g,parcel.g))>=b.area-.05);
@@ -60,16 +60,21 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
   if(parcel&&parcelId&&!parcelMetrics.has(parcelId)){
    const complete=buildings.length===list(0).length&&parcels.length===list(1).length&&results[0]?.status==="fulfilled"&&results[1]?.status==="fulfilled"&&parcel.box.x>site.origin[0]-radius&&parcel.box.X<site.origin[0]+radius&&parcel.box.y>site.origin[1]-radius&&parcel.box.Y<site.origin[1]+radius;
    const onParcel=buildings.filter(other=>touches(other.box,parcel.box)&&polygonArea(intersection(other.g,parcel.g))>.05);
-   let grz:number|null=null,gfz:number|null=null;
-   if(complete&&parcel.area){const occupied=union(...onParcel.map(other=>intersection(other.g,parcel.g)));grz=polygonArea(occupied)/parcel.area;
+   let grz:number|null=null,grz2:number|null=null,gfz:number|null=null;
+   if(complete&&parcel.area){
+    // GRZ 1 counts main buildings only; GRZ 2 adds garages, sheds, carports and underground structures (§ 19 (4) BauNVO) from ALKIS building functions.
+    const alkis=results[2]?.status==="fulfilled"&&cadastral.length===list(2).length?cadastral.filter(c=>c.f.properties.bezeich==="AX_Gebaeude"&&touches(c.box,parcel.box)&&polygonArea(intersection(c.g,parcel.g))>.05):null;
+    if(alkis?.length){const cover=(items:typeof alkis)=>items.length?polygonArea(union(...items.map(c=>intersection(c.g,parcel.g))))/parcel.area!:0;grz=cover(alkis.filter(c=>buildingCoverageClass(c.f.properties)==="main"));grz2=cover(alkis);}
+    else{const occupied=union(...onParcel.map(other=>intersection(other.g,parcel.g)));grz=polygonArea(occupied)/parcel.area;}
     const floors=onParcel.map(other=>number(other.f.properties.geschosse));
     if(floors.every(n=>n!==null&&Number.isInteger(n)&&n<=200)){let area=0;const max=Math.max(0,...floors as number[]);for(let level=1;level<=max;level++)area+=polygonArea(union(...onParcel.filter((_,i)=>floors[i]!>=level).map(other=>intersection(other.g,parcel.g))));gfz=area/parcel.area;}
-   }parcelMetrics.set(parcelId,{grz,gfz});
+   }parcelMetrics.set(parcelId,{grz,grz2,gfz});
   }
   const ratios=parcelId?parcelMetrics.get(parcelId):undefined;
   const ratioSource=`${source} · ${urls[1]} · ${parcelId??"unresolved parcel"} · coverage from observed footprints; GFZ assumes reported storeys are countable, not a legal full-storey determination`;
+  const coverageSource=`${urls[2]} · ${urls[1]} · ${parcelId??"unresolved parcel"} · ALKIS building functions: GRZ 1 main buildings; GRZ 2 adds garages, carports, sheds and underground structures; paved access and parking areas are not in ALKIS, so GRZ 2 is a lower bound`;
   return{id,buildingId:id,...(parcelId?{parcelId}:{}),label:referenceLabel(text(cad?.f.properties.namlag)||text(p.strasse),text(cad?.f.properties.hnr)||text(p.hnr))||text(p.name)||id,source,note:"Public context proposal. Select appropriate references and verify observed storeys, heights, façade alignment and planning relevance. Oriented bounding dimensions are estimates; not street-aligned surveyed dimensions.",polygons:b.g,
-   metrics:{footprint:metric(b.area,source,date),storeys:metric(storeys,source,null,"official"),ridgeHeight:metric(number(p.hoehe),source,null,"official"),eaveHeight:metric(null,source,null,"estimated"),depth:metric(dimensions.depth,source,date,"estimated"),frontage:metric(dimensions.frontage,source,date,"estimated"),boundaryDistance:metric(boundaryDistance,`${source} · ${parcelId??""}`,null),buildingLineOffset:metric(null,source,null,"estimated"),grz:metric(ratios?.grz??null,ratioSource,null),gfz:metric(ratios?.gfz??null,ratioSource,null,"estimated")},
+   metrics:{footprint:metric(b.area,source,date),storeys:metric(storeys,source,null,"official"),ridgeHeight:metric(number(p.hoehe),source,null,"official"),eaveHeight:metric(null,source,null,"estimated"),depth:metric(dimensions.depth,source,date,"estimated"),frontage:metric(dimensions.frontage,source,date,"estimated"),boundaryDistance:metric(boundaryDistance,`${source} · ${parcelId??""}`,null),buildingLineOffset:metric(null,source,null,"estimated"),grz:metric(ratios?.grz??null,ratios?.grz2!=null?coverageSource:ratioSource,null),grz2:metric(ratios?.grz2??null,coverageSource,null,"estimated"),gfz:metric(ratios?.gfz??null,ratioSource,null,"estimated")},
    ...(cad&&text(cad.f.properties.bezbaw)?{buildingForm:{value:text(cad.f.properties.bezbaw),source:`${urls[2]} · ${text(cad.f.properties.uuid)}`,sourceDate:null,reviewed:false}}:{})};
  });
  references.sort((a,b)=>{const ac=bbox(a.polygons!),bc=bbox(b.polygons!);return Math.hypot((ac.x+ac.X)/2-site.origin[0],(ac.y+ac.Y)/2-site.origin[1])-Math.hypot((bc.x+bc.X)/2-site.origin[0],(bc.y+bc.Y)/2-site.origin[1]);});
@@ -79,3 +84,7 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
 /** ALKIS `namlag` often already includes the house number ("Giersstraße 20"); avoid "Giersstraße 20 20". */
 export function referenceLabel(street:string,houseNumber:string){if(!houseNumber)return street;const escaped=houseNumber.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");return new RegExp(`(^|\\s)${escaped}$`,"i").test(street)?street:[street,houseNumber].filter(Boolean).join(" ");}
 export function createSiteReferencesRouter(getDeps:(req:Request)=>AppDeps){const router=Router();router.post("/projects/:projectId/references/discover",async(req,res,next)=>{try{const d=getDeps(req);d.requirePermission("projects:read");const id=z.string().uuid().parse(req.params.projectId);if(!await d.project(id))throw Object.assign(new Error("Project not found"),{status:404});const signal=AbortSignal.timeout(30000),site=await resolveAssessmentLocation(d,id,req.body,signal);res.json(ok(await discoverSiteReferences(site,signal)));}catch(e){next(e);}});return router;}
+
+/** ALKIS building functions (gfk) that count only towards GRZ 2 under § 19 (4) BauNVO; anything underground does too. */
+const ANCILLARY_FUNCTIONS=new Set([1312,1313,1610,1611,2460,2461,2462,2463,2464,2465,2523,2612,2723,2741]);
+export function buildingCoverageClass(p:Record<string,unknown>):"main"|"ancillary"{return Number(p.ofl)===1200||ANCILLARY_FUNCTIONS.has(Number(p.gfk))?"ancillary":"main";}

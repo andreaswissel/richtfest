@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- **Parcel map:** Neighbouring parcels show GRZ 1 (main buildings) and GRZ 2 (including garages, sheds and underground garages) next to GFZ, as a layer you can toggle. Each parcel is marked as B-Plan in force, plan in progress, likely § 34 or likely § 35, using the B-Plan register and the Berlin land-use plan; the site summary no longer assumes § 34 on open land.
+
 - Workbench tools in Site assessment, 3D location and the building model show a tooltip with their name and shortcut on hover, including tools that are currently unavailable.
 - **Site summary:** One click from the saved address to a complete, unreviewed site frame: official parcel, B-Plan or § 34, nearby references, GRZ/GFZ/storeys, building form, setback envelope, an exemption scenario and a first massing. For a covering B-Plan it imports the official plan PDF and reads its GRZ, GFZ, storeys and Bauweise with the provider you choose, citing the page; under § 34 it uses the neighbours. Building form is inferred from neighbours on the parcel boundaries when the plan does not state it. Reviewed and entered values are never replaced.
 - **Parcel map:** The Site step shows parcels on the Berlin aerial image, labelled with number and observed GRZ/GFZ, with named B-Plan areas, nearby buildings, zoom and layer controls. Selecting a parcel shows its area, last change, whether a development plan is in force and the § 34 values of its neighbours.

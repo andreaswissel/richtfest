@@ -42,6 +42,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, siteLoca
   const visible = showAll ? parcels : parcels.slice(0, VISIBLE_PARCELS);
   // Keep a parcel chosen on the preview visible in the table.
   if (!showAll && selected && !visible.some(p => p.id === selected)) visible.push(parcels.find(p => p.id === selected)!);
+  const num = (n: number) => n.toLocaleString(locale, { maximumFractionDigits: 2 });
   const range = (r: { mean: number; max: number } | null) => r ? `${r.mean.toLocaleString(locale, { maximumFractionDigits: 2 })} – ${r.max.toLocaleString(locale, { maximumFractionDigits: 2 })}` : "–";
   const area = (n: number | null) => n === null ? "–" : `${n.toLocaleString(locale)} m²`;
   const adopt = (parcel: Parcel) => {
@@ -75,30 +76,30 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, siteLoca
               <dt>{label("Area")}</dt><dd className="tabular-nums">{area(parcel.area)}</dd>
               <dt>{label("Relation")}</dt><dd>{parcel.containsAddress ? <Badge variant="outline">{label("Contains")}</Badge> : label("Nearby")}</dd>
               <dt>{label("LastChange")}</dt><dd>{parcel.sourceDate ? new Date(parcel.sourceDate).toLocaleDateString(locale) : "–"}</dd>
-              <dt>{label("ObservedRatios")}</dt><dd className="tabular-nums">{facts.grz != null ? `GRZ ${facts.grz.toLocaleString(locale)}${facts.gfz != null ? ` · GFZ ${facts.gfz.toLocaleString(locale)}` : ""}` : <span className="muted">{label(discovery ? "NoRatios" : "RatiosAfterDiscovery")}</span>}</dd>
+              <dt>GRZ 1</dt><dd className="tabular-nums">{facts.grz != null ? num(facts.grz) : <span className="muted">{label(discovery ? "NoRatios" : "RatiosAfterDiscovery")}</span>}</dd>
+              {facts.grz != null && <><dt>GRZ 2</dt><dd className="tabular-nums">{facts.grz2 != null ? `≥ ${num(facts.grz2)}` : "–"}</dd>
+              <dt>GFZ</dt><dd className="tabular-nums">{facts.gfz != null ? num(facts.gfz) : "–"}</dd></>}
             </dl>
-            <div className="site-map-basis text-ui-xs">
-              <p className="muted text-ui-2xs">{label("PlanInForce")}</p>
-              {facts.plans.some(p => p.status === "adopted") ? <>
-                <p className="text-ui-sm font-semibold">{label("PlanYes")}</p>
-                {facts.plans.map(plan => <div key={plan.id}>
-                  <p className="font-medium">{plan.name}{plan.status === "adopted" ? "" : ` · ${label("InProgress")}`}</p>
-                  <p className="site-map-links">
-                    {plan.documentUrl && <a href={plan.documentUrl} target="_blank" rel="noreferrer">{label("PlanPdf")}</a>}
-                    {plan.explanationUrl && <a href={plan.explanationUrl} target="_blank" rel="noreferrer">{label("Explanation")}</a>}
-                    {!plan.documentUrl && !plan.explanationUrl && <span className="muted">{label("PlanNoDocuments")}</span>}
-                  </p>
-                </div>)}
-                <p className="muted">{label("PlanDecides")}</p>
-              </> : <>
-                <p className="text-ui-sm font-semibold">{label(facts.plans.length ? "PlanDraftOnly" : "PlanNo")}</p>
-                <p className="muted">{label("PlanSection34")}</p>
-              </>}
-            </div>
-            <details className="site-map-frame text-ui-xs" open={!facts.plans.some(p => p.status === "adopted")}>
+            {facts.grz != null && <p className="muted text-ui-2xs">{label("RatiosHint")}</p>}
+            {facts.law && <div className="site-map-basis text-ui-xs" data-law={facts.law.kind}>
+              <p className="muted text-ui-2xs">{label("PlanningLaw")}</p>
+              <p className="text-ui-sm font-semibold">{label(`Law_${facts.law.kind}`)}</p>
+              {facts.law.plans.map(plan => <div key={plan.id}>
+                <p className="font-medium">{plan.name}{plan.status === "adopted" ? (plan.effectiveDate ? ` · ${label("Adopted")} ${plan.effectiveDate}` : "") : ` · ${label("InProgress")}`}</p>
+                <p className="site-map-links">
+                  {plan.documentUrl && <a href={plan.documentUrl} target="_blank" rel="noreferrer">{label("PlanPdf")}</a>}
+                  {plan.explanationUrl && <a href={plan.explanationUrl} target="_blank" rel="noreferrer">{label("Explanation")}</a>}
+                  {!plan.documentUrl && !plan.explanationUrl && <span className="muted">{label("PlanNoDocuments")}</span>}
+                </p>
+              </div>)}
+              {facts.law.landUse && <p><span className="muted">{label("LandUse")}: </span>{facts.law.landUse.label}</p>}
+              <p className="muted">{label(`LawHint_${facts.law.kind}`)}</p>
+            </div>}
+            <details className="site-map-frame text-ui-xs" open={facts.law?.kind !== "b_plan"}>
               <summary className="font-medium">{label("Section34Values")}</summary>
               {facts.frame.count ? <dl className="site-map-facts">
-                <dt>GRZ</dt><dd className="tabular-nums">{range(facts.frame.grz)}</dd>
+                <dt>GRZ 1</dt><dd className="tabular-nums">{range(facts.frame.grz)}</dd>
+                <dt>GRZ 2</dt><dd className="tabular-nums">{range(facts.frame.grz2)}</dd>
                 <dt>GFZ</dt><dd className="tabular-nums">{range(facts.frame.gfz)}</dd>
                 <dt>{label("Section34Basis")}</dt><dd>{label("Section34Count").replace("{count}", String(facts.frame.count))}</dd>
               </dl> : <p className="muted">{label(discovery ? "NoRatios" : "RatiosAfterDiscovery")}</p>}
