@@ -23,7 +23,9 @@ Record meaningful completed, verified work in the root `CHANGELOG.md` as it happ
 
 ## Preparing a release
 
-Before the deployment commit and docs build, move every `Unreleased` entry included in that deployment into a `## YYYY-MM-DD` section using the deployment's Europe/Berlin calendar date. Reuse an existing section for the same day instead of creating a duplicate; keep dated sections newest first. Leave unrelated, undeployed work in `Unreleased` and never move shipped entries back there. This promotion is part of every deployment, not optional cleanup afterward: the deployed Docs bundle must already contain the dated notes.
+Before the deployment commit and docs build, move every `Unreleased` entry included in that deployment into a `## YYYY-MM-DD` section using the deployment's Europe/Berlin calendar date. Reuse an existing section for the same day instead of creating a duplicate; keep dated sections newest first. Keep unrelated, undeployed work and its notes on a separate branch, outside the deployment commit, and never move shipped entries back to `Unreleased`. This promotion is part of every deployment, not optional cleanup afterward: the deployed Docs bundle must already contain the dated notes.
+
+The production Docker build sets `REQUIRE_RELEASED_CHANGELOG=1` and fails if any `Unreleased` section contains notes. It does not silently hide or date them. Normal local docs builds still allow the undeployed queue for review. To check the release gate locally, run `REQUIRE_RELEASED_CHANGELOG=1 bun run --filter '@richtfest/docs' build`.
 
 Confirm the Railway deployment succeeded before reporting the release as live. If deployment is abandoned, return only its still-undeployed entries to `Unreleased`. For a historical correction, check successful deployment records and the commits they contain; a commit date alone does not establish a release date. Do not relabel already shipped history with today's date.
 
@@ -31,7 +33,7 @@ Confirm the Railway deployment succeeded before reporting the release as live. I
 
 Include the release note for a user-facing or operational change and any affected workflow, architecture or setup docs in the same commit as the change. Run `bun run --filter '@richtfest/docs' build` whenever changelog or docs content changes, and inspect the diff before staging only the files that belong to the change.
 
-The Docs Changelog page is generated automatically from root `CHANGELOG.md` when Docs starts or builds, including the production Docker build. There is no second changelog to maintain or Git hook to install. The generated `content/docs/changelog.md` is ignored by Git; never edit or stage it. Restart the Docs development server after changelog edits to regenerate the page. The root heading is replaced by page metadata; release sections and entries are preserved.
+The Docs Changelog page is generated automatically from root `CHANGELOG.md` when Docs starts or builds, including the production Docker build. There is no second changelog to maintain or Git hook to install. The generated `content/docs/changelog.md` is ignored by Git; never edit or stage it. Restart the Docs development server after changelog edits to regenerate the page. The root heading is replaced by page metadata and empty `Unreleased` headings are omitted; release sections and entries are preserved.
 
 ## Verification
 

@@ -102,7 +102,7 @@ Purely UI/visual changes are pre-authorized for immediate deployment after verif
 Every deploy must:
 
 - inspect `git status`, staged diff, and the target branch
-- include concise `CHANGELOG.md` entries for user-facing or operational changes and move the entries included in this deployment from `Unreleased` into `## YYYY-MM-DD` using the deployment date in Europe/Berlin, before the deployment commit and docs build. Reuse an existing section for that date; leave only genuinely undeployed work under `Unreleased`
+- include concise `CHANGELOG.md` entries for user-facing or operational changes and move the entries included in this deployment from `Unreleased` into `## YYYY-MM-DD` using the deployment date in Europe/Berlin, before the deployment commit and docs build. Reuse an existing section for that date. Keep genuinely undeployed work and its notes outside the deployment commit; the production build rejects non-empty `Unreleased` sections
 - update Richtfest Docs (`richtfest-os/apps/docs/content/docs`) in the same commit when the change adds or alters something documented or worth documenting: a Richtfest App, screen, workflow, role/permission, Richtfest Agent domain, integration, architecture or convention. Docs describe how things work now (rewrite or remove outdated pages); the changelog records what changed. See the "Writing docs" page for where each kind of change goes, and run `bun run --filter '@richtfest/docs' build` to check it
 - stage only the files that belong to the requested change
 - commit on local `main`

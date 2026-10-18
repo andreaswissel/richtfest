@@ -2,27 +2,9 @@
 
 ## Unreleased
 
-- Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
-
-- Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
-
-- Calculation and Report agents now message only agents in the current run family, keeping prior runs out of their discovery and inbox.
-
-- Successive agent clarifications now retain earlier project decisions in order; explicit corrections affect conflicting facts without discarding unrelated constraints. Oversized accumulated guidance is rejected clearly rather than truncated.
-
-- Acoustic agents use RLS-19 within the DIN 18005 planning workflow for road-noise assessment, reserve contour maps for aircraft research, and keep unavailable calculation inputs and other noise-source categories explicit.
-
-- Projects can save source-backed environmental surveys with bounded official Rheinland-Pfalz road, rail, industry and aviation records. The survey preserves dated source receipts and Fraport layer metadata, and checks the site against published noise-contour extents. Flight paths and site-specific noise levels remain explicitly unresolved.
-
-- Uploaded sources now retain reusable page models and PDF layer metadata. Agents can read compact source-backed blocks, while the document inspector shows page coverage, layer visibility and unresolved extraction limits. Existing project evidence can be prepared without AI calls; original files, reviews and reference exclusions remain intact.
-
-- Acoustic extraction keeps large, sparse plan pages together and retains directly printed plan areas as receipt-bound, unreviewed observations; visual mappings and areas remain outside calculation inputs until explicitly approved by a person.
-
-- Acoustic input review shows visual room candidates as partial, unreviewed observations linked to their exact source page and image-inspection receipt, with an on-demand source preview returned only when its rendered image hash still matches that receipt; candidates remain outside the calculation inventory.
-
-- Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
-
 ## 2026-10-18
+
+- Corrected already-shipped acoustic updates to their verified release date. Production builds now reject undated release notes instead of publishing them as Unreleased.
 
 - 3D location measurements float over the map without shifting the model. Save and reopen distances to any surface with an optional description and purpose; exterior-noise actions appear only after saving a road or railway purpose. Corner snapping can be switched off for free picking.
 
@@ -87,6 +69,26 @@
 - Building model processing fixes: deleting a plan PDF no longer fails; sections that mention a floor plan are no longer treated as floor plans; automatic processing applies only to newly uploaded project-evidence PDFs, with no backfill of older sources; repeatedly failing sources stop with a visible failed state; re-extracted geometry fences stale reviews; agent links open the linked object's own plan page; and agents see automatic draft storeys as unreviewed. Includes database migration 0042.
 
 ## 2026-10-16
+
+- Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
+
+- Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.
+
+- Calculation and Report agents now message only agents in the current run family, keeping prior runs out of their discovery and inbox.
+
+- Successive agent clarifications now retain earlier project decisions in order; explicit corrections affect conflicting facts without discarding unrelated constraints. Oversized accumulated guidance is rejected clearly rather than truncated.
+
+- Acoustic agents use RLS-19 within the DIN 18005 planning workflow for road-noise assessment, reserve contour maps for aircraft research, and keep unavailable calculation inputs and other noise-source categories explicit.
+
+- Projects can save source-backed environmental surveys with bounded official Rheinland-Pfalz road, rail, industry and aviation records. The survey preserves dated source receipts and Fraport layer metadata, and checks the site against published noise-contour extents. Flight paths and site-specific noise levels remain explicitly unresolved.
+
+- Uploaded sources now retain reusable page models and PDF layer metadata. Agents can read compact source-backed blocks, while the document inspector shows page coverage, layer visibility and unresolved extraction limits. Existing project evidence can be prepared without AI calls; original files, reviews and reference exclusions remain intact.
+
+- Acoustic extraction keeps large, sparse plan pages together and retains directly printed plan areas as receipt-bound, unreviewed observations; visual mappings and areas remain outside calculation inputs until explicitly approved by a person.
+
+- Acoustic input review shows visual room candidates as partial, unreviewed observations linked to their exact source page and image-inspection receipt, with an on-demand source preview returned only when its rendered image hash still matches that receipt; candidates remain outside the calculation inventory.
+
+- Project Sources now show each file’s purpose, making reference reports and test-only comparisons visibly distinct from agent evidence.
 
 - Building model now opens the strongest identified floor-plan page instead of an arbitrary report cover, including for older automatically generated links. Projects with several PDFs provide an explicit source-PDF selector, and deliberate source or page choices remain fixed in shareable links.
 - Building-model source PDFs now render through an authorized same-origin stream in production, avoiding private-bucket browser CORS failures while preserving signed redirects for explicit file downloads.
