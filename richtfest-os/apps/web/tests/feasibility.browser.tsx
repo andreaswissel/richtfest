@@ -35,7 +35,7 @@ export async function testFeasibility() {
   let router = createMemoryRouter([
     { path: "/study", element: <><Link to="/other">Leave study</Link><Feasibility projectId="ui-regression" /></> },
     { path: "/other", element: <p>Other view</p> },
-  ], { initialEntries: ["/study"] });
+  ], { initialEntries: ["/study?study=financial"] });
   window.fetch = async (url, options) => {
     if (String(url) !== `/api${path}`) return originalFetch(url, options);
     if (options?.method === "PUT") {
@@ -102,7 +102,7 @@ export async function testFeasibility() {
     root.unmount(); router.dispose();
     root = createRoot(host);
     usePreferences.getState().hydrate({ language: "de" });
-    router = createMemoryRouter([{ path: "*", element: <Feasibility projectId="ui-regression" /> }]);
+    router = createMemoryRouter([{ path: "*", element: <Feasibility projectId="ui-regression" /> }], { initialEntries: ["/?study=financial"] });
     flushSync(() => root.render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>));
     await wait(() => input("Bestandswohnfläche"));
     fill(input("Bestandswohnfläche"), "1.000,75");

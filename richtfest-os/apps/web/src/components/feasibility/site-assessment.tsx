@@ -628,7 +628,6 @@ export function SiteAssessment({ projectId, nav }: { projectId: string; nav?: Re
             onEdit={(key) => openReview({ kind: "constraint", key })}
             empty={<><p className="text-ui-sm muted">{label("VisualEmpty")}</p><Button variant="outline" size="sm" onClick={() => setStep("limits")}>{label("GoToLimits")}</Button></>}
           />
-          {result?.baseline && <p className="text-ui-xs muted">{label("FinancialHint")} <Link className="underline" to={`/projects/${projectId}?view=feasibility`}>{label("OpenFinancial")}</Link></p>}
           {summarySteps && summaryPanel}
           <Section title={label("OpenItemsTitle")} meta={<Badge variant="outline">{result ? label(result.status) : label("InvalidShort")}</Badge>}>
             {openItems.length === 0 ? (

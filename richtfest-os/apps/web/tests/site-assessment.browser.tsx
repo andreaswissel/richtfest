@@ -235,17 +235,11 @@ export async function testSiteAssessment() {
       record.assessment.notes === "Concurrent review",
       "Stale save cannot overwrite new server revision",
     );
-    flushSync(() =>
-      document
-        .querySelector<HTMLAnchorElement>(
-          'a[href="/project?view=feasibility"]',
-        )!
-        .click(),
-    );
+    void router.navigate("/project?view=details");
     await wait(() => document.querySelector('[role="dialog"]'));
     check(
       router.state.location.search.includes("study=site"),
-      "Switching subviews blocks unsaved navigation",
+      "Leaving the assessment blocks unsaved navigation",
     );
     await wait(() => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].some((b) => b.textContent === "Keep editing"));
     const stay = [

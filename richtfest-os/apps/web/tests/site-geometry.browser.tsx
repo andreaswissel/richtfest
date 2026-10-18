@@ -157,7 +157,7 @@ export async function testSiteGeometry() {
     flushSync(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     flushSync(() => button("Use usable area as capacity input").click());
     check(adopted === 1296, "Usable area adoption is explicit and calculated");
-    flushSync(() => host.querySelector<HTMLButtonElement>('.workbench-tool[aria-label="Trace mandatory building line"]')!.click());
+    flushSync(() => host.querySelector<HTMLButtonElement>('.workbench-tool[aria-label="Draw building line (Baulinie, open)"]')!.click());
     const canvas = host.querySelector<HTMLElement>(".geometry-plan")!,
       box = canvas.getBoundingClientRect();
     for (const [x, y] of [

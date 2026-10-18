@@ -93,12 +93,10 @@ function ValueField({ state, field, label, disabled, language, raw, onRaw, onCha
 }
 
 export function Feasibility({ projectId }: { projectId: string }) {
-  const t = useT(), [params] = useSearchParams();
-  const site = params.get("study") === "site";
-  const target = (isSite: boolean) => { const next = new URLSearchParams(params); if (isSite) next.set("study", "site"); else next.delete("study"); return `?${next}`; };
-  const nav = <nav className="site-study-nav text-ui-sm" aria-label={t("siteAssessmentTitle")}><Link to={target(false)} aria-current={!site ? "page" : undefined}>{t("siteAssessmentFinancial")}</Link><Link to={target(true)} aria-current={site ? "page" : undefined}>{t("siteAssessmentTitle")}</Link></nav>;
-  // The site assessment puts the study switch into its single header row, so the editor is reached without scrolling.
-  return site ? <SiteAssessment key={projectId} projectId={projectId} nav={nav} /> : <>{nav}<FinancialFeasibility key={projectId} projectId={projectId} /></>;
+  const [params] = useSearchParams();
+  // Site assessment is the feasibility workspace; the financial study stays reachable by link until it returns as a second tab.
+  if (params.get("study") === "financial") return <FinancialFeasibility key={projectId} projectId={projectId} />;
+  return <SiteAssessment key={projectId} projectId={projectId} nav={null} />;
 }
 
 function FinancialFeasibility({ projectId }: { projectId: string }) {

@@ -4,6 +4,8 @@
 
 ## 2026-10-18
 
+- **Feasibility:** Opens directly on the site assessment; the financial study is paused and no longer shown.
+- **Design:** Double-click closes a footprint outline in the plan and in 3D. The footprint tool is now called "Draw building footprint", the building-line tool has its own line icon, and in 3D the selected building stands out while the others turn grey.
 - **Baugrenze from the plan:** With a B-Plan page aligned on the parcel, one click traces the Baugrenze and Baulinien around the parcel as an unreviewed envelope and building lines, using the provider you choose. Drag the approximate corners onto the plan lines, then review.
 - **Parcel map:** "Design on this parcel" adopts the selected parcel and opens it in Design. Adopting a parcel inside Design now also sets the parcel area.
 - **3D editors and massing:** 3D location and the site assessment's Design step open as a top-down map: drag pans, scroll zooms to the cursor, and Ctrl/⌥ + drag tilts and turns. In Design, pick a parcel directly on the map, draw the footprint in the plan or in 3D, then set floors × floor height or drag the roof grip to extrude; BGF updates live. Abstandsflächen (0.4 H, min. 3 m) follow live in green, turning red where they cross the parcel boundary or overlap neighbouring buildings' areas.

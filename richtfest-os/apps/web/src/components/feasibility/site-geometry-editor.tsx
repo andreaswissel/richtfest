@@ -16,7 +16,7 @@ import {
   MousePointer2,
   PanelLeft,
   PanelRight,
-  PenLine,
+  Slash,
   Plus,
   Redo2,
   Scan,
@@ -161,7 +161,7 @@ function useElementSize<E extends HTMLElement>() {
 type Viewport = ReturnType<typeof createViewport>;
 type Local = (g: GeometryMultiPolygon) => GeometryPoint[][][];
 /** 3D massing view: a map-style camera (drag pans, Ctrl/⌥-drag orbits), parcels, live Abstandsflächen, draw, move and extrude. */
-function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, draft, editable, tool, viewport: handle, onSelect, onGround, onHover, onDrag }: {
+function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, draft, editable, tool, viewport: handle, onSelect, onGround, onHover, onDrag, onFinish }: {
   context: LocationContext;
   geometry: SiteGeometryInput;
   selected: string | null;
@@ -175,14 +175,16 @@ function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, d
   viewport: React.MutableRefObject<Viewport | null>;
   onSelect: (id: string | null, ground?: GeometryPoint) => void;
   onGround: (point: GeometryPoint) => void;
+  /** Double-click while drawing closes the outline (or ends a building line). */
+  onFinish: () => void;
   onHover: (point: GeometryPoint | null) => void;
   onDrag: { begin: (id: string, kind: "move" | "extrude") => void; move: (id: string, kind: "move" | "extrude", value: GeometryPoint | number) => void };
 }) {
   const t = useT();
   const host = useRef<HTMLDivElement>(null),
     viewport = handle,
-    handlers = useRef({ onSelect, onGround, onHover, onDrag });
-  handlers.current = { onSelect, onGround, onHover, onDrag };
+    handlers = useRef({ onSelect, onGround, onHover, onDrag, onFinish });
+  handlers.current = { onSelect, onGround, onHover, onDrag, onFinish };
   const dark = usePreferences((s) => s.theme) === "dark";
   const [ready, setReady] = useState(false),
     [error, setError] = useState(false);
@@ -207,6 +209,7 @@ function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, d
             move: (id, kind, value) => handlers.current.onDrag.move(id, kind, typeof value === "number" ? value : [value[0], -value[1]]),
           },
         });
+        host.current.addEventListener("dblclick", () => handlers.current.onFinish());
         setReady(true);
       } catch {
         setError(true);
@@ -224,18 +227,21 @@ function Geometry3D({ context, geometry, selected, parcels, setbacks, drawing, d
     if (geometry.parcel) items.push({ id: "parcel", polygons: local(geometry.parcel.geometry), base: 0.05, height: 0, color: 0x64748b });
     if (geometry.envelope) items.push({ id: "envelope", polygons: local(geometry.envelope.geometry), base: 0.1, height: 0, color: 0x10b981 });
     geometry.exclusions.forEach((x) => items.push({ id: x.id, polygons: local(x.geometry), base: 0.15, height: 0, color: 0xef4444 }));
+    // With a building selected, the others turn neutral so a footprint drawn inside another massing stays visible.
+    const focus = geometry.buildings.find((b) => b.id === selected || b.staffel.some((st) => st.footprint.id === selected))?.id;
     geometry.buildings.forEach((b) => {
       const height = fullStoreyMeshHeight(b);
-      items.push({ id: b.id, polygons: local(b.footprint.geometry), base: 0.2, height, color: 0x6366f1 });
+      const muted = !!focus && focus !== b.id;
+      items.push({ id: b.id, polygons: local(b.footprint.geometry), base: 0.2, height, color: muted ? 0xcbd5e1 : focus ? 0x4f46e5 : 0x6366f1 });
       let base = height + 0.2;
       b.staffel.forEach((s) => {
-        items.push({ id: s.footprint.id, polygons: local(s.footprint.geometry), base, height: s.height, color: 0x818cf8 });
+        items.push({ id: s.footprint.id, polygons: local(s.footprint.geometry), base, height: s.height, color: muted ? 0xe2e8f0 : 0x818cf8 });
         base += s.height;
       });
     });
     if (draft) items.push({ id: "draft", polygons: local(draft.footprint), base: 0.2, height: draft.height, color: 0x94a3b8 });
     return items;
-  }, [context, geometry, draft]);
+  }, [context, geometry, draft, selected]);
   const localParcels = useMemo(() => ({ items: parcels.items.map((p) => ({ id: p.id, polygons: local(p.polygons) })), selected: parcels.selected }), [context, parcels]);
   const localSetbacks = useMemo(() => setbacks.map((c) => ({ id: c.id, clear: local(c.clear), conflict: local(c.conflict) })), [context, setbacks]);
   const localDrawing = useMemo(() => drawing && { points: drawing.points.map((p) => toLocal(context, p)), hover: drawing.hover && toLocal(context, drawing.hover) }, [context, drawing]);
@@ -643,7 +649,9 @@ export function SiteGeometryEditor({
         Math.hypot(p[0] - next[0], p[1] - next[1]) < tolerance && (!best || Math.hypot(p[0] - next[0], p[1] - next[1]) < Math.hypot(best[0] - next[0], best[1] - next[1])) ? p : best,
       undefined,
     );
-    setPoints((p) => [...p, nearest ?? next]);
+    const point = nearest ?? next;
+    // The second click of a double-click lands on the last corner; it closes the outline instead of adding a corner.
+    setPoints((p) => (p.length && Math.hypot(p.at(-1)![0] - point[0], p.at(-1)![1] - point[1]) < tolerance ? p : [...p, point]));
   };
   const shift = (dx: number, dy: number) =>
     selectedEvidence &&
@@ -918,7 +926,7 @@ export function SiteGeometryEditor({
     ["select", MousePointer2, "siteGeometryselect", "V"],
     ["pan", Hand, "siteGeometrypan", "H"],
     ["envelope", SquareDashed, "siteGeometryenvelope", "E"],
-    ["line", PenLine, "siteGeometryline", "L"],
+    ["line", Slash, "siteGeometryline", "L"],
     ["exclusion", Ban, "siteGeometryexclusion", "X"],
     ["building", Building2, "siteGeometrybuilding", "B"],
     ["edge", ArrowLeftRight, "siteGeometryedge", "S"],
@@ -1096,6 +1104,7 @@ export function SiteGeometryEditor({
                     selectId(id);
                   }}
                   onGround={(point) => !disabled && addPoint(point, 0.75)}
+                  onFinish={() => drawing && finish()}
                   onHover={setHover}
                   onDrag={onDrag3d}
                 />
@@ -1105,6 +1114,7 @@ export function SiteGeometryEditor({
                   className="geometry-plan"
                   data-tool={tool}
                   data-scenario={scenario}
+                  onDoubleClick={() => drawing && finish()}
                   onPointerDown={(e) => {
                     // Dragging the map pans with any tool, like a web map; shapes that drag themselves stop the event first.
                     if (e.button !== 0 && e.button !== 1) return;
