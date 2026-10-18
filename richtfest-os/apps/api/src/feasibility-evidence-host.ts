@@ -1,4 +1,5 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { files, fileVersions, sourceExtractions, sourcePages } from "@richtfest/projects/schema";
 import { storeProjectFileBytes, registerStoredFile } from "@richtfest/projects/project-files";
 import { extractSourceText, extractSourceVisual } from "@richtfest/projects/source-text";
@@ -35,14 +36,29 @@ export function createFeasibilityEvidenceHost(db: Database, d: ProjectDeps, prov
       const bytes=Buffer.concat(chunks);
       if(!bytes.subarray(0,1024).includes(Buffer.from("%PDF-")))throw new HttpError(422,"not_pdf","The official link did not return a PDF");
       const name=(decodeURIComponent(url.pathname.split("/").pop()??"").replace(/[^a-zA-Z0-9._-]/g,"_").slice(0,250)||"Bebauungsplan")+(url.pathname.toLowerCase().endsWith(".pdf")?"":".pdf");
-      const stored=await storeProjectFileBytes(d,projectId,{name,mimeType:"application/pdf",bytes});
+      // One project file per official link: the same PDF again reuses its source (and its extraction), a changed PDF becomes the next revision.
+      const checksum=createHash("sha256").update(bytes).digest("hex");
+      const latest=async(q:any)=>(await q.select({fileId:files.id,versionId:fileVersions.id,version:fileVersions.version,checksum:fileVersions.checksum}).from(files).innerJoin(fileVersions,and(eq(fileVersions.fileId,files.id),eq(fileVersions.tenantId,d.tenantId)))
+        .where(and(eq(files.tenantId,d.tenantId),eq(files.projectId,projectId),eq(files.sourceType,"official_plan"),eq(files.sourceRef,url.href),eq(fileVersions.status,"ready"))).orderBy(desc(fileVersions.createdAt)).limit(1))[0] as {fileId:string;versionId:string;version:number;checksum:string|null}|undefined;
+      const existing=async(versionId:string)=>{const source=(await listSources(projectId)).find(s=>s.versionId===versionId);if(!source)throw new HttpError(404,"not_found","PDF revision not found in project");return source;};
+      const before=await latest(db);
+      if(before?.checksum===checksum)return existing(before.versionId);
+      const stored=await storeProjectFileBytes(d,projectId,{name,mimeType:"application/pdf",bytes,...(before?{fileId:before.fileId}:{})});
+      let reused:string|null=null,version=1;
       try {
         await db.transaction(async tx=>{
-          await registerStoredFile(tx,d,projectId,stored,{sourceType:"official_plan",sourceRef:url.href,sourceMetadata:{retrievedAt:new Date().toISOString(),authority:"unreviewed_official_source"}});
-          await d.audit(tx,"feasibility.plan.imported","file",stored.file.fileId,{projectId,versionId:stored.file.versionId,sourceUrl:url.href});
+          // Serialise imports of one link per project; a concurrent import may have registered it meanwhile.
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`official_plan:${projectId}:${url.href}`}))`);
+          const now=await latest(tx);
+          if(now?.checksum===checksum){reused=now.versionId;return;}
+          if(now&&now.fileId!==stored.file.fileId)throw new HttpError(409,"concurrent_import","The official plan was imported at the same time; try again");
+          version=(now?.version??0)+1;
+          await registerStoredFile(tx,d,projectId,stored,{sourceType:"official_plan",sourceRef:url.href,version,sourceMetadata:{retrievedAt:new Date().toISOString(),authority:"unreviewed_official_source"}});
+          await d.audit(tx,"feasibility.plan.imported","file",stored.file.fileId,{projectId,versionId:stored.file.versionId,version,sourceUrl:url.href});
         });
       }catch(e){await d.fileStorage.remove(stored.file.storageKey).catch(()=>{});throw e;}
-      return {fileId:stored.file.fileId,versionId:stored.file.versionId,name,version:1,status:"queued",pages:null};
+      if(reused){await d.fileStorage.remove(stored.file.storageKey).catch(()=>{});return existing(reused);}
+      return {fileId:stored.file.fileId,versionId:stored.file.versionId,name,version,status:"queued",pages:null};
     },
     interpret:async(projectId,input)=>{
       const row=await source(projectId,input.versionId);

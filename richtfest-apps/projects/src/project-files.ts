@@ -21,20 +21,21 @@ export async function enrollReadyVersion(tx: any, d: Pick<AppDeps, "tenantId" | 
 
 export type StoredProjectFile = { fileId: string; versionId: string; name: string; mimeType: string; storageKey: string };
 
-/** Writes bytes to file storage; call registerStoredFile inside the transaction that records why the file exists. */
-export async function storeProjectFileBytes(d: Pick<AppDeps, "tenantId" | "fileStorage">, projectId: string, input: { name: string; mimeType: string; bytes: Uint8Array }) {
-  const fileId = randomUUID(), versionId = randomUUID();
+/** Writes bytes to file storage; call registerStoredFile inside the transaction that records why the file exists. Pass `fileId` to store a new revision of an existing file. */
+export async function storeProjectFileBytes(d: Pick<AppDeps, "tenantId" | "fileStorage">, projectId: string, input: { name: string; mimeType: string; bytes: Uint8Array; fileId?: string }) {
+  const fileId = input.fileId ?? randomUUID(), versionId = randomUUID();
   const storageKey = `${d.tenantId}/${projectId}/${fileId}/${versionId}`;
   const saved = await d.fileStorage.saveStream(storageKey, Readable.from([Buffer.from(input.bytes)]), input.mimeType);
   return { file: { fileId, versionId, name: input.name, mimeType: input.mimeType, storageKey }, saved };
 }
 
+/** Records stored bytes as a new file, or with `version` > 1 as the next revision of the file they were stored under. */
 export async function registerStoredFile(tx: any, d: Pick<AppDeps, "tenantId" | "actorId" | "audit">, projectId: string,
-  stored: Awaited<ReturnType<typeof storeProjectFileBytes>>, source: { sourceType: string; sourceRef?: string | null; sourceMetadata?: Record<string, unknown> }) {
+  stored: Awaited<ReturnType<typeof storeProjectFileBytes>>, source: { sourceType: string; sourceRef?: string | null; sourceMetadata?: Record<string, unknown>; version?: number }) {
   await lockProject(tx, d.tenantId, projectId);
-  const { file, saved } = stored;
-  await tx.insert(files).values({ id: file.fileId, tenantId: d.tenantId, projectId, name: file.name, sourceType: source.sourceType, purpose: "project_evidence", sourceRef: source.sourceRef ?? null, createdBy: d.actorId });
-  await tx.insert(fileVersions).values({ id: file.versionId, tenantId: d.tenantId, fileId: file.fileId, version: 1, status: "ready", sourceMetadata: source.sourceMetadata ?? {},
+  const { file, saved } = stored, version = source.version ?? 1;
+  if (version === 1) await tx.insert(files).values({ id: file.fileId, tenantId: d.tenantId, projectId, name: file.name, sourceType: source.sourceType, purpose: "project_evidence", sourceRef: source.sourceRef ?? null, createdBy: d.actorId });
+  await tx.insert(fileVersions).values({ id: file.versionId, tenantId: d.tenantId, fileId: file.fileId, version, status: "ready", sourceMetadata: source.sourceMetadata ?? {},
     checksum: saved.checksum, storageKey: file.storageKey, sizeBytes: saved.sizeBytes, mimeType: file.mimeType, createdBy: d.actorId });
   await enrollReadyVersion(tx, d, { projectId, versionId: file.versionId, fileName: file.name, mimeType: file.mimeType, purpose: "project_evidence" });
   return file;
