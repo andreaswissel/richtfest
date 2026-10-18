@@ -2085,5 +2085,8 @@
   "siteMeasureApply": "Als Abstand zur Fassade übernehmen",
   "siteMeasureSaved": "In Außenlärm gespeichert",
   "siteMeasureDiscard": "Verwerfen",
-  "siteMeasureBasis": "Im 3D-Standort gemessen von {from} bis {to} ({crs}), horizontal, auf amtlichem Luftbild und Gebäudegrundrissen; keine Vermessung"
+  "siteMeasureBasis": "Im 3D-Standort gemessen von {from} bis {to} ({crs}), horizontal, auf amtlichem Luftbild und Gebäudegrundrissen; keine Vermessung",
+  "siteMeasureSources": "Lärmquellen",
+  "siteMeasureNearby": "Kartiert in der Nähe (wird hinzugefügt)",
+  "siteMeasureNew": "Neue Quelle"
 }

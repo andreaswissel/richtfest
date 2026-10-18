@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 3D location: when taking over a measurement, mapped roads and railways near the measured points are offered directly and the nearest is preselected; choosing one adds it as a noise source with the distance.
+
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 
 - Completed acoustic calculation runs can reassess a decision-free input review from saved extraction under the original remaining budget, without rerunning specialists or writing a report.

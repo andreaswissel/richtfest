@@ -2085,5 +2085,8 @@
   "siteMeasureApply": "Use as distance to facade",
   "siteMeasureSaved": "Saved to Exterior noise",
   "siteMeasureDiscard": "Discard",
-  "siteMeasureBasis": "Measured in 3D location from {from} to {to} ({crs}), horizontal, on official imagery and footprints; not surveyed"
+  "siteMeasureBasis": "Measured in 3D location from {from} to {to} ({crs}), horizontal, on official imagery and footprints; not surveyed",
+  "siteMeasureSources": "Noise sources",
+  "siteMeasureNearby": "Mapped nearby (adds a source)",
+  "siteMeasureNew": "New source"
 }

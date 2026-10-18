@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Crosshair, FileStack, Image as ImageIcon, Route, Volume2 } from "lucide-react";
 import {
+  segmentDistance,
   toUtm,
+  type MappedNoiseSource,
   aerialSourceFor,
   railNoiseAttribution,
   siteToPlan,
@@ -19,7 +21,7 @@ import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout } from "../ui/primitives";
 import { Input } from "../ui/input";
-import { fromLocal, useSiteGeometry, type SiteGeometry, type SiteOverlay } from "./site-geometry";
+import { fromLocal, useSiteGeometry, type NoiseData, type SiteGeometry, type SiteOverlay } from "./site-geometry";
 import "./site-workbench.css";
 
 type T = ReturnType<typeof useT>;
@@ -98,6 +100,10 @@ export function FacadeDistanceRow({ projectId, geometry, item, canWrite, compact
   );
 }
 
+const mappedLabel = (item: MappedNoiseSource, t: T) => item.kind === "road"
+  ? [item.designation, item.name].filter(Boolean).join(" ") || t("noiseUnnamedRoad")
+  : item.name || (item.routeNumbers.length ? `${t("noiseRoute")} ${item.routeNumbers.join(", ")}` : t("noiseUnnamedRail"));
+
 /**
  * What to do with a finished measurement in the 3D viewer: today, take it as a
  * noise source's distance to the facade (an existing source or a new one),
@@ -117,26 +123,42 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
   // Noise distances are horizontal; the vertical difference stays in the readout.
   const horizontal = Math.round(Math.hypot(points[0][0] - points[1][0], points[0][2] - points[1][2]) * 10) / 10;
   const ends = points.map(([x, , z]) => fromLocal(context, [x, z]));
-  const nearest = useMemo(() => {
-    // Preselect the source whose mapped axis passes closest to either end, else the first railway, else the first source.
-    const zone = context.crs === "EPSG:25832" ? 32 : 33;
-    let best: { id: string; distance: number } | null = null;
-    for (const source of sources) for (const part of source.mapped?.axes ?? []) for (const [lon, lat] of part) {
-      const [e, n] = toUtm(lon, lat, zone);
-      for (const end of ends) {
-        const distance = Math.hypot(e - end[0], n - end[1]);
-        if (distance < 60 && (!best || distance < best.distance)) best = { id: source.id, distance };
-      }
+  const survey = (noise.data as NoiseData | undefined)?.survey;
+  // Distance from a mapped axis (lon/lat parts) to the nearer measured end, in metres.
+  const zone = context.crs === "EPSG:25832" ? 32 : 33;
+  const axisDistance = (axes: Array<Array<[number, number]>> | undefined) => {
+    let best = Infinity;
+    for (const part of axes ?? []) {
+      const site = part.map(([lon, lat]) => toUtm(lon, lat, zone));
+      for (const end of ends) for (let i = 0; i + 1 < site.length; i++) best = Math.min(best, segmentDistance(end, site[i]!, site[i + 1]!).distance);
     }
-    return best?.id ?? sources.find((source) => source.kind === "rail")?.id ?? sources[0]?.id ?? "_new_rail";
-  }, [sources, points]);
+    return best;
+  };
+  const addedRefs = new Set(sources.map((source) => source.mapped?.ref).filter(Boolean));
+  // Mapped roads and railways passing within 40 m of either measured point, not yet noise sources.
+  const nearby = useMemo(() => [...(survey?.roads ?? []), ...(survey?.rail ?? [])]
+    .filter((item) => !addedRefs.has(item.ref))
+    .map((item) => ({ item, distance: axisDistance(item.axes) }))
+    .filter((entry) => entry.distance <= 40)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 6), [survey, sources, points]);
+  const nearest = useMemo(() => {
+    const ranked = [
+      ...sources.map((source) => ({ id: source.id, distance: axisDistance(source.mapped?.axes) })),
+      ...nearby.map((entry) => ({ id: `mapped:${entry.item.ref}`, distance: entry.distance })),
+    ].filter((entry) => entry.distance <= 40).sort((a, b) => a.distance - b.distance);
+    return ranked[0]?.id ?? sources[0]?.id ?? "_new_road";
+  }, [sources, nearby, points]);
   const [choice, setChoice] = useState<string | null>(null);
   const target = choice ?? nearest;
   const [name, setName] = useState("");
   const apply = useMutation({
     mutationFn: async () => {
       let source = sources.find((item) => item.id === target);
-      if (!source) {
+      if (!source && target.startsWith("mapped:")) {
+        const created = await api<{ id: string }>(`/projects/${projectId}/noise-sources`, { mappedRef: target.slice("mapped:".length) });
+        source = { id: created.id, inputs: {} } as NoiseSource;
+      } else if (!source) {
         const kind = target === "_new_road" ? "road" : "rail";
         const created = await api<{ id: string }>(`/projects/${projectId}/noise-sources`, { kind, name: name.trim() || t(kind === "rail" ? "siteNewRailName" : "siteNewRoadName") });
         source = { id: created.id, inputs: {} } as NoiseSource;
@@ -157,11 +179,24 @@ export function MeasurementActions({ projectId, context, points, onDone }: {
     <div className="measurement-actions">
       <span className="text-ui-xs muted">{t("siteMeasureUseAs").replace("{distance}", horizontal.toFixed(1))}</span>
       <NativeSelect aria-label={t("siteMeasureSource")} value={target} onChange={(event) => { setChoice(event.target.value); apply.reset(); }}>
-        {sources.map((source) => (
-          <option key={source.id} value={source.id}>{`${source.name} · ${t(source.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
-        ))}
-        <option value="_new_rail">{t("siteMeasureNewRail")}</option>
-        <option value="_new_road">{t("siteMeasureNewRoad")}</option>
+        {sources.length > 0 && (
+          <optgroup label={t("siteMeasureSources")}>
+            {sources.map((source) => (
+              <option key={source.id} value={source.id}>{`${source.name} · ${t(source.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
+            ))}
+          </optgroup>
+        )}
+        {nearby.length > 0 && (
+          <optgroup label={t("siteMeasureNearby")}>
+            {nearby.map(({ item }) => (
+              <option key={item.ref} value={`mapped:${item.ref}`}>{`${mappedLabel(item, t)} · ${t(item.kind === "rail" ? "siteKindRail" : "siteKindRoad")}`}</option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label={t("siteMeasureNew")}>
+          <option value="_new_road">{t("siteMeasureNewRoad")}</option>
+          <option value="_new_rail">{t("siteMeasureNewRail")}</option>
+        </optgroup>
       </NativeSelect>
       {target.startsWith("_new") && (
         <Input aria-label={t("siteMeasureNewName")} placeholder={t(target === "_new_rail" ? "siteNewRailName" : "siteNewRoadName")} value={name} onChange={(event) => setName(event.target.value)} />
