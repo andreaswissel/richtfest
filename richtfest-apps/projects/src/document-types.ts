@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { documentTypeSchema, ok, type DocumentType, type DocumentTypeState } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { files, sourceModels, sourcePages } from "./schema";
+import { files, sourceModels, sourcePages, sourceExtractions } from "./schema";
 
 export type DocumentTypeInference = { documentType: DocumentType; reason: string } | null;
 
@@ -47,16 +47,22 @@ const drawingPageTypes = new Set(["floor_plan", "section", "elevation", "other_d
 /** Document type per file: a person's confirmed type, otherwise an inference from the latest version. */
 export async function documentTypesFor(d: AppDeps, rows: Array<{ fileId: string; name: string; documentType: string | null; versionId: string }>) {
   const versionIds = rows.map(row => row.versionId);
-  const [titles, models] = versionIds.length ? await Promise.all([
+  const [titles, models, extractions] = versionIds.length ? await Promise.all([
     d.db.select({ versionId: sourcePages.versionId, text: sql<string>`left(coalesce(${sourcePages.content}->>'text',''), 1500)` }).from(sourcePages)
       .where(and(inArray(sourcePages.versionId, versionIds), eq(sourcePages.tenantId, d.tenantId), eq(sourcePages.page, 1))),
     d.db.select({ versionId: sourceModels.versionId, metadata: sourceModels.metadata }).from(sourceModels)
       .where(and(inArray(sourceModels.versionId, versionIds), eq(sourceModels.tenantId, d.tenantId))),
-  ]) : [[], []];
+    d.db.select({ versionId: sourceExtractions.versionId, proposal: sql`${sourceExtractions.result}->'documentTypeProposal'` }).from(sourceExtractions)
+      .where(and(inArray(sourceExtractions.versionId, versionIds), eq(sourceExtractions.tenantId, d.tenantId))),
+  ]) : [[], [], []];
+  const proposals = new Map((extractions as any[]).map(row => [row.versionId, row.proposal]));
   const titleOf = new Map((titles as any[]).map(row => [row.versionId, String(row.text ?? "")]));
   const pagesOf = new Map((models as any[]).map(row => [row.versionId, row.metadata?.automaticBuildingModel ?? null]));
   return new Map(rows.map((row): [string, DocumentTypeState] => {
     if (row.documentType && documentTypeSchema.safeParse(row.documentType).success) return [row.fileId, { documentType: row.documentType as any, provenance: "manual", reason: null }];
+    const proposal = proposals.get(row.versionId);
+    if (proposal) return [row.fileId, { documentType: proposal.documentType, provenance: proposal.documentType ? "inferred" : null,
+      reason: proposal.evidence.map((item: { page: number; quote: string }) => `Page ${item.page}: ${item.quote}`).join("; ") || null }];
     const pages = pagesOf.get(row.versionId);
     // Saved page text starts with extraction markers; skip them so the title is the document's own first line.
     const title = (titleOf.get(row.versionId) ?? "").replace(/^\s*(?:\[[^\]\n]*\]\s*)+/, "");

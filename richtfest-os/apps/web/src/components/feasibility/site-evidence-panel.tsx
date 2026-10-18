@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api } from "../../api";
+import type { DocumentTypeProposal } from "@richtfest/shared";
+import { documentTypeLabel } from "../inquiries/labels";
+import { api, uploadFile } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -15,6 +17,7 @@ export type EvidenceSource = {
   version: number;
   status: string;
   pages: number;
+  documentTypeProposal?: DocumentTypeProposal;
 };
 type ProposalValue = {
   key: string;
@@ -76,6 +79,34 @@ export function SiteEvidencePanel({
     [pages, setPages] = useState("1"),
     [visual, setVisual] = useState(false),
     [url, setUrl] = useState("");
+  const filePicker = useRef<HTMLInputElement>(null);
+  const currentProject = useRef(projectId);
+  currentProject.current = projectId;
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      const header = new TextDecoder().decode(await file.slice(0, 1024).arrayBuffer());
+      if (!file.size || !header.includes("%PDF-"))
+        throw new Error(label("InvalidPdf"));
+      const form = new FormData();
+      form.set("file", new File([file], file.name, { type: "application/pdf", lastModified: file.lastModified }));
+      const result = await uploadFile<{ id: string; version: number }>(`/projects/${projectId}/files`, form, { workflow: "site_assessment" });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/files`] }),
+        queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}`] }),
+        queryClient.invalidateQueries({ queryKey: [path], refetchType: "none" }),
+      ]);
+      if (currentProject.current !== projectId) return;
+      const refreshed = await query.refetch();
+      const source = (refreshed.data?.sources as EvidenceSource[] | undefined)?.find(
+        (item) => item.fileId === result.id && item.version === result.version,
+      );
+      if (!source) throw new Error(label("UploadedRefreshFailed"));
+      if (currentProject.current === projectId) {
+        setSourceId(source.versionId);
+        setPages("1");
+      }
+    },
+  });
   const refresh = () => queryClient.invalidateQueries({ queryKey: [path] });
   const importing = useMutation({
     mutationFn: () => api(`${path}/import`, { url }, "POST"),
@@ -129,6 +160,17 @@ export function SiteEvidencePanel({
           (!selected?.pages || n <= selected.pages),
       ) &&
       (!visual || pageNumbers.length === 1);
+  const processingSource = selected && ["queued", "running"].includes(selected.status);
+  useEffect(() => {
+    if (!processingSource) return;
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      if (++attempts >= 24) window.clearInterval(timer);
+      void query.refetch();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [projectId, selected?.versionId, processingSource, query.refetch]);
+  const typeProposal = selected?.documentTypeProposal;
   return (
     <details className="site-secondary">
       <summary className="text-ui-sm">
@@ -136,6 +178,30 @@ export function SiteEvidencePanel({
       </summary>
       <div className="site-evidence-controls">
         {query.error && <Callout tone="error">{query.error.message}</Callout>}
+        <input
+          ref={filePicker}
+          type="file"
+          accept="application/pdf,.pdf"
+          disabled={disabled || !data?.canWrite || upload.isPending}
+          hidden
+          aria-label={label("Upload")}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) upload.mutate(file);
+          }}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || !data?.canWrite || upload.isPending}
+          aria-busy={upload.isPending}
+          onClick={() => { upload.reset(); filePicker.current?.click(); }}
+        >
+          {label(upload.isPending ? "Uploading" : "Upload")}
+        </Button>
+        {upload.isSuccess && <p role="status" className="muted text-ui-xs">{label("Uploaded")}</p>}
         <Field label={label("ImportUrl")}>
           <Input
             value={url}
@@ -166,6 +232,20 @@ export function SiteEvidencePanel({
             ))}
           </NativeSelect>
         </Field>
+        {selected && <div className="text-ui-xs" aria-live="polite">
+          <div className="inline-actions">
+            <span className="muted">{label("DocumentKind")}</span>
+            <strong>{typeProposal?.kind ? label(`Kind_${typeProposal.kind}`) : typeProposal?.documentType ? documentTypeLabel(typeProposal.documentType, t) : t("documentTypeUnknown")}</strong>
+            {typeProposal?.status === "proposed" && <Badge variant="outline">{label("TypeUnreviewed")}</Badge>}
+          </div>
+          {processingSource ? <div className="inline-actions">
+            <span className="muted">{label("TypeProcessing")}</span>
+            <Button type="button" size="sm" variant="ghost" disabled={query.isFetching} onClick={() => void query.refetch()}>{label("RefreshSource")}</Button>
+          </div> : selected.status === "failed" ? <p className="muted">{label("TypeFailed")}</p> : typeProposal?.status !== "proposed" ? <p className="muted">{label(typeProposal?.status === "ambiguous" ? "TypeAmbiguous" : "TypeUnknown")}</p> : null}
+          {typeProposal?.evidence.slice(0, 2).map((evidence, index) => <blockquote key={index} className="muted mt-1">
+            <a href={`/api/projects/${projectId}/files/${selected.fileId}/versions/${selected.version}/download?inline=1#page=${evidence.page}`} target="_blank" rel="noreferrer">{label("Page")} {evidence.page}</a>: {evidence.quote}
+          </blockquote>)}
+        </div>}
         <Field label={label("Pages")}>
           <Input
             value={pages}
@@ -202,7 +282,7 @@ export function SiteEvidencePanel({
         >
           {label(interpret.isPending ? "Interpreting" : "Interpret")}
         </Button>
-        {[importing.error, interpret.error, review.error]
+        {[upload.error, importing.error, interpret.error, review.error]
           .filter(Boolean)
           .map((error, i) => (
             <Callout key={i} tone="error">

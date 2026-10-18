@@ -36,6 +36,7 @@ export const list = (value: any, key?: string): RecordData[] =>
 export async function uploadFile<T = RecordData>(
   path: string,
   form: FormData,
+  sourceMetadata?: Record<string, unknown>,
 ): Promise<T> {
   const file = form.get("file");
   if (!(file instanceof File) || file.size === 0)
@@ -53,7 +54,7 @@ export async function uploadFile<T = RecordData>(
     mimeType: file.type || "application/octet-stream",
     sizeBytes: file.size,
     sourceType: "upload",
-    sourceMetadata: { label: String(form.get("label") || "") },
+    sourceMetadata: { ...sourceMetadata, label: String(form.get("label") || "") },
   });
   const uploadUrl = initiated.uploadUrl;
   const apiPath = (url: string) =>

@@ -3,6 +3,7 @@ import type { SourceText, SourceDocumentLayers } from "@richtfest/shared";
 import type { SourceExtractionDeps } from "./deps";
 import { files, fileVersions, sourceExtractions as jobs, sourcePages } from "./schema";
 import { extractSourceText } from "./source-text";
+import { proposeDocumentType } from "./document-type-proposal";
 import { isIfcSource } from "./ifc-model";
 import { withSourceDocumentPage, prepareSourceDocumentLayers } from "./source-document";
 
@@ -70,6 +71,15 @@ export async function runSourceExtraction(d: SourceExtractionDeps, signal: Abort
     const [current] = await tx.select().from(jobs).where(owned).for("update");
     if (!current) return;
     result = { ...result, pages: result.pages ?? current.result?.pages, ...(documentLayers ? { documentLayers } : {}) };
+    if (status === "complete" || status === "failed") {
+      const [version] = await tx.select({ sourceMetadata: fileVersions.sourceMetadata }).from(fileVersions)
+        .where(and(eq(fileVersions.id, job.versionId), eq(fileVersions.tenantId, job.tenantId)));
+      if ((version?.sourceMetadata as { workflow?: string } | null)?.workflow === "site_assessment") {
+        const pages = await tx.select({ page: sourcePages.page, content: sourcePages.content }).from(sourcePages)
+          .where(and(eq(sourcePages.versionId, job.versionId), eq(sourcePages.tenantId, job.tenantId))).orderBy(sourcePages.page).limit(100);
+        result.documentTypeProposal = proposeDocumentType(job.versionId, version.sourceMetadata, pages);
+      }
+    }
     const [saved] = await tx.update(jobs).set({ status, result: { ...result, text: undefined }, leaseToken: null,
       leaseUntil: status === "queued" ? new Date(Date.now() + 2000) : null, updatedAt: new Date() }).where(owned).returning({ id: jobs.versionId });
     if (!saved) return;

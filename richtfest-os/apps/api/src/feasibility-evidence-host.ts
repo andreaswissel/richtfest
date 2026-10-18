@@ -17,7 +17,7 @@ export function createFeasibilityEvidenceHost(db: Database, d: ProjectDeps, prov
   }
   const listSources:EvidenceHost["listSources"]=async projectId=>{
     const rows=await db.select({fileId:files.id,versionId:fileVersions.id,name:files.name,version:fileVersions.version,status:sourceExtractions.status,result:sourceExtractions.result}).from(files).innerJoin(fileVersions,and(eq(fileVersions.fileId,files.id),eq(fileVersions.tenantId,d.tenantId))).leftJoin(sourceExtractions,eq(sourceExtractions.versionId,fileVersions.id)).where(and(eq(files.tenantId,d.tenantId),eq(files.projectId,projectId),eq(fileVersions.status,"ready"),eq(fileVersions.mimeType,"application/pdf"))).orderBy(desc(fileVersions.createdAt)).limit(100);
-    return rows.map(row=>({fileId:row.fileId,versionId:row.versionId,name:row.name,version:row.version,status:row.status??"queued",pages:row.result?.pages??null}));
+    return rows.map(row=>({fileId:row.fileId,versionId:row.versionId,name:row.name,version:row.version,status:row.status??"queued",pages:row.result?.pages??null,...(row.result?.documentTypeProposal ? {documentTypeProposal:row.result.documentTypeProposal} : {})}));
   };
   return {
     listSources,

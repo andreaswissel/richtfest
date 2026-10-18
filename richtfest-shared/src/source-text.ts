@@ -34,6 +34,7 @@ export type SourceVisual = SourceVisualRequest & ({
 export type SourceText = {
   status: "processing" | "available" | "unsupported" | "extraction_too_large" | "extraction_failed";
   text?: string;
+  documentTypeProposal?: import("./project-documents").DocumentTypeProposal;
   documentModel?: SourceDocumentPage;
   documentLayers?: SourceDocumentLayers;
   truncated?: boolean;
