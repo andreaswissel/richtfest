@@ -159,8 +159,8 @@ export function Feasibility({ projectId }: { projectId: string }) {
         <TableBody>{feasibilityScenarioKinds.map(kind => {
           const r = results.find(item => item.kind === kind)!;
           const s = study.scenarios.find(item => item.kind === kind)!;
-          return <TableRow key={kind} data-state={kind === selected ? "selected" : undefined}>
-            <TableCell><Button variant="ghost" size="sm" aria-pressed={kind === selected} onClick={() => setSelected(kind)}>{scenarioLabel(kind, t)}</Button><span className="muted text-ui-2xs feasibility-mode">{t(s.revenueMode === "sale" ? "feasibilityModeSale" : "feasibilityModeRent")}</span></TableCell>
+          return <TableRow key={kind} className="cursor-pointer" data-state={kind === selected ? "selected" : undefined} onClick={() => setSelected(kind)}>
+            <TableCell><Button variant="ghost" size="sm" aria-pressed={kind === selected}>{scenarioLabel(kind, t)}</Button><span className="muted text-ui-2xs feasibility-mode">{t(s.revenueMode === "sale" ? "feasibilityModeSale" : "feasibilityModeRent")}</span></TableCell>
             <TableCell className="feasibility-number">{euro(r.residualLandValue)}</TableCell><TableCell><Badge variant="outline">{status(r)}</Badge></TableCell>
           </TableRow>;
         })}</TableBody>

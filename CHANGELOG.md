@@ -26,7 +26,7 @@
 
 - 3D location: **Fit construction** (Shift+F) brings the planned build back into view after zooming or panning. A teal outline and readable label keep it distinct from the surroundings.
 
-- Feasibility now compares scenarios in a compact summary with one input group at a time, clearer review status and validation, protected unsaved edits, and reports in the selected language. Zoning checks require a confirmed storey inventory and GFZ counting basis; Bebauungsplan suggestions retain height references and mandatory storey qualifiers. Site downloads are explicitly 2D, use interoperable GeoJSON and Unicode-safe DXF, and wait for location edits to be saved.
+- Feasibility now compares scenarios in a compact summary with one input group at a time, clearer review status and validation, protected unsaved edits, and reports in the selected language. Click anywhere in a scenario row to switch scenarios; keyboard selection remains available. Zoning checks require a confirmed storey inventory and GFZ counting basis; Bebauungsplan suggestions retain height references and mandatory storey qualifiers. Site downloads are explicitly 2D, use interoperable GeoJSON and Unicode-safe DXF, and wait for location edits to be saved.
 
 - **Feasibility**: a new project view compares keeping the building, densifying it or building new by residual land value, with sale or rental per scenario. Floor areas start from the approved GFZ and parcel area, cost standards are marked until reviewed, missing inputs are named, and **Download report** creates a PDF of the saved study for banks or investors. Includes database migration 0048.
 

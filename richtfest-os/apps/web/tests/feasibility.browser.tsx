@@ -51,6 +51,13 @@ export async function testFeasibility() {
     flushSync(() => root.render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>));
     await wait(() => input("Existing living area"));
     check(!input("Construction cost KG 300–700"), "Only the selected input group is mounted");
+    const rows = host.querySelectorAll<HTMLTableRowElement>(".feasibility-summary tbody tr");
+    flushSync(() => rows[1]!.cells[1]!.click());
+    check(button("Densify & renovate").getAttribute("aria-pressed") === "true" && input("Existing living area") && input("New floor area (GF)"), "Clicking the residual cell selects densification and its inputs");
+    flushSync(() => rows[2]!.querySelector<HTMLElement>('[data-slot="badge"]')!.click());
+    check(button("New build").getAttribute("aria-pressed") === "true" && !input("Existing living area") && input("New floor area (GF)"), "Clicking the status badge selects new build and its inputs");
+    flushSync(() => rows[0]!.click());
+    check(button("Keep existing").getAttribute("aria-pressed") === "true" && !input("New floor area (GF)"), "Clicking row whitespace selects the existing scenario");
     fill(input("Existing living area"), "1,000");
     flushSync(() => button("Save study").click());
     await wait(() => record.study.revision === 2 && button("Save study").disabled);
@@ -102,7 +109,7 @@ export async function testFeasibility() {
     flushSync(() => button("Studie speichern").click());
     await wait(() => record.study.revision === 5 && button("Studie speichern").disabled);
     check(record.study.scenarios[0]!.values.existingLivingArea.value === 1000.75, "German grouping and decimal must preserve the amount");
-    return "PASS: grouped EN/DE inputs, one input group, invalid/optional values, draft retention, stale-save conflict, navigation guard";
+    return "PASS: full-row scenario selection, grouped EN/DE inputs, one input group, invalid/optional values, draft retention, stale-save conflict, navigation guard";
   } finally {
     root.unmount(); router.dispose(); host.remove(); queryClient.removeQueries({ queryKey: [path] });
     window.fetch = originalFetch; usePreferences.getState().hydrate(preferences);
