@@ -1,7 +1,25 @@
 {
-  "name": "@richtfest/shared", "version": "0.1.0", "private": true, "type": "module",
-  "exports": { ".": "./src/index.ts", "./auth": "./src/auth.ts", "./response": "./src/response.ts", "./openui-registry": "./src/openui-registry.generated.ts" },
-  "scripts": { "typecheck": "tsc -p tsconfig.json" },
-  "dependencies": { "zod": "^3.24.2" },
-  "devDependencies": { "typescript": "^5.7.2" }
+  "name": "@richtfest/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts",
+    "./response": "./src/response.ts",
+    "./openui-registry": "./src/openui-registry.generated.ts",
+    "./site-geometry": "./src/site-geometry.ts",
+    "./site-geometry-model": "./src/site-geometry-model.ts",
+    "./site-design": "./src/site-design.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "polygon-clipping": "0.15.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
 }

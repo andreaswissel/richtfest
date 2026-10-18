@@ -1,3 +1,4 @@
+import { createFeasibilityEvidenceHost } from "./feasibility-evidence-host";
 import { resolveLocationAddress } from "@richtfest/projects/location-context";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
@@ -15,6 +16,7 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
   const actor = (req as any).actor as Actor;
   return {
     db, tenantId: actor.tenantId, actorId: actor.id,
+    evidence: createFeasibilityEvidenceHost(db, projectsDeps(db, req)),
     requirePermission: key => { if (!actor.permissions.has(key)) throw new HttpError(403, "forbidden", `Permission ${key} is required`); },
     can: key => actor.permissions.has(key),
     audit: (tx, action, type, id, metadata) => recordAudit(tx, actor.id, actor.tenantId, action, type, id, metadata),

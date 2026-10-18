@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { siteGeometryInputSchema } from "./site-geometry-model";
+import { siteReferenceSchema } from "./site-references";
 export const siteAssessmentMethod = "berlin_arithmetic_v1" as const;
 export const SITE_ASSESSMENT_CONSTRAINT_KEYS = ["parcelArea", "grz", "gfz", "buildableFootprint", "maxFullStoreys", "additionalGrossArea", "additionalCountableArea"] as const;
 export const SITE_ASSESSMENT_CHECK_KEYS = ["planningBasis", "bauweise", "height", "setbacks", "rights", "heritage"] as const;
@@ -12,7 +14,11 @@ export const siteAssessmentInputSchema = z.object({
   baseRevision: z.number().int().min(0), jurisdiction: z.literal("BE"), planningBasis: z.enum(["b_plan", "section34", "unresolved"]),
   constraints: z.object({ parcelArea: constraint(z.number().finite().positive().max(1e9)), grz: constraint(z.number().finite().min(0).max(1)), gfz: constraint(z.number().finite().min(0).max(100)), buildableFootprint: constraint(z.number().finite().min(0).max(1e9)), maxFullStoreys: constraint(z.number().int().min(1).max(200)), additionalGrossArea: siteAssessmentConstraintSchema, additionalCountableArea: siteAssessmentConstraintSchema }).strict(),
   checks: z.object(Object.fromEntries(SITE_ASSESSMENT_CHECK_KEYS.map(key => [key, check])) as Record<SiteAssessmentCheckKey, typeof check>).strict(),
-  references: z.array(z.object({ id: z.string().min(1).max(200), label: z.string().max(300), source: z.string().max(2000), note: z.string().max(2000) }).strict()).max(100), notes: z.string().max(10000), upside: z.object({ maxFullStoreys: constraint(z.number().int().min(1).max(200)), note: z.string().trim().max(2000) }).strict().nullable(),
+  geometry: siteGeometryInputSchema.nullable().optional(),
+  siteLocator: z.object({origin:z.tuple([z.number().min(350000).max(430000),z.number().min(5780000).max(5860000)]),label:z.string().min(1).max(300),source:z.string().max(2000),reviewed:z.boolean()}).strict().optional(),
+  designRules: z.object({maxHeight:z.number().finite().positive().nullable(),heightNotSpecified:z.boolean(),buildingForm:z.enum(["open","closed","deviating","unresolved"]),source:z.string().max(2000),sourceDate:date.nullable(),reviewed:z.boolean()}).strict().optional(),
+  planningFacts: z.record(z.enum(["landUse", "buildingForm", "roofForm", "heightRule", "encroachments"]), z.object({ value:z.string().max(4000), source:z.string().max(2000), sourceDate:date.nullable(), reviewed:z.boolean(), kind:z.enum(["official","calculated","estimated","assessment"]) }).strict()).optional(),
+  references: z.array(siteReferenceSchema).max(100), notes: z.string().max(10000), upside: z.object({ maxFullStoreys: constraint(z.number().int().min(1).max(200)), note: z.string().trim().max(2000) }).strict().nullable(),
 }).strict();
 export type SiteAssessmentInput = z.infer<typeof siteAssessmentInputSchema>;
 export type SiteAssessmentConstraint = z.infer<typeof siteAssessmentConstraintSchema>;

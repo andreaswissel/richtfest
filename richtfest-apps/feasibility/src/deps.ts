@@ -2,6 +2,7 @@ import type { FeasibilitySiteFigures, PermissionKey } from "@richtfest/shared";
 
 /** What the feasibility app needs from Richtfest OS, adapted by richtfest-os/apps/api/src/feasibility-host.ts. */
 export type AppDeps = {
+  evidence?: import("./evidence").EvidenceHost;
   db: any;
   tenantId: string;
   actorId: string;

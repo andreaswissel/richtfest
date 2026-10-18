@@ -1,0 +1,351 @@
+{
+  "purpose": "Live-source geometry regression, not approval or proof of property identity",
+  "capturedAt": "2026-10-18T10:41:07.554Z",
+  "crs": "EPSG:25833",
+  "sites": [
+    {
+      "key": "giers",
+      "address": "Giersstraße 20, 13088 Berlin",
+      "retrievedAt": "2026-10-18T10:41:06.587Z",
+      "addressSource": "https://gdi.berlin.de/services/wfs/adressen_berlin?service=WFS&version=2.0.0&request=GetFeature&typeNames=adressen_berlin%3Aadressen_berlin&outputFormat=application%2Fjson&srsName=EPSG%3A4326&CQL_FILTER=str_name+ILIKE+%27Gier%25tra%25e%27+AND+hnr%3D20+AND+plz%3D%2713088%27&count=100",
+      "parcel": {
+        "id": "DEBE00YYAC00002j",
+        "label": "Weißensee · 263 / 292",
+        "area": 995,
+        "sourceDate": "2025-06-24",
+        "sourceUrl": "https://gdi.berlin.de/services/wfs/alkis_flurstuecke?service=WFS&version=2.0.0&request=GetFeature&typeNames=alkis_flurstuecke%3Aflurstuecke&outputFormat=application%2Fjson&srsName=EPSG%3A25833&bbox=397086.524413514%2C5824084.603153919%2C397186.524413514%2C5824184.603153919%2CEPSG%3A25833&count=100",
+        "polygons": [
+          [
+            [
+              [
+                397146.715,
+                5824115.105
+              ],
+              [
+                397162.196,
+                5824116.83
+              ],
+              [
+                397158.953,
+                5824146.621
+              ],
+              [
+                397125.946,
+                5824142.972
+              ],
+              [
+                397129.279,
+                5824113.157
+              ],
+              [
+                397146.715,
+                5824115.105
+              ]
+            ]
+          ]
+        ],
+        "containsAddress": true
+      },
+      "selectionStatus": "address-containing"
+    },
+    {
+      "key": "eldena-candidate",
+      "address": "Eldenaer Straße 60, 10247 Berlin",
+      "retrievedAt": "2026-10-18T10:41:07.045Z",
+      "addressSource": "https://gdi.berlin.de/services/wfs/adressen_berlin?service=WFS&version=2.0.0&request=GetFeature&typeNames=adressen_berlin%3Aadressen_berlin&outputFormat=application%2Fjson&srsName=EPSG%3A4326&CQL_FILTER=str_name+ILIKE+%27Eldenaer+Stra%25e%27+AND+hnr%3D60+AND+plz%3D%2710247%27&count=100",
+      "parcel": {
+        "id": "DEBE03YY600001ns",
+        "label": "Prenzlauer Berg · 915 / 9139",
+        "area": 1041,
+        "sourceDate": "2024-08-09",
+        "sourceUrl": "https://gdi.berlin.de/services/wfs/alkis_flurstuecke?service=WFS&version=2.0.0&request=GetFeature&typeNames=alkis_flurstuecke%3Aflurstuecke&outputFormat=application%2Fjson&srsName=EPSG%3A25833&bbox=395334.87028057594%2C5820033.2522804%2C395434.87028057594%2C5820133.2522804%2CEPSG%3A25833&count=100",
+        "polygons": [
+          [
+            [
+              [
+                395417.868,
+                5820128.603
+              ],
+              [
+                395418.708,
+                5820131.246
+              ],
+              [
+                395420.855,
+                5820137.925
+              ],
+              [
+                395422.992,
+                5820144.604
+              ],
+              [
+                395425.682,
+                5820153.002
+              ],
+              [
+                395424.499,
+                5820153.384
+              ],
+              [
+                395416.548,
+                5820128.598
+              ],
+              [
+                395412.671,
+                5820127.662
+              ],
+              [
+                395409.759,
+                5820128.597
+              ],
+              [
+                395406.956,
+                5820129.49
+              ],
+              [
+                395407.509,
+                5820131.209
+              ],
+              [
+                395404.358,
+                5820132.219
+              ],
+              [
+                395401.407,
+                5820133.165
+              ],
+              [
+                395399.876,
+                5820128.405
+              ],
+              [
+                395396.885,
+                5820129.362
+              ],
+              [
+                395393.883,
+                5820130.329
+              ],
+              [
+                395395.404,
+                5820135.079
+              ],
+              [
+                395392.462,
+                5820136.035
+              ],
+              [
+                395389.51,
+                5820136.971
+              ],
+              [
+                395387.98,
+                5820132.221
+              ],
+              [
+                395384.978,
+                5820133.178
+              ],
+              [
+                395381.987,
+                5820134.135
+              ],
+              [
+                395383.507,
+                5820138.895
+              ],
+              [
+                395380.555,
+                5820139.841
+              ],
+              [
+                395377.465,
+                5820140.84
+              ],
+              [
+                395376.37,
+                5820137.441
+              ],
+              [
+                395373.518,
+                5820138.356
+              ],
+              [
+                395369.781,
+                5820139.547
+              ],
+              [
+                395368.34,
+                5820142.664
+              ],
+              [
+                395362.632,
+                5820145.342
+              ],
+              [
+                395356.933,
+                5820148.02
+              ],
+              [
+                395345.695,
+                5820153.304
+              ],
+              [
+                395345.163,
+                5820152.174
+              ],
+              [
+                395367.729,
+                5820141.565
+              ],
+              [
+                395369.65,
+                5820137.389
+              ],
+              [
+                395368.16,
+                5820134.218
+              ],
+              [
+                395366.669,
+                5820131.047
+              ],
+              [
+                395370.327,
+                5820129.337
+              ],
+              [
+                395369.159,
+                5820126.84
+              ],
+              [
+                395367.992,
+                5820124.352
+              ],
+              [
+                395366.502,
+                5820121.191
+              ],
+              [
+                395366.335,
+                5820120.824
+              ],
+              [
+                395410.8,
+                5820106.559
+              ],
+              [
+                395412.288,
+                5820111.21
+              ],
+              [
+                395414.435,
+                5820117.889
+              ],
+              [
+                395416.572,
+                5820124.568
+              ],
+              [
+                395417.868,
+                5820128.603
+              ]
+            ]
+          ]
+        ],
+        "containsAddress": false
+      },
+      "selectionStatus": "nearby-area-match-candidate-unconfirmed",
+      "addressContainingParcel": {
+        "id": "DEBE03YY600002bP",
+        "label": "Prenzlauer Berg · 915 / 9236",
+        "area": 2166
+      }
+    },
+    {
+      "key": "falkenberger",
+      "address": "Falkenberger Straße 145, 13088 Berlin",
+      "retrievedAt": "2026-10-18T10:41:07.554Z",
+      "addressSource": "https://gdi.berlin.de/services/wfs/adressen_berlin?service=WFS&version=2.0.0&request=GetFeature&typeNames=adressen_berlin%3Aadressen_berlin&outputFormat=application%2Fjson&srsName=EPSG%3A4326&CQL_FILTER=str_name+ILIKE+%27Falkenberger+Stra%25e%27+AND+hnr%3D145+AND+plz%3D%2713088%27&count=100",
+      "parcel": {
+        "id": "DEBE03YY70000LxP",
+        "label": "Weißensee · 252 / 52",
+        "area": 3171,
+        "sourceDate": "2026-07-21",
+        "sourceUrl": "https://gdi.berlin.de/services/wfs/alkis_flurstuecke?service=WFS&version=2.0.0&request=GetFeature&typeNames=alkis_flurstuecke%3Aflurstuecke&outputFormat=application%2Fjson&srsName=EPSG%3A25833&bbox=397160.33790684026%2C5823970.696260128%2C397260.33790684026%2C5824070.696260128%2CEPSG%3A25833&count=100",
+        "polygons": [
+          [
+            [
+              [
+                397199.514,
+                5823994.757
+              ],
+              [
+                397215.715,
+                5823996.503
+              ],
+              [
+                397227.506,
+                5823997.774
+              ],
+              [
+                397219.745,
+                5824067.167
+              ],
+              [
+                397204.584,
+                5824065.657
+              ],
+              [
+                397194.634,
+                5824064.666
+              ],
+              [
+                397196.113,
+                5824051.662
+              ],
+              [
+                397171.378,
+                5824048.702
+              ],
+              [
+                397172.463,
+                5824038.972
+              ],
+              [
+                397177.349,
+                5823995.157
+              ],
+              [
+                397177.662,
+                5823992.35
+              ],
+              [
+                397199.514,
+                5823994.757
+              ]
+            ]
+          ]
+        ],
+        "containsAddress": true
+      },
+      "selectionStatus": "address-containing"
+    }
+  ],
+  "plans": [
+    {
+      "url": "https://fbinter.stadt-berlin.de/ScansBPlan/03_PA/IV-2c_Abz.pdf",
+      "retrievedAt": "2026-10-18",
+      "sha256": "03e8e8066a8d4f3a928769fea97d21891a8321640ef985029ac98551b7f09557",
+      "bytes": 12520198,
+      "reviewNote": "WA5 diagram: IV / 0.5 / 1.6; blue Baugrenzen. Visual grid alignment corroborates candidate location, not a surveyed boundary."
+    },
+    {
+      "url": "https://fbinter.stadt-berlin.de/ScansBPlan/Begruendungen/0304002c_IV-2c.pdf",
+      "retrievedAt": "2026-10-18",
+      "sha256": "c657b0f0476c904d4b29d5470dfe5bab098f19da9bec1c54209deb17051fcb01",
+      "bytes": 1086689,
+      "reviewNote": "Pages25-27 sectionsII.3 andII.3.2: WA GRZ0.5/GFZ1.6/four full storeys. Page27 WA5 west boundary set back3m from TS25. No individual approval established."
+    }
+  ]
+}

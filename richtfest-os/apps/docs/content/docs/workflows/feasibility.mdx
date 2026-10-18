@@ -7,15 +7,29 @@ The project view **Feasibility** answers the first economic question for a site:
 
 ## Berlin site assessment
 
-Choose **Grundstücksprüfung / Site assessment** beside **Economics** in the project Feasibility view. Existing links still open the financial study. The assessment is an arithmetic capacity check for Berlin, not a building placement solver or permission decision.
+Choose **Grundstücksprüfung / Site assessment** beside **Economics** in the project Feasibility view. Existing links still open the financial study. The assessment combines reviewed arithmetic capacity with a visual parcel and building study for Berlin. Both remain planning evidence, not a permission decision.
 
 ### Find and review the site evidence
 
 **Look up parcels and plans** uses the saved complete Berlin project address. It resolves an exact official address and queries the ALKIS parcel service plus the adopted and in-progress B-Plan registers within a 100 m square. The parcel preview uses EPSG:25833, north up, with the address point marked. Nearby candidates and polygons containing the address point are distinguished. Choose the actual parcel deliberately: an address is not proof of the correct development site, and a project may involve several parcels.
 
-**Use parcel area** puts the selected official area and its source reference into the draft, always unreviewed. The source record date is separate from the retrieval timestamp. Inspect and confirm it, then save. Lookup results themselves are a temporary preview; the adopted area, source URL, feature ID and retrieval time are retained in the saved constraint. No boundaries are adopted as a buildable envelope.
+**Use parcel area** puts the selected official area and its source reference into the draft, always unreviewed. The source record date is separate from the retrieval timestamp. Inspect and confirm it, then save. Lookup results themselves are a temporary preview; the adopted area, source URL, feature ID and retrieval time are retained in the saved constraint. The selected parcel boundary is available to the geometry editor; it is not automatically a buildable envelope.
 
-Plan candidates link to their records and available plan PDFs. Check the coverage, legal status, amendments and relevant Baufeld. Empty results or unavailable services never establish that § 34 applies. Automatic plan extraction, Baufenster tracing and setback geometry are not part of this first assessment.
+Plan candidates link to their records and available plan PDFs. Check the coverage, legal status, amendments and relevant Baufeld. Empty results or unavailable services never establish that § 34 applies. Use **Find address candidates** when an exact suffix is unavailable; selecting a nearby address requires explicit confirmation of the intended parcel. Heritage and preservation-area hints retain their official sources; absent or failed lookups do not establish that restrictions are absent.
+
+### Plan sources and nearby references
+
+Import a linked official plan PDF to preserve its bytes as a project source version. Select pages and an explicitly configured OpenAI or Anthropic connection to propose numeric constraints and planning facts. Scanned pages can be interpreted visually. Proposals retain page evidence and exact cited text where available; adopting a proposal copies it into the draft **unreviewed**. Rejecting or adopting a proposal records its disposition. Interpretation does not approve a planning constraint.
+
+**Find nearby buildings** queries official footprints, reported storeys, ridge heights and cadastral context within 200 m. Add or remove suitable reference buildings, explain their relevance, and review each measurement in its side panel. Reported storeys are not automatically legal full storeys. Eave height and street alignment remain unknown where the source does not supply them. Estimated depth and width are oriented bounding dimensions. The mean-to-maximum comparison describes the selected observations; it does not derive an entitlement under § 34.
+
+### Visual envelope and building study
+
+Use the 2D editor to trace a buildable envelope, exclusions and mandatory building lines over the parcel. Select an edge to review its setback rule and evidence. Berlin setback profiles can derive a distance from a reviewed height; exceptions require their own evidence. The polygon calculation clips the envelope to the parcel, removes exclusions and applies the selected setbacks. The explicit **Use geometry area** action proposes its area for the numeric assessment and revokes numeric review.
+
+A PDF page can be aligned with three matching control points and shown as an adjustable overlay. This affine alignment is a planning aid, not surveyed georeferencing; check the anchors, coordinate system and source before reviewing it.
+
+Generate up to three distinct feasible massing candidates, select one, then move or edit its footprint, storeys and Staffelgeschoss. A constrained site may yield fewer candidates. The generator searches a bounded set of placements; it does not prove a global maximum or that no other solution exists. The 3D view places the selected design among the available official neighboring buildings. Changes update the geometry quantities and placement conflicts. Staffelgeschoss classification uses the supplied area and height evidence; unknown classifications remain unresolved.
 
 ### Reviewed constraints
 
@@ -25,6 +39,12 @@ Select the planning basis and enter parcel area, GRZ, GFZ, the reviewed buildabl
 
 The envelope area must already account for the relevant building lines, building boundaries, setbacks and rights. Confirm the planning basis, Bauweise, height, setbacks, rights/Baulasten and heritage context with a source and explanation. These are human assessments, not automatic regulatory checks. § 34 assessments also need source-linked reference buildings and the reason for their selection; comparison GRZ/GFZ values do not create statutory limits.
 
+### Check the selected design
+
+The combined design check compares the actual drawn footprint and countable floor area against GRZ, GFZ and the reviewed envelope cap. It also checks placement, classified full storeys, height, agreement between scalar and geometric areas, and the reviewed building-form rule. Height uses the larger of the stated building height and the sum of modelled floors. Open-form checks screen connected house forms against the 50 m length rule; closed form requires evidenced boundary conditions and actual facade contact. Qualitative planning, fire protection and rights checks still require a person to establish the applicable rule.
+
+Changing a design rule revokes its review. Missing rules, contradictions, incomplete storey classifications or a breached limit prevent a reviewed design result. A reviewed arithmetic capacity does not automatically make a drawn design reviewed.
+
 ### What limits the area
 
 The result explains these stages and retains tied constraints:
@@ -33,15 +53,19 @@ The result explains these stages and retains tied constraints:
 2. Full-storey area = minimum of footprint × maximum full storeys and parcel area × GFZ minus additional countable area.
 3. Countable GF adds the additional countable area. Above-ground BGF adds the additional gross area instead.
 
-This simplified model treats full-storey GF as the full-storey contribution to BGF. It does not derive DIN area measurements, floor layouts, roof shapes or a geometrically feasible Staffelgeschoss. Supply and review additional areas separately. The displayed footprint is an envelope limit, not necessarily a realised footprint when GFZ controls. The result also shows unused GFZ capacity, which is not a promise that the volume can be built.
+The arithmetic capacity model treats full-storey GF as the full-storey contribution to BGF. It does not derive DIN area measurements, floor layouts or roof shapes. The separate geometry study measures the drawn buildings and Staffel footprints; supply and review additional arithmetic areas separately. The displayed footprint is an envelope limit, not necessarily a realised footprint when GFZ controls. The result also shows unused GFZ capacity, which is not a promise that the volume can be built.
 
 Missing or invalid numbers suppress the capacity. Unreviewed evidence, unresolved qualitative checks or missing § 34 references leave the numeric result **Indicative**. **Evidence reviewed** describes the input review only, never a permit. Additional-storey upside remains an explicitly separate indicative scenario requiring its own review and any necessary authority decision; it never changes the baseline.
 
-Save creates an immutable revision and audit event. Concurrent changes reject stale saves without overwriting the draft. The assessment follows existing project read/write permissions. Its link is `/projects/:id?view=feasibility&study=site`; GET and PUT use `/api/feasibility/projects/:id/site-assessment`. The explicit public lookup uses POST `/api/feasibility/projects/:id/berlin-context`. Migration `0049_site_assessments` adds only the assessment and revision tables.
+Save creates an immutable revision and audit event. Concurrent changes reject stale saves without overwriting the draft. The assessment follows existing project read/write permissions. Its link is `/projects/:id?view=feasibility&study=site`; GET and PUT use `/api/feasibility/projects/:id/site-assessment`. The explicit public lookup uses POST `/api/feasibility/projects/:id/berlin-context`. Migration `0050_site_assessments` adds the assessment and revision tables; `0051_site_evidence_proposals` adds persisted source interpretations and review dispositions. The geometry, references and planning facts are versioned within the assessment input.
+
+**Download report** exports the saved revision as a PDF for preliminary authority discussion. It includes source and review states, the geometry diagram and quantities, selected references, the baseline, and separately labelled hypothetical upside. Save draft changes first. Readers can export; editing and proposal review require project write access. The endpoint is `GET /api/feasibility/projects/:id/site-assessment/report.pdf?lang=de|en`.
 
 ### Acceptance cases
 
 Automated tests use the user's Giersstraße and Eldenaer Straße examples as labelled synthetic arithmetic fixtures, not verified project records. Giersstraße uses a derived parcel area (375 / 0.38), a test envelope of 400 m², three full storeys and 348 m² additional gross area to reproduce 1,473 m² BGF. Eldenaer Straße derives an envelope of 1,041 × 1.27 / 4 = 330.5175 m² from the reported approved GFZ, producing 1,322.07 m² under four storeys and 343.53 m² unused GFZ capacity. A separate five-storey test yields 1,652.5875 m². These derived assumptions must not be presented as surveyed dimensions or approved rights.
+
+Public-record acceptance fixtures additionally preserve the actual Giersstraße 20 parcel (995 m²) separately from the derived arithmetic example. They retain IV-2c plan evidence for residential GRZ 0.5, GFZ 1.6 and four full storeys. The 1,041 m² parcel near Eldenaer Straße is only a candidate: the official address match is number 60, not proof of the requested 60A parcel. Private Vorbescheid, rights and Baulast decisions require their actual documents before these cases can be treated as verified approvals.
 
 ## Site
 

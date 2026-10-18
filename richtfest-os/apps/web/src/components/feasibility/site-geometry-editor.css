@@ -1,0 +1,186 @@
+.site-geometry-workspace {
+  min-width: 0;
+  border-block: 1px solid var(--border);
+  padding-block: var(--stack);
+}
+.geometry-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--stack);
+  margin-bottom: var(--stack);
+}
+.geometry-toolbar h3 {
+  margin: 0;
+}
+.geometry-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 19rem);
+  gap: var(--stack);
+}
+.geometry-canvas-wrap {
+  min-width: 0;
+}
+.geometry-plan {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--muted);
+  overflow: hidden;
+}
+.geometry-plan > svg {
+  width: 100%;
+  height: 100%;
+}
+.geometry-plan path {
+  vector-effect: non-scaling-stroke;
+  fill-rule: evenodd;
+}
+.geometry-context-building {
+  fill: var(--border);
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+  cursor: pointer;
+}
+.geometry-parcel {
+  fill: transparent;
+  stroke: var(--foreground);
+  stroke-width: 2;
+  pointer-events: none;
+}
+.geometry-envelope {
+  fill: #10b98120;
+  stroke: #059669;
+  stroke-width: 2;
+  cursor: pointer;
+}
+.geometry-usable {
+  fill: #10b98112;
+  stroke: #059669;
+  stroke-dasharray: 4 4;
+  pointer-events: none;
+}
+.geometry-exclusion {
+  fill: #ef444430;
+  stroke: #dc2626;
+  stroke-width: 2;
+  cursor: pointer;
+}
+.geometry-building {
+  fill: #6366f180;
+  stroke: #4338ca;
+  stroke-width: 2;
+  cursor: pointer;
+}
+.geometry-staffel {
+  fill: #c7d2fe90;
+  stroke: #4338ca;
+  stroke-dasharray: 4 3;
+  cursor: pointer;
+}
+.geometry-edge {
+  stroke: #f59e0b;
+  stroke-width: 9;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.geometry-drawing {
+  fill: none;
+  stroke: var(--foreground);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.geometry-scale {
+  position: absolute;
+  bottom: var(--stack);
+  left: var(--stack);
+  background: var(--background);
+  padding: 4px;
+  pointer-events: none;
+}
+.geometry-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  min-width: 0;
+  max-height: 40rem;
+  overflow-y: auto;
+}
+.geometry-inspector h4 {
+  margin: 0;
+}
+.geometry-draw-actions,
+.geometry-move,
+.geometry-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--stack);
+  align-items: center;
+  padding-block: var(--stack);
+}
+.geometry-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  border-top: 1px solid var(--border);
+  padding-top: var(--stack);
+}
+.geometry-3d {
+  height: 100%;
+  min-height: 30rem;
+  position: relative;
+}
+.geometry-3d canvas {
+  max-width: 100%;
+}
+.geometry-plan .building-model-outline-editor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.geometry-plan .building-model-outline-editor-shape {
+  width: 100%;
+  height: 100%;
+  fill: transparent;
+  stroke: var(--foreground);
+  pointer-events: none;
+}
+.geometry-plan .building-model-outline-handle,
+.geometry-plan .building-model-outline-midpoint {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  border: 1px solid var(--foreground);
+  background: var(--background);
+  padding: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  cursor: move;
+}
+.geometry-plan .building-model-outline-midpoint {
+  width: 8px;
+  height: 8px;
+  opacity: 0.7;
+}
+@media (max-width: 800px) {
+  .geometry-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .geometry-inspector {
+    max-height: none;
+  }
+}
+.geometry-mandatory-line { fill:none; stroke:#b45309; stroke-width:4; vector-effect:non-scaling-stroke; cursor:pointer; }
+.site-evidence-controls { display:flex; flex-direction:column; gap:var(--stack); max-width:50rem; padding-block:var(--stack); }
+.site-proposal-row { display:flex; flex-direction:column; gap:var(--stack); border-bottom:1px solid var(--border); padding-block:var(--stack); }
+.site-proposal-row blockquote { margin:0; padding-left:var(--stack); border-left:2px solid var(--border); }
+.site-plan-alignment { display:flex; flex-direction:column; gap:var(--stack); padding-block:var(--stack); }
+.site-plan-picker { height:30rem; overflow:hidden; position:relative; }
+.geometry-issue-list { width:100%; display:flex; flex-direction:column; gap:var(--stack); margin:0; padding-left:var(--section); }
+.geometry-issue-actions { display:flex; flex-wrap:wrap; gap:var(--stack); }
+.geometry-view-controls { display:flex; flex-wrap:wrap; gap:var(--stack); }
+.site-design-rules { display:flex; flex-direction:column; gap:var(--stack); max-width:40rem; padding-block:var(--stack); }
+.site-design-table { width:100%; table-layout:fixed; }
+.site-design-table td { white-space:normal; overflow-wrap:anywhere; }

@@ -11,12 +11,12 @@ import type { SiteAssessmentConstraint } from "@richtfest/shared";
 
 type Point = [number, number];
 type Parcel = { id: string; label: string; area: number | null; sourceDate: string | null; sourceUrl: string; polygons: Point[][][]; containsAddress: boolean };
-type Context = { address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: Parcel[]; plans: { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; containsAddress: boolean }[] };
-export function BerlinContext({ projectId, disabled, onAdopt }: { projectId: string; disabled: boolean; onAdopt: (value: SiteAssessmentConstraint) => void }) {
+type Context = { hints?: {id:string;kind:string;label:string;sourceUrl:string;detailUrl:string|null;containsAddress:boolean}[];hintStatus?:string; address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: Parcel[]; plans: { id: string; name: string; status: string; sourceUrl: string; documentUrl: string | null; explanationUrl: string | null; effectiveDate: string | null; containsAddress: boolean }[] };
+export function BerlinContext({ projectId, disabled, onAdopt, onParcel, siteLocator }: { projectId: string; disabled: boolean; siteLocator?: {origin:[number,number];label:string}; onParcel?: (parcel: Parcel) => void; onAdopt: (value: SiteAssessmentConstraint, parcel: Parcel) => void }) {
   const t = useT(), language = usePreferences(s => s.language);
   const label = (key: string) => t(`berlinContext${key}` as Parameters<typeof t>[0]);
   const [selected, setSelected] = useState<string>();
-  const lookup = useMutation({ mutationFn: () => api<Context>(`/feasibility/projects/${projectId}/berlin-context`, {}, "POST"), onSuccess: () => setSelected(undefined) });
+  const lookup = useMutation({ mutationFn: () => api<Context>(`/feasibility/projects/${projectId}/berlin-context`, siteLocator ? {mapOrigin:siteLocator.origin,mapLabel:siteLocator.label} : {}, "POST"), onSuccess: () => setSelected(undefined) });
   const context = lookup.data;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const parcel of context?.parcels ?? []) for (const polygon of parcel.polygons) for (const ring of polygon) for (const [x, y] of ring) {
@@ -38,17 +38,21 @@ export function BerlinContext({ projectId, disabled, onAdopt }: { projectId: str
           <circle cx={context.origin[0]} cy={-context.origin[1]} r={Math.max(width,height)*.009} fill="var(--foreground)" />
         </svg>
         <p className="muted text-ui-xs">{label("PreviewHint")}</p>
-        <ul className="grid gap-stack">{context.parcels.map(parcel => <li key={parcel.id} className="inline-actions text-ui-xs">
+        <ul className="berlin-parcel-list" aria-label={label("Candidates")}>{[...context.parcels].sort((a,b)=>Number(b.containsAddress)-Number(a.containsAddress)).map(parcel => <li key={parcel.id} className="inline-actions text-ui-xs" data-selected={selected===parcel.id}>
           <Button size="sm" variant="outline" aria-pressed={selected === parcel.id} onClick={() => setSelected(parcel.id)}>{parcel.label}</Button>
           <span>{parcel.area?.toLocaleString(language === "de" ? "de-DE" : "en-GB") ?? "–"} m² · {parcel.containsAddress ? label("Contains") : label("Nearby")}</span>
           <a href={parcel.sourceUrl} target="_blank" rel="noreferrer">{label("Source")}</a>
-          <Button variant="outline" size="sm" disabled={disabled || parcel.area === null} onClick={() => { setSelected(parcel.id); onAdopt({ value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id} · retrieved ${context.retrievedAt}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false }); }}>{label("UseArea")}</Button>
+          <Button variant="outline" size="sm" disabled={disabled || parcel.area === null} onClick={() => { setSelected(parcel.id); onParcel?.(parcel); onAdopt({ value: parcel.area, source: `${parcel.sourceUrl} · ${parcel.id} · retrieved ${context.retrievedAt}`, sourceDate: parcel.sourceDate, kind: "official", reviewed: false }, parcel); }}>{label("UseArea")}</Button>
         </li>)}</ul>
       </> : context.parcelStatus === "available" && <p className="muted text-ui-xs">{label("NoParcels")}</p>}
       <h3 className="text-ui-sm font-medium">{label("Plans")}</h3>
       {context.planStatus !== "available" && <Callout>{label("PlansUnavailable")}</Callout>}
       <ul className="grid gap-stack">{context.plans.map(plan => <li key={plan.id} className="inline-actions text-ui-xs"><strong>{plan.name}</strong><span>{label(plan.status === "adopted" ? "Adopted" : "InProgress")} · {plan.containsAddress ? label("Contains") : label("Nearby")}</span>{plan.documentUrl && <a href={plan.documentUrl} target="_blank" rel="noreferrer">{label("PlanPdf")}</a>}{plan.explanationUrl && <a href={plan.explanationUrl} target="_blank" rel="noreferrer">{label("Explanation")}</a>}<a href={plan.sourceUrl} target="_blank" rel="noreferrer">{label("Source")}</a></li>)}</ul>
       <Callout>{label("PlanHint")}</Callout>
+      <h3 className="text-ui-sm font-medium">{label("HeritageTitle")}</h3>
+      {context.hintStatus === "unavailable" && <Callout>{label("HeritageUnavailable")}</Callout>}
+      <ul className="grid gap-stack">{context.hints?.map(hint => <li key={`${hint.kind}:${hint.id}`} className="inline-actions text-ui-xs"><span>{hint.label} · {hint.containsAddress ? label("Contains") : label("Nearby")}</span><a href={hint.detailUrl ?? hint.sourceUrl} target="_blank" rel="noreferrer">{label("Source")}</a></li>)}</ul>
+      <p className="muted text-ui-xs">{label("HeritageHint")}</p>
     </>}
   </Section>;
 }

@@ -154,6 +154,7 @@ export async function testSiteAssessment() {
   try {
     usePreferences.getState().hydrate({ language: "en" });
     queryClient.setQueryData([path], record);
+    queryClient.setQueryData(["/feasibility/projects/site-ui-regression/evidence"], {});
     flushSync(() =>
       root.render(
         <QueryClientProvider client={queryClient}>

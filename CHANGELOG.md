@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Berlin site assessment:** Review source-backed site constraints, look up official parcel and B-Plan candidates, and see which limits govern floor area, with a separate exception scenario.
+- **Berlin site assessment:** Review parcel and plan evidence, compare nearby buildings, edit buildable envelopes and massing in 2D/3D, and see which constraints limit the selected design. Keep exception scenarios separate and export source-linked assessments for preliminary authority discussions.
 
 - Acoustic agent preparation is checkpointed for project-data-model integration; deployment remains on hold. Visual crop follow-ups now retain typed, receipt-backed observations alongside earlier extraction without approving calculation inputs.
 

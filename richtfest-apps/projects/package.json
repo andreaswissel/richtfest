@@ -21,7 +21,8 @@
     "./building-extraction": "./src/building-extraction-worker.ts",
     "./automatic-building-model": "./src/automatic-building-model.ts",
     "./environment": "./src/environment.ts",
-    "./noise-sources": "./src/noise-sources.ts"
+    "./noise-sources": "./src/noise-sources.ts",
+    "./project-files": "./src/project-files.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

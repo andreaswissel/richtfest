@@ -7,6 +7,9 @@ import { feasibilityStudies, feasibilityStudyRevisions } from "./schema";
 import { initialStudy } from "./defaults";
 
 import { createBerlinSiteContextRouter } from "./berlin-site-context";
+import { createSiteLocationRouter } from "./site-location";
+import { createSiteReferencesRouter } from "./site-references";
+import { createEvidenceRouter } from "./evidence-router";
 import { createSiteAssessmentRouter } from "./site-assessment-router";
 
 const error = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
@@ -28,6 +31,9 @@ async function readStudy(d: AppDeps, projectId: string) {
 export function createRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
   router.use(createSiteAssessmentRouter(getDeps));
+  router.use(createEvidenceRouter(getDeps));
+  router.use(createSiteLocationRouter(getDeps));
+  router.use(createSiteReferencesRouter(getDeps));
   router.use(createBerlinSiteContextRouter(getDeps));
 
   router.get("/projects/:projectId/study", async (req, res, next) => {

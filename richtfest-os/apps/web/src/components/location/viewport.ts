@@ -18,6 +18,8 @@ import { AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type Point2 } from "@rich
 
 export type ViewportState = {
   context: LocationContext;
+  /** Optional proposal geometry owned by the feasibility workspace, in local X/Z metres. */
+  assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number }>;
   objects: SceneObject[];
   models: Record<string, IfcGeometry>;
   cloud?: LocationPointCloud;
@@ -126,6 +128,7 @@ export function createViewport(
     aerial: new THREE.Group(),
     construction: new THREE.Group(),
     buildingSelection: new THREE.Group(),
+    assessment: new THREE.Group(),
   };
   Object.values(groups).forEach((group) => scene.add(group));
   const ground = new THREE.Mesh(
@@ -344,6 +347,23 @@ export function createViewport(
     for (const p of ends) groups.measure.add(handle(p));
   };
   function update(next: ViewportState) {
+    if (current?.assessment !== next.assessment) {
+      disposeGroup(groups.assessment);
+      for (const item of next.assessment ?? []) {
+        const group = new THREE.Group(); group.userData.id = item.id;
+        for (const polygon of item.polygons) {
+          if (!polygon[0]?.length) continue;
+          const shape = new THREE.Shape(polygon[0].map(([x,z]) => new THREE.Vector2(x,-z)));
+          shape.holes = polygon.slice(1).map(ring => new THREE.Path(ring.map(([x,z]) => new THREE.Vector2(x,-z))));
+          const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(.04,item.height), bevelEnabled: false });
+          geometry.rotateX(-Math.PI / 2);
+          const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color:item.color, transparent:true, opacity:item.height > .1 ? .8 : .35 }));
+          mesh.position.y = item.base; edges(mesh,item.color); group.add(mesh);
+        }
+        groups.assessment.add(group);
+      }
+    }
+
     const previous = current;
     current = next;
     scene.background = next.dark ? new THREE.Color(0x202a34) : sky;
@@ -819,6 +839,7 @@ export function createViewport(
       groups.buildings,
       groups.trees,
       groups.objects,
+      groups.assessment,
       ...(current?.tool === "measure" ? [groups.lidar] : []),
     ].filter((g) => g.visible);
     return raycaster

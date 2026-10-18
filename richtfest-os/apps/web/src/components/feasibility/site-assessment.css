@@ -165,3 +165,8 @@
   -webkit-backdrop-filter: none;
   background: rgb(0 0 0 / 4%);
 }
+
+.berlin-parcel-list { max-height: 13rem; overflow-y:auto; list-style:none; margin:0; padding:0; border:1px solid var(--border); border-radius:var(--radius); }
+.berlin-parcel-list > li { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto auto; align-items:center; gap:var(--stack); padding:var(--stack); margin:0; border-bottom:1px solid var(--border); }
+.berlin-parcel-list > li[data-selected="true"] { background:var(--muted); }
+@media(max-width:600px) { .berlin-parcel-list > li { grid-template-columns:minmax(0,1fr) auto; } .berlin-parcel-list button { white-space:normal; height:auto; min-height:var(--control-sm); } }

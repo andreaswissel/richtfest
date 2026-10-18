@@ -7,6 +7,7 @@ import {
   SITE_ASSESSMENT_CONSTRAINT_KEYS,
   SITE_ASSESSMENT_CHECK_KEYS,
   type SiteAssessmentInput,
+  type LocationContext,
 } from "@richtfest/shared";
 import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
@@ -26,6 +27,11 @@ import {
 } from "../ui/dialog";
 import { Table, TableBody, TableCell, TableRow } from "../ui/table";
 import { SiteCapacityVisual } from "./capacity-visual";
+import { SiteReferencesPanel } from "./site-references-panel";
+import { SiteEvidencePanel } from "./site-evidence-panel";
+import { SiteDesignResult } from "./site-design-result";
+import { SiteGeometryEditor } from "./site-geometry-editor";
+import { createEmptySiteGeometryInput } from "@richtfest/shared/site-geometry-model";
 import { BerlinContext } from "./berlin-context";
 
 type Assessment = Omit<SiteAssessmentInput, "baseRevision"> & {
@@ -44,10 +50,13 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
   const query = useApi(path),
     data = query.data as Response | undefined;
   const [draft, setDraft] = useState<Assessment>();
+  const [geometryContext, setGeometryContext] =
+    useState<LocationContext | null>(null);
   const editorOpener = useRef<HTMLElement | null>(null);
   const [editor, setEditor] = useState<
     | { kind: "constraint"; key: keyof Assessment["constraints"] }
     | { kind: "check"; key: keyof Assessment["checks"] }
+    | { kind: "fact"; key: keyof NonNullable<Assessment["planningFacts"]> }
   >();
   const [raw, setRaw] = useState<Record<string, string>>({});
   const openEditor = (value: NonNullable<typeof editor>) => {
@@ -68,6 +77,10 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
     references: assessment.references,
     notes: assessment.notes,
     upside: assessment.upside,
+    geometry: assessment.geometry,
+    planningFacts: assessment.planningFacts,
+    siteLocator: assessment.siteLocator,
+    designRules: assessment.designRules,
   };
   const validation = input && siteAssessmentInputSchema.safeParse(input);
   const valid = validation?.success;
@@ -262,14 +275,7 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
       </p>
       <dl className="feasibility-results">
         {(
-          [
-            "footprint",
-            "fullFloorArea",
-            "countableFloorArea",
-            "grossFloorArea",
-            "gfzCapacity",
-            "unusedGfzCapacity",
-          ] as const
+          ["countableFloorArea", "grossFloorArea", "unusedGfzCapacity"] as const
         ).map((key) => (
           <div key={key}>
             <dt>{label(key)}</dt>
@@ -277,20 +283,22 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
           </div>
         ))}
       </dl>
-      <p className="text-ui-xs">{label("Limits")}</p>
-      <dl className="feasibility-results">
-        {value.limits.map((limit) => (
-          <div key={limit.id}>
-            <dt>
-              {label(limit.id)} · {label(limit.unit)}
-              {value.bindingConstraints.includes(limit.id)
-                ? ` · ${label("Binding")}`
-                : ""}
-            </dt>
-            <dd>{format(limit.capacity)}</dd>
-          </div>
-        ))}
-      </dl>
+      <details>
+        <summary className="text-ui-xs">{label("Limits")}</summary>
+        <dl className="feasibility-results">
+          {value.limits.map((limit) => (
+            <div key={limit.id}>
+              <dt>
+                {label(limit.id)} · {label(limit.unit)}
+                {value.bindingConstraints.includes(limit.id)
+                  ? ` · ${label("Binding")}`
+                  : ""}
+              </dt>
+              <dd>{format(limit.capacity)}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
     </div>
   );
   return (
@@ -354,20 +362,219 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
           }))}
         />
       </Section>
-      <BerlinContext
-        projectId={projectId}
-        disabled={disabled}
-        onAdopt={(value) => {
-          setRaw((current) => {
-            const next = { ...current };
-            delete next["baseline:parcelArea"];
-            return next;
-          });
+      <details className="site-secondary">
+        <summary className="text-ui-sm">{label("SourcesAndRules")}</summary>
+        <SiteReferencesPanel
+          projectId={projectId}
+          disabled={disabled}
+          siteLocator={assessment.siteLocator}
+          references={assessment.references}
+          onLocator={(siteLocator) => update({ siteLocator })}
+          onReferences={(references) => update({ references })}
+          onContext={setGeometryContext}
+        />
+        <SiteEvidencePanel
+          projectId={projectId}
+          disabled={disabled}
+          onAdopt={(proposal) => {
+            if (!proposal.constraint) return;
+            const { key, value } = proposal.constraint;
+            if (proposal.collection === "constraints") {
+              update({
+                constraints: { ...assessment.constraints, [key]: value },
+              });
+            } else
+              update({
+                planningFacts: { ...assessment.planningFacts, [key]: value },
+              });
+          }}
+        />
+        <BerlinContext
+          siteLocator={assessment.siteLocator}
+          projectId={projectId}
+          disabled={disabled}
+          onAdopt={(value, parcel) => {
+            setRaw((current) => {
+              const next = { ...current };
+              delete next["baseline:parcelArea"];
+              return next;
+            });
+            update({
+              constraints: { ...assessment.constraints, parcelArea: value },
+              geometry: {
+                ...(assessment.geometry ?? createEmptySiteGeometryInput()),
+                parcel: {
+                  id: parcel.id,
+                  label: parcel.label,
+                  geometry: parcel.polygons,
+                  source: parcel.sourceUrl,
+                  sourceDate: parcel.sourceDate,
+                  reviewed: false,
+                },
+                setbacks: [],
+              },
+            });
+          }}
+        />
+        <details className="site-secondary">
+          <summary className="text-ui-sm">{label("DesignRules")}</summary>
+          {(() => {
+            const rules = assessment.designRules ?? {
+              maxHeight: null,
+              heightNotSpecified: false,
+              buildingForm: "unresolved" as const,
+              source: "",
+              sourceDate: null,
+              reviewed: false,
+            };
+            const change = (patch: Partial<typeof rules>) =>
+              update({ designRules: { ...rules, ...patch } });
+            return (
+              <div className="site-design-rules">
+                <Field label={label("buildingForm")}>
+                  <Segmented
+                    value={rules.buildingForm}
+                    onChange={(v) =>
+                      change({
+                        buildingForm: v as typeof rules.buildingForm,
+                        reviewed: false,
+                      })
+                    }
+                    items={["open", "closed", "deviating", "unresolved"].map(
+                      (value) => ({ value, label: label(value), disabled }),
+                    )}
+                  />
+                </Field>
+                <Field label={label("MaxHeight")}>
+                  <Input
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    disabled={disabled || rules.heightNotSpecified}
+                    value={rules.maxHeight ?? ""}
+                    onChange={(e) =>
+                      change({
+                        maxHeight: Number.isFinite(e.target.valueAsNumber)
+                          ? e.target.valueAsNumber
+                          : null,
+                        reviewed: false,
+                      })
+                    }
+                  />
+                </Field>
+                <label className="site-review text-ui-xs">
+                  <Checkbox
+                    disabled={disabled}
+                    checked={rules.heightNotSpecified}
+                    onCheckedChange={(v) =>
+                      change({
+                        heightNotSpecified: v === true,
+                        maxHeight: null,
+                        reviewed: false,
+                      })
+                    }
+                  />
+                  {label("HeightNotSpecified")}
+                </label>
+                <Field label={label("Source")}>
+                  <Input
+                    disabled={disabled}
+                    value={rules.source}
+                    onChange={(e) =>
+                      change({ source: e.target.value, reviewed: false })
+                    }
+                  />
+                </Field>
+                <Field label={label("Date")}>
+                  <Input
+                    type="date"
+                    disabled={disabled}
+                    value={rules.sourceDate ?? ""}
+                    onChange={(e) =>
+                      change({
+                        sourceDate: e.target.value || null,
+                        reviewed: false,
+                      })
+                    }
+                  />
+                </Field>
+                <label className="site-review text-ui-xs">
+                  <Checkbox
+                    disabled={
+                      disabled ||
+                      !rules.source ||
+                      !rules.sourceDate ||
+                      rules.buildingForm === "unresolved" ||
+                      (!rules.heightNotSpecified && !rules.maxHeight)
+                    }
+                    checked={rules.reviewed}
+                    onCheckedChange={(v) => change({ reviewed: v === true })}
+                  />
+                  {label("Reviewed")}
+                </label>
+              </div>
+            );
+          })()}
+        </details>
+      </details>
+      <SiteGeometryEditor
+        onUseArea={(area) =>
           update({
-            constraints: { ...assessment.constraints, parcelArea: value },
+            constraints: {
+              ...assessment.constraints,
+              buildableFootprint: {
+                value: area,
+                source: "berlin_geometry_v1 · draft geometry calculation",
+                sourceDate: new Date().toISOString().slice(0, 10),
+                kind: "calculated",
+                reviewed: false,
+              },
+            },
+          })
+        }
+        contextOverride={geometryContext}
+        onReference={(building, context) => {
+          if (assessment.references.some((r) => r.buildingId === building.id))
+            return;
+          update({
+            references: [
+              ...assessment.references,
+              {
+                id: crypto.randomUUID(),
+                buildingId: building.id,
+                label: building.label,
+                source: context.sources.map((s) => s.url).join("; "),
+                note: "",
+                polygons: building.polygons.map((p) =>
+                  p.map((r) =>
+                    r.map(([x, z]) => [
+                      x + context.origin[0],
+                      context.origin[1] - z,
+                    ]),
+                  ),
+                ),
+              },
+            ],
           });
         }}
+        projectId={projectId}
+        value={assessment.geometry ?? null}
+        disabled={disabled}
+        onChange={(geometry) => update({ geometry })}
+        options={
+          assessment.constraints.grz.value !== null &&
+          assessment.constraints.gfz.value !== null &&
+          assessment.constraints.maxFullStoreys.value !== null
+            ? {
+                grz: assessment.constraints.grz.value,
+                gfz: assessment.constraints.gfz.value,
+                maxFullStoreys: assessment.constraints.maxFullStoreys.value,
+                storeyHeight: 3,
+              }
+            : null
+        }
       />
+      {input && <SiteDesignResult input={input} />}
       <SiteCapacityVisual
         result={result}
         onEdit={(key) => openEditor({ kind: "constraint", key })}
@@ -454,6 +661,47 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
           </TableBody>
         </Table>
       </Section>
+      <details className="site-secondary">
+        <summary className="text-ui-sm">{label("PlanningFacts")}</summary>
+        <Table>
+          <TableBody>
+            {(
+              [
+                "landUse",
+                "buildingForm",
+                "roofForm",
+                "heightRule",
+                "encroachments",
+              ] as const
+            ).map((key) => (
+              <TableRow key={key}>
+                <TableCell>{label(key)}</TableCell>
+                <TableCell>
+                  {assessment.planningFacts?.[key]?.value || "–"}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline">
+                    {label(
+                      assessment.planningFacts?.[key]?.reviewed
+                        ? "Reviewed"
+                        : "Unreviewed",
+                    )}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => openEditor({ kind: "fact", key })}
+                  >
+                    {label(data.canWrite ? "Edit" : "View")}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </details>
       <Dialog
         open={!!editor}
         onOpenChange={(open) => {
@@ -475,6 +723,71 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
                 constraints: { ...assessment.constraints, [editor.key]: value },
               }),
             )}
+          {editor?.kind === "fact" &&
+            (() => {
+              const fact = assessment.planningFacts?.[editor.key] ?? {
+                value: "",
+                source: "",
+                sourceDate: null,
+                kind: "assessment" as const,
+                reviewed: false,
+              };
+              const change = (patch: Partial<typeof fact>) =>
+                update({
+                  planningFacts: {
+                    ...assessment.planningFacts,
+                    [editor.key]: { ...fact, ...patch },
+                  },
+                });
+              return (
+                <>
+                  <Field label={label(editor.key)}>
+                    <Textarea
+                      disabled={disabled}
+                      value={fact.value}
+                      onChange={(e) =>
+                        change({ value: e.target.value, reviewed: false })
+                      }
+                    />
+                  </Field>
+                  <Field label={label("Source")}>
+                    <Input
+                      disabled={disabled}
+                      value={fact.source}
+                      onChange={(e) =>
+                        change({ source: e.target.value, reviewed: false })
+                      }
+                    />
+                  </Field>
+                  <Field label={label("Date")}>
+                    <Input
+                      type="date"
+                      disabled={disabled}
+                      value={fact.sourceDate ?? ""}
+                      onChange={(e) =>
+                        change({
+                          sourceDate: e.target.value || null,
+                          reviewed: false,
+                        })
+                      }
+                    />
+                  </Field>
+                  <label className="site-review text-ui-xs">
+                    <Checkbox
+                      disabled={
+                        disabled ||
+                        !fact.source ||
+                        !fact.sourceDate ||
+                        !fact.value
+                      }
+                      checked={fact.reviewed}
+                      onCheckedChange={(v) => change({ reviewed: v === true })}
+                    />
+                    {label("Reviewed")}
+                  </label>
+                </>
+              );
+            })()}
           {editor?.kind === "check" &&
             (() => {
               const check = assessment.checks[editor.key];
@@ -722,6 +1035,19 @@ export function SiteAssessment({ projectId }: { projectId: string }) {
         </Section>
       </div>
       <div className="site-save-bar">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={dirty || !assessment.revision || save.isPending}
+          onClick={() => {
+            const a = document.createElement("a");
+            a.href = `/api${path}/report.pdf?lang=${language}`;
+            a.download = "";
+            a.click();
+          }}
+        >
+          {t("feasibilityReport")}
+        </Button>
         <span className="muted text-ui-2xs">
           {dirty
             ? t("feasibilityUnsaved")
