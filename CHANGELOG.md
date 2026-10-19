@@ -1,10 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2026-10-19
 
 - **Exterior noise verification:** Exterior noise lists the rooms of the placed plan with their exterior facades and La. Enter room use, clear room height, wall Rw and windows; complete rooms are checked against the DIN 4109-1 requirement right away. **Create Nachweis** writes the draft Schallschutznachweis Außenlärm with calculation sheets, the derivation of La and a sign-off block as a document and PDF.
-
-## 2026-10-19
 
 - **Facade levels:** Exterior noise shows draft road rating levels after RLS-19 and relevant exterior noise levels La per facade and storey after DIN 4109-2, with every assumption and limitation listed. Roads take a surface type and gradient; railways take rating levels from a study. Needs the acoustic norm pack configured on the server.
 - **B-Plan rules version:** The site assessment now records a B-Plan's type, adoption date and court review from the Berlin register and derives which BauNVO version applies. Plans before 1990 and the Baunutzungsplan no longer get a GRZ 2 default, and attic and Staffel rooms count toward GF there. In former West Berlin without a newer plan, parcels are marked "Baunutzungsplan 1960" instead of § 34; choosing the building class (e.g. V/3) on the plan map proposes storeys, GRZ, GFZ and building form.
