@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { aerialSourceFor, compassOf, facadeDistances, planToSite, simplifyPolyline, siteToPlan, twoPointPlacement, type Point2 } from "./site-plan";
+import { aerialSourceFor, alignPlanOutline, compassOf, facadeDistances, planToSite, shiftedPlacement, simplifyPolyline, siteToPlan, twoPointPlacement, type Point2 } from "./site-plan";
 
 const close = (actual: Point2, expected: Point2) => {
   expect(actual[0]).toBeCloseTo(expected[0], 6);
@@ -69,4 +69,32 @@ test("aerial imagery only for registers with an open orthophoto service in the s
   expect(aerialSourceFor({ siteId: "rlp-address:1", crs: "EPSG:25833" })).toBeNull();
   expect(aerialSourceFor({ siteId: "berlin-address:1" })?.id).toBe("berlin-truedop");
   expect(aerialSourceFor({ siteId: "he-hako:1", crs: "EPSG:25832" })).toBeNull();
+});
+
+describe("aligning storey plans by their outline", () => {
+  // Exterior walls as 0.3 m bands around a 10 × 8 m outline starting at (x, y).
+  const walls = (x: number, y: number, w: number, h: number): Point2[][] => [
+    [[x, y], [x + w, y], [x + w, y + 0.3], [x, y + 0.3]], [[x, y + h - 0.3], [x + w, y + h - 0.3], [x + w, y + h], [x, y + h]],
+    [[x, y], [x + 0.3, y], [x + 0.3, y + h], [x, y + h]], [[x + w - 0.3, y], [x + w, y], [x + w, y + h], [x + w - 0.3, y + h]],
+  ];
+  test("the same outline drawn elsewhere on its sheet aligns with its offset and a near-zero fit", () => {
+    const aligned = alignPlanOutline(walls(2, 3, 10, 8), walls(7.5, 1, 10, 8))!;
+    expect(aligned.offset[0]).toBeCloseTo(-5.5, 9);
+    expect(aligned.offset[1]).toBeCloseTo(2, 9);
+    expect(aligned.fitM).toBeCloseTo(0, 9);
+    // A point on the other page maps to the same site point as its aligned point on the placed page.
+    const placement = { origin: [500000, 5800000] as Point2, degrees: 30 };
+    const shifted = shiftedPlacement(placement, aligned.offset);
+    const [a, b] = [planToSite([7.5, 1], shifted), planToSite([2, 3], placement)];
+    expect(a[0]).toBeCloseTo(b[0], 6);
+    expect(a[1]).toBeCloseTo(b[1], 6);
+  });
+  test("a set-back upper storey aligns at a shared corner; a different building does not fit", () => {
+    // Upper storey 10 × 6 m flush with the south-west corner (minimum x and y) of the 10 × 8 m storey below.
+    const upper = alignPlanOutline(walls(0, 0, 10, 8), walls(4, 4, 10, 6))!;
+    expect(upper.offset[0]).toBeCloseTo(-4, 9);
+    expect(upper.offset[1]).toBeCloseTo(-4, 9);
+    expect(upper.fitM).toBeLessThan(0.3);
+    expect(alignPlanOutline(walls(0, 0, 10, 8), walls(0, 0, 25, 4))!.fitM).toBeGreaterThan(0.3);
+  });
 });

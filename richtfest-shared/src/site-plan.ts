@@ -223,3 +223,36 @@ export function placementForPage(placement: StoredPlacement | null, page: Pick<S
   if (!placement || placement.origin.crs !== crs || evidence?.kind !== "page" || evidence.sourceVersionId !== page.sourceVersionId || evidence.page !== page.page) return null;
   return { origin: [placement.origin.x, placement.origin.y], degrees: placement.orientation?.degrees ?? 0 };
 }
+
+const ringsBox = (rings: Point2[][]) => {
+  const points = rings.flat();
+  return { minX: Math.min(...points.map(p => p[0])), maxX: Math.max(...points.map(p => p[0])), minY: Math.min(...points.map(p => p[1])), maxY: Math.max(...points.map(p => p[1])) };
+};
+
+/**
+ * Aligns the exterior walls of another storey's plan page to the placed page,
+ * both in plan metres at the same orientation: tries matching each outline
+ * corner and the centre and keeps the shift whose wall corners lie closest to
+ * the reference walls. fitM is the median distance of the shifted corners to
+ * the reference walls; stacked storeys fit within a few centimetres, setbacks
+ * leave some corners further away.
+ */
+export function alignPlanOutline(reference: Point2[][], rings: Point2[][]): { offset: Point2; fitM: number } | null {
+  if (!reference.length || !rings.length) return null;
+  const a = ringsBox(reference), b = ringsBox(rings);
+  const anchors = (box: ReturnType<typeof ringsBox>): Point2[] => [[box.minX, box.minY], [box.maxX, box.minY], [box.maxX, box.maxY], [box.minX, box.maxY], [(box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2]];
+  const segments = reference.flatMap(ring => ring.map((p, i) => [p, ring[(i + 1) % ring.length]!] as const));
+  const corners = rings.flat();
+  const median = (values: number[]) => { const sorted = [...values].sort((x, y) => x - y); const mid = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2; };
+  let best: { offset: Point2; fitM: number } | null = null;
+  const anchorsA = anchors(a), anchorsB = anchors(b);
+  for (let i = 0; i < anchorsA.length; i++) {
+    const offset: Point2 = [anchorsA[i]![0] - anchorsB[i]![0], anchorsA[i]![1] - anchorsB[i]![1]];
+    const fitM = median(corners.map(p => Math.min(...segments.map(([s, e]) => segmentDistance([p[0] + offset[0], p[1] + offset[1]], s, e).distance))));
+    if (!best || fitM < best.fitM) best = { offset, fitM };
+  }
+  return best;
+}
+
+/** The placement of a page aligned to the placed page: plan point p on it is point p + offset on the placed page. */
+export const shiftedPlacement = (placement: PlanPlacement, offset: Point2): PlanPlacement => ({ origin: planToSite(offset, placement), degrees: placement.degrees });

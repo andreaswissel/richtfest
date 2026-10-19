@@ -29,6 +29,8 @@ const limitationKeys = {
   free_propagation: "facadeLevelsLimitFree", flat_ground: "facadeLevelsLimitGround", no_reflections: "facadeLevelsLimitReflections",
   no_junction_correction: "facadeLevelsLimitJunctions", storey_height_assumed: "facadeLevelsLimitStorey",
   rail_imported_all_facades: "facadeLevelsLimitRail", turned_away_reduction: "facadeLevelsLimitTurnedAway",
+  storeys_aligned_by_outline: "facadeLevelsLimitAligned", storey_plan_missing: "facadeLevelsLimitStoreyPlanMissing",
+  storey_plan_not_aligned: "facadeLevelsLimitNotAligned", storey_level_missing: "facadeLevelsLimitStoreyLevel",
 } as const;
 
 const sourceLink = (projectId: string, sourceId: string) => `/projects/${projectId}?view=noise&source=${sourceId}`;
@@ -67,7 +69,9 @@ export function FacadeLevels({ projectId }: { projectId: string }) {
     <p className="muted text-ui-xs">
       {t("facadeLevelsBasis").replace("{rls}", data.editions.rls19).replace("{din}", data.editions.din4109)}{" "}
       {t("facadeLevelsPlacement").replace("{file}", data.placement.fileName ?? "—").replace("{page}", String(data.placement.page))}{" "}
-      {data.placement.alignmentStatus !== "reviewed" && t("facadeLevelsPlacementApproximate")}
+      {data.placement.alignmentStatus !== "reviewed" && t("facadeLevelsPlacementApproximate")}{" "}
+      {data.pages.length > 1 && t("facadeLevelsAlignedPages").replace("{pages}", data.pages.slice(1)
+        .map((page) => `${page.storey?.name ?? "—"} (${page.fileName ?? "—"}, ${t("facadeLevelsPage").replace("{page}", String(page.page))})`).join(", "))}
     </p>
     <h3 className="site-section-title">{t("facadeLevelsSources")}</h3>
     {data.sources.length ? <Table headers={[t("noiseSourceName"), t("facadeLevelsStatus"), t("facadeLevelsTrafficDayNight"), t("facadeLevelsLineLevel"), t("facadeLevelsAssumptions")]}

@@ -72,18 +72,27 @@ export type ProofRoomResult = {
 };
 export type ProofRoom = {
   id: string; name: string; label: string; roomUse: string | null;
+  /** The storey whose plan page the room was traced on. */
+  storeyId: string;
   kind: ProofValue<string> | null; proposedKind: ExteriorNoiseRoomKind | null;
   floorAreaM2: number | null; surfacesComplete: ProofValue<boolean> | null;
   facades: ProofFacade[]; gaps: ProofGap[]; result: ProofRoomResult | null;
+};
+
+export type ProofStorey = {
+  id: string; name: string; levelIndex: number | null;
+  page: { sourceVersionId: string; fileName: string | null; page: number };
+  clearHeight: ProofValue<number> | null;
 };
 
 export type ExteriorNoiseProof =
   | { available: false; reason: "norm_pack_missing" | "location_missing" | "placement_missing" | "exterior_walls_missing" | "model_missing" }
   | {
     available: true; modelRevision: number;
-    buildingId: string; page: { fileName: string | null; page: number };
-    storey: { id: string; name: string; levelIndex: number | null };
-    applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
+    buildingId: string;
+    /** Storeys with a traced plan page aligned to the placed page, ground floor first; each has its own clear room height. */
+    storeys: ProofStorey[];
+    applicability: ProofValue<string> | null; flanking: ProofValue<string> | null;
     rooms: ProofRoom[];
     /** Suggested values still waiting for a person, oldest entity first. */
     suggestions: ProofSuggestion[];
@@ -103,10 +112,11 @@ export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: 
   const shown = <T,>(item: ProofValue<T> | null) => item ? { value: item.value, status: item.provenance === "inferred" && item.reviewStatus !== "approved" ? "suggested" : item.reviewStatus } : null;
   return {
     available: true as const, view, modelRevision: proof.modelRevision, buildingId: proof.buildingId,
-    plan: proof.page, storey: proof.storey,
-    applicability: shown(proof.applicability), flanking: shown(proof.flanking), clearRoomHeightM: shown(proof.clearHeight),
+    storeys: proof.storeys.map(storey => ({ storeyId: storey.id, name: storey.name, levelIndex: storey.levelIndex,
+      plan: { fileName: storey.page.fileName, page: storey.page.page }, clearRoomHeightM: shown(storey.clearHeight) })),
+    applicability: shown(proof.applicability), flanking: shown(proof.flanking),
     rooms: proof.rooms.slice(0, maxRooms).map(room => ({
-      roomId: room.id, label: room.label, roomUse: room.roomUse, kind: shown(room.kind), proposedKind: room.kind ? null : room.proposedKind,
+      roomId: room.id, storeyId: room.storeyId, label: room.label, roomUse: room.roomUse, kind: shown(room.kind), proposedKind: room.kind ? null : room.proposedKind,
       floorAreaM2: room.floorAreaM2, surfacesComplete: shown(room.surfacesComplete), gaps: room.gaps,
       result: room.result && { status: room.result.status, requiredDb: room.result.targetDb, providedDb: room.result.valueDb, marginDb: room.result.marginDb },
       facades: room.facades.map(facade => ({

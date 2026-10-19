@@ -33,6 +33,10 @@ const limitations: Record<string, string> = {
   storey_height_assumed: "Immissionsorte in Höhe der Geschossdecke mit angenommener Geschosshöhe von {height} m.",
   rail_imported_all_facades: "Schienen-Beurteilungspegel aus einem Gutachten gelten für jede Fassade.",
   turned_away_reduction: "Abgewandte Fassaden erhalten mindestens den Pegel der lautesten Fassade des Geschosses abzüglich der Minderung für offene Bebauung.",
+  storeys_aligned_by_outline: "Grundrisse weiterer Geschosse sind über ihren Gebäudeumriss am platzierten Plan ausgerichtet.",
+  storey_plan_missing: "Geschosse ohne eigenen Grundriss übernehmen die Fassaden des platzierten Plans.",
+  storey_plan_not_aligned: "Mindestens ein Geschossgrundriss ließ sich nicht am platzierten Plan ausrichten; seine Räume sind nicht enthalten.",
+  storey_level_missing: "Mindestens einem Geschoss mit Grundriss fehlt die Geschossebene; seine Fassadenpegel sind nicht berechnet.",
 };
 
 /** The derivation of La behind the Nachweis: sources, traffic, assumptions, facade levels and limits. */
@@ -40,10 +44,13 @@ function noiseAnnex(proof: Proof) {
   const levels = proof.levels;
   const nameOf = new Map(levels.sources.map(source => [source.id, source.name]));
   const walls = new Set(proof.rooms.flatMap(room => room.facades.map(facade => facade.wallId)));
-  const facades = levels.facades.filter(facade => walls.has(facade.wallId) && (facade.storey.id === proof.storey.id || facade.storey.id === null));
+  const storeyIds = new Set(proof.storeys.map(storey => storey.id));
+  const facades = levels.facades.filter(facade => walls.has(facade.wallId) && (facade.storey.id === null || storeyIds.has(facade.storey.id)));
+  const several = proof.storeys.length > 1;
+  const plans = proof.storeys.map(storey => `${several ? `${md(storey.name)}: ` : ""}${md(storey.page.fileName)}, Seite ${storey.page.page}`).join("; ");
   return [
     "## Anlage: Ermittlung der maßgeblichen Außenlärmpegel",
-    `Straßen-Beurteilungspegel nach ${md(levels.editions.rls19)}; maßgebliche Außenlärmpegel La nach ${md(levels.editions.din4109)}. Fassaden aus ${md(levels.placement.fileName)}, Seite ${levels.placement.page}; Planplatzierung ${levels.placement.alignmentStatus === "reviewed" ? "geprüft" : "ungeprüft"}.`,
+    `Straßen-Beurteilungspegel nach ${md(levels.editions.rls19)}; maßgebliche Außenlärmpegel La nach ${md(levels.editions.din4109)}. Fassaden aus ${plans}; Planplatzierung ${levels.placement.alignmentStatus === "reviewed" ? "geprüft" : "ungeprüft"}${several ? ", weitere Geschosse über ihren Gebäudeumriss am platzierten Plan ausgerichtet" : ""}.`,
     "### Schallquellen",
     ["| Quelle | Status | Verkehr Tag / Nacht | L'W Tag / Nacht | Eingaben und Annahmen |\n| --- | --- | --- | --- | --- |",
     ...levels.sources.map(source => `| ${md(source.name)} | ${sourceStatus[source.status] ?? source.status} | ${source.emission
@@ -52,7 +59,7 @@ function noiseAnnex(proof: Proof) {
         ...source.defaults.map(item => defaults[item.key]?.(item.value) ?? item.key)].join("; ") || "—")} |`)].join("\n"),
     "### Fassadenpegel",
     ["| Fassade | Lr Tag / Nacht je Quelle | La Tag | La Nacht | La Schlafräume | Grundlage |\n| --- | --- | --- | --- | --- | --- |",
-    ...facades.map(facade => `| ${md(`${facade.compass} · ${facade.wallName}`)} | ${md(facade.sources.map(item => `${nameOf.get(item.sourceId) ?? "—"} ${dB(item.dayDb)} / ${dB(item.nightDb)}`).join("; ") || "—")} | ${facade.level ? dB(facade.level.dayDb) : "—"} | ${facade.level ? dB(facade.level.nightDb) : "—"} | ${facade.level ? dB(facade.level.sleepingDb) : "—"} | ${facade.basis === "turned_away" ? "abgewandt" : facade.basis === "calculated" ? "berechnet" : "keine Quelle"} |`)].join("\n"),
+    ...facades.map(facade => `| ${md(`${several && facade.storey.name ? `${facade.storey.name} · ` : ""}${facade.compass} · ${facade.wallName}`)} | ${md(facade.sources.map(item => `${nameOf.get(item.sourceId) ?? "—"} ${dB(item.dayDb)} / ${dB(item.nightDb)}`).join("; ") || "—")} | ${facade.level ? dB(facade.level.dayDb) : "—"} | ${facade.level ? dB(facade.level.nightDb) : "—"} | ${facade.level ? dB(facade.level.sleepingDb) : "—"} | ${facade.basis === "turned_away" ? "abgewandt" : facade.basis === "calculated" ? "berechnet" : "keine Quelle"} |`)].join("\n"),
     "### Grenzen der Pegelermittlung",
     ...levels.limitations.map(item => `- ${(limitations[item] ?? item).replace("{height}", String(levels.storeyHeightM))}`),
   ].join("\n\n");
@@ -82,12 +89,12 @@ export async function createExteriorNoiseNachweis(d: AppDeps, projectId: string,
     blockers, basedOn: null });
   const complete = Boolean(dataset.receipt.batch?.complete) && !blockers.length;
   const title = complete ? "Schallschutznachweis · Außenlärm" : "Schallschutznachweis · Außenlärm · Teilstand";
-  const placementVersion = proof.levels.placement.sourceVersionId;
-  await sources(d, projectId, [placementVersion]);
+  const planVersions = [...new Set([proof.levels.placement.sourceVersionId, ...proof.storeys.map(storey => storey.page.sourceVersionId)])];
+  await sources(d, projectId, planVersions);
   const content = [
     `# ${title}`,
     complete
-      ? "Entwurf aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Alle schutzbedürftigen Räume des Plans sind berechnet; fachliche Prüfung und Freigabe stehen aus."
+      ? "Entwurf aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Alle schutzbedürftigen Räume der Grundrisse sind berechnet; fachliche Prüfung und Freigabe stehen aus."
       : "Teilstand aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Räume mit offenen Eingaben sind nicht berechnet; offene Eingaben und noch nicht bestätigte Vorschläge sind unten aufgeführt. Fachliche Prüfung und Freigabe stehen aus.",
     renderAcousticCalculationReceipts([dataset.receipt], "de"),
     ...(blockers.length ? ["## Offene Eingaben", ...blockers.map(note => `- ${md(note)}`)] : []),
@@ -95,7 +102,7 @@ export async function createExteriorNoiseNachweis(d: AppDeps, projectId: string,
     "## Freigabe",
     "Aufgestellt: ______________________ Datum: __________\n\nGeprüft: ______________________ Datum: __________",
   ].join("\n\n");
-  const write = (inner: any) => createArtifact(d, inner, { projectId, title, type: "draft", content, sourceVersionIds: [placementVersion] }, runId, dataset);
+  const write = (inner: any) => createArtifact(d, inner, { projectId, title, type: "draft", content, sourceVersionIds: planVersions }, runId, dataset);
   const created = tx ? await write(tx) : await d.db.transaction(write);
   return { artifact: created.artifact, revision: created.revision, complete, openItems: blockers.length };
 }

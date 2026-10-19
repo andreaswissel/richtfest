@@ -9,7 +9,7 @@ const north = { id: "north", name: "N wall", ring: [[0, 0], [12, 0], [12, 0.3], 
 const west = { id: "west", name: "W wall", ring: [[0, 0], [0.3, 0], [0.3, 9], [0, 9]] as Point2[] };
 
 const input = (patch: Partial<ProofAssemblyInput> = {}): ProofAssemblyInput => ({
-  sourceLabel: "plan.pdf, p. 1", source: { versionId: "00000000-0000-4000-8000-000000000001", page: 1 },
+  sourceLabel: "plan.pdf, p. 1", storeyId: "s", source: { versionId: "00000000-0000-4000-8000-000000000001", page: 1 },
   applicability: value("standard_exterior_noise"), flanking: value("negligible"), clearHeight: value(2.5),
   rooms: [{ id: "r1", name: "Schlafen", roomUse: null, polygon: room, holes: [], adjacentWallIds: new Set(["north", "west"]),
     kind: value("sleeping"), surfacesComplete: value(true) }],
@@ -88,8 +88,9 @@ describe("exterior noise proof assembly", () => {
 describe("agent context", () => {
   test("marks unconfirmed inferred values as suggestions and uses the room's La period", () => {
     const { rooms } = assembleExteriorNoiseProof(input({ openings: [{ ...input().openings[0]!, rw: { ...value(37), provenance: "inferred" } }] }));
-    const proof = { available: true as const, modelRevision: 3, buildingId: "b", page: { fileName: "plan.pdf", page: 1 }, storey: { id: "s", name: "EG", levelIndex: 0 },
-      applicability: value("standard_exterior_noise", "approved"), flanking: null, clearHeight: value(2.5), rooms, suggestions: [], calculation: null, levels: {} as any };
+    const proof = { available: true as const, modelRevision: 3, buildingId: "b",
+      storeys: [{ id: "s", name: "EG", levelIndex: 0, page: { sourceVersionId: "v", fileName: "plan.pdf", page: 1 }, clearHeight: value(2.5) }],
+      applicability: value("standard_exterior_noise", "approved"), flanking: null, rooms, suggestions: [], calculation: null, levels: {} as any };
     const context = exteriorNoiseAgentContext(proof, "p");
     if (!context.available) throw new Error("expected available");
     expect(context.applicability).toEqual({ value: "standard_exterior_noise", status: "approved" });

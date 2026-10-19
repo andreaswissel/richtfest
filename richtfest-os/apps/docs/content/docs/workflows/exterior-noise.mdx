@@ -81,15 +81,17 @@ Select a source to enter its inputs. Each value has a **Basis**, for example "He
 - **From study**: a railway with rating levels day and night entered from a study.
 - **Inputs missing**, **No mapped axis**: not part of the levels until completed. Road levels need the mapped axis from the survey.
 
+**Storeys.** The facades of each storey come from that storey's own plan in the building model. Only one plan is placed on the site; the plans of the other storeys are aligned to it by their building outline: Richtfest matches the corners of their exterior walls to the placed plan, so a plan drawn elsewhere on its sheet or a set-back upper storey still lands in place. The aligned plans are named above the tables. A storey plan that does not fit the placed outline (another building, a section) is left out and named under the limitations; a storey without a plan of its own repeats the facades of the placed plan. The receiver height follows each storey's **level** from the building model.
+
 **Facades** lists, per storey, each exterior wall with the rating level of each source, La day, La night and La for sleeping rooms, which is what the room requirement uses. The rules applied are those of DIN 4109-2 for calculated levels: the rail reduction, the night surcharge for sleeping rooms, sources combined per period with the addition applied once to the sum, and sleeping rooms taking the higher of day and night. A facade turned away from all sources takes the loudest facade of its storey less the reduction for turned-away facades in open development (**Turned away**).
 
 Limitations shown under the table: free propagation without screening by other buildings, flat ground, no reflections, no junction corrections, receivers at the ceiling of each storey with an assumed storey height of 3 m. Each makes the level more conservative or needs a check where it does not. The coefficients are configured on the server ([acoustic norm pack](/docs/engineering/deployment#acoustic-norm-pack)); the editions used are named above the tables.
 
 ## Exterior noise verification
 
-**Exterior noise verification** turns the facade levels into the inputs of the DIN 4109-1 exterior noise requirement, room by room, and calculates every room whose inputs are complete. It works on the rooms of the placed plan page in the building model.
+**Exterior noise verification** turns the facade levels into the inputs of the DIN 4109-1 exterior noise requirement, room by room, and calculates every room whose inputs are complete. It works on the rooms of every storey plan in the building model: the placed plan and each plan aligned to it (see **Storeys** above). With more than one storey, rooms carry the storey in their name, for example *EG · Wohnen*, and the Nachweis covers all storeys in one calculation.
 
-1. Above the rooms, choose the **Method** (standard exterior noise method or special assessment, for example near airports), whether **Flanking transmission** is negligible, and the storey's **Clear room height**.
+1. Above the rooms, choose the **Method** (standard exterior noise method or special assessment, for example near airports), whether **Flanking transmission** is negligible, and each storey's **Clear room height**.
 2. Give each room its **Use**: sleeping room, living room, office or practice, hospital bedroom, or not protected (kitchen, bathroom, hall, storage). A proposal from the room name can be taken over with one click. Sleeping rooms use La for sleeping rooms, all others La by day.
 3. **Edit facades** lists the room's exterior walls: the length along each wall comes from the room and wall outlines of the plan, times the clear room height. Enter the wall's **Rw** with its basis, and add each **window or door** with its area and installed Rw (corrections included) and basis. The wall area is the facade less its openings.
 4. Confirm that **all exterior walls, roofs and openings of this room are entered**.

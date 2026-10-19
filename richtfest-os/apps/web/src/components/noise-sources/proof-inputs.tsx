@@ -80,7 +80,8 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
   const ready = proof.rooms.filter(room => room.result?.status === "calculated").length;
   const selected = proof.rooms.find(room => room.id === open) ?? null;
   return <Section title={t("proof")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
-    <p className="muted text-ui-xs">{t("proofIntro").replace("{file}", proof.page.fileName ?? "—").replace("{file_page}", String(proof.page.page))}</p>
+    <p className="muted text-ui-xs">{t("proofIntro").replace("{plans}", proof.storeys.map(storey => t("proofPlan").replace("{storey}", storey.name)
+      .replace("{file}", storey.page.fileName ?? "—").replace("{page}", String(storey.page.page))).join(", "))}</p>
     <BuildingInputs projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
     {proof.suggestions.length > 0 && <Suggestions projectId={projectId} proof={proof} canWrite={canWrite} t={t} />}
     <div className="noise-toolbar">
@@ -89,8 +90,8 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
       {canWrite && protectedRooms.some(room => room.facades.some(facade => !facade.rw)) && <CatalogueSuggestions projectId={projectId} t={t} />}
     </div>
     {proof.rooms.length ? <Table headers={[t("proofRoom"), t("proofUse"), t("proofFloorArea"), t("proofFacades"), t("proofResult"), ""]}
-      rows={proof.rooms.map(room => ({ id: room.id, sort: [room.name, room.kind?.value ?? "", String(room.floorAreaM2 ?? 0), String(room.facades.length), room.result?.status ?? room.gaps.join(), ""], cells: [
-        <span>{room.name}{room.roomUse && <span className="muted text-ui-xs"> · {room.roomUse}</span>}</span>,
+      rows={proof.rooms.map(room => ({ id: room.id, sort: [room.label, room.kind?.value ?? "", String(room.floorAreaM2 ?? 0), String(room.facades.length), room.result?.status ?? room.gaps.join(), ""], cells: [
+        <span>{room.label}{room.roomUse && <span className="muted text-ui-xs"> · {room.roomUse}</span>}</span>,
         <RoomKind projectId={projectId} proof={proof} room={room} canWrite={canWrite} t={t} />,
         <span className="text-ui-xs">{room.floorAreaM2 === null ? "—" : `${m(room.floorAreaM2)} m²`}</span>,
         <span className="text-ui-xs muted">{room.facades.map(facade => `${facade.compass ?? "—"} ${m(facade.lengthM)} m${facade.la ? ` · La ${db(facade.la.dayDb)}/${db(facade.la.sleepingDb)}` : ""}`).join("; ") || "—"}</span>,
@@ -217,13 +218,7 @@ function RoomKind({ projectId, proof, room, canWrite, t }: { projectId: string; 
 /** Inputs that hold for the whole storey or building: applicability, flanking and clear room height. */
 function BuildingInputs({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
   const save = useSaveProperty(projectId, proof);
-  const initialHeight = proof.clearHeight ? String(proof.clearHeight.value) : "";
-  const [height, setHeight] = useState(initialHeight);
-  useEffect(() => setHeight(initialHeight), [initialHeight]);
-  const heightValue = parseNumber(height);
-  const submitHeight = (event: FormEvent) => { event.preventDefault();
-    if (heightValue !== null && height !== initialHeight) save.mutate({ entityType: "storey", entityId: proof.storey.id, propertyKey: "clearRoomHeight", value: heightValue, unit: "m" }); };
-  return <form className="proof-building" onSubmit={submitHeight}>
+  return <div className="proof-building">
     <Field label={t("proofApplicability")}>
       <NativeSelect size="sm" className="w-full" value={proof.applicability?.value ?? ""} disabled={!canWrite || save.isPending}
         onChange={(event) => event.target.value && save.mutate({ entityType: "building", entityId: proof.buildingId, propertyKey: "exteriorNoiseApplicability", value: event.target.value })}>
@@ -240,20 +235,36 @@ function BuildingInputs({ projectId, proof, canWrite, t }: { projectId: string; 
         <NativeSelectOption value="required">{t("proofFlankingRequired")}</NativeSelectOption>
       </NativeSelect>
     </Field>
-    <Field label={t("proofClearHeight").replace("{storey}", proof.storey.name)}>
+    {proof.storeys.map(storey => <StoreyHeight key={storey.id} projectId={projectId} proof={proof} storey={storey} canWrite={canWrite} t={t} />)}
+    {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
+  </div>;
+}
+
+/** One storey's clear room height; exterior and interior sound insulation share it. */
+export function StoreyHeight({ projectId, proof, storey, canWrite, t }: { projectId: string; proof: { modelRevision: number }; storey: { id: string; name: string; clearHeight: ProofValue<number> | null }; canWrite: boolean; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  const initial = storey.clearHeight ? String(storey.clearHeight.value) : "";
+  const [height, setHeight] = useState(initial);
+  useEffect(() => setHeight(initial), [initial]);
+  const value = parseNumber(height);
+  const submit = (event: FormEvent) => { event.preventDefault();
+    if (value !== null && height !== initial) save.mutate({ entityType: "storey", entityId: storey.id, propertyKey: "clearRoomHeight", value, unit: "m" }); };
+  return <form onSubmit={submit}>
+    <Field label={t("proofClearHeight").replace("{storey}", storey.name)}>
       <span className="proof-inline">
-        <Input value={height} inputMode="decimal" disabled={!canWrite} onChange={(event) => setHeight(event.target.value)} aria-invalid={Boolean(height.trim()) && heightValue === null} />
-        {canWrite && <Button type="submit" size="sm" variant="outline" disabled={heightValue === null || height === initialHeight || save.isPending}>{t("noiseSave")}</Button>}
+        <Input value={height} inputMode="decimal" disabled={!canWrite} onChange={(event) => setHeight(event.target.value)} aria-invalid={Boolean(height.trim()) && value === null} />
+        {canWrite && <Button type="submit" size="sm" variant="outline" disabled={value === null || height === initial || save.isPending}>{t("noiseSave")}</Button>}
       </span>
     </Field>
     {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
   </form>;
 }
 
+
 function RoomEditor({ projectId, proof, room, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; canWrite: boolean; t: T }) {
   const save = useSaveProperty(projectId, proof);
   return <div className="proof-room">
-    <h3 className="site-section-title">{room.name}</h3>
+    <h3 className="site-section-title">{room.label}</h3>
     {room.facades.map(facade => <FacadeEditor key={facade.wallId} projectId={projectId} proof={proof} room={room} facade={facade} canWrite={canWrite} t={t} />)}
     <label className="proof-confirm text-ui-sm">
       <Checkbox checked={room.surfacesComplete?.value === true} disabled={!canWrite || save.isPending}
@@ -280,7 +291,7 @@ function FacadeEditor({ projectId, proof, room, facade, canWrite, t }: { project
   return <div className="proof-facade">
     <p className="text-ui-sm"><strong>{facadeLabel(facade)}</strong>{" "}
       <span className="muted text-ui-xs">
-        {facade.areaM2 === null ? t("proofFacadeLength").replace("{length}", m(facade.lengthM)) : t("proofFacadeArea").replace("{length}", m(facade.lengthM)).replace("{height}", String(proof.clearHeight?.value ?? "")).replace("{area}", m(facade.areaM2))}
+        {facade.areaM2 === null ? t("proofFacadeLength").replace("{length}", m(facade.lengthM)) : t("proofFacadeArea").replace("{length}", m(facade.lengthM)).replace("{height}", String(proof.storeys.find(storey => storey.id === room.storeyId)?.clearHeight?.value ?? "")).replace("{area}", m(facade.areaM2))}
         {" · "}{la === null || la === undefined ? t("proofGapFacadeLevel") : `La ${db(la)} dB`}
         {" · "}{facade.construction === "unknown" ? t("proofConstructionUnknown") : t(facade.construction === "massive" ? "proofConstructionMassive" : "proofConstructionLightweight")}
       </span>

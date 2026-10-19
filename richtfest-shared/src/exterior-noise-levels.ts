@@ -67,7 +67,13 @@ export type ExteriorNoiseLevel = {
 /** Per-facade road rating levels and relevant exterior noise levels of a project, as the API returns them. */
 export type FacadeLevelLimitation =
   | "free_propagation" | "flat_ground" | "no_reflections" | "no_junction_correction" | "storey_height_assumed"
-  | "rail_imported_all_facades" | "turned_away_reduction";
+  | "rail_imported_all_facades" | "turned_away_reduction" | "storeys_aligned_by_outline" | "storey_plan_missing" | "storey_plan_not_aligned" | "storey_level_missing";
+/** A plan page whose exterior walls form the facades of its storey: the placed page, or a page aligned to it by its outline. */
+export type FacadeLevelPage = {
+  sourceVersionId: string; page: number; fileName: string | null;
+  storey: { id: string; name: string; levelIndex: number | null } | null;
+  basis: "placed" | "outline"; fitM: number | null;
+};
 export type FacadeLevelSource = {
   id: string;
   name: string;
@@ -99,6 +105,8 @@ export type FacadeNoiseLevels =
     editions: { rls19: string; din4109: string; pack: string };
     placement: { alignmentStatus: "unknown" | "approximate" | "reviewed"; sourceVersionId: string; page: number; fileName: string | null };
     storeyHeightM: number;
+    /** Plan pages the facades come from, the placed page first. */
+    pages: FacadeLevelPage[];
     sources: FacadeLevelSource[];
     facades: FacadeLevel[];
     limitations: FacadeLevelLimitation[];

@@ -4,11 +4,11 @@ import { z } from "zod";
 import {
   buildingComponentProperties, buildingEvidenceSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
-  type ProofFacade, type ProofGap, type ProofRoom, type ProofSuggestion, type ProofValue, type ProofWindow,
+  type ProofFacade, type ProofGap, type ProofRoom, type SitePlanPage, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { appendPropertyVersion, evidenceVersionsForProject, modelForProject, modelTransaction, readSitePlan, touchRevision } from "./building-model-router";
-import { readFacadeNoiseLevels } from "./exterior-noise-levels";
+import { readFacadeNoiseLevels, storeyLevels } from "./exterior-noise-levels";
 import {
   buildingBuildings, buildingElements, buildingModels, buildingProperties, fileVersions, files, buildingPropertyVersions, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys,
 } from "./schema";
@@ -82,6 +82,9 @@ const constructionOf = (value: unknown): ProofFacade["construction"] =>
 
 export type ProofAssemblyInput = {
   sourceLabel: string;
+  storeyId: string;
+  /** Prepended to room labels when several storeys are verified together, e.g. "EG · ". */
+  labelPrefix?: string;
   /** The plan page the rooms and walls were traced from; their geometry cites it. */
   source: { versionId: string; page: number } | null;
   applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
@@ -110,7 +113,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
   const inventory: BatchInput["inventory"] = [];
   for (const room of input.rooms) {
     const count = (labels.get(room.name) ?? 0) + 1; labels.set(room.name, count);
-    const label = count > 1 ? `${room.name} (${count})` : room.name;
+    const label = `${input.labelPrefix ?? ""}${count > 1 ? `${room.name} (${count})` : room.name}`;
     const kind = room.kind && (exteriorNoiseRoomKinds as readonly string[]).includes(room.kind.value) ? room.kind.value as ExteriorNoiseRoomKind : null;
     const floorAreaM2 = room.polygon && room.polygon.length >= 3
       ? round2(Math.max(0, polygonArea(room.polygon) - room.holes.reduce((sum, hole) => sum + polygonArea(hole), 0))) : null;
@@ -147,7 +150,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       if (input.flanking?.value !== "negligible") gaps.add("flanking");
       inventory.push({ roomId: label, provenance: fromPlan(`Raum „${room.name}“, aus dem Plan in das Richtfest-Gebäudemodell übernommen.`) });
     }
-    rooms.push({ id: room.id, name: room.name, label, roomUse: room.roomUse, kind: room.kind, proposedKind: proposeExteriorNoiseRoom(room.name, room.roomUse),
+    rooms.push({ id: room.id, storeyId: input.storeyId, name: room.name, label, roomUse: room.roomUse, kind: room.kind, proposedKind: proposeExteriorNoiseRoom(room.name, room.roomUse),
       floorAreaM2, surfacesComplete: room.surfacesComplete, facades, gaps: [...gaps], result: null });
     if (!protectedRoom || gaps.size) continue;
     const period = exteriorNoiseLaPeriod(kind!);
@@ -217,17 +220,28 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
   if (!modelRow) return { available: false, reason: "model_missing" };
   const modelId = modelRow.model.id;
   const sitePlan = await readSitePlan(d, projectId);
-  const page = sitePlan.pages.find(item => item.sourceVersionId === levels.placement.sourceVersionId && item.page === levels.placement.page);
-  if (!page) return { available: false, reason: "placement_missing" };
-  const toMetres = (point: { x: unknown; y: unknown }): Point2 => [Number(point.x) * page.scale.pageAspectRatio * page.scale.metresPerPageHeight, Number(point.y) * page.scale.metresPerPageHeight];
+  // The placed page and every page aligned to it, ground floor first: one storey each.
+  const pages = levels.pages.flatMap(entry => sitePlan.pages.filter(item => item.sourceVersionId === entry.sourceVersionId && item.page === entry.page));
+  if (!pages.length) return { available: false, reason: "placement_missing" };
 
-  const roomRows = (await d.db.select().from(buildingRooms).where(and(eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))) as any[])
-    .filter(room => room.geometry?.source?.sourceVersionId === page.sourceVersionId && room.geometry?.source?.page === page.page && room.constructionState !== "demolished");
-  const storeyId = page.storey?.id ?? roomRows[0]?.storeyId ?? null;
-  const [storey] = storeyId ? await d.db.select().from(buildingStoreys).where(and(eq(buildingStoreys.id, storeyId), eq(buildingStoreys.tenantId, d.tenantId))).limit(1) : [];
-  if (!storey) return { available: false, reason: "model_missing" };
-  const exterior = page.walls.filter(wall => wall.exterior);
+  const allRooms = (await d.db.select().from(buildingRooms).where(and(eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))) as any[])
+    .filter(room => room.constructionState !== "demolished");
+  const storeyRows = await d.db.select().from(buildingStoreys).where(and(eq(buildingStoreys.modelId, modelId), eq(buildingStoreys.tenantId, d.tenantId))) as any[];
+  const plans: Array<{ page: SitePlanPage; storey: any; rooms: any[] }> = [];
+  for (const page of pages) {
+    const rooms = allRooms.filter(room => room.geometry?.source?.sourceVersionId === page.sourceVersionId && room.geometry?.source?.page === page.page);
+    const storey = storeyRows.find(row => row.id === (page.storey?.id ?? rooms[0]?.storeyId));
+    if (storey && !plans.some(plan => plan.storey.id === storey.id)) plans.push({ page, storey, rooms });
+  }
+  if (!plans.length) return { available: false, reason: "model_missing" };
+  const levelOf = await storeyLevels(d, modelId, plans.map(plan => plan.storey));
+  for (const plan of plans) plan.storey = { ...plan.storey, levelIndex: levelOf.get(plan.storey.id) ?? null };
+  // Ground floor first, then upwards; storeys without a level last.
+  plans.sort((a, b) => (a.storey.levelIndex ?? 1e6) - (b.storey.levelIndex ?? 1e6));
+  const buildingId: string = plans[0]!.storey.buildingId;
+  const roomRows = plans.flatMap(plan => plan.rooms);
   const roomIds = roomRows.map(room => room.id);
+  const exterior = plans.flatMap(plan => plan.page.walls.filter(wall => wall.exterior));
   const openingRows = roomIds.length ? await d.db.select().from(buildingElements)
     .where(and(eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId), inArray(buildingElements.roomId, roomIds), inArray(buildingElements.kind, ["window", "door"]))) as any[] : [];
   const hosts = openingRows.length ? await d.db.select({ from: buildingRelationships.fromEntityId, to: buildingRelationships.toEntityId }).from(buildingRelationships)
@@ -240,39 +254,49 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       inArray(buildingRelationships.toEntityId, roomIds))) as any[] : [];
   const adjacentOf = new Map<string, Set<string>>();
   for (const row of separates) adjacentOf.set(row.roomId, (adjacentOf.get(row.roomId) ?? new Set()).add(row.wallId));
-  const values = await currentValues(d, modelId, [storey.buildingId, storey.id, ...roomIds, ...exterior.map(wall => wall.id), ...openingRows.map(row => row.id)]);
+  const values = await currentValues(d, modelId, [buildingId, ...plans.map(plan => plan.storey.id), ...roomIds, ...exterior.map(wall => wall.id), ...openingRows.map(row => row.id)]);
   const value = <T,>(entityId: string, key: string) => {
     const found = values.get(`${entityId}:${key}`);
     return found ? { value: found.value, reviewStatus: found.reviewStatus, provenance: found.provenance, propertyId: found.propertyId, version: found.version, reviewRevision: found.reviewRevision } as ProofValue<T> : null;
   };
 
-  const levelOf = new Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>();
-  for (const facade of levels.facades) {
-    const sameStorey = facade.storey.id === storey.id || (facade.storey.id === null && (storey.levelIndex ?? 0) === facade.storey.levelIndex);
-    if (!sameStorey || !facade.level || facade.basis === "none") continue;
-    levelOf.set(facade.wallId, { compass: facade.compass as Compass, dayDb: facade.level.dayDb, sleepingDb: facade.level.sleepingDb, basis: facade.basis });
+  const rooms: ProofRoom[] = [];
+  const batches: BatchInput[] = [];
+  for (const { page, storey, rooms: storeyRooms } of plans) {
+    const toMetres = (point: { x: unknown; y: unknown }): Point2 => [Number(point.x) * page.scale.pageAspectRatio * page.scale.metresPerPageHeight, Number(point.y) * page.scale.metresPerPageHeight];
+    const facadeLevel = new Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>();
+    for (const facade of levels.facades) {
+      const sameStorey = facade.storey.id === storey.id || (facade.storey.id === null && (storey.levelIndex ?? 0) === facade.storey.levelIndex);
+      if (!sameStorey || !facade.level || facade.basis === "none") continue;
+      facadeLevel.set(facade.wallId, { compass: facade.compass as Compass, dayDb: facade.level.dayDb, sleepingDb: facade.level.sleepingDb, basis: facade.basis });
+    }
+    const assembled = assembleExteriorNoiseProof({
+      sourceLabel: `${page.fileName ?? "plan"}, p. ${page.page}`, source: { versionId: page.sourceVersionId, page: page.page },
+      storeyId: storey.id, labelPrefix: plans.length > 1 ? `${storey.name} · ` : "",
+      applicability: value(buildingId, "exteriorNoiseApplicability"), flanking: value(buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
+      rooms: storeyRooms.map(room => ({ id: room.id, name: room.name, roomUse: room.roomUse,
+        polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
+        adjacentWallIds: adjacentOf.get(room.id) ?? null,
+        holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],
+        kind: value(room.id, "exteriorNoiseRoom"), surfacesComplete: value(room.id, "exteriorSurfacesComplete") })),
+      walls: page.walls.filter(wall => wall.exterior).map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring, construction: value(wall.id, "construction")?.value ?? null,
+        rw: value(wall.id, "soundReductionIndex"), rwBasis: value(wall.id, "soundReductionIndexBasis") })),
+      levels: facadeLevel,
+      openings: openingRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name, componentType: row.kind === "door" ? "door" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
+        area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis") })),
+    });
+    rooms.push(...assembled.rooms);
+    if (assembled.batch) batches.push(assembled.batch);
   }
-  const sourceLabel = `${page.fileName ?? "plan"}, p. ${page.page}`;
-  const assembled = assembleExteriorNoiseProof({
-    sourceLabel, source: { versionId: page.sourceVersionId, page: page.page },
-    applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
-    rooms: roomRows.map(room => ({ id: room.id, name: room.name, roomUse: room.roomUse,
-      polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
-      adjacentWallIds: adjacentOf.get(room.id) ?? null,
-      holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],
-      kind: value(room.id, "exteriorNoiseRoom"), surfacesComplete: value(room.id, "exteriorSurfacesComplete") })),
-    walls: exterior.map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring, construction: value(wall.id, "construction")?.value ?? null,
-      rw: value(wall.id, "soundReductionIndex"), rwBasis: value(wall.id, "soundReductionIndexBasis") })),
-    levels: levelOf,
-    openings: openingRows.map(row => ({ id: row.id, name: row.name, componentType: row.kind === "door" ? "door" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
-      area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis") })),
-  });
+  // One batch over every storey: one inventory, one calculation, one Nachweis.
+  const batch: BatchInput | null = batches.length ? { method: "exterior_noise_batch", scope: `Außenlärm, ${batches.map(item => item.scope.replace(/^Außenlärm, /, "")).join("; ")}`,
+    inventory: batches.flatMap(item => item.inventory), rooms: batches.flatMap(item => item.rooms) } : null;
   let calculation: Extract<ExteriorNoiseProof, { available: true }>["calculation"] = null;
-  if (assembled.batch && d.calculateAcoustics) {
-    const result = d.calculateAcoustics(assembled.batch);
-    calculation = { input: assembled.batch, result };
+  if (batch && d.calculateAcoustics) {
+    const result = d.calculateAcoustics(batch);
+    calculation = { input: batch, result };
     for (const item of result.batch?.rooms ?? []) {
-      const room = assembled.rooms.find(entry => entry.label === item.roomId);
+      const room = rooms.find(entry => entry.label === item.roomId);
       if (!room) continue;
       const outcome = item.result?.exteriorNoise;
       // As in the Nachweis: the requirement without, and the provided value less, the prognosis allowance.
@@ -282,16 +306,19 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
         reason: item.status === "unsupported" ? item.result?.limitations[0] ?? null : null };
     }
   }
-  const entities: Array<[ProofSuggestion["entityType"], string, string]> = [["building", storey.buildingId, ""], ["storey", storey.id, storey.name],
-    ...assembled.rooms.map(room => ["room", room.id, room.label] as [ProofSuggestion["entityType"], string, string]),
-    ...exterior.map(wall => ["element", wall.id, wall.name] as [ProofSuggestion["entityType"], string, string]),
-    ...openingRows.map(row => ["element", row.id, row.name] as [ProofSuggestion["entityType"], string, string])];
+  type Entity = [ProofSuggestion["entityType"], string, string];
+  const prefix = (plan: (typeof plans)[number] | undefined) => plans.length > 1 && plan ? `${plan.storey.name} · ` : "";
+  const entities: Entity[] = [["building", buildingId, ""], ...plans.map(plan => ["storey", plan.storey.id, plan.storey.name] as Entity),
+    ...rooms.map(room => ["room", room.id, room.label] as Entity),
+    ...plans.flatMap(plan => plan.page.walls.filter(wall => wall.exterior).map(wall => ["element", wall.id, `${prefix(plan)}${wall.name}`] as Entity)),
+    ...openingRows.map(row => ["element", row.id, `${prefix(plans.find(plan => plan.rooms.some(room => room.id === row.roomId)))}${row.name}`] as Entity)];
   const suggestions = await suggestionsOf(d, values, entities);
   return {
-    available: true, modelRevision: modelRow.model.revision, buildingId: storey.buildingId,
-    page: { fileName: page.fileName, page: page.page }, storey: { id: storey.id, name: storey.name, levelIndex: storey.levelIndex },
-    applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
-    rooms: assembled.rooms, suggestions, calculation, levels,
+    available: true, modelRevision: modelRow.model.revision, buildingId,
+    storeys: plans.map(({ page, storey }) => ({ id: storey.id, name: storey.name, levelIndex: storey.levelIndex,
+      page: { sourceVersionId: page.sourceVersionId, fileName: page.fileName, page: page.page }, clearHeight: value<number>(storey.id, "clearRoomHeight") })),
+    applicability: value(buildingId, "exteriorNoiseApplicability"), flanking: value(buildingId, "exteriorNoiseFlanking"),
+    rooms, suggestions, calculation, levels,
   };
 }
 

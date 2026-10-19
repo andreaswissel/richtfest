@@ -11,7 +11,7 @@ import { Input } from "../ui/input";
 import { NativeSelect, NativeSelectOption } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Table } from "../ui/primitives";
 import { optionLabel } from "../building-model/component-properties";
-import { errorText, Suggestions, useSaveProperty } from "./proof-inputs";
+import { errorText, StoreyHeight, Suggestions, useSaveProperty } from "./proof-inputs";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
@@ -139,25 +139,6 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
 function StoreyHeights({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
   return <div className="proof-building">{proof.storeys.map(storey => <StoreyHeight key={storey.id} projectId={projectId} proof={proof} storey={storey} canWrite={canWrite} t={t} />)}</div>;
 }
-function StoreyHeight({ projectId, proof, storey, canWrite, t }: { projectId: string; proof: Proof; storey: Proof["storeys"][number]; canWrite: boolean; t: T }) {
-  const save = useSaveProperty(projectId, proof);
-  const initial = storey.clearHeight ? String(storey.clearHeight.value) : "";
-  const [height, setHeight] = useState(initial);
-  useEffect(() => setHeight(initial), [initial]);
-  const value = parseNumber(height);
-  const submit = (event: FormEvent) => { event.preventDefault();
-    if (value !== null && height !== initial) save.mutate({ entityType: "storey", entityId: storey.id, propertyKey: "clearRoomHeight", value, unit: "m" }); };
-  return <form onSubmit={submit}>
-    <Field label={t("proofClearHeight").replace("{storey}", storey.name)}>
-      <span className="proof-inline">
-        <Input value={height} inputMode="decimal" disabled={!canWrite} onChange={(event) => setHeight(event.target.value)} aria-invalid={Boolean(height.trim()) && value === null} />
-        {canWrite && <Button type="submit" size="sm" variant="outline" disabled={value === null || height === initial || save.isPending}>{t("noiseSave")}</Button>}
-      </span>
-    </Field>
-    {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
-  </form>;
-}
-
 /** What a ceiling separates and its floating screed; saved together, so one Save enters the ceiling. */
 function CeilingInputs({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorCeilingCheck; canWrite: boolean; t: T }) {
   const save = useSaveProperty(projectId, proof);

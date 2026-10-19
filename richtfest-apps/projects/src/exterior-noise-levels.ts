@@ -2,13 +2,14 @@ import { Router, type Request } from "express";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
-  compassOf, ok, placementForPage, planToSite, roadSurfaceTypeSchema, toUtm, utmZone,
+  alignPlanOutline, compassOf, ok, placementForPage, planToSite, shiftedPlacement, roadSurfaceTypeSchema, toUtm, utmZone,
   type FacadeLevel, type FacadeLevelLimitation, type FacadeLevelSource, type FacadeNoiseLevels, type LocationContext, type NoiseSource,
-  type Point2, type RatingLevelContribution, type RoadClass, type RoadNoiseReceiver, type RoadNoiseSource,
+  type PlanPlacement, type Point2, type RatingLevelContribution, type SitePlan, type SitePlanPage, type RoadClass, type RoadNoiseReceiver, type RoadNoiseSource,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { modelForProject, readSitePlan } from "./building-model-router";
 import { readNoiseSources } from "./noise-sources";
+import { currentValues } from "./exterior-noise-proof";
 import { buildingStoreys, projectLocations as locations } from "./schema";
 
 /**
@@ -81,6 +82,40 @@ function roadSource(source: NoiseSource, zone: 32 | 33): { input: RoadNoiseSourc
   };
 }
 
+/** Pages within this median distance of the placed page's walls count as the same building, stacked. */
+const ALIGNMENT_FIT_M = 0.3;
+
+/**
+ * The placed page and every other plan page with exterior walls aligned to it by
+ * its outline, each with its site placement. Pages that do not fit (another
+ * building, a section, a site plan) are left out.
+ */
+export function facadePages(sitePlan: SitePlan, crs: string): { pages: FacadePage[]; unaligned: SitePlanPage[] } {
+  const placed = sitePlan.pages.find(candidate => placementForPage(sitePlan.placement, candidate, crs));
+  const placement = placed && placementForPage(sitePlan.placement, placed, crs);
+  if (!placed || !placement) return { pages: [], unaligned: [] };
+  const exteriorRings = (page: SitePlanPage) => page.walls.filter(wall => wall.exterior).map(wall => wall.ring);
+  const reference = exteriorRings(placed);
+  const pages: FacadePage[] = [{ page: placed, placement, basis: "placed", fitM: null }];
+  const unaligned: SitePlanPage[] = [];
+  for (const page of sitePlan.pages) {
+    // One page per storey: the first (fullest) page of a storey wins.
+    if (page === placed || !page.storey || pages.some(entry => entry.page.storey?.id === page.storey!.id)) continue;
+    const aligned = alignPlanOutline(reference, exteriorRings(page));
+    if (aligned && aligned.fitM <= ALIGNMENT_FIT_M) pages.push({ page, placement: shiftedPlacement(placement, aligned.offset), basis: "outline", fitM: Math.round(aligned.fitM * 100) / 100 });
+    else if (page.walls.some(wall => wall.exterior)) unaligned.push(page);
+  }
+  return { pages, unaligned };
+}
+/** Each storey's level: its current `level` property (not rejected), else the level set when it was created. */
+export async function storeyLevels(d: AppDeps, modelId: string, storeys: Array<{ id: string; levelIndex: number | null }>) {
+  const values = await currentValues(d, modelId, storeys.map(storey => storey.id), ["level"]);
+  return new Map(storeys.map(storey => { const level = values.get(`${storey.id}:level`)?.value;
+    return [storey.id, typeof level === "number" && Number.isInteger(level) ? level : storey.levelIndex] as const; }));
+}
+
+type FacadePage = { page: SitePlanPage; placement: PlanPlacement; basis: "placed" | "outline"; fitM: number | null };
+
 export async function readFacadeNoiseLevels(d: AppDeps, projectId: string): Promise<FacadeNoiseLevels> {
   const host = d.exteriorNoise;
   if (!host) return { available: false, reason: "norm_pack_missing" };
@@ -89,25 +124,35 @@ export async function readFacadeNoiseLevels(d: AppDeps, projectId: string): Prom
   if (!context) return { available: false, reason: "location_missing" };
   const crs = context.crs ?? "EPSG:25833";
   const sitePlan = await readSitePlan(d, projectId);
-  const page = sitePlan.pages.find(candidate => placementForPage(sitePlan.placement, candidate, crs));
-  const placement = page && placementForPage(sitePlan.placement, page, crs);
-  if (!page || !placement || !sitePlan.placement) return { available: false, reason: "placement_missing" };
-  const exterior = page.walls.filter(wall => wall.exterior);
-  if (!exterior.length) return { available: false, reason: "exterior_walls_missing" };
+  const { pages, unaligned } = facadePages(sitePlan, crs);
+  const page = pages[0]?.page;
+  if (!page || !sitePlan.placement) return { available: false, reason: "placement_missing" };
+  if (!page.walls.some(wall => wall.exterior)) return { available: false, reason: "exterior_walls_missing" };
   const model = await modelForProject(d, projectId);
   const storeyRows = model ? await d.db.select({ id: buildingStoreys.id, name: buildingStoreys.name, levelIndex: buildingStoreys.levelIndex }).from(buildingStoreys)
     .where(and(eq(buildingStoreys.modelId, model.model.id), eq(buildingStoreys.tenantId, d.tenantId))) : [];
-  // Storeys above ground; a model without storey levels is treated as one ground floor.
-  const aboveGround = (storeyRows as Array<{ id: string; name: string; levelIndex: number | null }>).filter(row => row.levelIndex !== null && row.levelIndex >= 0)
-    .sort((a, b) => a.levelIndex! - b.levelIndex!);
-  const storeys = aboveGround.length ? aboveGround.map(row => ({ id: row.id, name: row.name, levelIndex: row.levelIndex! })) : [{ id: null, name: "", levelIndex: 0 }];
+  // Storeys above ground by their level (the reviewed or read level, else the one set at creation); a model without levels is one ground floor.
+  const levelOf = model ? await storeyLevels(d, model.model.id, storeyRows as Array<{ id: string; levelIndex: number | null }>) : new Map<string, number | null>();
+  const aboveGround = (storeyRows as Array<{ id: string; name: string }>).map(row => ({ ...row, levelIndex: levelOf.get(row.id) ?? null }))
+    .filter(row => row.levelIndex !== null && row.levelIndex >= 0).sort((a, b) => a.levelIndex! - b.levelIndex!);
+  const storeys = aboveGround.length ? aboveGround.map(row => ({ id: row.id as string | null, name: row.name, levelIndex: row.levelIndex! })) : [{ id: null, name: "", levelIndex: 0 }];
 
-  const walls = exterior.map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring.map(point => planToSite(point, placement)) }));
-  const faces = facadeReceivers(walls);
-  const receivers: Array<RoadNoiseReceiver & { face: FacadeReceiver; storey: (typeof storeys)[number] }> = storeys.flatMap(storey => faces.map(face => ({
-    id: `${face.wallId}:${storey.levelIndex}`, face, storey, normal: face.normal,
-    position: [face.point[0], face.point[1], (storey.levelIndex + 1) * STOREY_HEIGHT_M] as [number, number, number],
-  })));
+  // Each storey takes the exterior walls of its own plan page; a storey without one repeats the placed page's.
+  const facesOf = new Map<SitePlanPage, FacadeReceiver[]>();
+  const faces = (entry: (typeof pages)[number]) => {
+    if (!facesOf.has(entry.page)) facesOf.set(entry.page, facadeReceivers(entry.page.walls.filter(wall => wall.exterior)
+      .map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring.map(point => planToSite(point, entry.placement)) }))));
+    return facesOf.get(entry.page)!;
+  };
+  let storeyPlanMissing = false;
+  const receivers: Array<RoadNoiseReceiver & { face: FacadeReceiver; storey: (typeof storeys)[number] }> = storeys.flatMap(storey => {
+    const own = pages.find(entry => storey.id && entry.page.storey?.id === storey.id);
+    if (!own && storey.id && pages[0]!.page.storey?.id !== storey.id) storeyPlanMissing = true;
+    return faces(own ?? pages[0]!).map(face => ({
+      id: `${face.wallId}:${storey.levelIndex}`, face, storey, normal: face.normal,
+      position: [face.point[0], face.point[1], (storey.levelIndex + 1) * STOREY_HEIGHT_M] as [number, number, number],
+    }));
+  });
 
   const zone = utmZone(context.crs);
   const noiseSources = await readNoiseSources(d, projectId);
@@ -165,11 +210,17 @@ export async function readFacadeNoiseLevels(d: AppDeps, projectId: string): Prom
   const limitations: FacadeLevelLimitation[] = ["free_propagation", "flat_ground", "no_reflections", "no_junction_correction", "storey_height_assumed"];
   if (rail.length) limitations.push("rail_imported_all_facades");
   if (turnedAway) limitations.push("turned_away_reduction");
+  if (pages.some(entry => entry.basis === "outline")) limitations.push("storeys_aligned_by_outline");
+  if (storeyPlanMissing) limitations.push("storey_plan_missing");
+  if (unaligned.length) limitations.push("storey_plan_not_aligned");
+  if (aboveGround.length && pages.some(entry => entry.page.storey && (levelOf.get(entry.page.storey.id) ?? null) === null)) limitations.push("storey_level_missing");
   return {
     available: true,
     editions: { rls19: host.editions.rls19, din4109: host.editions.din4109, pack: host.packId },
     placement: { alignmentStatus: sitePlan.placement.alignmentStatus, sourceVersionId: page.sourceVersionId, page: page.page, fileName: page.fileName },
-    storeyHeightM: STOREY_HEIGHT_M, sources, facades, limitations,
+    storeyHeightM: STOREY_HEIGHT_M,
+    pages: pages.map(entry => ({ sourceVersionId: entry.page.sourceVersionId, page: entry.page.page, fileName: entry.page.fileName, storey: entry.page.storey, basis: entry.basis, fitM: entry.fitM })),
+    sources, facades, limitations,
   };
 }
 
