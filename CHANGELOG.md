@@ -2,7 +2,7 @@
 
 ## 2026-10-19
 
-- **Storeys in the outliner:** The building model outliner now lists every storey of the plan set, top floor first, with its level and room count. Expand a storey to see its rooms, or open its plan page from its row.
+- **Storeys in the outliner:** The building model outliner now lists every storey of the plan set, top floor first, with its level and room count, or switch it to group by plan page. Expand a storey or page to see its rooms, or open its plan from its row.
 - **Room detection at the plan's scale:** Plan extraction now reads each sheet's scale from its dimension chains (and a printed "M 1:100" when they agree), shown in Plan context where you can correct it. Rooms are bounded only by walls and doors: furniture, door swings and fittings belong to the room, kept existing walls separate rooms, and a living room, dining area, kitchen or hall that share one open space become one room ("Wohnen / Diele") with both labels and printed areas. On a real plan, rooms within 10 % of their printed area went from none to 55 of 59. Existing plans are re-extracted automatically.
 - **Merge rooms:** In the building model, select a room candidate and merge it with a neighbouring one when the plan trace split one room; the wall or doorway between them becomes floor and the printed areas add up. **Split rooms** undoes it.
 - **Landing page paused:** The public landing page is offline until its relaunch. `richtfest.ai` and the other marketing domains now forward to the app sign-in at `app.richtfest.ai`.
