@@ -1,0 +1,359 @@
+import { Router, type Request } from "express";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { z } from "zod";
+import {
+  exteriorNoiseCalculationUse, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, proposeExteriorNoiseRoom, segmentDistance,
+  type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
+  type ProofFacade, type ProofGap, type ProofRoom, type ProofValue, type ProofWindow,
+} from "@richtfest/shared";
+import type { AppDeps } from "./deps";
+import { appendPropertyVersion, modelForProject, modelTransaction, readSitePlan, touchRevision } from "./building-model-router";
+import { readFacadeNoiseLevels } from "./exterior-noise-levels";
+import {
+  buildingElements, buildingProperties, buildingPropertyVersions, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys,
+} from "./schema";
+
+/**
+ * Exterior noise verification inputs from the building model: the protected
+ * rooms of the placed plan, their exterior facades with La from the facade
+ * levels, and the facade elements a person enters (wall Rw, windows and doors).
+ * Rooms with every input form the exterior_noise_batch calculation input.
+ */
+
+// ---- Geometry (plan metres) -------------------------------------------------
+
+export const polygonArea = (ring: Point2[]) => Math.abs(ring.reduce((sum, a, i) => {
+  const b = ring[(i + 1) % ring.length]!;
+  return sum + a[0] * b[1] - b[0] * a[1];
+}, 0)) / 2;
+
+const inside = (p: Point2, ring: Point2[]) => {
+  let result = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!, [xj, yj] = ring[j]!;
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) result = !result;
+  }
+  return result;
+};
+const distanceToRing = (p: Point2, ring: Point2[]) => inside(p, ring) ? 0
+  : Math.min(...ring.map((a, i) => segmentDistance(p, a, ring[(i + 1) % ring.length]!).distance));
+
+/** How far a room extends along a wall: the overlap of both outlines projected on the wall's long axis. */
+export function overlapAlongWall(room: Point2[], wall: Point2[]): number {
+  let axis: Point2 = [1, 0], longest = 0;
+  wall.forEach((a, i) => { const b = wall[(i + 1) % wall.length]!, length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (length > longest) { longest = length; axis = [(b[0] - a[0]) / length, (b[1] - a[1]) / length]; } });
+  const project = (ring: Point2[]) => { const values = ring.map(p => p[0] * axis[0] + p[1] * axis[1]); return [Math.min(...values), Math.max(...values)] as const; };
+  const [w0, w1] = project(wall), [r0, r1] = project(room);
+  return Math.max(0, Math.min(w1, r1) - Math.max(w0, r0));
+}
+
+/**
+ * Exterior wall length per wall that a room faces. With the model's room/wall
+ * adjacency, the room's extent along each adjacent wall; without it, room edges
+ * whose midpoint lies on or within `toleranceM` of a wall.
+ */
+export function facadeLengths(room: Point2[], walls: Array<{ id: string; ring: Point2[] }>, adjacent: Set<string> | null = null, toleranceM = 0.3): Map<string, number> {
+  const lengths = new Map<string, number>();
+  if (adjacent) {
+    for (const wall of walls) if (adjacent.has(wall.id)) lengths.set(wall.id, overlapAlongWall(room, wall.ring));
+    return lengths;
+  }
+  room.forEach((a, i) => {
+    const b = room[(i + 1) % room.length]!;
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (length < 0.05) return;
+    const mid: Point2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    let best: { id: string; distance: number } | null = null;
+    for (const wall of walls) {
+      const distance = distanceToRing(mid, wall.ring);
+      if (distance <= toleranceM && (!best || distance < best.distance)) best = { id: wall.id, distance };
+    }
+    if (best) lengths.set(best.id, (lengths.get(best.id) ?? 0) + length);
+  });
+  return lengths;
+}
+
+// ---- Assembly (pure) ---------------------------------------------------------
+
+const round2 = (value: number) => Math.round(value * 100) / 100;
+const constructionOf = (value: unknown): ProofFacade["construction"] =>
+  value === "masonry" || value === "concrete" ? "massive" : value === "drywall" || value === "timber" || value === "steel" ? "lightweight" : "unknown";
+
+export type ProofAssemblyInput = {
+  sourceLabel: string;
+  applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
+  rooms: Array<{ id: string; name: string; roomUse: string | null; polygon: Point2[] | null; holes: Point2[][]; adjacentWallIds: Set<string> | null;
+    kind: ProofValue<string> | null; surfacesComplete: ProofValue<boolean> | null }>;
+  walls: Array<{ id: string; name: string; ring: Point2[]; construction: unknown; rw: ProofValue<number> | null; rwBasis: ProofValue<string> | null }>;
+  levels: Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>;
+  openings: Array<{ id: string; name: string; componentType: "window" | "door"; roomId: string; wallId: string | null;
+    area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null }>;
+};
+type BatchInput = Extract<AcousticCalculationInput, { method: "exterior_noise_batch" }>;
+type RoomInput = BatchInput["rooms"][number];
+
+const reviewed = (value: { reviewStatus: string } | null) => value?.reviewStatus === "approved" ? "approved" : "not reviewed";
+
+export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: ProofRoom[]; batch: BatchInput | null } {
+  const assumption = (reason: string) => ({ kind: "assumption" as const, reason: reason.slice(0, 1000) });
+  const labels = new Map<string, number>();
+  const rooms: ProofRoom[] = [];
+  const packets: RoomInput[] = [];
+  const inventory: BatchInput["inventory"] = [];
+  for (const room of input.rooms) {
+    const count = (labels.get(room.name) ?? 0) + 1; labels.set(room.name, count);
+    const label = count > 1 ? `${room.name} (${count})` : room.name;
+    const kind = room.kind && (exteriorNoiseRoomKinds as readonly string[]).includes(room.kind.value) ? room.kind.value as ExteriorNoiseRoomKind : null;
+    const floorAreaM2 = room.polygon && room.polygon.length >= 3
+      ? round2(Math.max(0, polygonArea(room.polygon) - room.holes.reduce((sum, hole) => sum + polygonArea(hole), 0))) : null;
+    const lengths = room.polygon ? facadeLengths(room.polygon, input.walls, room.adjacentWallIds) : new Map<string, number>();
+    const height = input.clearHeight?.value ?? null;
+    const facades: ProofFacade[] = input.walls.filter(wall => (lengths.get(wall.id) ?? 0) >= 0.1).map(wall => {
+      const lengthM = round2(lengths.get(wall.id)!);
+      const areaM2 = height === null ? null : round2(lengthM * height);
+      const windows: ProofWindow[] = input.openings.filter(opening => opening.roomId === room.id && opening.wallId === wall.id)
+        .map(({ id, name, componentType, area, rw, basis }) => ({ id, name, componentType, area, rw, basis }));
+      const openingArea = windows.reduce((sum, item) => sum + (item.area?.value ?? 0), 0);
+      const level = input.levels.get(wall.id);
+      return { wallId: wall.id, wallName: wall.name, compass: level?.compass ?? null, lengthM, areaM2,
+        la: level ? { dayDb: level.dayDb, sleepingDb: level.sleepingDb, basis: level.basis } : null,
+        construction: constructionOf(wall.construction), rw: wall.rw, rwBasis: wall.rwBasis, windows,
+        opaqueAreaM2: areaM2 === null ? null : round2(areaM2 - openingArea) };
+    });
+    const gaps = new Set<ProofGap>();
+    if (!kind) gaps.add("room_kind");
+    const protectedRoom = kind !== null && kind !== "not_protected";
+    if (protectedRoom) {
+      if (floorAreaM2 === null || floorAreaM2 <= 0) gaps.add("floor_area");
+      if (!facades.length) gaps.add("no_facade");
+      if (height === null) gaps.add("clear_height");
+      for (const facade of facades) {
+        if (!facade.la) gaps.add("facade_level");
+        if (!facade.rw) gaps.add("wall_rw");
+        if (facade.construction === "unknown") gaps.add("wall_construction");
+        for (const item of facade.windows) { if (!item.area) gaps.add("window_area"); if (!item.rw) gaps.add("window_rw"); }
+        if (facade.opaqueAreaM2 !== null && facade.opaqueAreaM2 < 0) gaps.add("openings_exceed_facade");
+      }
+      if (room.surfacesComplete?.value !== true) gaps.add("surfaces_unconfirmed");
+      if (input.applicability?.value !== "standard_exterior_noise") gaps.add("applicability");
+      if (input.flanking?.value !== "negligible") gaps.add("flanking");
+      inventory.push({ roomId: label, provenance: assumption(`Room "${room.name}" of the Richtfest building model (${input.sourceLabel}).`) });
+    }
+    rooms.push({ id: room.id, name: room.name, label, roomUse: room.roomUse, kind: room.kind, proposedKind: proposeExteriorNoiseRoom(room.name, room.roomUse),
+      floorAreaM2, surfacesComplete: room.surfacesComplete, facades, gaps: [...gaps], result: null });
+    if (!protectedRoom || gaps.size) continue;
+    const period = exteriorNoiseLaPeriod(kind!);
+    const facadeLabel = (facade: ProofFacade) => `${facade.compass ? `${facade.compass} · ` : ""}${facade.wallName}`;
+    packets.push({
+      standard: "DIN 4109-1/-2:2018-01",
+      room: { id: label, use: exteriorNoiseCalculationUse(kind!), floorAreaM2: floorAreaM2!,
+        provenance: assumption(`Floor area of the room polygon on ${input.sourceLabel}; room use "${kind}" ${reviewed(room.kind)}.`) },
+      applicability: { assessment: "standard_exterior_noise", basis: "Standard exterior noise method confirmed in Richtfest.",
+        provenance: assumption(`Applicability ${reviewed(input.applicability)} in the Richtfest building model.`) },
+      envelopeComplete: true,
+      facades: facades.map(facade => ({
+        id: facadeLabel(facade), areaM2: facade.areaM2!,
+        provenance: assumption(`Facade length ${facade.lengthM} m from the room polygon on ${input.sourceLabel} × clear room height ${height} m (${reviewed(input.clearHeight)}).`),
+        noise: { metric: "La" as const, levelDb: period === "sleeping" ? facade.la!.sleepingDb : facade.la!.dayDb,
+          basis: `${period === "sleeping" ? "Sleeping-room" : "Day"} La of this facade from the Richtfest facade levels (${facade.la!.basis === "turned_away" ? "turned-away facade" : "calculated"}).`,
+          provenance: assumption("Calculated facade level: RLS-19 road rating levels and DIN 4109-2 La; draft, see the facade levels for inputs and limitations.") },
+      })),
+      elementsComplete: true,
+      flanking: { assessment: "negligible", provenance: assumption(`Flanking assessment ${reviewed(input.flanking)} in the Richtfest building model.`) },
+      elements: facades.flatMap(facade => [
+        ...(facade.opaqueAreaM2! > 0 ? [{ kind: "area" as const, id: `${facadeLabel(facade)} · wall`, facadeId: facadeLabel(facade), areaM2: facade.opaqueAreaM2!,
+          rwDb: facade.rw!.value, construction: facade.construction, ratingBasis: "installed_configuration" as const,
+          configuration: facade.rwBasis?.value ?? "Rw of the wall as entered in the building model.",
+          provenance: assumption(`Wall Rw ${reviewed(facade.rw)}; area is the facade area less its openings.`) }] : []),
+        ...facade.windows.map(item => ({ kind: "area" as const, id: `${facadeLabel(facade)} · ${item.name}`, facadeId: facadeLabel(facade), areaM2: item.area!.value,
+          rwDb: item.rw!.value, construction: "window_or_door" as const, ratingBasis: "installed_configuration" as const,
+          configuration: item.basis?.value ?? "Rw of the installed window or door as entered in the building model.",
+          provenance: assumption(`${item.componentType === "door" ? "Door" : "Window"} area and Rw ${reviewed(item.rw)} in the Richtfest building model.`) })),
+      ]),
+    });
+  }
+  return { rooms, batch: inventory.length ? { method: "exterior_noise_batch", scope: `Exterior noise, ${input.sourceLabel}`, inventory, rooms: packets } : null };
+}
+
+// ---- Reading -----------------------------------------------------------------
+
+const proofKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
+  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "componentType"];
+
+async function currentValues(d: AppDeps, modelId: string, entityIds: string[]) {
+  const values = new Map<string, ProofValue<any>>();
+  if (!entityIds.length) return values;
+  const properties = await d.db.select({ id: buildingProperties.id, entityId: buildingProperties.entityId, key: buildingProperties.propertyKey }).from(buildingProperties)
+    .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, entityIds), inArray(buildingProperties.propertyKey, proofKeys)));
+  if (!properties.length) return values;
+  const versions = await d.db.select().from(buildingPropertyVersions)
+    .where(and(eq(buildingPropertyVersions.tenantId, d.tenantId), inArray(buildingPropertyVersions.propertyId, (properties as any[]).map(row => row.id))))
+    .orderBy(desc(buildingPropertyVersions.version));
+  const byProperty = new Map((properties as any[]).map(row => [row.id, row]));
+  for (const version of versions as any[]) {
+    const property = byProperty.get(version.propertyId);
+    const key = `${property.entityId}:${property.key}`;
+    // The latest version that is not rejected; a rejected latest falls back to the one before.
+    if (values.has(key) || version.reviewStatus === "rejected" || version.value === null) continue;
+    values.set(key, { value: version.value, reviewStatus: version.reviewStatus, provenance: version.provenance, propertyId: property.id, version: version.version });
+  }
+  return values;
+}
+
+export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Promise<ExteriorNoiseProof> {
+  const levels = await readFacadeNoiseLevels(d, projectId);
+  if (!levels.available) return levels;
+  const modelRow = await modelForProject(d, projectId);
+  if (!modelRow) return { available: false, reason: "model_missing" };
+  const modelId = modelRow.model.id;
+  const sitePlan = await readSitePlan(d, projectId);
+  const page = sitePlan.pages.find(item => item.sourceVersionId === levels.placement.sourceVersionId && item.page === levels.placement.page);
+  if (!page) return { available: false, reason: "placement_missing" };
+  const toMetres = (point: { x: unknown; y: unknown }): Point2 => [Number(point.x) * page.scale.pageAspectRatio * page.scale.metresPerPageHeight, Number(point.y) * page.scale.metresPerPageHeight];
+
+  const roomRows = (await d.db.select().from(buildingRooms).where(and(eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))) as any[])
+    .filter(room => room.geometry?.source?.sourceVersionId === page.sourceVersionId && room.geometry?.source?.page === page.page && room.constructionState !== "demolished");
+  const storeyId = page.storey?.id ?? roomRows[0]?.storeyId ?? null;
+  const [storey] = storeyId ? await d.db.select().from(buildingStoreys).where(and(eq(buildingStoreys.id, storeyId), eq(buildingStoreys.tenantId, d.tenantId))).limit(1) : [];
+  if (!storey) return { available: false, reason: "model_missing" };
+  const exterior = page.walls.filter(wall => wall.exterior);
+  const roomIds = roomRows.map(room => room.id);
+  const openingRows = roomIds.length ? await d.db.select().from(buildingElements)
+    .where(and(eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId), inArray(buildingElements.roomId, roomIds), inArray(buildingElements.kind, ["window", "door"]))) as any[] : [];
+  const hosts = openingRows.length ? await d.db.select({ from: buildingRelationships.fromEntityId, to: buildingRelationships.toEntityId }).from(buildingRelationships)
+    .where(and(eq(buildingRelationships.modelId, modelId), eq(buildingRelationships.tenantId, d.tenantId), eq(buildingRelationships.relationshipType, "opening_in"),
+      inArray(buildingRelationships.fromEntityId, openingRows.map(row => row.id)))) as any[] : [];
+  const hostOf = new Map(hosts.map(row => [row.from, row.to]));
+  // Derived room/wall adjacency (wall separates room); rooms without any use the geometric fallback.
+  const separates = roomIds.length ? await d.db.select({ wallId: buildingRelationships.fromEntityId, roomId: buildingRelationships.toEntityId }).from(buildingRelationships)
+    .where(and(eq(buildingRelationships.modelId, modelId), eq(buildingRelationships.tenantId, d.tenantId), eq(buildingRelationships.relationshipType, "separates"),
+      inArray(buildingRelationships.toEntityId, roomIds))) as any[] : [];
+  const adjacentOf = new Map<string, Set<string>>();
+  for (const row of separates) adjacentOf.set(row.roomId, (adjacentOf.get(row.roomId) ?? new Set()).add(row.wallId));
+  const values = await currentValues(d, modelId, [storey.buildingId, storey.id, ...roomIds, ...exterior.map(wall => wall.id), ...openingRows.map(row => row.id)]);
+  const value = <T,>(entityId: string, key: string) => (values.get(`${entityId}:${key}`) ?? null) as ProofValue<T> | null;
+
+  const levelOf = new Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>();
+  for (const facade of levels.facades) {
+    const sameStorey = facade.storey.id === storey.id || (facade.storey.id === null && (storey.levelIndex ?? 0) === facade.storey.levelIndex);
+    if (!sameStorey || !facade.level || facade.basis === "none") continue;
+    levelOf.set(facade.wallId, { compass: facade.compass as Compass, dayDb: facade.level.dayDb, sleepingDb: facade.level.sleepingDb, basis: facade.basis });
+  }
+  const sourceLabel = `${page.fileName ?? "plan"}, p. ${page.page}`;
+  const assembled = assembleExteriorNoiseProof({
+    sourceLabel,
+    applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
+    rooms: roomRows.map(room => ({ id: room.id, name: room.name, roomUse: room.roomUse,
+      polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
+      adjacentWallIds: adjacentOf.get(room.id) ?? null,
+      holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],
+      kind: value(room.id, "exteriorNoiseRoom"), surfacesComplete: value(room.id, "exteriorSurfacesComplete") })),
+    walls: exterior.map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring, construction: value(wall.id, "construction")?.value ?? null,
+      rw: value(wall.id, "soundReductionIndex"), rwBasis: value(wall.id, "soundReductionIndexBasis") })),
+    levels: levelOf,
+    openings: openingRows.map(row => ({ id: row.id, name: row.name, componentType: row.kind === "door" ? "door" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
+      area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis") })),
+  });
+  let calculation: Extract<ExteriorNoiseProof, { available: true }>["calculation"] = null;
+  if (assembled.batch && d.calculateAcoustics) {
+    const result = d.calculateAcoustics(assembled.batch);
+    calculation = { input: assembled.batch, result };
+    for (const item of result.batch?.rooms ?? []) {
+      const room = assembled.rooms.find(entry => entry.label === item.roomId);
+      if (!room) continue;
+      const outcome = item.result?.exteriorNoise;
+      room.result = { status: item.status, targetDb: outcome?.targetRwDb ?? null, valueDb: item.result?.value ?? null, marginDb: outcome?.marginDb ?? null,
+        reason: item.status === "unsupported" ? item.result?.limitations[0] ?? null : null };
+    }
+  }
+  return {
+    available: true, modelRevision: modelRow.model.revision, buildingId: storey.buildingId,
+    page: { fileName: page.fileName, page: page.page }, storey: { id: storey.id, name: storey.name, levelIndex: storey.levelIndex },
+    applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
+    rooms: assembled.rooms, calculation,
+  };
+}
+
+// ---- Openings ------------------------------------------------------------------
+
+const openingInput = z.object({
+  baseRevision: z.number().int().nonnegative(),
+  roomId: z.string().uuid(), wallId: z.string().uuid(),
+  componentType: z.enum(["window", "door"]),
+  name: z.string().trim().min(1).max(120),
+  area: z.number().positive().max(10000).nullable(),
+  rw: z.number().min(0).max(100).nullable(),
+  basis: z.string().trim().min(1).max(500).nullable(),
+}).strict();
+
+export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDeps) {
+  const router = Router();
+  const conflict = (res: any, revision: number) => res.status(409).json({ data: { currentRevision: revision }, error: { code: "revision_conflict" }, message: "The building model changed; reload before saving." });
+  const notFound = (res: any, message: string) => res.status(404).json({ data: null, error: { code: "not_found" }, message });
+
+  router.get("/projects/:projectId/exterior-noise/proof", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read");
+      res.json(ok(await readExteriorNoiseProof(d, z.string().uuid().parse(req.params.projectId))));
+    } catch (error) { next(error); }
+  });
+
+  // A window or door in an exterior wall of a room, with its area and installed Rw.
+  router.post("/projects/:projectId/exterior-noise/proof/openings", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      const input = openingInput.parse(req.body);
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return notFound(res, "Building model not found");
+      const modelId = modelRow.model.id;
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const [room] = await tx.select().from(buildingRooms).where(and(eq(buildingRooms.id, input.roomId), eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))).limit(1);
+        const [wall] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, input.wallId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId))).limit(1);
+        if (!room || !wall) return { missing: true };
+        const [storey] = await tx.select({ buildingId: buildingStoreys.buildingId }).from(buildingStoreys).where(eq(buildingStoreys.id, room.storeyId)).limit(1);
+        const revision = await touchRevision(tx, d, modelId, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const [element] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId, buildingId: storey.buildingId, storeyId: room.storeyId, roomId: room.id,
+          stableKey: `opening:${crypto.randomUUID()}`, kind: input.componentType, name: input.name, constructionState: "proposed", createdBy: d.actorId }).returning();
+        await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
+          relationshipType: "opening_in", metadata: { method: "manual" }, reviewStatus: "approved", createdBy: d.actorId });
+        const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], ["openingArea", input.area, "m²"], ["soundReductionIndex", input.rw, "dB"], ["soundReductionIndexBasis", input.basis, null]];
+        for (const [propertyKey, value, unit] of entries) if (value !== null)
+          await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey, value, unit, provenance: "manual", evidence: [] });
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.element.created", "element", element.id, { projectId, roomId: room.id, wallId: wall.id, kind: input.componentType, modelRevision: revision });
+        return { element, revision };
+      });
+      if (result.missing) return notFound(res, "Room or wall not found");
+      if (result.conflict !== undefined) return conflict(res, result.conflict);
+      res.status(201).json(ok(result));
+    } catch (error) { next(error); }
+  });
+
+  router.delete("/projects/:projectId/exterior-noise/proof/openings/:elementId", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write");
+      const projectId = z.string().uuid().parse(req.params.projectId);
+      const elementId = z.string().uuid().parse(req.params.elementId);
+      const baseRevision = z.coerce.number().int().nonnegative().parse(req.query.baseRevision);
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return notFound(res, "Building model not found");
+      const modelId = modelRow.model.id;
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const [element] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, elementId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId),
+          inArray(buildingElements.kind, ["window", "door"]))).limit(1);
+        if (!element) return { missing: true };
+        const revision = await touchRevision(tx, d, modelId, baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelId), or(eq(buildingRelationships.fromEntityId, elementId), eq(buildingRelationships.toEntityId, elementId))));
+        await tx.delete(buildingProperties).where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.entityType, "element"), eq(buildingProperties.entityId, elementId)));
+        await tx.delete(buildingElements).where(eq(buildingElements.id, elementId));
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.element.deleted", "element", elementId, { projectId, kind: element.kind, name: element.name, modelRevision: revision });
+        return { revision };
+      });
+      if (result.missing) return notFound(res, "Opening not found");
+      if (result.conflict !== undefined) return conflict(res, result.conflict);
+      res.json(ok(result));
+    } catch (error) { next(error); }
+  });
+  return router;
+}

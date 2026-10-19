@@ -1,5 +1,5 @@
 import type {
-  PermissionKey, DocumentModelInput, DocumentModelResult, ExteriorNoiseLevel, RatingLevelContribution, RoadNoiseReceiver, RoadNoiseSource, RoadRatingLevel,
+  AcousticCalculationInput, AcousticCalculationResult, PermissionKey, DocumentModelInput, DocumentModelResult, ExteriorNoiseLevel, RatingLevelContribution, RoadNoiseReceiver, RoadNoiseSource, RoadRatingLevel,
 } from "@richtfest/shared";
 export type StoredObject = {
   sizeBytes: number;
@@ -68,6 +68,8 @@ export type AppDeps = {
     roadRatingLevels: (sources: RoadNoiseSource[], receivers: RoadNoiseReceiver[]) => RoadRatingLevel[];
     exteriorNoiseLevel: (contributions: RatingLevelContribution[]) => ExteriorNoiseLevel | null;
   } | null;
+  /** The deterministic acoustic calculator (DIN 4109 exterior noise verification), shared with the knowledge app. */
+  calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
 };
 
 /** Receiving email runs without a request actor; the OS verifies the provider webhook and supplies system-scoped audit. */

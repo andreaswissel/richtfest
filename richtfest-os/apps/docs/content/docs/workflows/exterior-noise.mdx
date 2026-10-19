@@ -85,6 +85,17 @@ Select a source to enter its inputs. Each value has a **Basis**, for example "He
 
 Limitations shown under the table: free propagation without screening by other buildings, flat ground, no reflections, no junction corrections, receivers at the ceiling of each storey with an assumed storey height of 3 m. Each makes the level more conservative or needs a check where it does not. The coefficients are configured on the server ([acoustic norm pack](/docs/engineering/deployment#acoustic-norm-pack)); the editions used are named above the tables.
 
+## Exterior noise verification
+
+**Exterior noise verification** turns the facade levels into the inputs of the DIN 4109-1 exterior noise requirement, room by room, and calculates every room whose inputs are complete. It works on the rooms of the placed plan page in the building model.
+
+1. Above the rooms, choose the **Method** (standard exterior noise method or special assessment, for example near airports), whether **Flanking transmission** is negligible, and the storey's **Clear room height**.
+2. Give each room its **Use**: sleeping room, living room, office or practice, hospital bedroom, or not protected (kitchen, bathroom, hall, storage). A proposal from the room name can be taken over with one click. Sleeping rooms use La for sleeping rooms, all others La by day.
+3. **Edit facades** lists the room's exterior walls: the length along each wall comes from the room and wall outlines of the plan, times the clear room height. Enter the wall's **Rw** with its basis, and add each **window or door** with its area and installed Rw (corrections included) and basis. The wall area is the facade less its openings.
+4. Confirm that **all exterior walls, roofs and openings of this room are entered**.
+
+The result shows the resulting R'w,ges, the required value including the area correction K_AL and the 2 dB margin, and the reserve, or what is still missing. Values entered here are ordinary building-model values (unreviewed until a person reviews them in the building model). The table is a draft: roofs, roller shutter boxes and ventilators are not covered yet, and the plan model's rooms and walls may be incomplete; check facade lengths against the plan before confirming a room.
+
 ## Measure facade distances on the site
 
 In **3D location** the scene layers include:

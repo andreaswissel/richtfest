@@ -17,3 +17,14 @@
 .noise-measured-distance .site-distance-row { justify-content: flex-start; padding-block: 0; }
 .noise-sources > * { min-width: 0; }
 .facade-levels-wrap { display: block; min-width: 16rem; max-width: 32rem; white-space: normal; }
+.proof-building { margin-bottom: calc(var(--stack) / 2); display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px var(--stack); align-items: end; max-width: 1040px; }
+.proof-building > .callout { grid-column: 1 / -1; }
+.proof-inline { display: flex; gap: 6px; align-items: center; }
+.proof-kind { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.proof-room { display: grid; gap: var(--stack); padding-top: calc(var(--stack) / 2); border-top: 1px solid var(--border); }
+.proof-facade { display: grid; gap: calc(var(--stack) / 2); }
+.proof-row { display: grid; grid-template-columns: minmax(120px, 10rem) minmax(200px, 1fr) minmax(13rem, auto); align-items: end; gap: 4px var(--stack); max-width: 1040px; }
+.proof-openings { display: grid; gap: calc(var(--stack) / 2); padding-left: var(--stack); }
+.proof-opening-row { display: grid; grid-template-columns: 8rem minmax(120px, 1fr) 7rem 8rem minmax(160px, 1.5fr) auto; align-items: end; gap: 4px var(--stack); max-width: 1040px; }
+.proof-confirm { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 720px) { .proof-row, .proof-opening-row { grid-template-columns: 1fr; } }

@@ -71,7 +71,7 @@ type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
 // including any optimistic revision increment performed earlier in the callback.
 class ModelTransactionRejected { constructor(readonly result: any) {} }
-async function modelTransaction(db: any, work: (tx: any) => Promise<any>) {
+export async function modelTransaction(db: any, work: (tx: any) => Promise<any>) {
   try { return await db.transaction(async (tx: any) => {
     const result = await work(tx);
     if (result && ["conflict", "missing", "missingOrConflict", "reviewConflict", "invalid", "invalidSource"].some(key => Object.hasOwn(result, key)))
@@ -148,7 +148,7 @@ const revisionConflict = (res: any, currentRevision: number) => send(res, 409, {
 });
 
 /** Increment the model revision only when the client read the current value. */
-const touchRevision = async (tx: any, d: AppDeps, modelId: string, baseRevision: number) => {
+export const touchRevision = async (tx: any, d: AppDeps, modelId: string, baseRevision: number) => {
   const rows = await tx.update(buildingModels)
     .set({ revision: sql`${buildingModels.revision} + 1`, updatedAt: new Date() })
     .where(and(eq(buildingModels.id, modelId), eq(buildingModels.tenantId, d.tenantId), eq(buildingModels.revision, baseRevision)))

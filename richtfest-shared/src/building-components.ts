@@ -41,6 +41,10 @@ export const buildingComponentProperties = {
     thickness: { value: z.number().positive().max(500), unit: "cm" },
     bulkDensity: { value: z.number().positive().max(10000), unit: "kg/m³" },
     wallRole: { value: wallRoleSchema, unit: null },
+    // Exterior noise: Rw of the installed component (window corrections included), its basis, and an opening's area.
+    soundReductionIndex: { value: z.number().min(0).max(100), unit: "dB" },
+    soundReductionIndexBasis: { value: z.string().trim().min(1).max(500), unit: null },
+    openingArea: { value: z.number().positive().max(10000), unit: "m²" },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },
@@ -63,6 +67,9 @@ export const buildingComponentProperties = {
     footprintArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
     storeyInventory: { value: z.enum(["complete", "incomplete"]), unit: null },
     gfzCountingBasis: { value: z.enum(["full_storeys_only", "include_other_storeys"]), unit: null },
+    // Exterior noise verification: whether the standard method applies and whether flanking is negligible.
+    exteriorNoiseApplicability: { value: z.enum(["standard_exterior_noise", "special_assessment_required"]), unit: null },
+    exteriorNoiseFlanking: { value: z.enum(["negligible", "required"]), unit: null },
   },
   /** 0 is the ground floor; upper storeys count up, basements down. */
   storey: {
@@ -71,10 +78,15 @@ export const buildingComponentProperties = {
     fullStorey: { value: fullStoreySchema, unit: null },
     grossFloorArea: { value: z.number().positive().max(1_000_000), unit: "m²" },
     countableFloorArea: { value: z.number().nonnegative().max(1_000_000), unit: "m²" },
+    /** Clear room height: with the facade length it gives a room's exterior wall area. */
+    clearRoomHeight: { value: z.number().min(1.5).max(20), unit: "m" },
   },
   room: {
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
     spaceType: { value: spaceTypeSchema, unit: null },
+    exteriorNoiseRoom: { value: z.enum(["sleeping", "living", "office", "hospital_bedroom", "not_protected"]), unit: null },
+    /** A person confirmed that every exterior surface and opening of the room is entered. */
+    exteriorSurfacesComplete: { value: z.boolean(), unit: null },
   },
 } satisfies Record<string, Record<string, PropertySpec>>;
 /** Element kinds created by plan derivation imply a component type until one is entered. */

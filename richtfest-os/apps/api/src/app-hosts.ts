@@ -136,6 +136,7 @@ export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   // Imported reference counts are read whenever present; only their import is switched by TRAFFIC_COUNT_IMPORT_ENABLED.
   trafficCounts: bbox => trafficCountsInBox(db, bbox),
   exteriorNoise: exteriorNoiseHost(),
+  calculateAcoustics,
 });
 const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
   const pack = acousticNormPack();

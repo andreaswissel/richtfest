@@ -6,6 +6,7 @@ export * from "./acoustic-concept";
 export * from "./acoustic-calculation";
 export * from "./acoustic-norm-pack";
 export * from "./exterior-noise-levels";
+export * from "./exterior-noise-proof";
 export * from "./exterior-noise-reference";
 export * from "./agent-analytics";
 export * from "./agent-output";

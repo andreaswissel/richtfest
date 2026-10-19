@@ -97,7 +97,7 @@ export type FacadeNoiseLevels =
   | {
     available: true;
     editions: { rls19: string; din4109: string; pack: string };
-    placement: { alignmentStatus: "unknown" | "approximate" | "reviewed"; page: number; fileName: string | null };
+    placement: { alignmentStatus: "unknown" | "approximate" | "reviewed"; sourceVersionId: string; page: number; fileName: string | null };
     storeyHeightM: number;
     sources: FacadeLevelSource[];
     facades: FacadeLevel[];

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Exterior noise verification:** Exterior noise lists the rooms of the placed plan with their exterior facades and La. Enter room use, clear room height, wall Rw and windows; complete rooms are checked against the DIN 4109-1 requirement right away.
+
 ## 2026-10-19
 
 - **Facade levels:** Exterior noise shows draft road rating levels after RLS-19 and relevant exterior noise levels La per facade and storey after DIN 4109-2, with every assumption and limitation listed. Roads take a surface type and gradient; railways take rating levels from a study. Needs the acoustic norm pack configured on the server.

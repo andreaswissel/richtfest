@@ -168,7 +168,7 @@ export async function readFacadeNoiseLevels(d: AppDeps, projectId: string): Prom
   return {
     available: true,
     editions: { rls19: host.editions.rls19, din4109: host.editions.din4109, pack: host.packId },
-    placement: { alignmentStatus: sitePlan.placement.alignmentStatus, page: page.page, fileName: page.fileName },
+    placement: { alignmentStatus: sitePlan.placement.alignmentStatus, sourceVersionId: page.sourceVersionId, page: page.page, fileName: page.fileName },
     storeyHeightM: STOREY_HEIGHT_M, sources, facades, limitations,
   };
 }
