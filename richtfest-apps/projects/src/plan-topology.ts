@@ -102,6 +102,18 @@ export function fillState(colour: string | undefined, existingLayer: boolean): "
   return null;
 }
 
+export type WallColourState = "proposed" | "retained" | "demolished" | "not_wall";
+export type WallColourLayer = "construction" | "existing";
+/** A person's reading of a plan set's fill colours; it replaces the suggestion for that colour and layer. */
+export type WallColourLegend = Array<{ colour: string; layer: WallColourLayer; state: WallColourState }>;
+
+/** The suggested state of a colour without a legend entry: the DIN 1356-1 colours, else planned
+ * on the construction layer and not a wall on the existing/demolition layer. */
+export function suggestedColourState(colour: string | undefined, layer: WallColourLayer): WallColourState {
+  const state = fillState(colour, layer === "existing");
+  return state ?? (layer === "construction" ? "proposed" : "not_wall");
+}
+
 /** Printed areas remain observations: proximity is not a verified measurement or room use. */
 export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) {
   const ambiguous = new Set<string>();
@@ -129,7 +141,7 @@ export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) 
 
 /** Bounded raster topology with one construction scenario, hard unit ownership,
  * inferred gap closure and printed-area-guided partitions. No door claims. */
-export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1, normalizedPageAreaM2?: number, options: { doorSwings?: PlanDoorSwing[]; metresPerPageHeight?: number | null; barrierLines?: PlanBarrierLine[]; straightSeams?: boolean } = {}) {
+export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint[], words: PlanWord[] = [], resolution = 1200, supplementary: PlanFootprint[] = [], closeRadius = 0, fillRegions: PlanFillRegion[] = [], pageAspectRatio = 1, normalizedPageAreaM2?: number, options: { doorSwings?: PlanDoorSwing[]; metresPerPageHeight?: number | null; barrierLines?: PlanBarrierLine[]; straightSeams?: boolean; colourLegend?: WallColourLegend } = {}) {
   const n = Math.max(64, Math.min(1600, Math.floor(resolution))), size = n * n;
   const horizontalCost = Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : 1;
   const wall = new Uint8Array(size), owner = new Int32Array(size).fill(-1);
@@ -173,15 +185,21 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const a = footprint.geometry.planRegion, b = label.geometry.planRegion;
     return a.x < b.x+b.width && a.x+a.width > b.x && a.y < b.y+b.height && a.y+a.height > b.y;
   });
-  // Construction states by fill colour (DIN 1356-1 conventions): yellow is demolished on any layer;
-  // grey on the existing/demolition layer is existing and retained. Everything else on the
-  // construction layer is the proposed building. Demolished and retained walls are proposed
-  // with their state, so the proposed building's checks leave demolished walls out.
-  type WallSource = { footprint: PlanFootprint; index: number | null; state: "proposed" | "retained" | "demolished" };
-  const sources: WallSource[] = [
-    ...footprints.map((footprint, index) => ({ footprint, index, state: fillState(footprint.fillColor, false) === "demolished" ? "demolished" as const : "proposed" as const })),
-    ...supplementary.flatMap(footprint => { const state = fillState(footprint.fillColor, true); return state ? [{ footprint, index: null, state }] : []; }),
-  ];
+  // Construction states by fill colour: the plan set's colour legend where a person set one,
+  // else the suggested DIN 1356-1 reading. Demolished and retained walls are proposed with their
+  // state, so the proposed building's checks leave demolished walls out; "not a wall" drops a colour.
+  type WallSource = { footprint: PlanFootprint; index: number | null; layer: WallColourLayer; state: "proposed" | "retained" | "demolished"; fromLegend: boolean };
+  const legendEntry = (colour: string | undefined, layer: WallColourLayer) => colour ? options.colourLegend?.find(entry => entry.colour === colour && entry.layer === layer) : undefined;
+  const colourSummary = new Map<string, { colour: string; layer: WallColourLayer; count: number; suggested: WallColourState; state: WallColourState; example: { x: number; y: number; width: number; height: number } }>();
+  const sources: WallSource[] = ([...footprints.map((footprint, index) => ({ footprint, index, layer: "construction" as const })),
+    ...supplementary.map(footprint => ({ footprint, index: null, layer: "existing" as const }))]).flatMap(({ footprint, index, layer }) => {
+    const entry = legendEntry(footprint.fillColor, layer), suggested = suggestedColourState(footprint.fillColor, layer), state = entry?.state ?? suggested;
+    if (footprint.fillColor) {
+      const key = `${layer}:${footprint.fillColor}`, summary = colourSummary.get(key);
+      if (summary) summary.count++; else colourSummary.set(key, { colour: footprint.fillColor, layer, count: 1, suggested, state, example: footprint.geometry.planRegion });
+    }
+    return state === "not_wall" ? [] : [{ footprint, index, layer, state, fromLegend: Boolean(entry) }];
+  });
   const contactsOf = (source: WallSource) => source.index === null ? 0 : adjacency[source.index].size;
   const aspect = Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : 1;
   const wallSources = new Set(sources.filter(source => draftWallEvidence(source.footprint, pageAspectRatio).wallLike && !collidesWithLabel(source.footprint)));
@@ -206,7 +224,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     return accepted;
   });
   for (const entry of runEntries) bandCounts.set(entry.band, (bandCounts.get(entry.band) ?? 0) + 1);
-  const stateEvidence = (source: WallSource) => ({ state: source.state, method: source.state === "proposed" && !source.footprint.fillColor ? "source_layer_role" as const : "source_layer_and_fill_colour" as const,
+  const stateEvidence = (source: WallSource) => ({ state: source.state, method: source.fromLegend ? "plan_colour_legend" as const : source.state === "proposed" && !source.footprint.fillColor ? "source_layer_role" as const : "source_layer_and_fill_colour" as const,
     layerId: source.footprint.layerId, layerName: source.footprint.layerName, ...(source.footprint.fillColor ? { fillColor: source.footprint.fillColor } : {}), status: "unreviewed" as const });
   const walls = [
     ...[...wallSources].map(source => {
@@ -231,10 +249,10 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       classification: wall.classification, limitations: wall.limitations } }));
   // Unsupported construction fills are grouped only through direct contact with
   // each other. A wall-like polygon may not bridge unrelated fragments into a
-  // false assembly. Demolished fills are not part of the proposed building.
+  // false assembly. Demolished fills and colours read as "not a wall" are left out.
   const handled = new Set([...wallSources, ...splitSources].flatMap(source => source.index === null ? [] : [source.index]));
-  const demolishedIndexes = new Set(sources.flatMap(source => source.index !== null && source.state === "demolished" ? [source.index] : []));
-  const fragmentIndexes = footprints.map((_, index) => index).filter(index => !handled.has(index) && !demolishedIndexes.has(index));
+  const plannedIndexes = new Set(sources.flatMap(source => source.index !== null && source.state !== "demolished" ? [source.index] : []));
+  const fragmentIndexes = footprints.map((_, index) => index).filter(index => !handled.has(index) && plannedIndexes.has(index));
   const fragmentParent = new Map(fragmentIndexes.map(index => [index, index]));
   const fragmentRoot = (index: number): number => { let p = fragmentParent.get(index)!; while (p !== fragmentParent.get(p)) p = fragmentParent.get(p)!; return p; };
   for (const index of fragmentIndexes) for (const neighbor of adjacency[index]) if (fragmentParent.has(neighbor))
@@ -591,7 +609,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     }
   }
   return { rooms, assemblies, selectionMask: { gridSize: n, cells: selectionCells }, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
-    retainedWallCount:walls.filter(w=>w.geometry.constructionState==="retained").length,demolishedWallCount:walls.filter(w=>w.geometry.constructionState==="demolished").length,splitFillCount:splitSources.size,highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
+    wallColours:[...colourSummary.values()].sort((a,b)=>b.count-a.count),retainedWallCount:walls.filter(w=>w.geometry.constructionState==="retained").length,demolishedWallCount:walls.filter(w=>w.geometry.constructionState==="demolished").length,splitFillCount:splitSources.size,highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
     areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, straightSeamCount:chordSeamCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
     openingEvidence:openings.slice(0,500).map(({sideProbes:_probes,...opening},o)=>({...opening,sides:openingSides[o].map(side=>typeof side==="number"?`topology-v5:${labels[side].sourceKey}`:side)})),

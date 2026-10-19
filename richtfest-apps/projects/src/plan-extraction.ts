@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { SaxesParser } from "saxes";
 import { extractPlanFootprints } from "./plan-footprints";
-import { inferPlanTopology } from "./plan-topology";
+import { inferPlanTopology, type WallColourLegend } from "./plan-topology";
 import { outlineWallFootprints } from "./plan-outline-walls";
 import { encodeSelectionMask, selectionMaskEncoding } from "./plan-selection";
 
@@ -80,16 +80,16 @@ export type PlanExtraction = Awaited<ReturnType<typeof analysePlanFile>>;
 
 /** Stream the source to a private temp file, then parse it off the main thread:
  * PDF geometry and raster topology are CPU-bound and would stall the API. */
-export async function extractPlanLabels(stream: AsyncIterable<Uint8Array>, page: number, signal: AbortSignal): Promise<PlanExtraction> {
+export async function extractPlanLabels(stream: AsyncIterable<Uint8Array>, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend } = {}): Promise<PlanExtraction> {
   const directory = await mkdtemp(join(tmpdir(), "richtfest-plan-"));
   try {
     const path = join(directory,"source.pdf");
     await pipeline(Readable.from(stream),createWriteStream(path),{ signal });
-    return await inPlanWorker({ path, page }, signal);
+    return await inPlanWorker({ path, page, colourLegend: options.colourLegend ?? [] }, signal);
   } finally { (stream as {destroy?:()=>void}).destroy?.(); await rm(directory,{recursive:true,force:true}); }
 }
 
-function inPlanWorker(input: { path: string; page: number }, signal: AbortSignal) {
+function inPlanWorker(input: { path: string; page: number; colourLegend: WallColourLegend }, signal: AbortSignal) {
   return new Promise<PlanExtraction>((resolve, reject) => {
     signal.throwIfAborted();
     const worker = new Worker(new URL("./plan-extraction-thread.ts", import.meta.url));
@@ -104,7 +104,7 @@ function inPlanWorker(input: { path: string; page: number }, signal: AbortSignal
 }
 
 /** Runs inside the plan-extraction worker thread (see plan-extraction-thread.ts). */
-export async function analysePlanFile(path: string, page: number, signal: AbortSignal) {
+export async function analysePlanFile(path: string, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend } = {}) {
   const directory = dirname(path);
   const command = (file: string, args: string[]) => new Promise<string>((resolve,reject) => execFile(file,args,
     { signal, timeout: 90_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, OMP_THREAD_LIMIT: "1" } },
@@ -135,7 +135,7 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
     // The printed scale is unreviewed: it only bounds plausible opening widths and room sizes, never measures them.
     const pageHeightPoints = footprints && "pageHeightPoints" in footprints ? footprints.pageHeightPoints : null;
     const metresPerPageHeight = scaleObservation && pageHeightPoints ? pageHeightPoints / 72 * .0254 * scaleObservation.denominator : null;
-    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines});
+    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines,colourLegend:options.colourLegend});
     // The barrier raster goes to its own table (magic selection), never into the job result.
     const selectionMask = { gridSize: topology.selectionMask.gridSize, encoding: selectionMaskEncoding, data: encodeSelectionMask(topology.selectionMask.cells) };
     return { labels:topology.rooms, footprints: topology.assemblies, selectionMask, pageScale: { pageAspectRatio, metresPerPageHeight }, geometryExtraction:{...geometryExtraction,...(outline?{outlineWalls:outline.stats}:{})},topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",

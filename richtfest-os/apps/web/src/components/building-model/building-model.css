@@ -356,3 +356,16 @@
 .building-model-outline-editor-edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .building-model-outline-editor-edges line { stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: move; touch-action: none; }
 .building-model-outline-editor-edges line:hover, .building-model-outline-editor-edges line.is-active { stroke: color-mix(in oklch, var(--primary) 45%, transparent); stroke-width: 6px; }
+.building-model-wall-colours { display: grid; gap: 6px; }
+.building-model-wall-colours-heading { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.building-model-wall-colours h3 { font-size: var(--ui-xs); font-weight: 600; }
+.building-model-wall-colour { display: inline-flex; gap: 6px; align-items: center; }
+.building-model-wall-colour-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); flex: none; }
+.building-model-wall-colour-pages { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.building-model-wall-colour-pages button { color: var(--muted-foreground); text-decoration: underline; text-underline-offset: 2px; }
+.building-model-wall-colour-pages button:hover { color: var(--foreground); }
+.building-model-wall-colour > span:last-child { display: grid; line-height: 1.2; }
+.building-model-wall-colour small { color: var(--muted-foreground); font-size: var(--ui-2xs); }
+.building-model-wall-colours td, .building-model-wall-colours th { padding-block: 4px; }
+.building-model-wall-colours select { min-width: 150px; }
+.building-model-wall-colour-suggested { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: var(--ui-2xs); }

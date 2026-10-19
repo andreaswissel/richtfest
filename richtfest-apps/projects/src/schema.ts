@@ -384,6 +384,21 @@ export const buildingSupersededSources = pgTable("projects_building_superseded_s
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, table => ({ source: uniqueIndex("projects_building_superseded_sources_unique").on(table.modelId, table.sourceVersionId) }));
 
+/**
+ * What the fill colours of one plan set mean for its walls (planned, existing and kept,
+ * demolished, not a wall), set by a person. Colour conventions differ between offices;
+ * without an entry the extractor suggests the usual DIN 1356-1 colours.
+ */
+export const buildingColourLegends = pgTable("projects_building_colour_legends", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull(),
+  modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
+  sourceVersionId: uuid("source_version_id").notNull().references(() => fileVersions.id, { onDelete: "cascade" }),
+  entries: jsonb("entries").notNull().default([]),
+  updatedBy: uuid("updated_by").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, table => ({ source: uniqueIndex("projects_building_colour_legends_unique").on(table.modelId, table.sourceVersionId) }));
+
 export const buildingRelationships = pgTable("projects_building_relationships", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),

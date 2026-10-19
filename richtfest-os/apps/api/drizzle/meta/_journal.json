@@ -393,6 +393,13 @@
       "when": 1793500000000,
       "tag": "0055_user_feature_flags",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1793600000000,
+      "tag": "0056_building_colour_legends",
+      "breakpoints": true
     }
   ]
 }

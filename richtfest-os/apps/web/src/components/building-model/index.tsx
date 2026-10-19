@@ -13,7 +13,7 @@ import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { AudioLines, ChevronDown, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
-import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
+import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingWallColour, type BuildingWallColourState, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
@@ -536,6 +536,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
+  const saveColourLegend = useMutation({
+    mutationFn: ({ sourceVersionId, entries }: { sourceVersionId: string; entries: WallColourEntry[] }) =>
+      api<RecordData>(`/projects/${projectId}/building-model/colour-legends/${sourceVersionId}`, { baseRevision: model.revision, entries }, "PUT"),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
+  });
   const reviewCandidate = useMutation({
     mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => api(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
     onSuccess: async () => {
@@ -836,7 +842,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
             {automaticPlanProcessing.length > 0 && <AutomaticPlanCoverage processing={automaticPlanProcessing} sources={model.planSources} storeys={model.storeys} selectedPage={page} selectedSourceVersionId={sourceForEvidence?.source?.versionId} onPage={({ page: nextPage, sourceVersionId: nextVersion, storeyId }) => selectSourcePage(nextPage, nextVersion, storeyId || "")}
               superseded={model.supersededSources} pending={supersedePlanSet.isPending}
               onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
-              onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })} t={t} />}
+              onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })}
+              colourPending={saveColourLegend.isPending} onSaveColours={(sourceVersionId, entries) => saveColourLegend.mutate({ sourceVersionId, entries })} t={t} />}
           </PopoverContent>
         </Popover>
         <Popover open={soundOpen} onOpenChange={setSoundOpen}>
@@ -1067,8 +1074,10 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
   </section>;
 }
 
-export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, superseded = [], onSupersede, onRestore, pending = false, t }: {
+export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, superseded = [], onSupersede, onRestore, pending = false, onSaveColours, colourPending = false, t }: {
   processing: BuildingAutomaticPlanProcessing[];
+  onSaveColours?: (sourceVersionId: string, entries: WallColourEntry[]) => void;
+  colourPending?: boolean;
   superseded?: BuildingSupersededSource[];
   onSupersede?: (sourceVersionId: string, supersededByVersionId: string) => void;
   onRestore?: (sourceVersionId: string) => void;
@@ -1096,6 +1105,9 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
           return <button type="button" key={pageNumber} className={`is-${disposition.replaceAll("_", "-")}`} aria-pressed={selectedSourceVersionId === item.sourceVersionId && selectedPage === pageNumber} title={label} onClick={() => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId, storeyId: pageSource?.storeyId || null })}><span>{pageNumber}</span><small>{label}</small></button>;
         })}</div>
         {item.coverageTruncated && <Callout tone="warning">{t("buildingModelCoverageTruncated")}</Callout>}
+        {onSaveColours && item.colourLegend && item.floorPlanPages.length > 0 && <WallColours key={item.colourLegend.savedAt || "suggested"} item={item} pending={colourPending}
+          onSave={(entries) => onSaveColours(item.sourceVersionId, entries)} onPage={(pageNumber) => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId,
+            storeyId: sources.find((source) => source.source?.versionId === item.sourceVersionId && source.page === pageNumber)?.storeyId || null })} t={t} />}
       </div>;
     })}
     {superseded.length > 0 && <div className="building-model-superseded-sources">
@@ -1107,6 +1119,41 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
       })}
     </div>}
   </section>;
+}
+
+type WallColourEntry = { colour: string; layer: BuildingWallColour["layer"]; state: BuildingWallColourState };
+const wallColourStateLabels: Record<BuildingWallColourState, Parameters<ReturnType<typeof useT>>[0]> = { proposed: "buildingModelWallColourProposed", retained: "buildingModelWallColourRetained",
+  demolished: "buildingModelWallColourDemolished", not_wall: "buildingModelWallColourNotWall" };
+
+/** The planner's reading of the plan set's wall colours; the DIN 1356-1 colours are only the preselection. */
+function WallColours({ item, pending, onSave, onPage, t }: { item: BuildingAutomaticPlanProcessing; pending: boolean;
+  onSave: (entries: WallColourEntry[]) => void; onPage: (page: number) => void; t: ReturnType<typeof useT> }) {
+  const colours = item.colourLegend?.colours ?? [];
+  const keyOf = (colour: BuildingWallColour) => `${colour.layer}:${colour.colour}`;
+  const [states, setStates] = useState<Record<string, BuildingWallColourState>>(() => Object.fromEntries(colours.map((colour) => [keyOf(colour), colour.state ?? colour.suggested])));
+  const changed = !item.colourLegend?.savedAt || colours.some((colour) => states[keyOf(colour)] !== (colour.state ?? colour.suggested));
+  return <div className="building-model-wall-colours">
+    <div className="building-model-wall-colours-heading"><div><h3>{t("buildingModelWallColours")}</h3>
+      <p className="muted text-ui-xs">{colours.length ? t("buildingModelWallColoursHint") : t("buildingModelWallColoursNone")}</p></div>
+      {colours.length > 0 && <Button size="sm" variant="outline" type="button" disabled={pending || !changed}
+        onClick={() => onSave(colours.map((colour) => ({ colour: colour.colour, layer: colour.layer, state: states[keyOf(colour)] ?? colour.suggested })))}>{t("buildingModelSaveWallColours")}</Button>}</div>
+    {colours.length > 0 && <Table>
+      <TableHeader><TableRow><TableHead>{t("buildingModelWallColour")}</TableHead>
+        <TableHead className="text-right">{t("buildingModelWallColourFills")}</TableHead><TableHead>{t("buildingModelWallColourPages")}</TableHead><TableHead>{t("buildingModelWallColourMeaning")}</TableHead></TableRow></TableHeader>
+      <TableBody>{colours.map((colour) => {
+        const key = keyOf(colour), state = states[key] ?? colour.suggested;
+        return <TableRow key={key}>
+          <TableCell><span className="building-model-wall-colour"><span className="building-model-wall-colour-swatch" style={{ background: colour.colour }} aria-hidden="true" />
+            <span><code>{colour.colour}</code><small>{colour.layer === "existing" ? t("buildingModelWallColourLayerExisting") : t("buildingModelWallColourLayerConstruction")}</small></span></span></TableCell>
+          <TableCell className="text-right tabular-nums">{colour.count}</TableCell>
+          <TableCell><span className="building-model-wall-colour-pages">{colour.pages.map((pageNumber) => <button type="button" key={pageNumber} onClick={() => onPage(pageNumber)}>{pageNumber}</button>)}</span></TableCell>
+          <TableCell><NativeSelect aria-label={`${t("buildingModelWallColourMeaning")} ${colour.colour}`} value={state} onChange={(event) => setStates((current) => ({ ...current, [key]: event.target.value as BuildingWallColourState }))}>
+            {(Object.keys(wallColourStateLabels) as BuildingWallColourState[]).map((option) => <option key={option} value={option}>{t(wallColourStateLabels[option])}</option>)}
+          </NativeSelect>{state !== colour.suggested && <small className="building-model-wall-colour-suggested">{t("buildingModelWallColourSuggested")}: {t(wallColourStateLabels[colour.suggested])}</small>}</TableCell>
+        </TableRow>;
+      })}</TableBody>
+    </Table>}
+  </div>;
 }
 
 function SupersedePlanSet({ item, processing, pending, onSupersede, t }: { item: BuildingAutomaticPlanProcessing; processing: BuildingAutomaticPlanProcessing[]; pending: boolean;

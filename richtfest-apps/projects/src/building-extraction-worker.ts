@@ -1,6 +1,6 @@
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { SourceExtractionDeps } from "./deps";
-import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingModels, buildingRevisions, buildingSelectionMasks, buildingSupersededSources, fileVersions } from "./schema";
+import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates, buildingColourLegends, buildingModels, buildingRevisions, buildingSelectionMasks, buildingSupersededSources, fileVersions } from "./schema";
 import { buildingExtractorVersion, extractPlanLabels } from "./plan-extraction";
 export { buildingExtractorVersion };
 
@@ -39,7 +39,10 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
     if (!source?.storageKey) throw new Error("Source unavailable");
     const bounded = AbortSignal.any([signal,AbortSignal.timeout(6*60_000)]);
     const stream = await d.fileStorage.read(source.storageKey,bounded); if (!stream) throw new Error("Source unavailable");
-    const result = await extractPlanLabels(stream,job.page,bounded);
+    // The plan set's colour legend, as a person set it; without one the extractor suggests the DIN colours.
+    const [legend] = await d.db.select({entries:buildingColourLegends.entries}).from(buildingColourLegends)
+      .where(and(eq(buildingColourLegends.modelId,job.modelId),eq(buildingColourLegends.tenantId,job.tenantId),eq(buildingColourLegends.sourceVersionId,job.sourceVersionId))).limit(1);
+    const result = await extractPlanLabels(stream,job.page,bounded,{colourLegend:Array.isArray(legend?.entries)?legend.entries as any:[]});
     const existing = await d.db.select({sourceKey:candidates.sourceKey,status:candidates.status,geometry:candidates.geometry}).from(candidates)
       .where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId)));
     const existingBySource = new Map(existing.map((row:any)=>[row.sourceKey,row]));

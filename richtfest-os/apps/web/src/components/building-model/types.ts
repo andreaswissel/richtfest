@@ -183,8 +183,13 @@ export type BuildingExtractionJob = {
   } | null;
 };
 
+export type BuildingWallColourState = "proposed" | "retained" | "demolished" | "not_wall";
+export type BuildingWallColour = { colour: string; layer: "construction" | "existing"; count: number; pages: number[];
+  suggested: BuildingWallColourState; state: BuildingWallColourState | null; example?: { page: number; region?: unknown } | null };
+
 export type BuildingAutomaticPlanProcessing = {
   fileId?: string;
+  colourLegend?: { colours: BuildingWallColour[]; savedAt: string | null };
   fileName: string;
   sourceVersionId: string;
   status: "reading_source" | "classifying_pages" | "planning" | "queued" | "extracting" | "complete" | "partial" | "unresolved" | "failed" | string;
@@ -576,6 +581,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
         floorPlanPages: Array.isArray(row.floorPlanPages) ? row.floorPlanPages.filter((page): page is number => typeof page === "number") : [],
         nonFloorPlanPages: Array.isArray(row.nonFloorPlanPages) ? row.nonFloorPlanPages.filter((page): page is { page: number; pageType?: string | null; confidence?: number | null } => Boolean(page) && typeof page === "object" && typeof page.page === "number") : [],
         unresolvedPages: Array.isArray(row.unresolvedPages) ? row.unresolvedPages.filter((page): page is number => typeof page === "number") : [],
+        colourLegend: wallColourLegend(row.colourLegend),
       } as BuildingAutomaticPlanProcessing];
     }) : [],
     storeys: Array.isArray(raw.storeys) ? raw.storeys.flatMap((item: unknown) => {
@@ -596,4 +602,21 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     },
     updatedAt: asString(source.updatedAt) || undefined,
   };
+}
+
+const wallColourStates = ["proposed", "retained", "demolished", "not_wall"] as const;
+const isWallColourState = (value: unknown): value is BuildingWallColourState => wallColourStates.includes(value as BuildingWallColourState);
+
+function wallColourLegend(value: unknown): BuildingAutomaticPlanProcessing["colourLegend"] {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as RecordData;
+  const colours = Array.isArray(raw.colours) ? raw.colours.flatMap((item: unknown): BuildingWallColour[] => {
+    const row = item && typeof item === "object" ? item as RecordData : null;
+    if (!row || typeof row.colour !== "string" || (row.layer !== "construction" && row.layer !== "existing") || !isWallColourState(row.suggested)) return [];
+    return [{ colour: row.colour, layer: row.layer, count: typeof row.count === "number" ? row.count : 0,
+      pages: Array.isArray(row.pages) ? row.pages.filter((page): page is number => typeof page === "number") : [],
+      suggested: row.suggested, state: isWallColourState(row.state) ? row.state : null,
+      example: row.example && typeof row.example === "object" ? row.example as BuildingWallColour["example"] : null }];
+  }) : [];
+  return { colours, savedAt: typeof raw.savedAt === "string" ? raw.savedAt : null };
 }

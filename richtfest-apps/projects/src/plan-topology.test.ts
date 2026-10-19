@@ -242,3 +242,15 @@ test("an L-shaped construction fill becomes two draft walls; fill colours give e
   const state=(key:string)=>walls.filter(w=>w.geometry.sourceFootprintKeys[0]===key).map(w=>w.geometry.constructionState);
   expect([state("old"),state("kept"),state("gone"),state("other")]).toEqual([["demolished"],["retained"],["demolished"],[]]);
 });
+test("a plan set's colour legend overrides the suggested colour states, and a colour marked not a wall gives no walls",()=>{
+  const result=inferPlanTopology([],[footprint("old",.5,.1,.01,.2),{...footprint("yellow",.55,.1,.01,.2),fillColor:"#e6e699"}],[],200,
+    [{...footprint("kept",.6,.1,.01,.2),layerName:"Abbruch/Bestand",fillColor:"#949494"},{...footprint("cyan",.7,.1,.01,.2),layerName:"Abbruch/Bestand",fillColor:"#00cdcd"}],
+    0,[],1,undefined,{colourLegend:[{colour:"#e6e699",layer:"construction",state:"proposed"},{colour:"#949494",layer:"existing",state:"not_wall"},{colour:"#00cdcd",layer:"existing",state:"demolished"}]});
+  const walls=result.assemblies.filter(a=>a.geometry.quality==="draft_wall");
+  const state=(key:string)=>walls.filter(w=>w.geometry.sourceFootprintKeys[0]===key).map(w=>w.geometry.constructionState);
+  expect([state("yellow"),state("kept"),state("cyan")]).toEqual([[state("old")[0]],[],["demolished"]]);
+  expect(state("old")).toHaveLength(1);
+  // The summary keeps the suggestion next to the planner's choice, so the legend can be reviewed.
+  expect(result.coverage.wallColours.map(c=>[c.colour,c.layer,c.suggested,c.state])).toEqual(expect.arrayContaining([
+    ["#e6e699","construction","demolished","proposed"],["#949494","existing","retained","not_wall"],["#00cdcd","existing","not_wall","demolished"]]));
+});

@@ -33,6 +33,7 @@ import {
 import {
   buildingAlternatives,
   buildingBuildings,
+  buildingColourLegends,
   buildingConflicts,
   buildingElements,
   buildingMeasurements,
@@ -182,8 +183,27 @@ export async function appendPropertyVersion(tx: any, d: AppDeps, modelId: string
   return { property, version, previous: latest ?? null };
 }
 
+/**
+ * The fill colours a plan set's wall extraction found, with the pages they occur on, the
+ * suggested reading and the reading a person saved. Newest completed run per page.
+ */
+const planColourLegend = (jobs: any[], saved: any | null) => {
+  const latest = new Map<number, any>();
+  for (const job of jobs) if (job.status === "complete" && (!latest.has(job.page) || latest.get(job.page).updatedAt < job.updatedAt)) latest.set(job.page, job);
+  const colours = new Map<string, { colour: string; layer: string; count: number; pages: number[]; suggested: string; example: unknown }>();
+  for (const job of latest.values()) for (const item of Array.isArray(job.result?.topologyCoverage?.wallColours) ? job.result.topologyCoverage.wallColours : []) {
+    const key = `${item.layer}:${item.colour}`, entry = colours.get(key);
+    if (entry) { entry.count += item.count; if (!entry.pages.includes(job.page)) entry.pages.push(job.page); }
+    else colours.set(key, { colour: item.colour, layer: item.layer, count: item.count, pages: [job.page], suggested: item.suggested, example: { page: job.page, region: item.example } });
+  }
+  const entries: Array<{ colour: string; layer: string; state: string }> = Array.isArray(saved?.entries) ? saved.entries : [];
+  return { colours: [...colours.values()].sort((a, b) => b.count - a.count).map(item => ({ ...item, pages: item.pages.sort((a, b) => a - b),
+    state: entries.find(entry => entry.colour === item.colour && entry.layer === item.layer)?.state ?? null })),
+    savedAt: saved?.updatedAt ?? null };
+};
+
 const readModel = async (d: AppDeps, model: any) => {
-  const [allExtractions, allExtractionCandidates, allAutomaticSources, supersededRows] = await Promise.all([
+  const [allExtractions, allExtractionCandidates, allAutomaticSources, colourLegendRows, supersededRows] = await Promise.all([
     d.db.select().from(buildingExtractionJobs).where(and(eq(buildingExtractionJobs.modelId, model.id), eq(buildingExtractionJobs.tenantId, d.tenantId))),
     d.db.select().from(buildingExtractionCandidates).where(and(eq(buildingExtractionCandidates.modelId, model.id), eq(buildingExtractionCandidates.tenantId, d.tenantId))),
     d.db.select({ fileId: files.id, fileName: files.name, sourceVersionId: fileVersions.id,
@@ -198,6 +218,7 @@ const readModel = async (d: AppDeps, model: any) => {
         sql`(${fileVersions.mimeType} = 'application/pdf' or ${files.name} ~* '\\.pdf$')`,
         // Only sources enrolled for automatic processing; others would never progress.
         sql`${sourceModels.metadata}->'automaticBuildingModel' is not null`)),
+    d.db.select().from(buildingColourLegends).where(and(eq(buildingColourLegends.modelId, model.id), eq(buildingColourLegends.tenantId, d.tenantId))),
     d.db.select({ superseded: buildingSupersededSources, fileName: files.name }).from(buildingSupersededSources)
       .innerJoin(fileVersions, and(eq(fileVersions.id, buildingSupersededSources.sourceVersionId), eq(fileVersions.tenantId, d.tenantId)))
       .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId)))
@@ -284,7 +305,8 @@ const readModel = async (d: AppDeps, model: any) => {
       pageCount: metadata?.pageCount ?? source.sourceResult?.pages ?? null,
       registeredPageCount: metadata?.registeredPageCount ?? 0, coverageTruncated: metadata?.coverageTruncated ?? false,
       floorPlanPages: metadata?.floorPlanPages ?? [], nonFloorPlanPages: metadata?.nonFloorPlanPages ?? [],
-      unresolvedPages: metadata?.unresolvedPages ?? [], reason: metadata?.reason ?? null, jobStatuses, errors };
+      unresolvedPages: metadata?.unresolvedPages ?? [], reason: metadata?.reason ?? null, jobStatuses, errors,
+      colourLegend: planColourLegend(extractionJobs, (colourLegendRows as any[]).find(row => row.sourceVersionId === source.sourceVersionId) ?? null) };
   });
   return {
     model,
@@ -1203,6 +1225,34 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         return { restored: sourceVersionId, revision };
       });
       if ((result as any).missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Plan set is not superseded" });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // What a plan set's fill colours mean for its walls. Saving re-extracts the plan set's pages;
+  // walls already accepted keep the state they were given.
+  router.put("/projects/:projectId/building-model/colour-legends/:sourceVersionId", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId)); const sourceVersionId = uuid.parse(id(req.params.sourceVersionId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), entries: z.array(z.object({
+        colour: z.string().regex(/^#[0-9a-f]{6}$/), layer: z.enum(["construction", "existing"]), state: z.enum(["proposed", "retained", "demolished", "not_wall"]) }).strict()).max(200) }).strict().parse(req.body);
+      const entries = [...new Map(input.entries.map(entry => [`${entry.layer}:${entry.colour}`, entry])).values()];
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const [version] = await d.db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId))
+        .where(and(eq(fileVersions.id, sourceVersionId), eq(fileVersions.tenantId, d.tenantId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
+      if (!version) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "The plan set must be a file revision in this project" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const [legend] = await tx.insert(buildingColourLegends).values({ tenantId: d.tenantId, modelId: modelRow.model.id, sourceVersionId, entries, updatedBy: d.actorId })
+          .onConflictDoUpdate({ target: [buildingColourLegends.modelId, buildingColourLegends.sourceVersionId], set: { entries, updatedBy: d.actorId, updatedAt: new Date() } }).returning();
+        const requeued = await tx.update(buildingExtractionJobs).set({ status: "queued", attempts: 0, leaseToken: null, leaseUntil: null, result: null, updatedAt: new Date() })
+          .where(and(eq(buildingExtractionJobs.modelId, modelRow.model.id), eq(buildingExtractionJobs.tenantId, d.tenantId), eq(buildingExtractionJobs.sourceVersionId, sourceVersionId),
+            inArray(buildingExtractionJobs.status, ["complete", "failed"]))).returning({ id: buildingExtractionJobs.id });
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", label: "Plan colours set", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.colour_legend.saved", "file_version", sourceVersionId, { projectId, entries, requeuedJobCount: requeued.length, modelRevision: revision });
+        return { legend, revision, requeuedJobCount: requeued.length };
+      });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
     } catch (e) { return next(e); }
   });
