@@ -19,7 +19,7 @@ import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
 import { ZoningCheck } from "./zoning-check";
-import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
+import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, ExteriorNoiseBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
@@ -434,8 +434,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   // The agreed sound insulation level belongs to the building; it is a requirement, not an observation.
   const saveBuildingProperty = useMutation({
     mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
-      // Zoning check areas are observed facts of the site and buildings; everything else here is a requirement.
-      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: save.key === "parcelArea" || save.key === "footprintArea" ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
+      // Zoning check areas and the exterior noise assessment are observations of the site and building; everything else here is a requirement.
+      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: ["parcelArea", "footprintArea", "exteriorNoiseApplicability", "exteriorNoiseFlanking"].includes(save.key) ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -490,6 +490,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     return [region.id, role && role.reviewStatus !== "rejected" ? role.value : role?.reviewedValue ?? null] as const;
   })), [model]);
   const roomNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "room").map((region) => [region.id, region.label])), [model]);
+  const elementNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element").map((region) => [region.id, region.label])), [model]);
   const startExtraction = useMutation({
     mutationFn: () => {
       if (!evidence.sourceVersionId || !currentSource?.storeyId) throw new Error(t("buildingModelExtractionSourceRequired"));
@@ -837,6 +838,10 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               </>}
             </>}
             <h2 className="building-model-panel-title">{t("noiseNav")}</h2>
+            {model.buildings[0] && <ExteriorNoiseBasis properties={model.buildings[0].componentProperties} storeys={model.storeys} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} t={t}
+              pending={saveBuildingProperty.isPending || saveStoreyProperty.isPending || reviewComponentProperty.isPending}
+              onSaveBuilding={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onSaveStorey={(storeyId, save) => saveStoreyProperty.mutate({ storeyId, save })}
+              onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />}
             <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise`}>{t("buildingExteriorNoiseOpen")} →</Link>
             <h2 className="building-model-panel-title">{t("buildingSoundInsulation")}</h2>
             <SoundInsulationOverview components={modelComponents} level={model.buildings[0]?.componentProperties.soundInsulationLevel} t={t}
@@ -915,7 +920,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
               : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
                 onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
-                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} storeyNames={storeyNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} elementNames={elementNames} storeyNames={storeyNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),

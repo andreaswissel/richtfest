@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { bebauungsplanSchema, componentConstructionSchema, fullStoreySchema, componentInputGaps, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -12,17 +12,27 @@ type T = ReturnType<typeof useT>;
 // Statements rather than values: shown in full.
 const longText = new Set(["bebauungsplanNoise", "bebauungsplanGrz", "bebauungsplanHeight"]);
 type Key = Parameters<T>[0];
-export type ComponentPropertySave = { key: string; value: string | number | null; unit: string | null };
+export type ComponentPropertySave = { key: string; value: string | number | boolean | null; unit: string | null };
 
 const enumOptions: Record<string, readonly string[]> = {
   componentType: componentTypeSchema.options, construction: componentConstructionSchema.options,
   wallRole: wallRoleSchema.options, spaceType: spaceTypeSchema.options, soundInsulationLevel: soundInsulationLevelSchema.options,
   federalState: federalStateSchema.options, bebauungsplan: bebauungsplanSchema.options, fullStorey: fullStoreySchema.options,
   storeyInventory: ["complete", "incomplete"], gfzCountingBasis: ["full_storeys_only", "include_other_storeys"],
+  exteriorNoiseRoom: exteriorNoiseRoomKinds, exteriorNoiseApplicability: ["standard_exterior_noise", "special_assessment_required"],
+  exteriorNoiseFlanking: ["negligible", "required"], exteriorSurfacesComplete: ["true", "false"],
 };
-const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²" };
+// Yes/no properties are stored as booleans and edited as a two-option select.
+const booleanKeys = new Set(["exteriorSurfacesComplete"]);
+const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
+  soundReductionIndex: "dB", openingArea: "m²", clearRoomHeight: "m" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
-const roomKeys = ["apartmentUnit", "spaceType"];
+const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
+// Windows and doors are rated as a whole: area and Rw instead of a build-up.
+const openingKeys = ["componentType", "openingArea", ...acousticKeys];
+const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
+const keysFor = (componentType: ComponentType | null) => componentType === "window" || componentType === "door" ? openingKeys
+  : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : [])];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
 export const fieldLabel = (key: string, t: T) => t(`buildingComponentField${camel(key)}` as Key);
 export const optionLabel = (key: string, option: string, t: T) => t(`buildingComponent${camel(key)}${camel(option)}` as Key);
@@ -67,8 +77,8 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
   const commit = (raw: string) => {
     const trimmed = raw.trim();
     if (trimmed === text) return;
-    const value = !trimmed ? null : unit ? Number(trimmed.replace(",", ".")) : trimmed;
-    if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" ? value >= 0 : value > 0))) { setDraft(text); return; }
+    const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit ? Number(trimmed.replace(",", ".")) : trimmed;
+    if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" || propertyKey === "soundReductionIndex" ? value >= 0 : value > 0))) { setDraft(text); return; }
     onSave({ key: propertyKey, value, unit: value === null ? null : unit });
   };
   return <>
@@ -95,15 +105,16 @@ export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: {
 const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
 /** Shared component data for a selected wall/ceiling or room, laid out as property rows. */
-export function ComponentProperties({ region, roomNames, storeyNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; storeyNames?: Map<string, string>; t: T; pending: boolean;
+export function ComponentProperties({ region, roomNames, elementNames, storeyNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; elementNames?: Map<string, string>; storeyNames?: Map<string, string>; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation; copy?: WallTypeCopy }) {
   const states = region.componentProperties ?? {};
   const isRoom = region.entityType === "room";
   const componentType = isRoom ? null : regionComponentType(region);
   const gaps = componentInputGaps(componentType, Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { value: state.value, reviewStatus: state.reviewStatus }])));
-  const keys = isRoom ? roomKeys : elementKeys.filter((key) => key !== "wallRole" || componentType === "wall");
+  const keys = isRoom ? roomKeys : keysFor(componentType);
   const placeholder = (key: string) => key === "componentType" && (region.elementKind === "draft_wall" || region.elementKind === "draft_ceiling") ? regionComponentType(region) ?? undefined
     : key === "apartmentUnit" ? region.groupLabel || undefined
+    : key === "exteriorNoiseRoom" ? proposeExteriorNoiseRoom(region.label, region.roomUse ?? null) ?? undefined
     // Mirrors the server's inference: a room inside an apartment is an apartment room.
     : key === "spaceType" && (states.apartmentUnit?.value || region.groupLabel) ? "apartment" : undefined;
   const result = derivation?.result;
@@ -117,6 +128,14 @@ export function ComponentProperties({ region, roomNames, storeyNames, t, pending
           <dt>{t("buildingComponentFace")} {face.side + 1}</dt>
           <dd className={face.roomIds.length || face.exterior ? undefined : "muted"}>{face.exterior ? t("buildingComponentOutside") : face.roomIds.length ? face.roomIds.map((id) => roomNames.get(id) || id).join(", ") : t("buildingModelUnknownValue")}</dd>
         </Fragment>)}
+      </>}
+      {componentType === "wall" && region.openings && <>
+        <dt>{t("buildingComponentOpenings")}</dt>
+        <dd>{region.openings.map((id) => elementNames?.get(id) || id).join(", ")}</dd>
+      </>}
+      {region.inWall && <>
+        <dt>{t("buildingComponentInWall")}</dt>
+        <dd>{elementNames?.get(region.inWall) || region.inWall}</dd>
       </>}
       {componentType === "ceiling" && region.covers && <>
         <dt>{t("buildingComponentOverRooms")}</dt>

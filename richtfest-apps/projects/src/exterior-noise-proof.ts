@@ -325,7 +325,7 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
         const [storey] = await tx.select({ buildingId: buildingStoreys.buildingId }).from(buildingStoreys).where(eq(buildingStoreys.id, room.storeyId)).limit(1);
         const revision = await touchRevision(tx, d, modelId, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         const [element] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId, buildingId: storey.buildingId, storeyId: room.storeyId, roomId: room.id,
-          stableKey: `opening:${crypto.randomUUID()}`, kind: input.componentType, name: input.name, constructionState: "proposed", createdBy: d.actorId }).returning();
+          stableKey: `opening:${crypto.randomUUID()}`, kind: input.componentType, name: input.name, constructionState: wall.constructionState, createdBy: d.actorId }).returning();
         await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
           relationshipType: "opening_in", metadata: { method: "manual" }, reviewStatus: "approved", createdBy: d.actorId });
         const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], ["openingArea", input.area, "m²"], ["soundReductionIndex", input.rw, "dB"], ["soundReductionIndexBasis", input.basis, null]];

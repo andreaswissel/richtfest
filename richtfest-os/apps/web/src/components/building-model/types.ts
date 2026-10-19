@@ -99,6 +99,10 @@ export type BuildingRegion = {
   covers?: string[];
   /** Storey directly above a derived ceiling, when both levels are known. */
   underStorey?: string;
+  /** Windows and doors set into this wall. */
+  openings?: string[];
+  /** The wall a window or door is set into. */
+  inWall?: string;
   status?: "unreviewed" | "reviewed" | "needs-review" | "accepted" | "rejected" | "matched" | string;
   /** Extraction candidates use the same normalized geometry as reviewed regions. */
   isCandidate?: boolean;
@@ -463,6 +467,16 @@ function coversByCeiling(relationships: RecordData[]) {
   return result;
 }
 
+function openingsInWalls(relationships: RecordData[]) {
+  const openings = new Map<string, string[]>(), inWall = new Map<string, string>();
+  for (const relationship of relationships) {
+    if (relationship.relationshipType !== "opening_in" || relationship.fromEntityType !== "element" || relationship.toEntityType !== "element") continue;
+    openings.set(relationship.toEntityId, [...openings.get(relationship.toEntityId) ?? [], relationship.fromEntityId]);
+    inWall.set(relationship.fromEntityId, relationship.toEntityId);
+  }
+  return { openings, inWall };
+}
+
 function separatesByWall(relationships: RecordData[]) {
   const result = new Map<string, NonNullable<BuildingRegion["separates"]>>();
   for (const relationship of relationships) {
@@ -522,10 +536,12 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
   }));
   const separates = separatesByWall(Array.isArray(raw.relationships) ? raw.relationships : []);
   const covers = coversByCeiling(Array.isArray(raw.relationships) ? raw.relationships : []);
+  const openings = openingsInWalls(Array.isArray(raw.relationships) ? raw.relationships : []);
   const entityRowsForState = (state: BuildingModelState) => [
     ...entityRows(raw.rooms, state, "room", "room", properties, measurements),
     ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => ({ ...region,
-      ...(separates.has(region.id) ? { separates: separates.get(region.id) } : {}), ...covers.get(region.id) })),
+      ...(separates.has(region.id) ? { separates: separates.get(region.id) } : {}), ...covers.get(region.id),
+      ...(openings.openings.has(region.id) ? { openings: openings.openings.get(region.id) } : {}), ...(openings.inWall.has(region.id) ? { inWall: openings.inWall.get(region.id) } : {}) })),
   ];
   return {
     id: asString(source.id) || undefined,

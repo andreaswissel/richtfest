@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { componentDataRequest, developmentPlanZoningKeys, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup, type DataRequestProgress } from "@richtfest/shared";
 import { useT } from "../../i18n";
@@ -143,6 +143,48 @@ export function StoreyLevels({ storeys, t, pending, onSave, onReview }: {
       })}
     </dl>
     <p className="muted text-ui-2xs">{t("buildingStoreyLevelsHint")}</p>
+  </>;
+}
+
+/** Building-wide exterior noise inputs and each storey's clear room height; the exterior noise verification reads them. */
+export function ExteriorNoiseBasis({ properties, storeys, storeyLabel, t, pending, onSaveBuilding, onSaveStorey, onReview }: { properties: Record<string, BuildingComponentPropertyState>;
+  storeys: Array<{ id: string; componentProperties?: Record<string, BuildingComponentPropertyState> }>; storeyLabel: (storeyId: string) => string; t: T; pending: boolean;
+  onSaveBuilding: (save: ComponentPropertySave) => void; onSaveStorey: (storeyId: string, save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void }) {
+  return <>
+    <dl className="building-model-component-rows">
+      {["exteriorNoiseApplicability", "exteriorNoiseFlanking"].map((key) =>
+        <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSaveBuilding} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
+    </dl>
+    {storeys.length > 0 && <dl className="building-model-component-rows">
+      {storeys.map((storey) => {
+        const state = storey.componentProperties?.clearRoomHeight;
+        return <Fragment key={storey.id}>
+          <dt>{fieldLabel("clearRoomHeight", t)} · {storeyLabel(storey.id)}</dt>
+          <dd><ClearHeight state={state} label={`${fieldLabel("clearRoomHeight", t)} (m): ${storeyLabel(storey.id)}`} t={t} pending={pending}
+            onSave={(save) => onSaveStorey(storey.id, save)} onReview={(decision) => state && onReview(state, decision)} /></dd>
+        </Fragment>;
+      })}
+    </dl>}
+    <p className="muted text-ui-2xs">{t("buildingExteriorNoiseBasisHint")}</p>
+  </>;
+}
+
+function ClearHeight({ state, label, t, pending, onSave, onReview }: { state?: BuildingComponentPropertyState; label: string; t: T; pending: boolean;
+  onSave: (save: ComponentPropertySave) => void; onReview: (decision: "approved" | "rejected") => void }) {
+  const text = state && state.reviewStatus !== "rejected" && state.value != null ? String(state.value) : "";
+  const [draft, setDraft] = useState(text);
+  useEffect(() => setDraft(text), [text]);
+  const commit = (raw: string) => {
+    const trimmed = raw.trim(); if (trimmed === text) return;
+    const value = trimmed ? Number(trimmed.replace(",", ".")) : null;
+    // Matches the property spec: a clear room height between 1.5 and 20 m.
+    if (value !== null && !(Number.isFinite(value) && value >= 1.5 && value <= 20)) { setDraft(text); return; }
+    onSave({ key: "clearRoomHeight", value, unit: value === null ? null : "m" });
+  };
+  return <>
+    <Input aria-label={label} value={draft} inputMode="decimal" placeholder={t("buildingModelUnknownValue")} disabled={pending}
+      onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />
+    <StatusLine state={state} t={t} pending={pending} onReview={onReview} />
   </>;
 }
 
