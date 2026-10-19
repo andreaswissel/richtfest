@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Exterior noise verification:** Exterior noise lists the rooms of the placed plan with their exterior facades and La. Enter room use, clear room height, wall Rw and windows; complete rooms are checked against the DIN 4109-1 requirement right away.
+- **Exterior noise verification:** Exterior noise lists the rooms of the placed plan with their exterior facades and La. Enter room use, clear room height, wall Rw and windows; complete rooms are checked against the DIN 4109-1 requirement right away. **Create Nachweis** writes the draft Schallschutznachweis Außenlärm with calculation sheets, the derivation of La and a sign-off block as a document and PDF.
 
 ## 2026-10-19
 

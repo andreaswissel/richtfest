@@ -1,5 +1,6 @@
 import type { AcousticCalculationInput, AcousticCalculationResult } from "./acoustic-calculation";
 import type { Compass } from "./site-plan";
+import type { FacadeNoiseLevels } from "./exterior-noise-levels";
 
 /**
  * Exterior noise verification inputs assembled from the building model and
@@ -67,4 +68,6 @@ export type ExteriorNoiseProof =
     rooms: ProofRoom[];
     /** The calculation input for every protected room that has all inputs, and its result. */
     calculation: { input: Extract<AcousticCalculationInput, { method: "exterior_noise_batch" }>; result: AcousticCalculationResult } | null;
+    /** The facade levels the La values come from, with their sources, defaults and limitations. */
+    levels: Extract<FacadeNoiseLevels, { available: true }>;
   };

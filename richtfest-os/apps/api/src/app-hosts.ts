@@ -38,6 +38,7 @@ import { trafficCountsInBox } from "@richtfest/public-data/traffic-count-queries
 import { calculateAcoustics } from "@richtfest/acoustics";
 import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
+import { readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
 import { acousticNormPack } from "./acoustic-norm-pack";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
@@ -183,6 +184,7 @@ export const knowledgeDeps = (
   return {
     ...base(db, req),
     // Only agent source access is evidence-only. Other apps retain generic validation.
+    exteriorNoiseProof: projectId => readExteriorNoiseProof(projectsDeps(db, req), projectId),
     buildingModelContext: (projectId, selection) => readBuildingModelAgentContext(projectsDeps(db, req), projectId,
       selection ? { objectId: selection.entityId } : {}),
     proposeBuildingModelChange: (projectId, input, execution, tx) => proposeBuildingModelChange(

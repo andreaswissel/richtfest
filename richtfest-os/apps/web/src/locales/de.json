@@ -3299,7 +3299,7 @@
   "proofNotProtected": "Kein schutzbedürftiger Raum",
   "proofMeets": "Erfüllt",
   "proofBelow": "Unterschritten",
-  "proofValues": "R'w,ges {value} dB, erforderlich {target} dB ({margin} dB)",
+  "proofValues": "Erfordernis {target} dB, vorhanden {value} dB ({margin} dB)",
   "proofMissing": "Fehlt",
   "proofGapRoomKind": "Nutzung",
   "proofGapFloorArea": "Grundfläche",
@@ -3336,5 +3336,11 @@
   "proofRemove": "Entfernen",
   "proofSurfacesComplete": "Alle Außenwände, Dächer und Öffnungen dieses Raums sind erfasst",
   "proofConflict": "Das Gebäudemodell wurde inzwischen geändert. Neu laden und den Wert erneut eingeben.",
-  "proofLimitations": "Entwurfsberechnung: Räume, Flächen und Fassaden stammen aus dem ungeprüften Planmodell, La aus den Fassadenpegeln. Dächer, Rollladenkästen und Lüfter sind noch nicht abgedeckt. Rw der Fenster ist der eingebaute Wert einschließlich Korrekturen."
+  "proofLimitations": "Entwurfsberechnung: Räume, Flächen und Fassaden stammen aus dem ungeprüften Planmodell, La aus den Fassadenpegeln. Dächer, Rollladenkästen und Lüfter sind noch nicht abgedeckt. Rw der Fenster ist der eingebaute Wert einschließlich Korrekturen.",
+  "proofCreate": "Nachweis erstellen",
+  "proofCreateHint": "Erstellt den Entwurf des Schallschutznachweises mit Berechnung, Ermittlung von La und Freigabefeld als Dokument und PDF.",
+  "proofCreatePartial": "{ready} von {total} Räumen sind vollständig; die übrigen stehen im Entwurf als offen.",
+  "proofCreateNone": "Für den Nachweis mindestens einen Raum vervollständigen.",
+  "proofOpenNachweis": "Nachweis öffnen",
+  "proofOpenPartial": "Teilstand öffnen"
 }

@@ -23,6 +23,7 @@
     "./automatic-building-model": "./src/automatic-building-model.ts",
     "./environment": "./src/environment.ts",
     "./noise-sources": "./src/noise-sources.ts",
+    "./exterior-noise-proof": "./src/exterior-noise-proof.ts",
     "./project-files": "./src/project-files.ts",
     "./project-deletion-worker": "./src/project-deletion-worker.ts"
   },

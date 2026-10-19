@@ -9,7 +9,7 @@ const north = { id: "north", name: "N wall", ring: [[0, 0], [12, 0], [12, 0.3], 
 const west = { id: "west", name: "W wall", ring: [[0, 0], [0.3, 0], [0.3, 9], [0, 9]] as Point2[] };
 
 const input = (patch: Partial<ProofAssemblyInput> = {}): ProofAssemblyInput => ({
-  sourceLabel: "plan.pdf, p. 1",
+  sourceLabel: "plan.pdf, p. 1", source: { versionId: "00000000-0000-4000-8000-000000000001", page: 1 },
   applicability: value("standard_exterior_noise"), flanking: value("negligible"), clearHeight: value(2.5),
   rooms: [{ id: "r1", name: "Schlafen", roomUse: null, polygon: room, holes: [], adjacentWallIds: new Set(["north", "west"]),
     kind: value("sleeping"), surfacesComplete: value(true) }],

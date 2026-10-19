@@ -97,7 +97,23 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
       ] }))} /> : <Empty>{t("proofNoRooms")}</Empty>}
     {selected && <RoomEditor key={selected.id} projectId={projectId} proof={proof} room={selected} canWrite={canWrite} t={t} />}
     <Callout>{t("proofLimitations")}</Callout>
+    {canWrite && <CreateNachweis projectId={projectId} proof={proof} ready={ready} total={protectedRooms.length} t={t} />}
   </Section>;
+}
+
+/** Writes the draft Schallschutznachweis (report and PDF) from the current inputs; rooms with gaps stay listed as open. */
+function CreateNachweis({ projectId, proof, ready, total, t }: { projectId: string; proof: Proof; ready: number; total: number; t: T }) {
+  const create = useMutation({
+    mutationFn: () => api<{ artifact: { id: string }; revision: { id: string }; complete: boolean }>(`/knowledge/projects/${projectId}/exterior-noise-nachweis`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith("/knowledge/") }),
+  });
+  return <div className="proof-create">
+    <Button disabled={!proof.calculation || create.isPending} onClick={() => create.mutate()}>{create.isPending ? t("loading") : t("proofCreate")}</Button>
+    <span className="muted text-ui-xs">{proof.calculation ? (ready < total ? t("proofCreatePartial").replace("{ready}", String(ready)).replace("{total}", String(total)) : t("proofCreateHint")) : t("proofCreateNone")}</span>
+    {create.data && <Link className="underline underline-offset-2 text-ui-sm" to={`/projects/${projectId}?panel=artifacts&artifact=${create.data.artifact.id}&revision=${create.data.revision.id}`}>
+      {create.data.complete ? t("proofOpenNachweis") : t("proofOpenPartial")}</Link>}
+    {create.isError && <Callout tone="error">{errorText(create.error, t)}</Callout>}
+  </div>;
 }
 
 function RoomResult({ room, t }: { room: ProofRoom; t: T }) {

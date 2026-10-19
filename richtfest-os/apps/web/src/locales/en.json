@@ -3299,7 +3299,7 @@
   "proofNotProtected": "Not a protected room",
   "proofMeets": "Meets",
   "proofBelow": "Below",
-  "proofValues": "R'w,ges {value} dB, required {target} dB ({margin} dB)",
+  "proofValues": "required {target} dB, provided {value} dB ({margin} dB)",
   "proofMissing": "Missing",
   "proofGapRoomKind": "room use",
   "proofGapFloorArea": "floor area",
@@ -3336,5 +3336,11 @@
   "proofRemove": "Remove",
   "proofSurfacesComplete": "All exterior walls, roofs and openings of this room are entered",
   "proofConflict": "The building model changed meanwhile. Reload and enter the value again.",
-  "proofLimitations": "Draft calculation: rooms, areas and facades come from the unreviewed plan model, La from the facade levels. Roofs, roller shutter boxes and ventilators are not covered yet. Window Rw is the installed value including corrections."
+  "proofLimitations": "Draft calculation: rooms, areas and facades come from the unreviewed plan model, La from the facade levels. Roofs, roller shutter boxes and ventilators are not covered yet. Window Rw is the installed value including corrections.",
+  "proofCreate": "Create Nachweis",
+  "proofCreateHint": "Writes the draft Schallschutznachweis with the calculation, the La derivation and a sign-off block as a document and PDF.",
+  "proofCreatePartial": "{ready} of {total} rooms are complete; the others are listed as open in the draft.",
+  "proofCreateNone": "Complete at least one room to create the Nachweis.",
+  "proofOpenNachweis": "Open Nachweis",
+  "proofOpenPartial": "Open draft"
 }

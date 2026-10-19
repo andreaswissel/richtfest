@@ -82,6 +82,8 @@ const constructionOf = (value: unknown): ProofFacade["construction"] =>
 
 export type ProofAssemblyInput = {
   sourceLabel: string;
+  /** The plan page the rooms and walls were traced from; their geometry cites it. */
+  source: { versionId: string; page: number } | null;
   applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
   rooms: Array<{ id: string; name: string; roomUse: string | null; polygon: Point2[] | null; holes: Point2[][]; adjacentWallIds: Set<string> | null;
     kind: ProofValue<string> | null; surfacesComplete: ProofValue<boolean> | null }>;
@@ -93,10 +95,15 @@ export type ProofAssemblyInput = {
 type BatchInput = Extract<AcousticCalculationInput, { method: "exterior_noise_batch" }>;
 type RoomInput = BatchInput["rooms"][number];
 
-const reviewed = (value: { reviewStatus: string } | null) => value?.reviewStatus === "approved" ? "approved" : "not reviewed";
+const reviewed = (value: { reviewStatus: string } | null) => value?.reviewStatus === "approved" ? "geprüft" : "ungeprüft";
+const kindLabels: Record<ExteriorNoiseRoomKind, string> = { sleeping: "Schlafraum", living: "Wohnraum", office: "Büro / Praxis", hospital_bedroom: "Bettenraum", not_protected: "nicht schutzbedürftig" };
 
 export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: ProofRoom[]; batch: BatchInput | null } {
   const assumption = (reason: string) => ({ kind: "assumption" as const, reason: reason.slice(0, 1000) });
+  // Geometry measured on the plan cites the plan page; the excerpt says what was read there.
+  const fromPlan = (what: string) => input.source
+    ? { kind: "source" as const, versionId: input.source.versionId, page: input.source.page, excerpt: what.slice(0, 1000) }
+    : assumption(`${what} (${input.sourceLabel})`);
   const labels = new Map<string, number>();
   const rooms: ProofRoom[] = [];
   const packets: RoomInput[] = [];
@@ -138,7 +145,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       if (room.surfacesComplete?.value !== true) gaps.add("surfaces_unconfirmed");
       if (input.applicability?.value !== "standard_exterior_noise") gaps.add("applicability");
       if (input.flanking?.value !== "negligible") gaps.add("flanking");
-      inventory.push({ roomId: label, provenance: assumption(`Room "${room.name}" of the Richtfest building model (${input.sourceLabel}).`) });
+      inventory.push({ roomId: label, provenance: fromPlan(`Raum „${room.name}“, aus dem Plan in das Richtfest-Gebäudemodell übernommen.`) });
     }
     rooms.push({ id: room.id, name: room.name, label, roomUse: room.roomUse, kind: room.kind, proposedKind: proposeExteriorNoiseRoom(room.name, room.roomUse),
       floorAreaM2, surfacesComplete: room.surfacesComplete, facades, gaps: [...gaps], result: null });
@@ -148,32 +155,33 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
     packets.push({
       standard: "DIN 4109-1/-2:2018-01",
       room: { id: label, use: exteriorNoiseCalculationUse(kind!), floorAreaM2: floorAreaM2!,
-        provenance: assumption(`Floor area of the room polygon on ${input.sourceLabel}; room use "${kind}" ${reviewed(room.kind)}.`) },
-      applicability: { assessment: "standard_exterior_noise", basis: "Standard exterior noise method confirmed in Richtfest.",
-        provenance: assumption(`Applicability ${reviewed(input.applicability)} in the Richtfest building model.`) },
+        provenance: fromPlan(`Grundfläche ${floorAreaM2} m² aus dem Umriss von Raum „${room.name}“ im Planmaßstab gemessen; Nutzung ${kindLabels[kind!]} (${reviewed(room.kind)}).`) },
+      applicability: { assessment: "standard_exterior_noise", basis: "Regelverfahren Außenlärm in Richtfest bestätigt.",
+        provenance: assumption(`Anwendbarkeit im Richtfest-Gebäudemodell eingetragen (${reviewed(input.applicability)}).`) },
       envelopeComplete: true,
       facades: facades.map(facade => ({
         id: facadeLabel(facade), areaM2: facade.areaM2!,
-        provenance: assumption(`Facade length ${facade.lengthM} m from the room polygon on ${input.sourceLabel} × clear room height ${height} m (${reviewed(input.clearHeight)}).`),
-        noise: { metric: "La" as const, levelDb: period === "sleeping" ? facade.la!.sleepingDb : facade.la!.dayDb,
-          basis: `${period === "sleeping" ? "Sleeping-room" : "Day"} La of this facade from the Richtfest facade levels (${facade.la!.basis === "turned_away" ? "turned-away facade" : "calculated"}).`,
-          provenance: assumption("Calculated facade level: RLS-19 road rating levels and DIN 4109-2 La; draft, see the facade levels for inputs and limitations.") },
+        provenance: fromPlan(`Fassadenlänge ${facade.lengthM} m von Raum „${room.name}“ entlang ${facade.wallName}, im Planmaßstab gemessen; × lichte Raumhöhe ${height} m (${reviewed(input.clearHeight)}).`),
+        // La to 0.1 dB, as stated in the report; the facade levels keep the unrounded values.
+        noise: { metric: "La" as const, levelDb: Math.round((period === "sleeping" ? facade.la!.sleepingDb : facade.la!.dayDb) * 10) / 10,
+          basis: `La ${period === "sleeping" ? "für Schlafräume" : "Tag"} dieser Fassade aus den Richtfest-Fassadenpegeln (${facade.la!.basis === "turned_away" ? "abgewandte Fassade" : "berechnet"}).`,
+          provenance: assumption("Berechneter Fassadenpegel: Straßen-Beurteilungspegel nach RLS-19, La nach DIN 4109-2; Entwurf, Eingaben und Grenzen siehe Anlage Außenlärmpegel.") },
       })),
       elementsComplete: true,
-      flanking: { assessment: "negligible", provenance: assumption(`Flanking assessment ${reviewed(input.flanking)} in the Richtfest building model.`) },
+      flanking: { assessment: "negligible", provenance: assumption(`Flankenübertragung als vernachlässigbar eingetragen (${reviewed(input.flanking)}).`) },
       elements: facades.flatMap(facade => [
-        ...(facade.opaqueAreaM2! > 0 ? [{ kind: "area" as const, id: `${facadeLabel(facade)} · wall`, facadeId: facadeLabel(facade), areaM2: facade.opaqueAreaM2!,
+        ...(facade.opaqueAreaM2! > 0 ? [{ kind: "area" as const, id: `${facadeLabel(facade)} · Wand`, facadeId: facadeLabel(facade), areaM2: facade.opaqueAreaM2!,
           rwDb: facade.rw!.value, construction: facade.construction, ratingBasis: "installed_configuration" as const,
-          configuration: facade.rwBasis?.value ?? "Rw of the wall as entered in the building model.",
-          provenance: assumption(`Wall Rw ${reviewed(facade.rw)}; area is the facade area less its openings.`) }] : []),
+          configuration: facade.rwBasis?.value ?? "Rw der Wand laut Gebäudemodell.",
+          provenance: assumption(`Rw der Wand eingegeben (${reviewed(facade.rw)}); Fläche = Fassadenfläche abzüglich Öffnungen.`) }] : []),
         ...facade.windows.map(item => ({ kind: "area" as const, id: `${facadeLabel(facade)} · ${item.name}`, facadeId: facadeLabel(facade), areaM2: item.area!.value,
           rwDb: item.rw!.value, construction: "window_or_door" as const, ratingBasis: "installed_configuration" as const,
-          configuration: item.basis?.value ?? "Rw of the installed window or door as entered in the building model.",
-          provenance: assumption(`${item.componentType === "door" ? "Door" : "Window"} area and Rw ${reviewed(item.rw)} in the Richtfest building model.`) })),
+          configuration: item.basis?.value ?? "Rw im Einbauzustand laut Gebäudemodell.",
+          provenance: assumption(`${item.componentType === "door" ? "Tür" : "Fenster"}: Fläche und Rw im Einbauzustand eingegeben (${reviewed(item.rw)}).`) })),
       ]),
     });
   }
-  return { rooms, batch: inventory.length ? { method: "exterior_noise_batch", scope: `Exterior noise, ${input.sourceLabel}`, inventory, rooms: packets } : null };
+  return { rooms, batch: inventory.length ? { method: "exterior_noise_batch", scope: `Außenlärm, ${input.sourceLabel}`, inventory, rooms: packets } : null };
 }
 
 // ---- Reading -----------------------------------------------------------------
@@ -242,7 +250,7 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
   }
   const sourceLabel = `${page.fileName ?? "plan"}, p. ${page.page}`;
   const assembled = assembleExteriorNoiseProof({
-    sourceLabel,
+    sourceLabel, source: { versionId: page.sourceVersionId, page: page.page },
     applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
     rooms: roomRows.map(room => ({ id: room.id, name: room.name, roomUse: room.roomUse,
       polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
@@ -263,7 +271,10 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       const room = assembled.rooms.find(entry => entry.label === item.roomId);
       if (!room) continue;
       const outcome = item.result?.exteriorNoise;
-      room.result = { status: item.status, targetDb: outcome?.targetRwDb ?? null, valueDb: item.result?.value ?? null, marginDb: outcome?.marginDb ?? null,
+      // As in the Nachweis: the requirement without, and the provided value less, the prognosis allowance.
+      const allowance = outcome?.prognosisUncertaintyDb ?? 0;
+      room.result = { status: item.status, targetDb: outcome ? outcome.targetRwDb - allowance : null,
+        valueDb: item.result?.value != null ? item.result.value - allowance : null, marginDb: outcome?.marginDb ?? null,
         reason: item.status === "unsupported" ? item.result?.limitations[0] ?? null : null };
     }
   }
@@ -271,7 +282,7 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
     available: true, modelRevision: modelRow.model.revision, buildingId: storey.buildingId,
     page: { fileName: page.fileName, page: page.page }, storey: { id: storey.id, name: storey.name, levelIndex: storey.levelIndex },
     applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
-    rooms: assembled.rooms, calculation,
+    rooms: assembled.rooms, calculation, levels,
   };
 }
 

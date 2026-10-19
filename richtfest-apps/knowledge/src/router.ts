@@ -17,6 +17,7 @@ import { agentProfilesRouter } from "./agent-profiles";
 import { runsRouter } from "./runs";
 import { reviewsRouter } from "./reviews";
 import { acousticScenariosRouter } from "./acoustic-scenarios";
+import { exteriorNoiseNachweisRouter } from "./exterior-noise-nachweis";
 import { acousticInputReviewRouter } from "./acoustic-input-review";
 import { companyLibraryRouter } from "./company-library";
 import { conversation, missing } from "./workspace";
@@ -63,6 +64,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(runsRouter(getDeps));
   router.use(reviewsRouter(getDeps));
   router.use(acousticScenariosRouter(getDeps));
+  router.use(exteriorNoiseNachweisRouter(getDeps));
   router.use(acousticInputReviewRouter(getDeps));
   router.use(companyLibraryRouter(getDeps));
   router.get("/conversations", async (req, res, next) => {
