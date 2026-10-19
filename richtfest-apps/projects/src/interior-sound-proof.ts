@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
-  interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles,
+  alignPlanOutline, interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles, type SitePlanPage,
   type AirborneInput, type DoorResult, type FlankElement, type InteriorDoorCheck, type InteriorDoorRole, type FlankingEdge, type InteriorCeilingCheck, type InteriorCeilingRole, type InteriorElement, type InteriorElementReason,
   type InteriorGap, type InteriorLimitation, type InteriorSoundProof, type InteriorWallCheck, type InteriorWallRole, type MassiveWallInput, type MassiveWallRw,
   type Point2, type ProofSuggestion, type ProofValue,
@@ -10,6 +10,7 @@ import {
 import type { AppDeps } from "./deps";
 import { evidenceVersionsForProject, modelForProject, readSitePlan, touchRevision } from "./building-model-router";
 import { classifyMassiveWall, catalogueBasis } from "./exterior-noise-catalogue";
+import { storeyLevels, STOREY_FIT_M } from "./exterior-noise-levels";
 import { currentValues, distanceToRing, inside, overlapAlongWall, polygonArea, suggestedOpening, suggestionsOf, writeSuggestion, type CurrentValue } from "./exterior-noise-proof";
 import { buildingBuildings, buildingElements, buildingModels, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys } from "./schema";
 
@@ -77,6 +78,8 @@ export type InteriorAssemblyInput = {
   ceilingRequirement: (role: InteriorCeilingRole) => { rwMinDb: number | null; lnwMaxDb: number | null; ref: string } | null;
   airborne: (input: AirborneInput) => import("@richtfest/shared").AirborneResult;
   impact: (input: import("@richtfest/shared").ImpactInput) => import("@richtfest/shared").ImpactResult;
+  /** Walls of the storey above, in this storey's plan coordinates (aligned by the outline); absent for the top storey. */
+  wallsAbove?: Array<{ id: string; name: string; ring: Point2[] }>;
   /** Doors of this storey with the wall they sit in and the room they lead into. */
   doors?: Array<{ id: string; name: string; wallId: string | null; roomId: string | null; role: ProofValue<string> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null }>;
   door?: (input: { rwDb: number; role: InteriorDoorRole }) => DoorResult;
@@ -85,14 +88,26 @@ export type InteriorAssemblyInput = {
 const doorWallRoles = new Set(["stairwell", "corridor_partition"]);
 const doorRoleOf = (door: { role: ProofValue<string> | null }) => door.role?.value === "to_dwelling_hallway" || door.role?.value === "to_habitable_room" ? door.role.value as InteriorDoorRole : null;
 
-const MIN_COMMON_M = 0.1, FLANK_DISTANCE_M = 0.6, MIN_EDGE_M = 0.3, SAMPLE_M = 0.05;
+const MIN_COMMON_M = 0.1, FLANK_DISTANCE_M = 0.6, MIN_EDGE_M = 0.3, SAMPLE_M = 0.05, ABOVE_OFFSET_M = 0.3;
 
-export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; doors: InteriorDoorCheck[]; floorAssumed: boolean; usedElementIds: Set<string> } {
+export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; doors: InteriorDoorCheck[]; floorAssumed: boolean; wallsAboveAssumed: boolean; usedElementIds: Set<string> } {
   const h = input.clearHeight;
   // Every element a check reads, so the inputs list and suggestions cover exactly these.
   const usedElementIds = new Set<string>();
   const wallById = new Map(input.walls.map(wall => [wall.id, wall]));
-  let floorAssumed = false;
+  let floorAssumed = false, wallsAboveAssumed = false;
+  // The wall of the storey above standing on a wall below: parallel, within a wall thickness, overlapping most.
+  const wallAbove = (ring: Point2[]) => {
+    const below = axisOf(ring), [b0, b1] = span(ring, below.axis);
+    let best: { wall: NonNullable<InteriorAssemblyInput["wallsAbove"]>[number]; overlap: number } | null = null;
+    for (const wall of input.wallsAbove ?? []) {
+      const above = axisOf(wall.ring);
+      if (Math.abs(dot(above.axis, below.axis)) < 0.95 || Math.abs(dot(above.centre, below.normal) - dot(below.centre, below.normal)) > ABOVE_OFFSET_M) continue;
+      const [a0, a1] = span(wall.ring, below.axis), overlap = Math.min(a1, b1) - Math.max(a0, b0);
+      if (overlap >= MIN_EDGE_M && (!best || overlap > best.overlap)) best = { wall, overlap };
+    }
+    return best?.wall ?? null;
+  };
   const elementGap = (element: InteriorElement | undefined, id: string, name: string): InteriorGap[] => {
     usedElementIds.add(id);
     if (!element) return [{ code: "element", elementId: id, elementName: name, reason: "construction_missing" }];
@@ -201,7 +216,7 @@ export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: In
       const screedType = typeof ceiling.screed.type?.value === "string" ? ceiling.screed.type.value : null;
       const screedMass = ceiling.screed.mass?.value ?? null, screedStiffness = ceiling.screed.stiffness?.value ?? null;
       if (!screedType || (screedType !== "none" && (screedMass === null || screedStiffness === null))) gaps.push({ code: "screed" });
-      // The room's walls flank the ceiling; the storey above is taken to repeat them.
+      // The room's walls flank the ceiling below it; above it, the wall of the storey above standing on each, else the same wall taken to continue.
       const edges: FlankingEdge[] = [], masses: number[] = [];
       for (const wallId of room.adjacentWallIds) {
         const wall = wallById.get(wallId);
@@ -210,8 +225,10 @@ export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: In
         if (lf < MIN_EDGE_M) continue;
         const element = input.elements.get(wallId);
         gaps.push(...elementGap(element, wallId, wall.name));
-        if (!element || element.reason || h === null) continue;
-        edges.push({ edge: wall.name, couplingLengthM: lf, source: flank(element, lf * h), receiving: flank(element, lf * h) });
+        const upper = wallAbove(wall.ring), upperElement = upper ? input.elements.get(upper.id) : element;
+        if (upper) gaps.push(...elementGap(upperElement, upper.id, upper.name)); else wallsAboveAssumed = true;
+        if (!element || element.reason || !upperElement || upperElement.reason || h === null) continue;
+        edges.push({ edge: wall.name, couplingLengthM: lf, source: flank(upperElement, lf * h), receiving: flank(element, lf * h) });
         if (element.massive) masses.push(element.massKgM2!);
       }
       const finalGaps = unique(gaps);
@@ -243,7 +260,7 @@ export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: In
       requirement: result?.status === "calculated" ? { rwMinDb: result.requiredDb, ref: result.refs[0]! } : null, gaps,
       result: result?.status === "calculated" ? result : null });
   }
-  return { walls, ceilings, doors, floorAssumed, usedElementIds };
+  return { walls, ceilings, doors, floorAssumed, wallsAboveAssumed, usedElementIds };
 }
 
 // ---- Reading -----------------------------------------------------------------
@@ -294,8 +311,18 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
   const ceilingRows = elementRows.filter(row => elements.get(row.id)?.componentType === "ceiling");
   const doorRows = elementRows.filter(row => row.constructionState !== "demolished" && (raw(row.id, "componentType")?.value ?? row.kind) === "door");
   const walls: InteriorWallCheck[] = [], ceilings: InteriorCeilingCheck[] = [], doors: InteriorDoorCheck[] = [], storeys: Extract<InteriorSoundProof, { available: true }>["storeys"] = [];
-  let floorAssumed = false;
+  let floorAssumed = false, wallsAboveAssumed = false;
   const used = new Set<string>();
+  const levelOf = await storeyLevels(d, modelId, storeyRows);
+  const exteriorRings = (page: SitePlanPage) => page.walls.filter(wall => wall.exterior).map(wall => wall.ring);
+  // The plan of the storey one level up, shifted onto this plan by the building outline; none when it does not fit.
+  const wallsAboveOf = (page: SitePlanPage) => {
+    const level = levelOf.get(page.storey!.id);
+    const upper = level == null ? undefined : pages.find(other => other.storey && levelOf.get(other.storey.id) === level + 1);
+    const aligned = upper && alignPlanOutline(exteriorRings(page), exteriorRings(upper));
+    if (!upper || !aligned || aligned.fitM > STOREY_FIT_M) return undefined;
+    return upper.walls.map(wall => ({ id: wall.id, name: wall.name, ring: wall.ring.map(([x, y]) => [x + aligned.offset[0], y + aligned.offset[1]] as Point2) }));
+  };
   for (const page of pages) {
     const storey = storeyRows.find(row => row.id === page.storey!.id);
     if (!storey) continue;
@@ -317,16 +344,17 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
       elements, wallRequirement: host.wallRequirement, ceilingRequirement: host.ceilingRequirement, airborne: host.airborne, impact: host.impact,
       doors: doorRows.filter(row => row.storeyId === storey.id).map(row => ({ id: row.id, name: row.name, wallId: hostOf.get(row.id) ?? null, roomId: row.roomId ?? null,
         role: value<string>(row.id, "doorRole"), rw: value<number>(row.id, "soundReductionIndex"), basis: value<string>(row.id, "soundReductionIndexBasis") })),
-      door: host.door, wallWithDoorRequirement: host.wallWithDoorRequirement,
+      door: host.door, wallWithDoorRequirement: host.wallWithDoorRequirement, wallsAbove: wallsAboveOf(page),
     });
     walls.push(...assembled.walls); ceilings.push(...assembled.ceilings); doors.push(...assembled.doors);
     floorAssumed ||= assembled.floorAssumed;
+    wallsAboveAssumed ||= assembled.wallsAboveAssumed;
     for (const id of assembled.usedElementIds) used.add(id);
   }
   const limitations: InteriorLimitation[] = ["minimum_requirements_only", "t_junctions", "without_linings"];
   if (!host.door) limitations.push("doors_not_checked");
   if (floorAssumed) limitations.push("floor_like_ceiling");
-  if (ceilings.length) limitations.push("walls_above_like_below", "screed_not_credited_airborne", "impact_vertical_only");
+  if (ceilings.length) limitations.push(...(wallsAboveAssumed ? ["walls_above_like_below" as const] : []), "screed_not_credited_airborne", "impact_vertical_only");
   type Entity = [ProofSuggestion["entityType"], string, string];
   // Doors carry their role and Rw; walls and ceilings their build-up (an exterior wall's Rw belongs to the exterior check).
   const doorKeys = ["doorRole", "soundReductionIndex", "soundReductionIndexBasis"];

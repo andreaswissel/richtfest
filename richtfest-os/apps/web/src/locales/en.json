@@ -2594,7 +2594,7 @@
   "interiorLimitLinings": "Without linings, suspended ceilings and plaster; flanking walls of different mass on the two sides use their mean mass.",
   "interiorLimitDoors": "Doors and walls with doors are not checked.",
   "interiorLimitFloor": "The slab under a storey is not in the model; it is taken to equal the ceiling above.",
-  "interiorLimitWallsAbove": "Ceilings: the walls of the storey above are taken to repeat those of the room below.",
+  "interiorLimitWallsAbove": "Ceilings: where the storey above has no traced wall standing on a wall below (always for the top storey), that wall is taken to continue upwards.",
   "interiorLimitScreedAirborne": "Ceilings: the floating screed's airborne improvement is not credited, which errs low.",
   "interiorLimitImpact": "Impact sound only into the room directly below.",
   "buildingComponentFieldCeilingRole": "Ceiling type",

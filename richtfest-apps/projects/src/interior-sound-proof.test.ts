@@ -85,6 +85,22 @@ describe("interior sound assembly", () => {
     expect(calls.impact[0]).toMatchObject({ slabMassKgM2: 500, screed: { type: "mortar", massKgM2: 90, stiffnessMNm3: 20 }, flankingMassesKgM2: [400, 600, 600], maxDb: 50 });
     expect(assembleInteriorSound(input({ ceilings: [{ ...input().ceilings[0]!, role: value("internal") }] })).ceilings).toEqual([]);
   });
+
+  test("above the ceiling, the walls of the storey above standing on the walls below are the source-side flanking elements", () => {
+    calls.airborne = [];
+    const elements = new Map(input().elements);
+    elements.set("N2", massive("N2", 300, 50));
+    // Upper storey: a lighter north wall 5 cm off the one below, and the west wall W again; no south wall above.
+    const wallsAbove = [{ id: "N2", name: "N2", ring: rect(-0.3, -0.25, 8.3, 0.05) }, { id: "W2", name: "W2", ring: rect(4, -0.3, 4.2, 5.3) }];
+    elements.set("W2", massive("W2", 400, 55));
+    const result = assembleInteriorSound(input({ elements, wallsAbove }));
+    const roomA = calls.airborne.filter(request => request.transmission === "vertical")[0]!;
+    const sourceOf = (edge: string) => { const found = roomA.edges.find(item => item.edge === edge)!; return [found.source.id, found.receiving.id]; };
+    expect([sourceOf("N"), sourceOf("W"), sourceOf("S")]).toEqual([["N2", "N"], ["W2", "W"], ["S", "S"]]);
+    // The south wall had no wall above, so that edge is still assumed to continue.
+    expect(result.wallsAboveAssumed).toBe(true);
+    expect(assembleInteriorSound(input({ elements, wallsAbove: [...wallsAbove, { id: "S2", name: "S2", ring: rect(-0.3, 5, 8.3, 5.3) }] })).wallsAboveAssumed).toBe(false);
+  });
 });
 
 describe("entrance doors", () => {

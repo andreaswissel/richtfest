@@ -40,7 +40,7 @@ const limitationText: Record<InteriorLimitation, string> = {
   doors_not_checked: "Türen und Wände mit Türen sind nicht nachgewiesen.",
 
   floor_like_ceiling: "Die Geschossdecke unter dem Geschoss ist nicht im Modell; sie wurde gleich der Decke darüber angenommen.",
-  walls_above_like_below: "Decken: die Wände des darüberliegenden Geschosses wurden gleich den Wänden des Raums darunter angenommen.",
+  walls_above_like_below: "Decken: Wo im Geschoss darüber keine Wand auf einer Wand des Raums darunter steht (beim obersten Geschoss immer), wurde diese Wand nach oben fortgesetzt angenommen. Grundrisse übereinanderliegender Geschosse sind über den Gebäudeumriss ausgerichtet.",
   screed_not_credited_airborne: "Decken: die Verbesserung der Luftschalldämmung durch den schwimmenden Estrich ist nicht angerechnet (auf der sicheren Seite).",
   impact_vertical_only: "Trittschall nur in den direkt darunterliegenden Raum; Übertragung in andere Richtungen ist nicht nachgewiesen.",
 };

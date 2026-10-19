@@ -2594,7 +2594,7 @@
   "interiorLimitLinings": "Ohne Vorsatzschalen, Unterdecken und Putz; Flankenwände unterschiedlicher Masse beidseits mit ihrer mittleren Masse.",
   "interiorLimitDoors": "Türen und Wände mit Türen sind nicht nachgewiesen.",
   "interiorLimitFloor": "Die Decke unter einem Geschoss ist nicht im Modell; sie wird gleich der Decke darüber angenommen.",
-  "interiorLimitWallsAbove": "Decken: Die Wände des Geschosses darüber werden gleich denen des Raums darunter angenommen.",
+  "interiorLimitWallsAbove": "Decken: Wo im Geschoss darüber keine gezeichnete Wand auf einer Wand darunter steht (immer beim obersten Geschoss), wird diese Wand nach oben fortgesetzt angenommen.",
   "interiorLimitScreedAirborne": "Decken: Die Luftschallverbesserung durch den schwimmenden Estrich ist nicht angerechnet (sichere Seite).",
   "interiorLimitImpact": "Trittschall nur in den direkt darunterliegenden Raum.",
   "buildingComponentFieldCeilingRole": "Art der Decke",

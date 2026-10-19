@@ -83,7 +83,7 @@ function roadSource(source: NoiseSource, zone: 32 | 33): { input: RoadNoiseSourc
 }
 
 /** Pages within this median distance of the placed page's walls count as the same building, stacked. */
-const ALIGNMENT_FIT_M = 0.3;
+export const STOREY_FIT_M = 0.3;
 
 /**
  * The placed page and every other plan page with exterior walls aligned to it by
@@ -102,7 +102,7 @@ export function facadePages(sitePlan: SitePlan, crs: string): { pages: FacadePag
     // One page per storey: the first (fullest) page of a storey wins.
     if (page === placed || !page.storey || pages.some(entry => entry.page.storey?.id === page.storey!.id)) continue;
     const aligned = alignPlanOutline(reference, exteriorRings(page));
-    if (aligned && aligned.fitM <= ALIGNMENT_FIT_M) pages.push({ page, placement: shiftedPlacement(placement, aligned.offset), basis: "outline", fitM: Math.round(aligned.fitM * 100) / 100 });
+    if (aligned && aligned.fitM <= STOREY_FIT_M) pages.push({ page, placement: shiftedPlacement(placement, aligned.offset), basis: "outline", fitM: Math.round(aligned.fitM * 100) / 100 });
     else if (page.walls.some(wall => wall.exterior)) unaligned.push(page);
   }
   return { pages, unaligned };
