@@ -1796,9 +1796,9 @@
   "buildingComponentGapMissing": "fehlt",
   "buildingComponentGapUnreviewed": "ungeprüft",
   "buildingComponentWallRoles": "Wandfunktionen",
-  "buildingComponentWallRolesHint": "Ermittelt die Räume beidseits jeder angenommenen Wand, erkennt Fassaden, schlägt Wandfunktionen anhand der Wohnungen vor und misst die Dicke im gedruckten Planmaßstab. Je Geschoss wird eine Decke angelegt. Vorschläge bleiben ungeprüft; von Personen eingetragene oder geprüfte Werte bleiben erhalten.",
+  "buildingComponentWallRolesHint": "Ermittelt die Räume beidseits jeder angenommenen Wand, erkennt Fassaden, schlägt Wandfunktionen anhand der Wohnungen vor und misst die Dicke im gedruckten Planmaßstab. Je Geschoss wird eine Decke angelegt, und die Öffnungen in den Wänden werden Fenster und Türen mit ihrer Breite. Vorschläge bleiben ungeprüft; von Personen eingetragene oder geprüfte Werte bleiben erhalten.",
   "buildingComponentDeriveWallRoles": "Aus Plan ableiten",
-  "buildingComponentDeriveResult": "{walls} Wände · {exterior} nach außen · {roles} Funktionen erkannt · {proposals} neue Funktions- und {thickness} neue Dickenvorschläge · Decken: {ceilings}",
+  "buildingComponentDeriveResult": "{walls} Wände · {exterior} nach außen · {roles} Funktionen erkannt · {proposals} neue Funktions- und {thickness} neue Dickenvorschläge · Decken: {ceilings} · neue Fenster: {windows}, Türen: {doors} · eingetragene Öffnungen verortet: {adopted}, offen: {ambiguous}",
   "buildingComponentOutside": "Außen",
   "buildingComponentCopyToRole": "Auf weitere Wände mit dieser Funktion übertragen ({count})",
   "buildingComponentCopyHint": "Überträgt Bauweise, Material, Dicke und Rohdichte. Auf diesen Wänden eingetragene oder geprüfte Werte bleiben erhalten; Kopien bleiben ungeprüft.",
@@ -2433,7 +2433,7 @@
   "proofGapFacadeLevel": "kein Fassadenpegel",
   "proofGapWallRw": "Rw der Wand",
   "proofGapWallConstruction": "Wandkonstruktion",
-  "proofGapWindowArea": "Fensterfläche",
+  "proofGapWindowArea": "Fensterfläche oder -höhe",
   "proofGapWindowRw": "Rw des Fensters",
   "proofGapOpeningsExceed": "Öffnungen größer als die Fassade",
   "proofGapSurfaces": "Flächen nicht bestätigt",
@@ -2656,5 +2656,7 @@
   "buildingComponentWindowOpeningTwinSash": "Stulpfenster",
   "buildingComponentWindowOpeningFixed": "Festverglasung",
   "buildingComponentGlazingBarsTrue": "Ja",
-  "buildingComponentGlazingBarsFalse": "Nein"
+  "buildingComponentGlazingBarsFalse": "Nein",
+  "buildingComponentFieldOpeningWidth": "Öffnungsbreite",
+  "buildingComponentFieldOpeningHeight": "Öffnungshöhe"
 }

@@ -61,6 +61,7 @@ import { createBuildingOutlineRouter } from "./building-outline-router";
 import { derivedWritable, effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks, inquiries } from "./schema";
 import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
+import { planOpeningMethod, planOpenings, type OpeningPage, type TracedOpening } from "./plan-openings";
 import { planStoreyLevels, storeyLevelFromText, type StoreyLevelReading } from "./storey-levels";
 import { sourcePages } from "./schema";
 import { documentTypesFor } from "./document-types";
@@ -859,6 +860,37 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         if (reading && !readings.has(source.storeyId)) readings.set(source.storeyId, { ...reading, sourceVersionId: source.sourceVersionId, page: source.page });
       }
       const levels = planStoreyLevels({ storeys: data.storeys as any[], properties: data.properties as any[], readings });
+      // Openings the plan trace found on each storey's current plan page, newest extraction per page.
+      const storeyPageKeys = new Set(storeyPages.map((source: any) => `${source.sourceVersionId}:${source.page}:${source.storeyId}`));
+      const openingJobs = await d.db.select({ sourceVersionId: buildingExtractionJobs.sourceVersionId, page: buildingExtractionJobs.page, storeyId: buildingExtractionJobs.storeyId,
+        openings: sql<unknown>`${buildingExtractionJobs.result}->'topologyCoverage'->'openingEvidence'`, aspect: sql<unknown>`${buildingExtractionJobs.result}->'pageScale'->'pageAspectRatio'` })
+        .from(buildingExtractionJobs).where(and(eq(buildingExtractionJobs.modelId, modelRow.model.id), eq(buildingExtractionJobs.tenantId, d.tenantId), eq(buildingExtractionJobs.status, "complete")))
+        .orderBy(desc(buildingExtractionJobs.updatedAt)) as any[];
+      const openingPages = new Map<string, OpeningPage>();
+      for (const job of openingJobs) {
+        const key = `${job.sourceVersionId}:${job.page}:${job.storeyId}`;
+        if (!storeyPageKeys.has(key) || openingPages.has(key) || !Array.isArray(job.openings)) continue;
+        openingPages.set(key, { sourceVersionId: job.sourceVersionId, page: job.page, storeyId: job.storeyId, pageAspectRatio: Number(job.aspect) || 1, openings: job.openings as TracedOpening[] });
+      }
+      // Accepted rooms keep their extraction candidate; its source key names the room in the trace.
+      const roomCandidateIds = (data.rooms as any[]).flatMap(room => typeof room.stableKey === "string" && room.stableKey.startsWith("extraction:") ? [room.stableKey.slice(11)] : [])
+        .filter(candidateId => uuid.safeParse(candidateId).success);
+      const candidateKeys = new Map(roomCandidateIds.length ? (await d.db.select({ id: buildingExtractionCandidates.id, sourceKey: buildingExtractionCandidates.sourceKey }).from(buildingExtractionCandidates)
+        .where(and(eq(buildingExtractionCandidates.tenantId, d.tenantId), inArray(buildingExtractionCandidates.id, roomCandidateIds))) as any[]).map(row => [row.id, row.sourceKey]) : []);
+      const hostOf = new Map((data.relationships as any[]).filter(item => item.relationshipType === "opening_in").map(item => [item.fromEntityId, item.toEntityId]));
+      const openingPlan = planOpenings({
+        pages: [...openingPages.values()],
+        walls: walls.map(wall => {
+          const element = (data.elements as any[]).find(item => item.id === wall.wallId);
+          return { id: wall.wallId, storeyId: element?.storeyId, sourceVersionId: wall.sourceVersionId, page: wall.page,
+            footprintKeys: Array.isArray(element?.geometry?.sourceFootprintKeys) ? element.geometry.sourceFootprintKeys : [],
+            exterior: wall.sides.includes("exterior") || wall.role === "exterior", roomIds: wall.sides.flatMap(side => Array.isArray(side) ? side.map(room => room.roomId) : []) };
+        }),
+        rooms: (data.rooms as any[]).map(room => ({ id: room.id, storeyId: room.storeyId, polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon : null,
+          candidateKey: typeof room.stableKey === "string" && room.stableKey.startsWith("extraction:") ? candidateKeys.get(room.stableKey.slice(11)) ?? null : null })),
+        existing: (data.elements as any[]).filter(item => item.kind === "window" || item.kind === "door")
+          .map(item => ({ id: item.id, kind: item.kind, wallId: hostOf.get(item.id) ?? null, planKey: typeof item.geometry?.planOpeningKey === "string" ? item.geometry.planOpeningKey : null })),
+      });
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
@@ -885,6 +917,40 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
               evidence: [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: wall.sourceVersionId, page: wall.page, ...region, ...quote })] });
             thicknessProposals++;
           }
+        }
+        // Openings from the plan: elements with their outline, in their wall, with the plan's width; area and Rw come from a schedule or the planner.
+        const storeyNumbers = new Map<string, { window: number; door: number }>();
+        for (const item of openingPlan.planned) {
+          const { x, y, width, height } = item.closure;
+          const geometry = { quality: "derived_opening", method: planOpeningMethod, semanticKind: item.kind, source: { sourceVersionId: item.sourceVersionId, page: item.page },
+            planRegion: item.closure, polygon: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }],
+            planOpeningKey: item.planKey, doorSwing: item.doorSwing,
+            limitations: "Unreviewed opening: a gap between two wall ends of the plan trace. Window or door, its room and wall are inferred; height, sill and rating are not in the plan." };
+          let elementId: string;
+          if (item.action === "adopt") {
+            // An entered opening takes its place on the plan; everything entered for it stays.
+            const [adopted] = await tx.update(buildingElements).set({ geometry }).where(and(eq(buildingElements.id, item.elementId), eq(buildingElements.tenantId, d.tenantId),
+              sql`${buildingElements.geometry} is null`)).returning({ id: buildingElements.id });
+            if (!adopted) continue;
+            elementId = adopted.id;
+          } else {
+            const counter = storeyNumbers.get(item.storeyId) ?? { window: (data.elements as any[]).filter(el => el.storeyId === item.storeyId && el.kind === "window").length,
+              door: (data.elements as any[]).filter(el => el.storeyId === item.storeyId && el.kind === "door").length };
+            counter[item.kind]++; storeyNumbers.set(item.storeyId, counter);
+            const wall = (data.elements as any[]).find(el => el.id === item.wallId);
+            const [created] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId: modelRow.model.id, buildingId: wall.buildingId, storeyId: item.storeyId, roomId: item.roomId,
+              stableKey: item.planKey, kind: item.kind, name: `${item.kind === "window" ? "Draft window" : "Draft door"} ${counter[item.kind]}`, constructionState: wall.constructionState,
+              geometry, createdBy: d.actorId }).onConflictDoNothing().returning({ id: buildingElements.id });
+            if (!created) continue;
+            elementId = created.id;
+            await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: elementId, toEntityType: "element", toEntityId: item.wallId,
+              relationshipType: "opening_in", metadata: { method: planOpeningMethod, sourceVersionId: item.sourceVersionId, page: item.page }, reviewStatus: "unreviewed", createdBy: d.actorId });
+          }
+          const evidence = [buildingEvidenceSchema.parse({ kind: "page", sourceVersionId: item.sourceVersionId, page: item.page, region: item.closure })];
+          const existingProperty = (key: string) => (data.properties as any[]).find(property => property.entityType === "element" && property.entityId === elementId && property.propertyKey === key);
+          if (item.action === "create") await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: elementId, propertyKey: "componentType", value: item.kind, unit: null, provenance: "inferred", evidence });
+          if (item.widthM !== null && derivedWritable(existingProperty("openingWidth"), item.widthM))
+            await appendPropertyVersion(tx, d, modelRow.model.id, { entityType: "element", entityId: elementId, propertyKey: "openingWidth", value: item.widthM, unit: "m", provenance: "inferred", evidence });
         }
         let levelProposals = 0;
         for (const level of levels.filter(item => item.write)) {
@@ -921,7 +987,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         const summary = { storeyLevels: levels.filter(level => level.level !== null).length, levelProposals, ceilings: ceilings.length, ceilingsCreated: createdCeilings.length, walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
           exterior: walls.filter(wall => wall.sides.includes("exterior")).length, unresolvedSides: walls.filter(wall => !wall.sides[0] || !wall.sides[1]).length,
           roles: walls.filter(wall => wall.role).length, roleProposals, thicknesses: walls.filter(wall => wall.thicknessCm !== null).length, thicknessProposals,
-          relationships: relationships.length + ceilingRelationships.length, method: wallAdjacencyMethod };
+          relationships: relationships.length + ceilingRelationships.length, method: wallAdjacencyMethod,
+          ...openingPlan.summary };
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
         await d.audit(tx, "projects.building.wall_adjacency.derived", "building_model", modelRow.model.id, { projectId, modelRevision: revision, ...summary, createdCeilingIds: createdCeilings });
         return { revision, summary };

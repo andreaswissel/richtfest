@@ -56,6 +56,9 @@ export const buildingComponentProperties = {
     soundReductionIndex: { value: z.number().min(0).max(100), unit: "dB" },
     soundReductionIndexBasis: { value: z.string().trim().min(1).max(500), unit: null },
     openingArea: { value: z.number().positive().max(10000), unit: "m²" },
+    // Clear width (from the plan's scale) and height of an opening; without an entered area, width × height is its area.
+    openingWidth: { value: z.number().positive().max(100), unit: "m" },
+    openingHeight: { value: z.number().positive().max(100), unit: "m" },
     // Small elements (ventilators, roller shutter boxes): Dn,e,w and how many of the same element sit in the wall.
     normalizedLevelDifference: { value: z.number().min(0).max(100), unit: "dB" },
     elementCount: { value: z.number().int().min(1).max(100), unit: null },

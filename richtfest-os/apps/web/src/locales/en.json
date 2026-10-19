@@ -1796,9 +1796,9 @@
   "buildingComponentGapMissing": "missing",
   "buildingComponentGapUnreviewed": "unreviewed",
   "buildingComponentWallRoles": "Wall roles",
-  "buildingComponentWallRolesHint": "Finds the rooms on both sides of each accepted wall, detects facades, proposes wall roles from the rooms' apartments and measures thickness at the printed plan scale. Each storey gets one ceiling. Proposals stay unreviewed; values entered or reviewed by a person are kept.",
+  "buildingComponentWallRolesHint": "Finds the rooms on both sides of each accepted wall, detects facades, proposes wall roles from the rooms' apartments and measures thickness at the printed plan scale. Each storey gets one ceiling, and the gaps in the walls become windows and doors with their width. Proposals stay unreviewed; values entered or reviewed by a person are kept.",
   "buildingComponentDeriveWallRoles": "Derive from plan",
-  "buildingComponentDeriveResult": "{walls} walls · {exterior} facing outside · {roles} roles found · {proposals} new role and {thickness} new thickness proposals · ceilings: {ceilings}",
+  "buildingComponentDeriveResult": "{walls} walls · {exterior} facing outside · {roles} roles found · {proposals} new role and {thickness} new thickness proposals · ceilings: {ceilings} · new windows: {windows}, doors: {doors} · entered openings placed: {adopted}, left to place: {ambiguous}",
   "buildingComponentOutside": "Outside",
   "buildingComponentCopyToRole": "Copy to other walls with this role ({count})",
   "buildingComponentCopyHint": "Copies construction, material, thickness and bulk density. Values entered or reviewed on those walls are kept; copies stay unreviewed.",
@@ -2433,7 +2433,7 @@
   "proofGapFacadeLevel": "no facade level",
   "proofGapWallRw": "wall Rw",
   "proofGapWallConstruction": "wall construction",
-  "proofGapWindowArea": "window area",
+  "proofGapWindowArea": "window area or height",
   "proofGapWindowRw": "window Rw",
   "proofGapOpeningsExceed": "openings larger than the facade",
   "proofGapSurfaces": "surfaces not confirmed",
@@ -2656,5 +2656,7 @@
   "buildingComponentWindowOpeningTwinSash": "Twin sash without mullion",
   "buildingComponentWindowOpeningFixed": "Fixed glazing",
   "buildingComponentGlazingBarsTrue": "Yes",
-  "buildingComponentGlazingBarsFalse": "No"
+  "buildingComponentGlazingBarsFalse": "No",
+  "buildingComponentFieldOpeningWidth": "Opening width",
+  "buildingComponentFieldOpeningHeight": "Opening height"
 }

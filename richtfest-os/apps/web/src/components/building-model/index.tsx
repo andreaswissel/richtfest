@@ -439,7 +439,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const deriveWallRoles = useMutation({
-    mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
+    mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings: number; windows: number; doors: number; adopted: number; ambiguous: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),

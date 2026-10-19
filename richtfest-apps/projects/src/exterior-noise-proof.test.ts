@@ -89,6 +89,15 @@ describe("exterior noise proof assembly", () => {
     expect(open.rooms[0]!.gaps.sort()).toEqual(["roof_construction", "roof_rw", "small_element_dnew"]);
   });
 
+  test("without an entered area, an opening's area is its plan width × height", () => {
+    const opening = { ...input().openings[0]!, area: null, width: value(1.5), height: value(1.2) };
+    const { rooms, batch } = assembleExteriorNoiseProof(input({ openings: [opening] }));
+    expect(rooms[0]!.gaps).not.toContain("window_area");
+    expect(batch!.rooms[0]!.elements.find(element => element.id.endsWith(opening.name))).toMatchObject({ areaM2: 1.8 });
+    // Width alone is not an area.
+    expect(assembleExteriorNoiseProof(input({ openings: [{ ...opening, height: null }] })).rooms[0]!.gaps).toContain("window_area");
+  });
+
   test("a basis as long as the building model allows still makes a valid calculation input", () => {
     // A catalogue window's basis names its row, every correction and what was assumed: well over 200 characters.
     const basis = value("x".repeat(500));

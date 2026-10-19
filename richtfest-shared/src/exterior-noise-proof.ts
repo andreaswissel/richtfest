@@ -37,7 +37,7 @@ export type ProofValue<T> = { value: T; reviewStatus: string; provenance: string
 
 /** Building-model properties the exterior noise verification reads; the agent may suggest any of them. */
 export const exteriorNoiseInputKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
-  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "normalizedLevelDifference", "elementCount", "surfaceArea",
+  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "openingWidth", "openingHeight", "normalizedLevelDifference", "elementCount", "surfaceArea",
   // A window's build-up, for its catalogue Rw when no tested value is declared.
   "glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"] as const;
 
@@ -61,6 +61,8 @@ export type ProofWindow = {
   count: ProofValue<number> | null; dnew: ProofValue<number> | null;
   /** A window's glazing build-up, read for its catalogue Rw. */
   glazing: ProofValue<string> | null;
+  /** Clear width (from the plan) and height; without an entered area, width × height is the area. */
+  width: ProofValue<number> | null; height: ProofValue<number> | null;
 };
 /** A roof surface over a room: its area and Rw. It takes the loudest La of the room's facades. */
 export type ProofRoof = {
@@ -136,6 +138,7 @@ export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: 
         laDb: facade.la ? Math.round((exteriorNoiseLaPeriod((room.kind?.value ?? "living") as ExteriorNoiseRoomKind) === "sleeping" ? facade.la.sleepingDb : facade.la.dayDb) * 10) / 10 : null,
         construction: facade.construction, rwDb: shown(facade.rw), rwBasis: facade.rwBasis?.value ?? null,
         openings: facade.windows.map(item => ({ elementId: item.id, name: item.name, type: item.componentType, areaM2: shown(item.area), rwDb: shown(item.rw),
+          widthM: shown(item.width), heightM: shown(item.height),
           ...(item.componentType === "small_element" ? { count: shown(item.count), dnewDb: shown(item.dnew) } : {}) })),
       })),
       roofs: room.roofs.map(roof => ({ elementId: roof.id, name: roof.name, areaM2: shown(roof.area), rwDb: shown(roof.rw), construction: roof.construction })),

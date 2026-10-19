@@ -10,7 +10,7 @@ const md = (value: unknown) => String(value ?? "—").replace(/[\\`*_{}<>#!|\[\]
 const dB = (value: number) => value.toFixed(1).replace(".", ",");
 const gapText: Record<ProofGap, string> = {
   room_kind: "Raumnutzung", floor_area: "Grundfläche", clear_height: "lichte Raumhöhe", facade_level: "Fassadenpegel", wall_rw: "Rw der Wand",
-  wall_construction: "Wandkonstruktion", window_area: "Fensterfläche", window_rw: "Rw eines Fensters", openings_exceed_facade: "Öffnungen größer als die Fassade",
+  wall_construction: "Wandkonstruktion", window_area: "Fensterfläche oder -höhe", window_rw: "Rw eines Fensters", openings_exceed_facade: "Öffnungen größer als die Fassade",
   surfaces_unconfirmed: "Vollständigkeit der Außenflächen nicht bestätigt", applicability: "Anwendbarkeit des Verfahrens", flanking: "Flankenübertragung", no_facade: "keine Außenfassade",
   small_element_dnew: "Dn,e,w eines Lüfters oder Rollladenkastens", roof_area: "Dachfläche", roof_rw: "Rw des Dachs", roof_construction: "Konstruktion des Dachs",
 };
@@ -68,7 +68,7 @@ function noiseAnnex(proof: Proof) {
 
 const fieldText: Record<string, string> = {
   exteriorNoiseApplicability: "Anwendbarkeit des Verfahrens", exteriorNoiseFlanking: "Flankenübertragung", clearRoomHeight: "lichte Raumhöhe", exteriorNoiseRoom: "Raumnutzung",
-  exteriorSurfacesComplete: "Vollständigkeit der Außenflächen", construction: "Konstruktion", soundReductionIndex: "Rw", soundReductionIndexBasis: "Nachweis für Rw", openingArea: "Öffnungsfläche",
+  exteriorSurfacesComplete: "Vollständigkeit der Außenflächen", construction: "Konstruktion", soundReductionIndex: "Rw", soundReductionIndexBasis: "Nachweis für Rw", openingArea: "Öffnungsfläche", openingWidth: "Öffnungsbreite", openingHeight: "Öffnungshöhe",
   normalizedLevelDifference: "Dn,e,w", elementCount: "Anzahl", surfaceArea: "Dachfläche",
   glazing: "Glasaufbau", glassSoundReduction: "Rw,GLAS", windowFrame: "Rahmenmaterial", rebateSeals: "Falzdichtungen", windowOpening: "Öffnungsart", frameShare: "Rahmenanteil", glazingBars: "Sprossen",
 };

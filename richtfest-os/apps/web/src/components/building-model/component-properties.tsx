@@ -31,11 +31,11 @@ const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars"]);
 const countKeys = new Set(["elementCount", "rebateSeals"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
   soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB",
-  glassSoundReduction: "dB", frameShare: "%" };
+  glassSoundReduction: "dB", frameShare: "%", openingWidth: "m", openingHeight: "m" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
-const openingKeys = ["componentType", "openingArea", ...acousticKeys];
+const openingKeys = ["componentType", "openingWidth", "openingHeight", "openingArea", ...acousticKeys];
 // Without a tested Rw, a window's build-up gives its catalogue Rw.
 const windowKeys = [...openingKeys, "glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"];
 const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
@@ -122,7 +122,7 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
   </>;
 }
 
-export type WallRoleDerivation = { pending: boolean; result?: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings?: number }; onDerive: () => void };
+export type WallRoleDerivation = { pending: boolean; result?: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings?: number; windows?: number; doors?: number; adopted?: number; ambiguous?: number }; onDerive: () => void };
 export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: { targets: number; updated: Record<string, number>; kept: number }; onCopy: (keys: string[]) => void };
 const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
@@ -155,7 +155,7 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
       </>}
       {componentType === "wall" && region.openings && <>
         <dt>{t("buildingComponentOpenings")}</dt>
-        <dd>{region.openings.map((id, index) => <Fragment key={id}>{index > 0 && ", "}<ElementLink id={id} names={elementNames} href={elementHref} /></Fragment>)}</dd>
+        <dd><span>{region.openings.map((id, index) => <Fragment key={id}>{index > 0 && ", "}<ElementLink id={id} names={elementNames} href={elementHref} /></Fragment>)}</span></dd>
       </>}
       {region.inWall && <>
         <dt>{t("buildingComponentInWall")}</dt>
@@ -181,7 +181,9 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
     {(componentType === "wall" || componentType === "ceiling") && derivation && <div className="building-model-component-derive">
       <Button size="xs" variant="outline" disabled={derivation.pending} onClick={derivation.onDerive}>{t("buildingComponentDeriveWallRoles")}</Button>
       <p className="muted text-ui-2xs" role="status">{result ? t("buildingComponentDeriveResult").replace("{walls}", String(result.walls)).replace("{exterior}", String(result.exterior))
-        .replace("{roles}", String(result.roles)).replace("{proposals}", String(result.roleProposals)).replace("{thickness}", String(result.thicknessProposals)).replace("{ceilings}", String(result.ceilings ?? 0)) : t("buildingComponentWallRolesHint")}</p>
+        .replace("{roles}", String(result.roles)).replace("{proposals}", String(result.roleProposals)).replace("{thickness}", String(result.thicknessProposals)).replace("{ceilings}", String(result.ceilings ?? 0))
+        .replace("{windows}", String(result.windows ?? 0)).replace("{doors}", String(result.doors ?? 0))
+        .replace("{adopted}", String(result.adopted ?? 0)).replace("{ambiguous}", String(result.ambiguous ?? 0)) : t("buildingComponentWallRolesHint")}</p>
     </div>}
   </>;
 }

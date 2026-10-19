@@ -94,7 +94,8 @@ export type ProofAssemblyInput = {
   levels: Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>;
   openings: Array<{ id: string; name: string; componentType: "window" | "door" | "small_element"; roomId: string; wallId: string | null;
     area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
-    count?: ProofValue<number> | null; dnew?: ProofValue<number> | null; glazing?: ProofValue<string> | null }>;
+    count?: ProofValue<number> | null; dnew?: ProofValue<number> | null; glazing?: ProofValue<string> | null;
+    width?: ProofValue<number> | null; height?: ProofValue<number> | null }>;
   /** Roof surfaces over rooms (top storey, sloped ceilings). */
   roofs?: Array<{ id: string; name: string; roomId: string; construction: unknown; area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null }>;
 };
@@ -103,6 +104,13 @@ type RoomInput = BatchInput["rooms"][number];
 
 const reviewed = (value: { reviewStatus: string } | null) => value?.reviewStatus === "approved" ? "geprüft" : "ungeprüft";
 const kindLabels: Record<ExteriorNoiseRoomKind, string> = { sleeping: "Schlafraum", living: "Wohnraum", office: "Büro / Praxis", hospital_bedroom: "Bettenraum", not_protected: "nicht schutzbedürftig" };
+
+/** Without an entered area, an opening's area is its width × height; it counts as reviewed only when both are. */
+export function openingAreaFrom(width: ProofValue<number> | null, height: ProofValue<number> | null): ProofValue<number> | null {
+  if (!width || !height) return null;
+  return { ...width, value: round2(width.value * height.value), reviewStatus: width.reviewStatus === "approved" && height.reviewStatus === "approved" ? "approved" : "unreviewed",
+    provenance: width.provenance === "manual" && height.provenance === "manual" ? "manual" : "inferred" };
+}
 
 export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: ProofRoom[]; batch: BatchInput | null } {
   const assumption = (reason: string) => ({ kind: "assumption" as const, reason: reason.slice(0, 1000) });
@@ -126,7 +134,8 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       const lengthM = round2(lengths.get(wall.id)!);
       const areaM2 = height === null ? null : round2(lengthM * height);
       const windows: ProofWindow[] = input.openings.filter(opening => opening.roomId === room.id && opening.wallId === wall.id)
-        .map(({ id, name, componentType, area, rw, basis, count, dnew, glazing }) => ({ id, name, componentType, area, rw, basis, count: count ?? null, dnew: dnew ?? null, glazing: glazing ?? null }));
+        .map(({ id, name, componentType, area, rw, basis, count, dnew, glazing, width, height }) => ({ id, name, componentType, rw, basis, count: count ?? null, dnew: dnew ?? null, glazing: glazing ?? null,
+          width: width ?? null, height: height ?? null, area: area ?? openingAreaFrom(width ?? null, height ?? null) }));
       // A small element's area is per element; without one it takes no facade area.
       const openingArea = windows.reduce((sum, item) => sum + (item.area?.value ?? 0) * (item.componentType === "small_element" ? item.count?.value ?? 1 : 1), 0);
       const level = input.levels.get(wall.id);
@@ -204,7 +213,9 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
           : { kind: "area" as const, id: `${facadeLabel(facade)} · ${item.name}`, facadeId: facadeLabel(facade), areaM2: item.area!.value,
             rwDb: item.rw!.value, construction: "window_or_door" as const, ratingBasis: "installed_configuration" as const,
             configuration: item.basis?.value ?? "Rw im Einbauzustand laut Gebäudemodell.",
-            provenance: assumption(`${item.componentType === "door" ? "Tür" : "Fenster"}: Fläche und Rw im Einbauzustand eingegeben (${reviewed(item.rw)}).`) }),
+            provenance: assumption(`${item.componentType === "door" ? "Tür" : "Fenster"}: ${item.width && item.height && item.area?.propertyId === item.width.propertyId
+              ? `Fläche = Breite ${item.width.value} m (${item.width.provenance === "inferred" ? "aus dem Plan" : "eingegeben"}) × Höhe ${item.height.value} m`
+              : "Fläche im Einbauzustand eingegeben"}; Rw im Einbauzustand eingegeben (${reviewed(item.rw)}).`) }),
       ]).concat(roofs.map(roof => ({ kind: "area" as const, id: `Dach · ${roof.name}`, facadeId: `Dach · ${roof.name}`, areaM2: roof.area!.value,
         rwDb: roof.rw!.value, construction: roof.construction, ratingBasis: "installed_configuration" as const,
         configuration: roof.basis?.value ?? "Rw des Dachs laut Gebäudemodell.",
@@ -315,7 +326,8 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       openings: openingRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name,
         componentType: row.kind === "door" ? "door" : row.kind === "small_element" ? "small_element" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
         area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis"),
-        count: value(row.id, "elementCount"), dnew: value(row.id, "normalizedLevelDifference"), glazing: value(row.id, "glazing") })),
+        count: value(row.id, "elementCount"), dnew: value(row.id, "normalizedLevelDifference"), glazing: value(row.id, "glazing"),
+        width: value(row.id, "openingWidth"), height: value(row.id, "openingHeight") })),
       roofs: roofRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name, roomId: row.roomId,
         construction: value(row.id, "construction")?.value ?? null, area: value(row.id, "surfaceArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis") })),
     });
