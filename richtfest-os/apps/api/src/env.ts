@@ -6,7 +6,7 @@ export const env = z.object({
   GEOAPIFY_API_KEY: z.string().trim().optional(),
   /** Nominatim base URL for approximate site points in BY, MV and SH; empty disables it. Public instance: max 1 request/s. */
   NOMINATIM_URL: z.union([z.literal(""), z.string().url()]).default("https://nominatim.openstreetmap.org"),
-  /** Licensed acoustic norm pack (JSON, or base64 of it); server-only. ACOUSTIC_NORM_PACK_PATH reads it from a file instead. */
+  /** Licensed acoustic norm pack (JSON, or base64 of it or of its gzip); server-only. ACOUSTIC_NORM_PACK_PATH reads it from a file instead. */
   ACOUSTIC_NORM_PACK: z.string().trim().optional().transform(value => value || undefined),
   ACOUSTIC_NORM_PACK_PATH: z.string().trim().optional().transform(value => value || undefined),
   PUBLIC_DATA_ENABLED: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
