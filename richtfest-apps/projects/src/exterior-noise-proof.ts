@@ -27,7 +27,7 @@ export const polygonArea = (ring: Point2[]) => Math.abs(ring.reduce((sum, a, i) 
   return sum + a[0] * b[1] - b[0] * a[1];
 }, 0)) / 2;
 
-const inside = (p: Point2, ring: Point2[]) => {
+export const inside = (p: Point2, ring: Point2[]) => {
   let result = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [xi, yi] = ring[i]!, [xj, yj] = ring[j]!;
@@ -35,7 +35,7 @@ const inside = (p: Point2, ring: Point2[]) => {
   }
   return result;
 };
-const distanceToRing = (p: Point2, ring: Point2[]) => inside(p, ring) ? 0
+export const distanceToRing = (p: Point2, ring: Point2[]) => inside(p, ring) ? 0
   : Math.min(...ring.map((a, i) => segmentDistance(p, a, ring[(i + 1) % ring.length]!).distance));
 
 /** How far a room extends along a wall: the overlap of both outlines projected on the wall's long axis. */
@@ -188,12 +188,12 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
 
 const proofKeys = [...exteriorNoiseInputKeys, "componentType"];
 
-type CurrentValue = ProofValue<any> & { unit: string | null; evidence: unknown };
-async function currentValues(d: AppDeps, modelId: string, entityIds: string[]) {
+export type CurrentValue = ProofValue<any> & { unit: string | null; evidence: unknown };
+export async function currentValues(d: AppDeps, modelId: string, entityIds: string[], keys: readonly string[] = proofKeys) {
   const values = new Map<string, CurrentValue>();
   if (!entityIds.length) return values;
   const properties = await d.db.select({ id: buildingProperties.id, entityId: buildingProperties.entityId, key: buildingProperties.propertyKey }).from(buildingProperties)
-    .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, entityIds), inArray(buildingProperties.propertyKey, proofKeys)));
+    .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, entityIds), inArray(buildingProperties.propertyKey, [...keys])));
   if (!properties.length) return values;
   const versions = await d.db.select().from(buildingPropertyVersions)
     .where(and(eq(buildingPropertyVersions.tenantId, d.tenantId), inArray(buildingPropertyVersions.propertyId, (properties as any[]).map(row => row.id))))
@@ -296,8 +296,9 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
 }
 
 /** Inferred values nobody has confirmed yet, with their first cited page. */
-async function suggestionsOf(d: AppDeps, values: Map<string, CurrentValue>, entities: Array<[ProofSuggestion["entityType"], string, string]>): Promise<ProofSuggestion[]> {
-  const pending = entities.flatMap(([entityType, entityId, entityLabel]) => exteriorNoiseInputKeys.flatMap(key => {
+export async function suggestionsOf(d: AppDeps, values: Map<string, CurrentValue>, entities: Array<[ProofSuggestion["entityType"], string, string]>,
+  keys: readonly string[] = exteriorNoiseInputKeys): Promise<ProofSuggestion[]> {
+  const pending = entities.flatMap(([entityType, entityId, entityLabel]) => keys.flatMap(key => {
     const found = values.get(`${entityId}:${key}`);
     if (!found || found.provenance !== "inferred" || found.reviewStatus !== "unreviewed") return [];
     const cited = (Array.isArray(found.evidence) ? found.evidence : []).map(item => buildingEvidenceSchema.safeParse(item)).find(item => item.success && item.data.kind === "page");

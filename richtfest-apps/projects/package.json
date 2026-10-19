@@ -26,7 +26,8 @@
     "./exterior-noise-proof": "./src/exterior-noise-proof.ts",
     "./project-files": "./src/project-files.ts",
     "./project-deletion-worker": "./src/project-deletion-worker.ts",
-    "./exterior-noise-catalogue": "./src/exterior-noise-catalogue.ts"
+    "./exterior-noise-catalogue": "./src/exterior-noise-catalogue.ts",
+    "./interior-sound-proof": "./src/interior-sound-proof.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

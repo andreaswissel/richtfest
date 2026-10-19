@@ -125,6 +125,13 @@ Project Chat receives `context.exteriorNoise`, a bounded summary of the building
 
 The prompt tells the agent to report gaps, suggest only what a cited source states, never estimate acoustic values, and leave review and sign-off to the planner.
 
+#### Interior sound verification in Project Chat
+
+Project Chat also receives `context.interiorSound`, a bounded summary of the [interior sound verification](/docs/workflows/interior-sound): per separating wall the room pair, separating area, gaps and result; per ceiling and room below its type, floating screed, gaps and airborne and impact results; and each element's catalogue area mass or what is missing. Two tools act on it:
+
+- `propose_interior_sound_inputs` writes cited suggestions for clear room height, construction, material, thickness, bulk density, wall and ceiling type, screed type, mass and stiffness, and Dn,f,w, with the same rules as the exterior suggestions. It has no key for Rw: Richtfest calculates element values from the catalogue. Requires `projects:write` and `agent:run`.
+- `prepare_interior_sound_nachweis` creates the same deterministic draft as **Create interior Nachweis**, linked to the run. Requires `knowledge:write`.
+
 ### Reviewed supplier component context
 
 The [Components app](/docs/workflows/components) supplies `componentContext` to direct execution and the default supervisor phases through host contracts. Reads inherit the initiating actor's tenant and permissions, including `components:read`; agent execution does not grant catalog access. Goal-based product/category matching selects only current reviewed revisions, excluding rejected and unreviewed records. Context contains at most five complete records within 24,000 UTF-8 bytes of serialized record content, with explicit truncation when matches are omitted. Matching is a bounded reference lookup, not a suitability calculation or exhaustive supplier search.

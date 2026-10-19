@@ -133,6 +133,10 @@ export type AppDeps = {
   proposeExteriorNoiseInputs?: (projectId: string, input: unknown, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
   /** Suggests wall Rw from the component catalogue for walls of the verification without one (Projects). */
   suggestExteriorNoiseCatalogue?: (projectId: string, tx: any) => Promise<{ written: number }>;
+  /** Projects assembles the interior sound verification (separating walls and ceilings) from the building model. */
+  interiorSoundProof?: (projectId: string) => Promise<import("@richtfest/shared").InteriorSoundProof>;
+  /** Writes the agent's cited interior sound suggestions as unreviewed building-model values (Projects). */
+  proposeInteriorSoundInputs?: (projectId: string, input: unknown, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
     runId?: string;

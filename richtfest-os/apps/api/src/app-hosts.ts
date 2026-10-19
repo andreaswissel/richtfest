@@ -39,8 +39,10 @@ import { calculateAcoustics } from "@richtfest/acoustics";
 import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
 import { massiveWallRw } from "@richtfest/acoustics/massive-wall";
+import { airborneSoundInsulation, impactSoundLevel } from "@richtfest/acoustics/interior-sound";
 import { proposeExteriorNoiseInputs, readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
 import { suggestCatalogueValues } from "@richtfest/projects/exterior-noise-catalogue";
+import { proposeInteriorSoundInputs, readInteriorSoundProof } from "@richtfest/projects/interior-sound-proof";
 import { acousticNormPack } from "./acoustic-norm-pack";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
@@ -139,8 +141,22 @@ export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   // Imported reference counts are read whenever present; only their import is switched by TRAFFIC_COUNT_IMPORT_ENABLED.
   trafficCounts: bbox => trafficCountsInBox(db, bbox),
   exteriorNoise: exteriorNoiseHost(),
+  interiorSound: interiorSoundHost(),
   calculateAcoustics,
 });
+const interiorSoundHost = (): ProjectsDeps["interiorSound"] => {
+  const pack = acousticNormPack();
+  const interior = pack?.din4109_interior, catalogue = pack?.din4109_32;
+  if (!pack || !interior || !catalogue) return null;
+  return {
+    editions: { ...interior.editions, catalogue: catalogue.edition },
+    wallRequirement: role => interior.requirements.walls[role] ?? null,
+    ceilingRequirement: role => interior.requirements.ceilings[role] ?? null,
+    massiveRw: input => massiveWallRw(pack, input),
+    airborne: input => airborneSoundInsulation(pack, input),
+    impact: input => impactSoundLevel(pack, input),
+  };
+};
 const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
   const pack = acousticNormPack();
   if (!pack) return null;
@@ -195,6 +211,8 @@ export const knowledgeDeps = (
     proposeExteriorNoiseInputs: (projectId, input, execution, tx) => proposeExteriorNoiseInputs(
       { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
     suggestExteriorNoiseCatalogue: (projectId, tx) => suggestCatalogueValues({ ...projectsDeps(db, req), db: tx }, projectId, tx),
+    interiorSoundProof: projectId => readInteriorSoundProof(projectsDeps(db, req), projectId),
+    proposeInteriorSoundInputs: (projectId, input, execution, tx) => proposeInteriorSoundInputs({ ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
     validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
       sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid

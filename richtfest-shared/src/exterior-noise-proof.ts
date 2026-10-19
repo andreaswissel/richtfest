@@ -122,7 +122,7 @@ export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: 
 }
 
 /** What the Richtfest Agent may suggest for the verification: cited values on existing entities, and windows/doors it read from plans or a Fensterliste. */
-const suggestionEvidence = z.array(buildingEvidenceSchema).min(1).max(5);
+export const suggestionEvidence = z.array(buildingEvidenceSchema).min(1).max(5);
 export const exteriorNoiseSuggestionInput = z.object({
   values: z.array(z.object({
     entityType: z.enum(["building", "storey", "room", "element"]), entityId: z.string().uuid(),

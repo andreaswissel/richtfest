@@ -12,6 +12,11 @@ export type ComponentConstruction = z.infer<typeof componentConstructionSchema>;
 /** Requirement-relevant wall role: DIN 4109-1 sets different requirements per role. */
 export const wallRoleSchema = z.enum(["apartment_partition", "corridor_partition", "stairwell", "exterior", "internal"]);
 export type WallRole = z.infer<typeof wallRoleSchema>;
+/** What a ceiling separates; it selects the interior requirement. Internal ceilings have none. */
+export const ceilingRoleSchema = z.enum(["apartment_separating", "over_common_space", "under_common_attic", "under_bathroom", "internal"]);
+export type CeilingRole = z.infer<typeof ceilingRoleSchema>;
+/** Floating screed: mortar (cement, calcium sulphate, …), mastic asphalt, prefabricated dry screed, or none. */
+export const screedTypeSchema = z.enum(["mortar", "mastic_asphalt", "prefab", "none"]);
 export const spaceTypeSchema = z.enum(["apartment", "common_corridor", "stairwell", "common_other", "exterior"]);
 export type SpaceType = z.infer<typeof spaceTypeSchema>;
 /** Agreed sound insulation level: the statutory DIN 4109-1 minimum, the elevated civil-law level or DEGA 103. */
@@ -45,6 +50,12 @@ export const buildingComponentProperties = {
     soundReductionIndex: { value: z.number().min(0).max(100), unit: "dB" },
     soundReductionIndexBasis: { value: z.string().trim().min(1).max(500), unit: null },
     openingArea: { value: z.number().positive().max(10000), unit: "m²" },
+    // Interior sound: what a ceiling separates, its floating screed, and Dn,f,w of a lightweight flanking wall.
+    ceilingRole: { value: ceilingRoleSchema, unit: null },
+    screedType: { value: screedTypeSchema, unit: null },
+    screedMass: { value: z.number().positive().max(1000), unit: "kg/m²" },
+    screedStiffness: { value: z.number().positive().max(1000), unit: "MN/m³" },
+    flankingLevelDifference: { value: z.number().min(0).max(120), unit: "dB" },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },

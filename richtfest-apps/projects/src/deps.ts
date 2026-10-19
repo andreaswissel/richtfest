@@ -70,6 +70,15 @@ export type AppDeps = {
     /** Rw of a single-leaf massive wall from the component catalogue; absent when the pack has no catalogue. */
     massiveWallRw?: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
   } | null;
+  /** Interior sound methods and requirements from the norm pack; absent when the pack has no interior part or component catalogue. */
+  interiorSound?: {
+    editions: { requirements: string; method: string; junctions: string; screeds: string; catalogue: string };
+    wallRequirement: (role: import("@richtfest/shared").InteriorWallRole) => { rwMinDb: number; ref: string } | null;
+    ceilingRequirement: (role: import("@richtfest/shared").InteriorCeilingRole) => { rwMinDb: number | null; lnwMaxDb: number | null; ref: string } | null;
+    massiveRw: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
+    airborne: (input: import("@richtfest/shared").AirborneInput) => import("@richtfest/shared").AirborneResult;
+    impact: (input: import("@richtfest/shared").ImpactInput) => import("@richtfest/shared").ImpactResult;
+  } | null;
   /** The deterministic acoustic calculator (DIN 4109 exterior noise verification), shared with the knowledge app. */
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
 };

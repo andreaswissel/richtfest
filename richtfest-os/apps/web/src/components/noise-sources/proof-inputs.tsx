@@ -20,8 +20,8 @@ type Proof = Extract<ExteriorNoiseProof, { available: true }>;
 const db = (value: number) => value.toFixed(1);
 const m = (value: number) => value.toFixed(2);
 const parseNumber = (text: string) => { const value = Number(text.trim().replace(",", ".")); return text.trim() && Number.isFinite(value) ? value : null; };
-const invalidate = (projectId: string) => queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith(`/projects/${projectId}/`) });
-const errorText = (error: unknown, t: T) => error instanceof ApiError && error.status === 409 ? t("proofConflict") : error instanceof Error ? error.message : String(error);
+export const invalidate = (projectId: string) => queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0]).startsWith(`/projects/${projectId}/`) });
+export const errorText = (error: unknown, t: T) => error instanceof ApiError && error.status === 409 ? t("proofConflict") : error instanceof Error ? error.message : String(error);
 
 const kindKeys: Record<string, Key> = {
   sleeping: "proofKindSleeping", living: "proofKindLiving", office: "proofKindOffice", hospital_bedroom: "proofKindHospital", not_protected: "proofKindNotProtected",
@@ -40,14 +40,14 @@ const unavailableKeys: Record<string, Key> = {
 // Every model write raises its revision. Consecutive saves (a value and its basis) continue from the
 // revision the previous save returned instead of the one last read, which the server would reject.
 const latestRevision = new Map<string, number>();
-const baseRevision = (projectId: string, proof: Proof) => Math.max(proof.modelRevision, latestRevision.get(projectId) ?? 0);
-const noteRevision = (projectId: string, result: unknown) => {
+export const baseRevision = (projectId: string, proof: { modelRevision: number }) => Math.max(proof.modelRevision, latestRevision.get(projectId) ?? 0);
+export const noteRevision = (projectId: string, result: unknown) => {
   const revision = (result as { revision?: unknown } | null)?.revision;
   if (typeof revision === "number") latestRevision.set(projectId, Math.max(revision, latestRevision.get(projectId) ?? 0));
 };
 
 /** Saves one building-model property as a manual, unreviewed value. */
-function useSaveProperty(projectId: string, proof: Proof) {
+export function useSaveProperty(projectId: string, proof: { modelRevision: number }) {
   return useMutation({
     mutationFn: (input: { entityType: "building" | "storey" | "room" | "element"; entityId: string; propertyKey: string; value: unknown; unit?: string | null }) =>
       api(`/projects/${projectId}/building-model/properties`, { baseRevision: baseRevision(projectId, proof), provenance: "manual", evidence: [], unit: null, ...input }),
@@ -120,18 +120,21 @@ function CreateNachweis({ projectId, proof, ready, total, t }: { projectId: stri
   </div>;
 }
 
-const enumKeys = new Set(["exteriorNoiseApplicability", "exteriorNoiseFlanking", "exteriorNoiseRoom", "construction"]);
+const enumKeys = new Set(["exteriorNoiseApplicability", "exteriorNoiseFlanking", "exteriorNoiseRoom", "construction", "wallRole", "ceilingRole", "screedType"]);
 const suggestedValue = (item: ProofSuggestion, t: T) => typeof item.value === "boolean" ? t(item.value ? "proofYes" : "proofNo")
   : enumKeys.has(item.propertyKey) ? optionLabel(item.propertyKey, String(item.value), t) : `${String(item.value)}${item.unit ? ` ${item.unit}` : ""}`;
 
 /** Values Richtfest suggested with their cited page; the planner accepts or rejects each, or all at once. */
-function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+export function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; proof: { modelRevision: number; suggestions: ProofSuggestion[] }; canWrite: boolean; t: T }) {
   const review = useMutation({
     mutationFn: (input: { decision: "approved" | "rejected"; items: ProofSuggestion[] }) => api(`/projects/${projectId}/building-model/properties/review`, {
       baseRevision: baseRevision(projectId, proof), decision: input.decision,
       items: input.items.map(item => ({ propertyId: item.propertyId, version: item.version, reviewRevision: item.reviewRevision })) }),
     onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
   });
+  // Long lists stay scannable: the first rows, then all on request; Accept all still covers every suggestion.
+  const [all, setAll] = useState(false);
+  const shown = all ? proof.suggestions : proof.suggestions.slice(0, SUGGESTIONS_SHOWN);
   return <div className="proof-suggestions">
     <div className="noise-toolbar">
       <h3 className="site-section-title">{t("proofSuggestions")}</h3>
@@ -140,7 +143,7 @@ function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; pro
         {t("proofAcceptAll").replace("{count}", String(proof.suggestions.length))}</Button>}
     </div>
     <Table headers={[t("proofSuggestionFor"), t("proofSuggestionField"), t("proofSuggestionValue"), t("proofSuggestionSource"), ""]}
-      rows={proof.suggestions.map(item => ({ id: `${item.propertyId}:${item.version}`, cells: [
+      rows={shown.map(item => ({ id: `${item.propertyId}:${item.version}`, cells: [
         <span>{item.entityLabel || t("proofBuilding")}</span>,
         <span className="text-ui-xs">{fieldLabel(item.propertyKey, t)}</span>,
         <span className="text-ui-xs">{suggestedValue(item, t)}</span>,
@@ -151,9 +154,11 @@ function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; pro
           <Button size="sm" variant="ghost" disabled={review.isPending} onClick={() => review.mutate({ decision: "rejected", items: [item] })}>{t("proofReject")}</Button>
         </span> : null,
       ] }))} />
+    {shown.length < proof.suggestions.length && <div><Button size="sm" variant="ghost" onClick={() => setAll(true)}>{t("proofShowAllSuggestions").replace("{count}", String(proof.suggestions.length))}</Button></div>}
     {review.isError && <Callout tone="error">{errorText(review.error, t)}</Callout>}
   </div>;
 }
+const SUGGESTIONS_SHOWN = 6;
 
 type CatalogueResult = { status: string; reason?: string; written: number; walls: Array<{ wallId: string; wall: string; status: string; rwDb: number | null; reason: string | null }> };
 const catalogueReasons: Record<string, Key> = {

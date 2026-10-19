@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { bebauungsplanSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, ceilingRoleSchema, screedTypeSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -21,18 +21,23 @@ const enumOptions: Record<string, readonly string[]> = {
   storeyInventory: ["complete", "incomplete"], gfzCountingBasis: ["full_storeys_only", "include_other_storeys"],
   exteriorNoiseRoom: exteriorNoiseRoomKinds, exteriorNoiseApplicability: ["standard_exterior_noise", "special_assessment_required"],
   exteriorNoiseFlanking: ["negligible", "required"], exteriorSurfacesComplete: ["true", "false"],
+  ceilingRole: ceilingRoleSchema.options, screedType: screedTypeSchema.options,
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
 const booleanKeys = new Set(["exteriorSurfacesComplete"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
-  soundReductionIndex: "dB", openingArea: "m²", clearRoomHeight: "m" };
+  soundReductionIndex: "dB", openingArea: "m²", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
 const openingKeys = ["componentType", "openingArea", ...acousticKeys];
 const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
-const keysFor = (componentType: ComponentType | null) => componentType === "window" || componentType === "door" ? openingKeys
-  : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : [])];
+// Interior sound: a ceiling's requirement and floating screed; a lightweight wall's Dn,f,w when it flanks a separating element.
+const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness"];
+const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "window" || componentType === "door" ? openingKeys
+  : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : []),
+    ...(componentType === "ceiling" ? ceilingKeys : []),
+    ...(componentType === "wall" && (construction === "drywall" || construction === "timber" || construction === "steel") ? ["flankingLevelDifference"] : [])];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
 export const fieldLabel = (key: string, t: T) => t(`buildingComponentField${camel(key)}` as Key);
 export const optionLabel = (key: string, option: string, t: T) => t(`buildingComponent${camel(key)}${camel(option)}` as Key);
@@ -115,7 +120,7 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
   const isRoom = region.entityType === "room";
   const componentType = isRoom ? null : regionComponentType(region);
   const gaps = componentInputGaps(componentType, Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { value: state.value, reviewStatus: state.reviewStatus }])));
-  const keys = isRoom ? roomKeys : keysFor(componentType);
+  const keys = isRoom ? roomKeys : keysFor(componentType, states.construction && states.construction.reviewStatus !== "rejected" ? states.construction.value : null);
   const placeholder = (key: string) => key === "componentType" && (region.elementKind === "draft_wall" || region.elementKind === "draft_ceiling") ? regionComponentType(region) ?? undefined
     : key === "apartmentUnit" ? region.groupLabel || undefined
     : key === "exteriorNoiseRoom" ? proposeExteriorNoiseRoom(region.label, region.roomUse ?? null) ?? undefined

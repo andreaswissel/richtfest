@@ -22,6 +22,7 @@ import { createNoiseSourcesRouter } from "./noise-sources";
 import { createExteriorNoiseLevelsRouter } from "./exterior-noise-levels";
 import { createExteriorNoiseProofRouter } from "./exterior-noise-proof";
 import { createExteriorNoiseCatalogueRouter } from "./exterior-noise-catalogue";
+import { createInteriorSoundProofRouter } from "./interior-sound-proof";
 import { createInboundEmailRouter } from "./inbound-email";
 import { enrollReadyVersion } from "./project-files";
 import { createPlanningRouter } from "./planning-router";
@@ -95,6 +96,7 @@ export function createRouter(getDeps: GetDeps) {
   router.use(createExteriorNoiseLevelsRouter(getDeps));
   router.use(createExteriorNoiseProofRouter(getDeps));
   router.use(createExteriorNoiseCatalogueRouter(getDeps));
+  router.use(createInteriorSoundProofRouter(getDeps));
   router.use(createInboundEmailRouter(getDeps));
   router.get("/projects/address-suggestions", async (req, res, next) => {
     try {

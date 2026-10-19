@@ -17,6 +17,7 @@ import { FacadeDistanceRow } from "../location/site-workbench";
 import { mappedClass, mappedDetails, mappedName } from "./labels";
 import { FacadeLevels } from "./facade-levels";
 import { ProofInputs } from "./proof-inputs";
+import { InteriorSound } from "./interior-sound";
 import { noiseReasonText, noiseReferenceText, useNoiseSuggestions } from "./suggestions";
 import "./noise-sources.css";
 
@@ -77,6 +78,7 @@ export function NoiseSources({ projectId, selectedId }: { projectId: string; sel
     {selectedId && !selected && query.isSuccess && <Callout>{t("noiseSourceNotFound")}</Callout>}
     {data && <FacadeLevels projectId={projectId} />}
     {data && <ProofInputs projectId={projectId} canWrite={canWrite} />}
+    {data && <InteriorSound projectId={projectId} canWrite={canWrite} />}
     {data && <SuggestedSources projectId={projectId} canWrite={canWrite} t={t} />}
     {data && <MappedSources projectId={projectId} survey={data.survey} sources={sources} canWrite={canWrite} t={t} />}
     {canWrite && sources.some((source) => source.missing.some((field) => (requestableNoiseInputs[source.kind] as readonly string[]).includes(field)))

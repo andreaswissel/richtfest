@@ -2,7 +2,7 @@ import { appendSteering } from "./steering-context";
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acousticInputReviewSchema, agentBudgetDecisionSchema, buildingEntityRefSchema, buildingEvidenceSchema, buildingPropertyValueSchema, exteriorNoiseAgentContext, exteriorNoiseSuggestionInput } from "@richtfest/shared";
+import { acousticInputReviewSchema, agentBudgetDecisionSchema, buildingEntityRefSchema, buildingEvidenceSchema, buildingPropertyValueSchema, exteriorNoiseAgentContext, exteriorNoiseSuggestionInput, interiorSoundAgentContext, interiorSoundSuggestionInput } from "@richtfest/shared";
 import { companyKnowledgeSearchSchema, type CompanyKnowledgeReceipt, agentMessageInputSchema, agentPresetSnapshotSchema, agentRunBudgetSchema, agentRunEvaluationSchema, agentWorkflowSchema, agentWorkflowRequestSchema, requestedAcousticConcept, specialistRoleSchema, type AgentExecutionLimits, ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { agentMessagingContext, deliverAgentMessage, runThreadMessages } from "./agent-messages";
@@ -38,6 +38,7 @@ import { recommendMode } from "./decision-routing";
 import { workflowProposalsRouter } from "./workflow-proposals";
 import { buildingContextForRun } from "./building-model-context";
 import { createExteriorNoiseNachweis } from "./exterior-noise-nachweis";
+import { createInteriorSoundNachweis } from "./interior-sound-nachweis";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -127,6 +128,8 @@ export const toolInputs = {
   propose_exterior_noise_inputs: exteriorNoiseSuggestionInput,
   prepare_exterior_noise_nachweis: z.object({}).strict(),
   suggest_catalogue_values: z.object({}).strict(),
+  propose_interior_sound_inputs: interiorSoundSuggestionInput,
+  prepare_interior_sound_nachweis: z.object({}).strict(),
   send_thread_message: agentMessageInputSchema,
   search_company_knowledge: companyKnowledgeSearchSchema,
   delegate_source_review: z
@@ -164,6 +167,12 @@ export const toolInputs = {
 async function exteriorNoiseContextForRun(d: AppDeps, projectId: string) {
   if (!d.exteriorNoiseProof) return undefined;
   try { return exteriorNoiseAgentContext(await d.exteriorNoiseProof(projectId), projectId); }
+  catch { return undefined; }
+}
+/** The interior sound verification state for the chat agent; absent when unavailable. */
+async function interiorSoundContextForRun(d: AppDeps, projectId: string) {
+  if (!d.interiorSoundProof) return undefined;
+  try { return interiorSoundAgentContext(await d.interiorSoundProof(projectId), projectId); }
   catch { return undefined; }
 }
 export function validateTool(name: string, input: unknown, limits?: AgentExecutionLimits) {
@@ -340,6 +349,7 @@ export async function executeRun(d: AppDeps, run: any) {
     const context = {
       buildingModel: await buildingContextForRun(d, run),
       exteriorNoise: await exteriorNoiseContextForRun(d, run.projectId),
+      interiorSound: await interiorSoundContextForRun(d, run.projectId),
       history: boundedHistory,
       messaging: await agentMessagingContext(d, run),
       companyKnowledgeCategories: await companyKnowledgeCategories(d),
@@ -462,7 +472,7 @@ export async function executeRun(d: AppDeps, run: any) {
         await sources(d, run.projectId, input.sourceVersionIds);
       }
       d.requirePermission(
-        tool.name === "create_draft" || tool.name === "ask_missing_input" || tool.name === "prepare_exterior_noise_nachweis"
+        tool.name === "create_draft" || tool.name === "ask_missing_input" || tool.name === "prepare_exterior_noise_nachweis" || tool.name === "prepare_interior_sound_nachweis"
           ? "knowledge:write"
           : "knowledge:read",
       );
@@ -515,6 +525,15 @@ export async function executeRun(d: AppDeps, run: any) {
         else if (tool.name === "suggest_catalogue_values") {
           if (!d.suggestExteriorNoiseCatalogue) throw conflict("Catalogue suggestions are unavailable");
           result = await d.suggestExteriorNoiseCatalogue(run.projectId, tx);
+        }
+        else if (tool.name === "propose_interior_sound_inputs") {
+          if (!d.proposeInteriorSoundInputs) throw conflict("Interior sound suggestions are unavailable");
+          result = await d.proposeInteriorSoundInputs(run.projectId, input, { runId: run.id, agentId: run.agentId ?? "richtfest-agent" }, tx);
+        }
+        else if (tool.name === "prepare_interior_sound_nachweis") {
+          const created = await createInteriorSoundNachweis(runDeps, run.projectId, tx, run.id);
+          result = { status: "draft_created", artifactId: created.artifact.id, revisionId: created.revision.id, complete: created.complete, openItems: created.openItems,
+            link: `/projects/${run.projectId}?panel=artifacts&artifact=${created.artifact.id}&revision=${created.revision.id}` };
         }
         else if (tool.name === "prepare_exterior_noise_nachweis") {
           const created = await createExteriorNoiseNachweis(runDeps, run.projectId, tx, run.id);
@@ -652,6 +671,8 @@ export async function executeRun(d: AppDeps, run: any) {
                 ? "Message delivered; recipient execution unchanged"
               : tool.name === "propose_exterior_noise_inputs" || tool.name === "suggest_catalogue_values"
                 ? `${result.written} exterior noise values suggested; planner review required`
+              : tool.name === "propose_interior_sound_inputs"
+                ? `${result.written} interior sound values suggested; planner review required`
               : "Draft or question persisted; review required",
         );
       });

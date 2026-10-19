@@ -56,3 +56,12 @@ test("exterior noise suggestions need a cited page and a verification input key"
   expect(validateTool("suggest_catalogue_values", {})).toEqual({});
   expect(() => validateTool("suggest_catalogue_values", { rwDb: 60 })).toThrow();
 });
+
+test("interior sound suggestions take element inputs, never acoustic results", () => {
+  const value = { entityType: "element", entityId, propertyKey: "screedStiffness", value: 20, unit: "MN/m³", reason: "Baubeschreibung states s'", evidence };
+  expect(validateTool("propose_interior_sound_inputs", { values: [value] })).toMatchObject({ values: [value] });
+  // Richtfest computes Rw itself from the element inputs.
+  expect(() => validateTool("propose_interior_sound_inputs", { values: [{ ...value, propertyKey: "soundReductionIndex" }] })).toThrow();
+  expect(() => validateTool("propose_interior_sound_inputs", { values: [] })).toThrow();
+  expect(validateTool("prepare_interior_sound_nachweis", {})).toEqual({});
+});

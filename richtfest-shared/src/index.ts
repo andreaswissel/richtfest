@@ -8,6 +8,7 @@ export * from "./acoustic-norm-pack";
 export * from "./exterior-noise-levels";
 export * from "./exterior-noise-proof";
 export * from "./exterior-noise-reference";
+export * from "./interior-sound";
 export * from "./agent-analytics";
 export * from "./agent-output";
 export * from "./agent-progress";
