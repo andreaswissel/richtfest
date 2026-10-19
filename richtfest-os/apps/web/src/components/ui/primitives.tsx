@@ -80,6 +80,27 @@ export function Callout({
     </div>
   );
 }
+/**
+ * Notices that arrive together, as one stack: the first in front, the others
+ * peeking out behind it. Opening the stack lists them all.
+ */
+export function NoticeStack({ children, className = "" }: { children: ReactNode[]; className?: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const notices = children.filter((child) => child !== null && child !== undefined && child !== false && child !== "");
+  if (!notices.length) return null;
+  if (notices.length === 1) return <div className={`notice-stack ${className}`}>{notices[0]}</div>;
+  if (open) return <div className={`notice-stack is-open ${className}`}>
+    {notices}
+    <button type="button" className="notice-stack-toggle" onClick={() => setOpen(false)}>{t("noticeStackCollapse")}</button>
+  </div>;
+  return <div className={`notice-stack is-stacked ${className}`}>
+    <div className="notice-stack-front">{notices[0]}</div>
+    {notices.slice(1, 3).map((_, index) => <span key={index} className={`notice-stack-peek is-${index + 1}`} aria-hidden="true" />)}
+    <button type="button" className="notice-stack-toggle" aria-expanded={false} onClick={() => setOpen(true)}>{t("noticeStackMore").replace("{count}", String(notices.length - 1))}</button>
+  </div>;
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return (
     <div className="empty">

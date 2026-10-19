@@ -252,7 +252,8 @@
 .building-model-automatic-canvas.is-tool-pan .building-model-evidence-canvas { cursor: grab; }
 .building-model-automatic-canvas.is-tool-measure .building-model-magic-surface { cursor: crosshair; }
 .building-model-canvas-notices { position: absolute; z-index: 6; top: 10px; left: 50%; display: grid; width: min(460px, calc(100% - 24px)); gap: 6px; transform: translateX(-50%); pointer-events: none; }
-.building-model-canvas-notices > * { pointer-events: auto; box-shadow: var(--shadow-sm); }
+.building-model-canvas-notices > * { pointer-events: auto; }
+.building-model-canvas-notices .callout { box-shadow: var(--shadow-sm); }
 .building-model-measure { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .building-model-measure line { stroke: oklch(.6 .2 25); stroke-width: 2px; stroke-dasharray: 6 3; }
 .building-model-measure-point { position: absolute; width: 9px; height: 9px; border: 2px solid oklch(.6 .2 25); border-radius: 999px; background: white; transform: translate(-50%, -50%) scale(var(--building-model-overlay-inverse-scale, 1)); pointer-events: none; }

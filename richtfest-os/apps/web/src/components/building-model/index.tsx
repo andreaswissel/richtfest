@@ -7,7 +7,7 @@ import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
-import { Badge, Callout, Empty, Field, Segmented } from "../ui/primitives";
+import { Badge, Callout, Empty, Field, NoticeStack, Segmented } from "../ui/primitives";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
@@ -931,10 +931,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 return count ? [<span key={role}><i className={`building-model-role-swatch is-${role}`} aria-hidden="true" />{role === "none" ? t("buildingSoundWallsWithoutRole") : t(`buildingComponentWallRole${role.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase())}` as keyof typeof import("../../locales/en.json"))} · {count}</span>] : []; })}
             </div>}
             {(conflict || modelError || magicNotice || magicSelect.isPending) && <div className="building-model-canvas-notices" aria-live="polite">
-              {conflict && <Callout tone="warning">{conflict}</Callout>}
-              {modelError && <Callout tone="error">{modelError.message}</Callout>}
-              {magicNotice && <Callout tone="warning">{magicNotice}</Callout>}
-              {magicSelect.isPending && <Callout>{t("buildingModelMagicDetecting")}</Callout>}
+              <NoticeStack>{[
+                conflict && <Callout key="conflict" tone="warning">{conflict}</Callout>,
+                modelError && <Callout key="error" tone="error">{modelError.message}</Callout>,
+                magicNotice && <Callout key="magic" tone="warning">{magicNotice}</Callout>,
+                magicSelect.isPending && <Callout key="detecting">{t("buildingModelMagicDetecting")}</Callout>,
+              ]}</NoticeStack>
             </div>}
           </div>
         </section>

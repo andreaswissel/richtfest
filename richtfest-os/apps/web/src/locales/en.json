@@ -2809,5 +2809,7 @@
   "buildingComponentDoorLeafTypeRebated": "Rebated",
   "buildingComponentDoorLeafTypeFlush": "Flush",
   "buildingComponentFieldRebateSealSoundReduction": "Rebate seal RS,w",
-  "buildingComponentFieldFloorSealSoundReduction": "Floor seal RS,w"
+  "buildingComponentFieldFloorSealSoundReduction": "Floor seal RS,w",
+  "noticeStackMore": "{count} more",
+  "noticeStackCollapse": "Show less"
 }

@@ -286,6 +286,18 @@ table[data-slot="table"] tbody tr:hover { background: color-mix(in oklch, var(--
 .work-list a { display: flex; justify-content: space-between; padding: 15px 2px; border-bottom: 1px solid var(--border); }
 .callout { display: flex; gap: 11px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); font-size: var(--ui-xs); line-height: 1.5; }
 .callout p { margin-top: 6px; }
+/* Messages that follow each other in a section's flow keep apart (grid and flex containers use their own gap). */
+.section > :is(.callout, .empty, .notice-stack) + *, .section > * + :is(.callout, .empty, .notice-stack) { margin-top: calc(var(--stack) / 2); }
+.notice-stack { position: relative; display: grid; gap: 6px; isolation: isolate; }
+.notice-stack.is-stacked { padding-bottom: 14px; }
+.notice-stack-front { position: relative; z-index: 2; }
+.notice-stack-front > .callout { box-shadow: var(--shadow-sm); }
+.notice-stack-peek { position: absolute; inset: 0 0 14px; border: 1px solid var(--border); border-radius: var(--radius); background: color-mix(in oklch, var(--muted) 70%, var(--foreground) 6%); box-shadow: var(--shadow-sm); pointer-events: none; }
+.notice-stack-peek.is-1 { z-index: 1; transform: translateY(7px) scaleX(.96); }
+.notice-stack-peek.is-2 { z-index: 0; transform: translateY(14px) scaleX(.92); opacity: .75; }
+.notice-stack-toggle { justify-self: end; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); color: var(--muted-foreground); font-size: var(--ui-2xs); }
+.notice-stack.is-stacked .notice-stack-toggle { position: absolute; z-index: 3; right: 12px; bottom: 14px; transform: translateY(50%); }
+.notice-stack-toggle:hover { color: var(--foreground); }
 .callout-mark { display: flex; width: 18px; height: 18px; flex-shrink: 0; align-items: center; justify-content: center; color: var(--muted-foreground); font-size: var(--ui-2xs); font-weight: 600; }
 .callout.error { border-color: color-mix(in oklch, var(--destructive) 28%, var(--border)); background: color-mix(in oklch, var(--destructive) 8%, var(--background)); color: var(--destructive); }
 .callout.success { border-color: color-mix(in oklch, oklch(.7 .16 145) 30%, var(--border)); background: color-mix(in oklch, oklch(.7 .16 145) 8%, var(--background)); }

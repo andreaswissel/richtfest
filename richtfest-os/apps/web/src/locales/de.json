@@ -2809,5 +2809,7 @@
   "buildingComponentDoorLeafTypeRebated": "Gefälzt",
   "buildingComponentDoorLeafTypeFlush": "Stumpf einschlagend",
   "buildingComponentFieldRebateSealSoundReduction": "Falzdichtung RS,w",
-  "buildingComponentFieldFloorSealSoundReduction": "Bodendichtung RS,w"
+  "buildingComponentFieldFloorSealSoundReduction": "Bodendichtung RS,w",
+  "noticeStackMore": "{count} weitere",
+  "noticeStackCollapse": "Weniger anzeigen"
 }
