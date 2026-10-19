@@ -37,7 +37,7 @@ export type ProofValue<T> = { value: T; reviewStatus: string; provenance: string
 
 /** Building-model properties the exterior noise verification reads; the agent may suggest any of them. */
 export const exteriorNoiseInputKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
-  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea"] as const;
+  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "normalizedLevelDifference", "elementCount", "surfaceArea"] as const;
 
 /**
  * A value Richtfest suggested (agent or derivation) that nobody has confirmed
@@ -52,8 +52,15 @@ export type ProofSuggestion = {
   evidence: { sourceVersionId: string; page: number; fileName: string | null; quote: string | null } | null;
 };
 
+/** A window or door (area and Rw), or a small element such as a ventilator or shutter box (count and Dn,e,w; area per element optional). */
 export type ProofWindow = {
-  id: string; name: string; componentType: "window" | "door";
+  id: string; name: string; componentType: "window" | "door" | "small_element";
+  area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
+  count: ProofValue<number> | null; dnew: ProofValue<number> | null;
+};
+/** A roof surface over a room: its area and Rw. It takes the loudest La of the room's facades. */
+export type ProofRoof = {
+  id: string; name: string; construction: "massive" | "lightweight" | "unknown";
   area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
 };
 export type ProofFacade = {
@@ -65,7 +72,8 @@ export type ProofFacade = {
 };
 export type ProofGap =
   | "room_kind" | "floor_area" | "clear_height" | "facade_level" | "wall_rw" | "wall_construction"
-  | "window_area" | "window_rw" | "openings_exceed_facade" | "surfaces_unconfirmed" | "applicability" | "flanking" | "no_facade";
+  | "window_area" | "window_rw" | "openings_exceed_facade" | "surfaces_unconfirmed" | "applicability" | "flanking" | "no_facade"
+  | "small_element_dnew" | "roof_area" | "roof_rw" | "roof_construction";
 export type ProofRoomResult = {
   status: "calculated" | "unsupported" | "missing_input" | "invalid_inventory";
   targetDb: number | null; valueDb: number | null; marginDb: number | null; reason: string | null;
@@ -76,7 +84,7 @@ export type ProofRoom = {
   storeyId: string;
   kind: ProofValue<string> | null; proposedKind: ExteriorNoiseRoomKind | null;
   floorAreaM2: number | null; surfacesComplete: ProofValue<boolean> | null;
-  facades: ProofFacade[]; gaps: ProofGap[]; result: ProofRoomResult | null;
+  facades: ProofFacade[]; roofs: ProofRoof[]; gaps: ProofGap[]; result: ProofRoomResult | null;
 };
 
 export type ProofStorey = {
@@ -123,8 +131,10 @@ export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: 
         wallId: facade.wallId, wall: facade.wallName, compass: facade.compass, lengthM: Math.round(facade.lengthM * 100) / 100, areaM2: facade.areaM2,
         laDb: facade.la ? Math.round((exteriorNoiseLaPeriod((room.kind?.value ?? "living") as ExteriorNoiseRoomKind) === "sleeping" ? facade.la.sleepingDb : facade.la.dayDb) * 10) / 10 : null,
         construction: facade.construction, rwDb: shown(facade.rw), rwBasis: facade.rwBasis?.value ?? null,
-        openings: facade.windows.map(item => ({ elementId: item.id, name: item.name, type: item.componentType, areaM2: shown(item.area), rwDb: shown(item.rw) })),
+        openings: facade.windows.map(item => ({ elementId: item.id, name: item.name, type: item.componentType, areaM2: shown(item.area), rwDb: shown(item.rw),
+          ...(item.componentType === "small_element" ? { count: shown(item.count), dnewDb: shown(item.dnew) } : {}) })),
       })),
+      roofs: room.roofs.map(roof => ({ elementId: roof.id, name: roof.name, areaM2: shown(roof.area), rwDb: shown(roof.rw), construction: roof.construction })),
     })),
     omittedRooms: Math.max(0, proof.rooms.length - maxRooms),
     pendingSuggestions: proof.suggestions.length,
@@ -144,5 +154,11 @@ export const exteriorNoiseSuggestionInput = z.object({
     area: z.number().positive().max(10000), rw: z.number().min(0).max(100).nullable().optional(), basis: z.string().trim().min(1).max(500).nullable().optional(),
     reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
   }).strict()).max(40).default([]),
-}).strict().refine(input => input.values.length + input.openings.length > 0, "Suggest at least one value or opening");
+  /** Ventilators, roller shutter boxes and similar elements rated by Dn,e,w, in a room's exterior wall. */
+  smallElements: z.array(z.object({
+    roomId: z.string().uuid(), wallId: z.string().uuid(), name: z.string().trim().min(1).max(120),
+    count: z.number().int().min(1).max(100), dnew: z.number().min(0).max(100).nullable().optional(), basis: z.string().trim().min(1).max(500).nullable().optional(),
+    reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
+  }).strict()).max(40).default([]),
+}).strict().refine(input => input.values.length + input.openings.length + input.smallElements.length > 0, "Suggest at least one value, opening or small element");
 export type ExteriorNoiseSuggestionInput = z.infer<typeof exteriorNoiseSuggestionInput>;

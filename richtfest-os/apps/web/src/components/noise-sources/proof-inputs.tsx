@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { exteriorNoiseRoomKinds, type ExteriorNoiseProof, type ProofFacade, type ProofGap, type ProofRoom, type ProofSuggestion, type ProofValue } from "@richtfest/shared";
+import { exteriorNoiseRoomKinds, type ExteriorNoiseProof, type ProofFacade, type ProofGap, type ProofRoom, type ProofSuggestion, type ProofValue, type ProofWindow } from "@richtfest/shared";
 import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -30,7 +30,7 @@ const gapKeys: Record<ProofGap, Key> = {
   room_kind: "proofGapRoomKind", floor_area: "proofGapFloorArea", clear_height: "proofGapClearHeight", facade_level: "proofGapFacadeLevel",
   wall_rw: "proofGapWallRw", wall_construction: "proofGapWallConstruction", window_area: "proofGapWindowArea", window_rw: "proofGapWindowRw",
   openings_exceed_facade: "proofGapOpeningsExceed", surfaces_unconfirmed: "proofGapSurfaces", applicability: "proofGapApplicability", flanking: "proofGapFlanking",
-  no_facade: "proofGapNoFacade",
+  no_facade: "proofGapNoFacade", small_element_dnew: "proofGapSmallElementDnew", roof_area: "proofGapRoofArea", roof_rw: "proofGapRoofRw", roof_construction: "proofGapRoofConstruction",
 };
 const unavailableKeys: Record<string, Key> = {
   norm_pack_missing: "facadeLevelsNoPack", location_missing: "facadeLevelsNoLocation", placement_missing: "facadeLevelsNoPlacement",
@@ -94,9 +94,10 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
         <span>{room.label}{room.roomUse && <span className="muted text-ui-xs"> · {room.roomUse}</span>}</span>,
         <RoomKind projectId={projectId} proof={proof} room={room} canWrite={canWrite} t={t} />,
         <span className="text-ui-xs">{room.floorAreaM2 === null ? "—" : `${m(room.floorAreaM2)} m²`}</span>,
-        <span className="text-ui-xs muted">{room.facades.map(facade => `${facade.compass ?? "—"} ${m(facade.lengthM)} m${facade.la ? ` · La ${db(facade.la.dayDb)}/${db(facade.la.sleepingDb)}` : ""}`).join("; ") || "—"}</span>,
+        <span className="text-ui-xs muted">{[...room.facades.map(facade => `${facade.compass ?? "—"} ${m(facade.lengthM)} m${facade.la ? ` · La ${db(facade.la.dayDb)}/${db(facade.la.sleepingDb)}` : ""}`),
+          ...room.roofs.map(roof => `${t("proofRoof")}${roof.area ? ` ${m(roof.area.value)} m²` : ""}`)].join("; ") || "—"}</span>,
         <RoomResult room={room} t={t} />,
-        room.kind?.value !== "not_protected" && room.facades.length > 0
+        room.kind?.value !== "not_protected"
           ? <Button size="sm" variant={open === room.id ? "outline" : "ghost"} aria-expanded={open === room.id} onClick={() => setOpen(open === room.id ? null : room.id)}>
             {open === room.id ? t("proofCloseRoom") : t("proofEditRoom")}</Button> : null,
       ] }))} /> : <Empty>{t("proofNoRooms")}</Empty>}
@@ -266,6 +267,7 @@ function RoomEditor({ projectId, proof, room, canWrite, t }: { projectId: string
   return <div className="proof-room">
     <h3 className="site-section-title">{room.label}</h3>
     {room.facades.map(facade => <FacadeEditor key={facade.wallId} projectId={projectId} proof={proof} room={room} facade={facade} canWrite={canWrite} t={t} />)}
+    <Roofs projectId={projectId} proof={proof} room={room} canWrite={canWrite} t={t} />
     <label className="proof-confirm text-ui-sm">
       <Checkbox checked={room.surfacesComplete?.value === true} disabled={!canWrite || save.isPending}
         onCheckedChange={(checked) => save.mutate({ entityType: "room", entityId: room.id, propertyKey: "exteriorSurfacesComplete", value: checked === true })} />
@@ -312,41 +314,97 @@ function FacadeEditor({ projectId, proof, room, facade, canWrite, t }: { project
 
 /** Windows and doors in one facade of a room; Enter in the last field adds the row. */
 function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; facade: ProofFacade; canWrite: boolean; t: T }) {
-  const empty = { componentType: "window" as "window" | "door", name: "", area: "", rw: "", basis: "" };
+  type Kind = "window" | "door" | "small_element";
+  const empty = { componentType: "window" as Kind, name: "", area: "", rw: "", basis: "", count: "1" };
   const [draft, setDraft] = useState(empty);
+  const small = draft.componentType === "small_element";
   const add = useMutation({
     mutationFn: () => api(`/projects/${projectId}/exterior-noise/proof/openings`, {
       baseRevision: baseRevision(projectId, proof), roomId: room.id, wallId: facade.wallId, componentType: draft.componentType,
-      name: draft.name.trim() || `${t(draft.componentType === "door" ? "proofDoor" : "proofWindow")} ${facade.windows.length + 1}`,
-      area: parseNumber(draft.area), rw: parseNumber(draft.rw), basis: draft.basis.trim() || null }),
+      name: draft.name.trim() || `${t(openingKeys[draft.componentType])} ${facade.windows.length + 1}`,
+      area: parseNumber(draft.area), basis: draft.basis.trim() || null,
+      ...(small ? { rw: null, dnew: parseNumber(draft.rw), count: parseNumber(draft.count) } : { rw: parseNumber(draft.rw) }) }),
     onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
   });
-  const remove = useMutation({
-    mutationFn: (elementId: string) => api(`/projects/${projectId}/exterior-noise/proof/openings/${elementId}?baseRevision=${baseRevision(projectId, proof)}`, undefined, "DELETE"),
-    onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
-  });
-  const valid = parseNumber(draft.area) !== null && (!draft.rw.trim() || parseNumber(draft.rw) !== null);
+  const remove = useRemoveElement(projectId, proof);
+  const count = parseNumber(draft.count);
+  const valid = (small ? count !== null && Number.isInteger(count) && count >= 1 && (!draft.area.trim() || parseNumber(draft.area) !== null) : parseNumber(draft.area) !== null)
+    && (!draft.rw.trim() || parseNumber(draft.rw) !== null);
   return <div className="proof-openings">
-    {facade.windows.length > 0 && <Table headers={[t("proofOpening"), t("proofOpeningArea"), t("proofOpeningRw"), t("noiseBasis"), " "]}
+    {facade.windows.length > 0 && <Table headers={[t("proofOpening"), t("proofOpeningArea"), t("proofOpeningRating"), t("noiseBasis"), " "]}
       rows={facade.windows.map(item => ({ id: item.id, cells: [
-        <span>{item.name} <span className="muted text-ui-xs">· {t(item.componentType === "door" ? "proofDoor" : "proofWindow")}</span></span>,
-        <span className="text-ui-xs">{item.area ? `${m(item.area.value)} m²` : "—"}</span>,
-        <span className="text-ui-xs">{item.rw ? `${db(item.rw.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>}</span>,
+        <span>{item.name} <span className="muted text-ui-xs">· {t(openingKeys[item.componentType])}</span></span>,
+        <span className="text-ui-xs">{item.componentType === "small_element"
+          ? `${item.count?.value ?? 1} ×${item.area ? ` ${m(item.area.value)} m²` : ""}` : item.area ? `${m(item.area.value)} m²` : "—"}</span>,
+        <span className="text-ui-xs">{item.componentType === "small_element"
+          ? item.dnew ? `Dn,e,w ${db(item.dnew.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>
+          : item.rw ? `Rw ${db(item.rw.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>}</span>,
         <span className="text-ui-xs muted">{item.basis?.value ?? "—"}</span>,
         canWrite ? <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(item.id)}>{t("proofRemove")}</Button> : null,
       ] }))} />}
     {canWrite && <form className="proof-opening-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
       <Field label={t("proofOpeningType")}>
-        <NativeSelect size="sm" className="w-full" value={draft.componentType} onChange={(event) => setDraft({ ...draft, componentType: event.target.value as "window" | "door" })}>
+        <NativeSelect size="sm" className="w-full" value={draft.componentType} onChange={(event) => setDraft({ ...draft, componentType: event.target.value as Kind })}>
           <NativeSelectOption value="window">{t("proofWindow")}</NativeSelectOption>
           <NativeSelectOption value="door">{t("proofDoor")}</NativeSelectOption>
+          <NativeSelectOption value="small_element">{t("proofSmallElement")}</NativeSelectOption>
         </NativeSelect>
       </Field>
       <Field label={t("proofOpeningName")}><Input value={draft.name} placeholder={t("proofOptional")} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
-      <Field label={t("proofOpeningArea")}><Input value={draft.area} inputMode="decimal" onChange={(event) => setDraft({ ...draft, area: event.target.value })} /></Field>
+      {small
+        ? <Field label={t("proofSmallElementCount")}><Input value={draft.count} inputMode="numeric" onChange={(event) => setDraft({ ...draft, count: event.target.value })} aria-invalid={count === null} /></Field>
+        : <Field label={t("proofOpeningArea")}><Input value={draft.area} inputMode="decimal" onChange={(event) => setDraft({ ...draft, area: event.target.value })} /></Field>}
+      <Field label={small ? t("proofSmallElementDnew") : t("proofOpeningRw")}><Input value={draft.rw} inputMode="decimal" onChange={(event) => setDraft({ ...draft, rw: event.target.value })} /></Field>
+      <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("proofRwBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
+      <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t(small ? "proofAddSmallElement" : "proofAddOpening")}</Button>
+    </form>}
+    {(add.isError || remove.isError) && <Callout tone="error">{errorText(add.error ?? remove.error, t)}</Callout>}
+  </div>;
+}
+
+const openingKeys: Record<ProofWindow["componentType"], Key> = { window: "proofWindow", door: "proofDoor", small_element: "proofSmallElement" };
+
+function useRemoveElement(projectId: string, proof: Proof) {
+  return useMutation({
+    mutationFn: (elementId: string) => api(`/projects/${projectId}/exterior-noise/proof/openings/${elementId}?baseRevision=${baseRevision(projectId, proof)}`, undefined, "DELETE"),
+    onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
+  });
+}
+
+/** Roof surfaces over the room: area and Rw. A roof takes the loudest La of the room's facades. */
+function Roofs({ projectId, proof, room, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; canWrite: boolean; t: T }) {
+  const empty = { name: "", construction: "concrete", area: "", rw: "", basis: "" };
+  const [draft, setDraft] = useState(empty);
+  const add = useMutation({
+    mutationFn: () => api(`/projects/${projectId}/exterior-noise/proof/openings`, {
+      baseRevision: baseRevision(projectId, proof), roomId: room.id, wallId: null, componentType: "roof", construction: draft.construction,
+      name: draft.name.trim() || `${t("proofRoof")} ${room.roofs.length + 1}`, area: parseNumber(draft.area), rw: parseNumber(draft.rw), basis: draft.basis.trim() || null }),
+    onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
+  });
+  const remove = useRemoveElement(projectId, proof);
+  const valid = parseNumber(draft.area) !== null && (!draft.rw.trim() || parseNumber(draft.rw) !== null);
+  if (!room.roofs.length && !canWrite) return null;
+  return <div className="proof-facade">
+    <p className="text-ui-sm"><strong>{t("proofRoofs")}</strong> <span className="muted text-ui-xs">{t("proofRoofsHint")}</span></p>
+    {room.roofs.length > 0 && <Table headers={[t("proofRoof"), t("proofRoofArea"), t("proofOpeningRating"), t("noiseBasis"), " "]}
+      rows={room.roofs.map(roof => ({ id: roof.id, cells: [
+        <span>{roof.name} <span className="muted text-ui-xs">· {t(roof.construction === "massive" ? "proofConstructionMassive" : roof.construction === "lightweight" ? "proofConstructionLightweight" : "proofConstructionUnknown")}</span></span>,
+        <span className="text-ui-xs">{roof.area ? `${m(roof.area.value)} m²` : <Badge variant="outline">{t("noiseMissing")}</Badge>}</span>,
+        <span className="text-ui-xs">{roof.rw ? `Rw ${db(roof.rw.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>}</span>,
+        <span className="text-ui-xs muted">{roof.basis?.value ?? "—"}</span>,
+        canWrite ? <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(roof.id)}>{t("proofRemove")}</Button> : null,
+      ] }))} />}
+    {canWrite && <form className="proof-opening-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+      <Field label={t("proofOpeningName")}><Input value={draft.name} placeholder={t("proofOptional")} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+      <Field label={t("proofRoofConstruction")}>
+        <NativeSelect size="sm" className="w-full" value={draft.construction} onChange={(event) => setDraft({ ...draft, construction: event.target.value })}>
+          {["concrete", "masonry", "timber", "steel", "drywall"].map(option => <NativeSelectOption key={option} value={option}>{optionLabel("construction", option, t)}</NativeSelectOption>)}
+        </NativeSelect>
+      </Field>
+      <Field label={t("proofRoofArea")}><Input value={draft.area} inputMode="decimal" onChange={(event) => setDraft({ ...draft, area: event.target.value })} /></Field>
       <Field label={t("proofOpeningRw")}><Input value={draft.rw} inputMode="decimal" onChange={(event) => setDraft({ ...draft, rw: event.target.value })} /></Field>
       <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("proofRwBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
-      <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t("proofAddOpening")}</Button>
+      <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t("proofAddRoof")}</Button>
     </form>}
     {(add.isError || remove.isError) && <Callout tone="error">{errorText(add.error ?? remove.error, t)}</Callout>}
   </div>;

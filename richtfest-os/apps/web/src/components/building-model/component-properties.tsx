@@ -25,8 +25,10 @@ const enumOptions: Record<string, readonly string[]> = {
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
 const booleanKeys = new Set(["exteriorSurfacesComplete"]);
+// Unitless numbers, such as how many of a small element sit in a wall.
+const countKeys = new Set(["elementCount"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
-  soundReductionIndex: "dB", openingArea: "m²", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB" };
+  soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
@@ -35,8 +37,9 @@ const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSu
 // Interior sound: a ceiling's requirement and floating screed; a lightweight wall's Dn,f,w when it flanks a separating element.
 const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness"];
 const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door" ? [...openingKeys, "doorRole"] : componentType === "window" ? openingKeys
+  : componentType === "small_element" ? ["componentType", "elementCount", "normalizedLevelDifference", "openingArea", "soundReductionIndexBasis"]
   : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : []),
-    ...(componentType === "ceiling" ? ceilingKeys : []),
+    ...(componentType === "ceiling" ? ceilingKeys : []), ...(componentType === "roof" ? ["surfaceArea"] : []),
     ...(componentType === "wall" && (construction === "drywall" || construction === "timber" || construction === "steel") ? ["flankingLevelDifference"] : [])];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
 export const fieldLabel = (key: string, t: T) => t(`buildingComponentField${camel(key)}` as Key);
@@ -84,7 +87,7 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
   const commit = (raw: string) => {
     const trimmed = raw.trim();
     if (trimmed === committed.current) return;
-    const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit ? Number(trimmed.replace(",", ".")) : trimmed;
+    const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit || countKeys.has(propertyKey) ? Number(trimmed.replace(",", ".")) : trimmed;
     if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" || propertyKey === "soundReductionIndex" ? value >= 0 : value > 0))) { setDraft(text); return; }
     committed.current = trimmed;
     onSave({ key: propertyKey, value, unit: value === null ? null : unit });
@@ -101,7 +104,7 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
         : longText.has(propertyKey) ? <Textarea aria-label={label} rows={propertyKey === "bebauungsplanNoise" ? 3 : 2} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) commit(event.currentTarget.value); }} />
-        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
+        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : countKeys.has(propertyKey) ? "numeric" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />}
       <StatusLine state={state} t={t} pending={pending} onReview={onReview} />

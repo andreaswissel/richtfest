@@ -5,7 +5,7 @@ import { z } from "zod";
  * (sound, thermal, fire, cost) reads the same wall/ceiling record; these keys
  * are stored as ordinary versioned, reviewed building properties.
  */
-export const componentTypeSchema = z.enum(["wall", "ceiling", "floor", "roof", "window", "door", "other"]);
+export const componentTypeSchema = z.enum(["wall", "ceiling", "floor", "roof", "window", "door", "small_element", "other"]);
 export type ComponentType = z.infer<typeof componentTypeSchema>;
 export const componentConstructionSchema = z.enum(["masonry", "concrete", "drywall", "timber", "steel", "other"]);
 export type ComponentConstruction = z.infer<typeof componentConstructionSchema>;
@@ -52,6 +52,11 @@ export const buildingComponentProperties = {
     soundReductionIndex: { value: z.number().min(0).max(100), unit: "dB" },
     soundReductionIndexBasis: { value: z.string().trim().min(1).max(500), unit: null },
     openingArea: { value: z.number().positive().max(10000), unit: "m²" },
+    // Small elements (ventilators, roller shutter boxes): Dn,e,w and how many of the same element sit in the wall.
+    normalizedLevelDifference: { value: z.number().min(0).max(100), unit: "dB" },
+    elementCount: { value: z.number().int().min(1).max(100), unit: null },
+    // A roof surface over a room, as it bounds the room (sloped area, not plan area).
+    surfaceArea: { value: z.number().positive().max(100000), unit: "m²" },
     // Interior sound: what a ceiling separates, its floating screed, and Dn,f,w of a lightweight flanking wall.
     ceilingRole: { value: ceilingRoleSchema, unit: null },
     screedType: { value: screedTypeSchema, unit: null },

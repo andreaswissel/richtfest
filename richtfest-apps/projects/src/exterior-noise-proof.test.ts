@@ -66,6 +66,29 @@ describe("exterior noise proof assembly", () => {
     expect(batch!.rooms).toHaveLength(0);
   });
 
+  test("small elements count by Dn,e,w with their area per element; a roof takes the loudest La of the room", () => {
+    const vent = { id: "v1", name: "Lüfter", componentType: "small_element" as const, roomId: "r1", wallId: "north", area: value(0.05), rw: null, basis: value("Datenblatt"),
+      count: value(2), dnew: value(42) };
+    const roof = { id: "d1", name: "Flachdach", roomId: "r1", construction: "concrete", area: value(20), rw: value(55), basis: value("DIN 4109-32") };
+    const { rooms, batch } = assembleExteriorNoiseProof(input({ openings: [...input().openings, vent], roofs: [roof] }));
+    expect(rooms[0]!.gaps).toEqual([]);
+    const packet = batch!.rooms[0]!;
+    // The sleeping room's loudest facade is the north one: La 66 for sleeping rooms.
+    expect(packet.facades.at(-1)).toMatchObject({ id: "Dach · Flachdach", areaM2: 20, noise: { levelDb: 66 } });
+    const north = packet.elements.filter(element => element.facadeId.includes("N wall"));
+    expect(north.find(element => element.kind === "small")).toMatchObject({ dnEWDb: 42, count: 2, openingAreaM2: 0.05 });
+    // Wall area = 12.5 m² facade − 2 m² window − 2 × 0.05 m² vents.
+    expect(north.find(element => element.id.endsWith("Wand"))).toMatchObject({ areaM2: 10.4 });
+    expect(packet.elements.find(element => element.id === "Dach · Flachdach")).toMatchObject({ kind: "area", areaM2: 20, rwDb: 55, construction: "massive" });
+    for (const facade of packet.facades) {
+      const covered = packet.elements.filter(element => element.facadeId === facade.id).reduce((sum, element) => sum + (element.kind === "area" ? element.areaM2 : element.openingAreaM2 * element.count), 0);
+      expect(Math.abs(covered - facade.areaM2)).toBeLessThanOrEqual(0.01);
+    }
+    // Missing ratings are gaps: a vent without Dn,e,w, a roof without Rw or construction.
+    const open = assembleExteriorNoiseProof(input({ openings: [{ ...vent, dnew: null }], roofs: [{ ...roof, rw: null, construction: null }] }));
+    expect(open.rooms[0]!.gaps.sort()).toEqual(["roof_construction", "roof_rw", "small_element_dnew"]);
+  });
+
   test("openings larger than the facade are reported, not silently clipped", () => {
     const { rooms } = assembleExteriorNoiseProof(input({ openings: [{ ...input().openings[0]!, area: value(14) }] }));
     expect(rooms[0]!.gaps).toContain("openings_exceed_facade");

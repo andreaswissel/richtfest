@@ -12,6 +12,7 @@ const gapText: Record<ProofGap, string> = {
   room_kind: "Raumnutzung", floor_area: "Grundfläche", clear_height: "lichte Raumhöhe", facade_level: "Fassadenpegel", wall_rw: "Rw der Wand",
   wall_construction: "Wandkonstruktion", window_area: "Fensterfläche", window_rw: "Rw eines Fensters", openings_exceed_facade: "Öffnungen größer als die Fassade",
   surfaces_unconfirmed: "Vollständigkeit der Außenflächen nicht bestätigt", applicability: "Anwendbarkeit des Verfahrens", flanking: "Flankenübertragung", no_facade: "keine Außenfassade",
+  small_element_dnew: "Dn,e,w eines Lüfters oder Rollladenkastens", roof_area: "Dachfläche", roof_rw: "Rw des Dachs", roof_construction: "Konstruktion des Dachs",
 };
 const sourceStatus: Record<string, string> = { calculated: "berechnet", imported: "aus Gutachten", missing_inputs: "Eingaben fehlen", no_geometry: "keine kartierte Achse", not_used: "nicht verwendet" };
 const issues: Record<string, string> = {
@@ -68,6 +69,7 @@ function noiseAnnex(proof: Proof) {
 const fieldText: Record<string, string> = {
   exteriorNoiseApplicability: "Anwendbarkeit des Verfahrens", exteriorNoiseFlanking: "Flankenübertragung", clearRoomHeight: "lichte Raumhöhe", exteriorNoiseRoom: "Raumnutzung",
   exteriorSurfacesComplete: "Vollständigkeit der Außenflächen", construction: "Konstruktion", soundReductionIndex: "Rw", soundReductionIndexBasis: "Nachweis für Rw", openingArea: "Öffnungsfläche",
+  normalizedLevelDifference: "Dn,e,w", elementCount: "Anzahl", surfaceArea: "Dachfläche",
 };
 
 /**

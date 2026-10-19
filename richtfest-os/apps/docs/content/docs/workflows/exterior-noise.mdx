@@ -93,7 +93,8 @@ Limitations shown under the table: free propagation without screening by other b
 
 1. Above the rooms, choose the **Method** (standard exterior noise method or special assessment, for example near airports), whether **Flanking transmission** is negligible, and each storey's **Clear room height**.
 2. Give each room its **Use**: sleeping room, living room, office or practice, hospital bedroom, or not protected (kitchen, bathroom, hall, storage). A proposal from the room name can be taken over with one click. Sleeping rooms use La for sleeping rooms, all others La by day.
-3. **Edit facades** lists the room's exterior walls: the length along each wall comes from the room and wall outlines of the plan, times the clear room height. Enter the wall's **Rw** with its basis, and add each **window or door** with its area and installed Rw (corrections included) and basis. The wall area is the facade less its openings.
+3. **Edit facades** lists the room's exterior walls: the length along each wall comes from the room and wall outlines of the plan, times the clear room height. Enter the wall's **Rw** with its basis, and add each **window or door** with its area and installed Rw (corrections included) and basis. Ventilators, roller shutter boxes and similar parts are **small elements**: enter their count and Dn,e,w instead of an area. The wall area is the facade less its openings.
+   Under **Roof surfaces**, add each roof that bounds the room (top storey, sloped ceiling) with its construction, area, Rw and basis. A roof takes the loudest La of the room's facades for the room's period; a room with only a roof is calculated too.
 4. Confirm that **all exterior walls, roofs and openings of this room are entered**.
 
 The result shows the required value (base requirement plus area correction K_AL), the provided value (R'w,ges less the 2 dB prognosis allowance) and the reserve, or what is still missing.
@@ -104,6 +105,7 @@ Ask the Richtfest Agent in the project conversation, for example *"Prepare the e
 
 - the use of each room, from the plan's room names;
 - windows and doors per room and exterior wall, with their area from the Fensterliste or plan dimensions, and their Rw where a source states it;
+- small elements such as ventilators and roller shutter boxes, with their count and the Dn,e,w their data sheet states;
 - the Rw of exterior walls and its basis, the construction, the clear room height, and the method and flanking choice.
 
 Every suggestion cites the source page and a short quote. Suggestions never replace a value someone entered or confirmed, and a rejected suggestion is not proposed again. The agent does not estimate acoustic values: where no source states a value, it asks for exactly that input and points to this view.
@@ -118,9 +120,9 @@ Walls the method does not cover get no value and say why: insulated or multi-lea
 
 ### In the building model
 
-The same values are editable in the [building model](/docs/workflows/project-onboarding): select a room for its **Exterior noise use** and **Exterior surfaces complete**, an exterior wall or roof for **Rw** and **Rw basis**, a window or door for **Opening area**, **Rw** and its basis. A wall lists the openings set into it, a window or door its wall. **Sound insulation → Exterior noise** holds the method, flanking and each storey's **clear room height**.
+The same values are editable in the [building model](/docs/workflows/project-onboarding): select a room for its **Exterior noise use** and **Exterior surfaces complete**, an exterior wall or roof for **Rw** and **Rw basis**, a window or door for **Opening area**, **Rw** and its basis, a small element for **Element count** and **Dn,e,w**, a roof for **Surface area**. A wall lists the openings set into it, a window or door its wall. **Sound insulation → Exterior noise** holds the method, flanking and each storey's **clear room height**.
 
-**Create Nachweis** writes the draft Schallschutznachweis Außenlärm as a document with PDF, without AI: a review summary, room overview, one calculation sheet per room with numbered input evidence (floor areas and facade lengths cite the plan page, entered values are marked as entries), the open inputs, an annex deriving La (sources, traffic, assumptions, facade levels, limits) and a sign-off block. While rooms are open it is titled *Teilstand*. Review and approve it like any other document; recreate it after inputs change. Values entered here are ordinary building-model values (entered, unreviewed until a person reviews them in the building model). The table is a draft: roofs, roller shutter boxes and ventilators are not covered yet, and the plan model's rooms and walls may be incomplete; check facade lengths against the plan before confirming a room.
+**Create Nachweis** writes the draft Schallschutznachweis Außenlärm as a document with PDF, without AI: a review summary, room overview, one calculation sheet per room with numbered input evidence (floor areas and facade lengths cite the plan page, entered values are marked as entries), the open inputs, an annex deriving La (sources, traffic, assumptions, facade levels, limits) and a sign-off block. While rooms are open it is titled *Teilstand*. Review and approve it like any other document; recreate it after inputs change. Values entered here are ordinary building-model values (entered, unreviewed until a person reviews them in the building model). The table is a draft: the plan model's rooms and walls may be incomplete; check facade lengths against the plan before confirming a room.
 
 ## Measure facade distances on the site
 
