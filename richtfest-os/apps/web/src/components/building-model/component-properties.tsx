@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { bebauungsplanSchema, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, ceilingRoleSchema, doorLeafTypeSchema, doorRoleSchema, installationKindSchema, installationProofSchema, liningSidesSchema, liningTypeSchema, screedInsulationSchema, screedTypeSchema, stairCaseSchema, timberCeilingUndersideSchema, timberWallLiningSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -24,14 +24,19 @@ const enumOptions: Record<string, readonly string[]> = {
   exteriorNoiseFlanking: ["negligible", "required"], exteriorSurfacesComplete: ["true", "false"],
   ceilingRole: ceilingRoleSchema.options, screedType: screedTypeSchema.options, doorRole: doorRoleSchema.options,
   windowFrame: windowFrameSchema.options, windowOpening: windowOpeningSchema.options, glazingBars: ["true", "false"],
+  doorLeafType: doorLeafTypeSchema.options, liningType: liningTypeSchema.options, liningSides: liningSidesSchema.options, timberWallLining: timberWallLiningSchema.options,
+  timberCeilingUnderside: timberCeilingUndersideSchema.options, screedInsulation: screedInsulationSchema.options, stairCase: stairCaseSchema.options,
+  installationKind: installationKindSchema.options, installationProof: installationProofSchema.options, serviceReceivingUse: ["living", "work"],
+  referenceBuildUpConfirmed: ["true", "false"], installationConditionsConfirmed: ["true", "false"],
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
-const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars"]);
+const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars", "referenceBuildUpConfirmed", "installationConditionsConfirmed"]);
 // Unitless numbers, such as how many of a small element sit in a wall.
 const countKeys = new Set(["elementCount", "rebateSeals"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
   soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB",
-  glassSoundReduction: "dB", frameShare: "%", openingWidth: "m", openingHeight: "m" };
+  glassSoundReduction: "dB", frameShare: "%", openingWidth: "m", openingHeight: "m", liningMass: "kg/m²", liningStiffness: "MN/m³", liningCavity: "cm", impactSoundReduction: "dB",
+  serviceSoundLevel: "dB", doorLeafSoundReduction: "dB", rebateSealSoundReduction: "dB", floorSealSoundReduction: "dB" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
@@ -40,12 +45,20 @@ const openingKeys = ["componentType", "openingWidth", "openingHeight", "openingA
 const windowKeys = [...openingKeys, "glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"];
 const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
 // Interior sound: a ceiling's requirement and floating screed; a lightweight wall's Dn,f,w when it flanks a separating element.
-const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness"];
-const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door" ? [...openingKeys, "doorRole"] : componentType === "window" ? windowKeys
+const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness", "screedInsulation"];
+// Massive walls and ceilings: a lining (a ceiling's is its suspended ceiling); lightweight ones: their catalogue row, a timber wall's lining, a timber ceiling's underside.
+const liningKeys = ["liningType", "liningMass", "liningStiffness", "liningCavity"];
+const lightweightConstruction = (construction: unknown) => construction === "drywall" || construction === "timber" || construction === "steel";
+const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door"
+    ? [...openingKeys, "doorRole", "doorLeafSoundReduction", "doorLeafType", "rebateSealSoundReduction", "floorSealSoundReduction"] : componentType === "window" ? windowKeys
   : componentType === "small_element" ? ["componentType", "elementCount", "normalizedLevelDifference", "openingArea", "soundReductionIndexBasis"]
+  : componentType === "stair" ? ["componentType", "stairCase", "impactSoundReduction"]
+  : componentType === "installation" ? ["componentType", "installationKind", "installationProof", "serviceSoundLevel", "serviceSoundLevelBasis", "serviceReceivingUse", "referenceBuildUpConfirmed", "installationConditionsConfirmed"]
   : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : []),
     ...(componentType === "ceiling" ? ceilingKeys : []), ...(componentType === "roof" ? ["surfaceArea"] : []),
-    ...(componentType === "wall" && (construction === "drywall" || construction === "timber" || construction === "steel") ? ["flankingLevelDifference"] : [])];
+    ...(componentType === "wall" || componentType === "ceiling" ? lightweightConstruction(construction)
+      ? ["lightweightCatalogueRow", ...(componentType === "wall" ? ["flankingLevelDifference", "timberWallLining"] : ["timberCeilingUnderside"])]
+      : [...liningKeys, ...(componentType === "wall" ? ["liningSides"] : [])] : [])];
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
 export const fieldLabel = (key: string, t: T) => t(`buildingComponentField${camel(key)}` as Key);
 export const optionLabel = (key: string, option: string, t: T) => t(`buildingComponent${camel(key)}${camel(option)}` as Key);

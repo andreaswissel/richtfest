@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
+  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, installationKindSchema, stairCaseSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
   type ProofFacade, type ProofGap, type ProofRoof, type ProofRoom, type SitePlanPage, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
@@ -501,7 +501,7 @@ const openingInput = z.object({
   baseRevision: z.number().int().nonnegative(),
   /** The wall an opening or small element sits in; a roof surface has none. */
   roomId: z.string().uuid(), wallId: z.string().uuid().nullable(),
-  componentType: z.enum(["window", "door", "small_element", "roof"]),
+  componentType: z.enum(["window", "door", "small_element", "roof", "stair", "installation"]),
   name: z.string().trim().min(1).max(120),
   /** Opening area; a small element's area per element; a roof's surface area. */
   area: z.number().positive().max(100000).nullable(),
@@ -516,10 +516,15 @@ const openingInput = z.object({
   doorRole: doorRoleSchema.nullable().optional(),
   /** A window's glazing build-up ("6/16/4"), for its catalogue Rw; only for windows. */
   glazing: z.string().trim().min(1).max(80).nullable().optional(),
+  /** Interior: a stair's case in its stairwell room; an installation's kind on the wall it is mounted on. */
+  stairCase: stairCaseSchema.nullable().optional(),
+  installationKind: installationKindSchema.nullable().optional(),
 }).strict()
   .refine(input => !input.glazing || input.componentType === "window", "Only windows take a glazing")
   .refine(input => !input.doorRole || input.componentType === "door", "Only doors take a door role")
-  .refine(input => (input.componentType === "roof") === (input.wallId === null), "Openings and small elements sit in a wall; roofs do not")
+  .refine(input => (input.componentType === "roof" || input.componentType === "stair") === (input.wallId === null), "Openings, small elements and installations sit in a wall; roofs and stairs do not")
+  .refine(input => !input.stairCase || input.componentType === "stair", "Only stairs take a stair case")
+  .refine(input => !input.installationKind || input.componentType === "installation", "Only installations take an installation kind")
   .refine(input => input.componentType === "small_element" || (input.dnew == null && input.count == null), "Only small elements take Dn,e,w and a count")
   .refine(input => input.componentType === "roof" || input.construction == null, "Only roofs take a construction here");
 
@@ -555,7 +560,8 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
           relationshipType: "opening_in", metadata: { method: "manual" }, reviewStatus: "approved", createdBy: d.actorId });
         const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], [input.componentType === "roof" ? "surfaceArea" : "openingArea", input.area, "m²"],
           ["soundReductionIndex", input.rw, "dB"], ["soundReductionIndexBasis", input.basis, null], ["doorRole", input.doorRole ?? null, null],
-          ["normalizedLevelDifference", input.dnew ?? null, "dB"], ["elementCount", input.count ?? null, null], ["construction", input.construction ?? null, null], ["glazing", input.glazing ?? null, null]];
+          ["normalizedLevelDifference", input.dnew ?? null, "dB"], ["elementCount", input.count ?? null, null], ["construction", input.construction ?? null, null], ["glazing", input.glazing ?? null, null],
+          ["stairCase", input.stairCase ?? null, null], ["installationKind", input.installationKind ?? null, null]];
         for (const [propertyKey, value, unit] of entries) if (value !== null)
           await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey, value, unit, provenance: "manual", evidence: [] });
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
@@ -578,7 +584,7 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
       const modelId = modelRow.model.id;
       const result = await modelTransaction(d.db, async (tx: any) => {
         const [element] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, elementId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId),
-          inArray(buildingElements.kind, ["window", "door", "small_element", "roof"]))).limit(1);
+          inArray(buildingElements.kind, ["window", "door", "small_element", "roof", "stair", "installation"]))).limit(1);
         if (!element) return { missing: true };
         const revision = await touchRevision(tx, d, modelId, baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelId), or(eq(buildingRelationships.fromEntityId, elementId), eq(buildingRelationships.toEntityId, elementId))));

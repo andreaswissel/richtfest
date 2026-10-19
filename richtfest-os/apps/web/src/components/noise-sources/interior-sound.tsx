@@ -1,7 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { buildingDeepLink, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, type AirborneResult, type InteriorDoorCheck, type ImpactResult, type InteriorCeilingCheck, type InteriorElementReason, type InteriorGap, type InteriorLimitation, type InteriorSoundProof } from "@richtfest/shared";
+import {
+  buildingDeepLink, ceilingRoleSchema, doorRoleSchema, installationKindSchema, installationProofSchema, screedTypeSchema, stairCaseSchema,
+  type AirborneResult, type InteriorDoorCheck, type ImpactOtherResult, type ImpactResult, type InteriorCeilingCheck, type InteriorElement, type InteriorElementReason, type InteriorGap,
+  type InteriorLimitation, type InteriorServiceCheck, type InteriorSoundProof, type InteriorStairCheck, type LightweightCatalogueOption, type StairResult, type TimberImpactResult,
+} from "@richtfest/shared";
 import { api } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -25,21 +29,25 @@ const entityLink = (projectId: string, id: string) => buildingDeepLink(projectId
 const gapKeys: Record<Exclude<InteriorGap["code"], "element">, Key> = {
   clear_height: "interiorGapClearHeight", geometry: "interiorGapGeometry", ceiling_missing: "interiorGapCeilingMissing", ceiling_role: "interiorGapCeilingRole",
   screed: "interiorGapScreed", no_requirement: "interiorGapNoRequirement", flanking_missing: "interiorGapFlankingMissing",
+  room_use: "interiorGapRoomUse", stair_case: "interiorGapStairCase", stair_wall: "interiorGapStairWall", installation_kind: "interiorGapInstallationKind",
+  installation_proof: "interiorGapInstallationProof", installation_wall: "interiorGapInstallationWall", service_level: "interiorGapServiceLevel",
 };
 const reasonKeys: Record<InteriorElementReason, Key> = {
   construction_missing: "interiorReasonConstruction", material_unknown: "interiorReasonMaterial", multi_leaf: "interiorReasonMultiLeaf", thickness_missing: "interiorReasonThickness",
   density_missing: "interiorReasonDensity", density_class_out_of_range: "interiorReasonOutOfRange", perforated_not_homogeneous: "interiorReasonPerforated",
   mass_out_of_range: "interiorReasonOutOfRange", catalogue_missing: "interiorReasonCatalogue", flanking_level_difference_missing: "interiorReasonDnfw",
-  lightweight_separating: "interiorReasonLightweight",
+  lightweight_separating: "interiorReasonLightweight", catalogue_row_unknown: "interiorReasonCatalogueRow", timber_inputs_missing: "interiorReasonTimber",
 };
 const edgeKeys: Record<string, Key> = { start: "interiorEdgeStart", end: "interiorEdgeEnd", top: "interiorEdgeTop", bottom: "interiorEdgeBottom" };
 const unsupportedKeys: Record<string, Key> = {
   method_missing: "interiorUnsupportedMethod", mixed_flanking: "interiorUnsupportedMixed", no_edges: "interiorUnsupportedGeometry", invalid_geometry: "interiorUnsupportedGeometry",
   slab_mass_out_of_range: "interiorUnsupportedRange", flanking_mass_out_of_range: "interiorUnsupportedRange", no_massive_flanking: "interiorUnsupportedNoMassive", screed_out_of_range: "interiorUnsupportedRange",
+  wall_too_light: "interiorUnsupportedWallLight", case_missing: "interiorUnsupportedRange", wall_mass_missing: "interiorUnsupportedWallMass", no_requirement: "interiorGapNoRequirement",
 };
 const limitationKeys: Record<InteriorLimitation, Key> = {
-  minimum_requirements_only: "interiorLimitMinimum", t_junctions: "interiorLimitJunctions", without_linings: "interiorLimitLinings", doors_not_checked: "interiorLimitDoors",
-  floor_like_ceiling: "interiorLimitFloor", walls_above_like_below: "interiorLimitWallsAbove", screed_not_credited_airborne: "interiorLimitScreedAirborne", impact_vertical_only: "interiorLimitImpact",
+  minimum_requirements_only: "interiorLimitMinimum", junction_types: "interiorLimitJunctions", linings_one_side: "interiorLimitLinings", doors_not_checked: "interiorLimitDoors",
+  floor_like_ceiling: "interiorLimitFloor", walls_above_like_below: "interiorLimitWallsAbove", impact_hallways_only: "interiorLimitImpact", timber_impact_vertical: "interiorLimitTimber",
+  stairs_room_behind_wall: "interiorLimitStairs", services_execution: "interiorLimitServices",
 };
 const gapText = (gap: InteriorGap, t: T) => gap.code === "element" ? `${gap.elementName}: ${t(reasonKeys[gap.reason])}`
   : gap.code === "flanking_missing" ? t("interiorGapFlankingMissing").replace("{edge}", t(edgeKeys[gap.edge] ?? "interiorEdgeStart")) : t(gapKeys[gap.code]);
@@ -58,7 +66,7 @@ function AirborneCell({ result, gaps, t }: { result: AirborneResult | null; gaps
 function Missing({ gaps, t }: { gaps: InteriorGap[]; t: T }) {
   return <span className="proof-gaps text-ui-xs muted">{t("proofMissing")}: {gaps.map(gap => gapText(gap, t)).join(", ")}</span>;
 }
-function ImpactCell({ result, t }: { result: ImpactResult | null; t: T }) {
+function ImpactCell({ result, t }: { result: ImpactResult | TimberImpactResult | ImpactOtherResult | StairResult | null; t: T }) {
   if (result?.status === "calculated") return <span className="text-ui-xs"><Verdict meets={result.meets} t={t} />{" "}
     {t("interiorImpactValue").replace("{value}", db(result.lnwPrimeDb)).replace("{allowance}", db(result.uncertaintyDb)).replace("{max}", db(result.maxDb)).replace("{margin}", `${result.marginDb >= 0 ? "+" : ""}${db(result.marginDb)}`)}</span>;
   if (result) return <span className="text-ui-xs muted">{t(unsupportedKeys[result.reason] ?? "interiorUnsupportedMethod")}</span>;
@@ -84,7 +92,8 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
   const ceilingsDone = proof.ceilings.filter(check => check.airborne?.status === "calculated" || check.impact?.status === "calculated").length;
   return <Section title={t("interiorSound")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
     <p className="noise-intro muted text-ui-xs">{t("interiorIntro")}</p>
-    {proof.level && proof.level !== "statutory_minimum" && <Callout>{t("interiorElevatedLevel")}</Callout>}
+    {proof.requirementLevel === "elevated" ? <Callout>{t("interiorElevatedChecked")}</Callout>
+      : proof.level && proof.level !== "statutory_minimum" && <Callout>{t("interiorElevatedLevel")}</Callout>}
     <Subsection title={t("proofBuildingInputs")}>
       <StoreyHeights projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
     </Subsection>
@@ -106,22 +115,14 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
     {ceilingIds.length ? ceilingIds.map(first => <Ceiling key={first.ceilingId} projectId={projectId} proof={proof} first={first}
       checks={proof.ceilings.filter(check => check.ceilingId === first.ceilingId)} canWrite={canWrite} t={t} />) : <Empty>{t("interiorNoCeilings")}</Empty>}
     </Subsection>
-    <Subsection title={t("interiorElements")} meta={t("interiorElementsHint")}>
-    {proof.elements.length ? <Table headers={[t("interiorElement"), t("interiorConstruction"), t("interiorMass"), t("interiorElementValue"), t("interiorBasis")]}
-      rows={elementsByStorey(proof).map(element => ({ id: element.id, cells: [
-        <span>{element.storeyId && storey(element.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, element.id)}>{element.name}</Link></span>,
-        <span className="text-ui-xs">{element.construction ? optionLabel("construction", element.construction, t) : "—"}</span>,
-        <span className="text-ui-xs">{element.massKgM2 === null ? "—" : `${element.massKgM2.toFixed(1)} kg/m²`}</span>,
-        element.massive || !canWrite
-          ? <span className="text-ui-xs">{element.rwDb !== null ? `Rw ${db(element.rwDb)} dB` : element.dnfwDb !== null ? `Dn,f,w ${db(element.dnfwDb)} dB` : "—"}</span>
-          : <FlankingLevel projectId={projectId} proof={proof} elementId={element.id} value={element.dnfwDb} t={t} />,
-        element.reason ? <Badge variant="outline">{t(reasonKeys[element.reason])}</Badge>
-          : <span className="text-ui-xs muted interior-basis" title={element.basis ?? undefined}>{element.basis ?? t("interiorEntered")}</span>,
-      ] }))} /> : <Empty>{t("interiorNoElements")}</Empty>}
-    </Subsection>
+    <Impacts projectId={projectId} proof={proof} t={t} />
+    <Stairs projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    <Services projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    <Elements projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
     <Subsection title={t("proofNachweis")}>
       <Callout><ul className="interior-limitations">{proof.limitations.map(item => <li key={item}>{t(limitationKeys[item])}</li>)}</ul></Callout>
-      {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone + proof.doors.filter(check => check.result).length} t={t} />}
+      {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone + proof.doors.filter(check => check.result).length
+        + [...proof.impacts, ...proof.stairs, ...proof.services].filter(check => check.result?.status === "calculated").length} t={t} />}
     </Subsection>
   </Section>;
 }
@@ -220,7 +221,8 @@ const elementsByStorey = (proof: Proof) => {
 const storeyPrefix = (proof: Proof) => (storeyId: string) => proof.storeys.length > 1
   ? <span className="muted text-ui-xs">{proof.storeys.find(item => item.id === storeyId)?.name} · </span> : null;
 
-const doorGapKeys: Record<InteriorDoorCheck["gaps"][number], Key> = { door_role: "interiorGapDoorRole", door_rw: "interiorGapDoorRw", no_requirement: "interiorGapNoRequirement" };
+const doorGapKeys: Record<InteriorDoorCheck["gaps"][number], Key> = { door_role: "interiorGapDoorRole", door_rw: "interiorGapDoorRw", no_requirement: "interiorGapNoRequirement",
+  criteria_not_applicable: "interiorGapDoorCriteria" };
 
 /**
  * Entrance doors from stairwells and common hallways: where each leads and its
@@ -244,8 +246,10 @@ function Doors({ projectId, proof, canWrite, t }: { projectId: string; proof: Pr
         <DoorRw projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />,
         <span className="text-ui-xs muted">{check.requirement ? `Rw ≥ ${check.requirement.rwMinDb} dB` : "—"}</span>,
         check.result ? <span className="text-ui-xs"><Verdict meets={check.result.meets} t={t} />{" "}
-          {t("interiorDoorValue").replace("{value}", db(check.result.valueDb)).replace("{allowance}", db(check.result.uncertaintyDb)).replace("{required}", db(check.result.requiredDb))
-            .replace("{margin}", `${check.result.marginDb >= 0 ? "+" : ""}${db(check.result.marginDb)}`)}</span>
+          {check.result.method === "declared"
+            ? t("interiorDoorValue").replace("{value}", db(check.result.valueDb)).replace("{allowance}", db(check.result.uncertaintyDb)).replace("{required}", db(check.result.requiredDb))
+              .replace("{margin}", `${check.result.marginDb >= 0 ? "+" : ""}${db(check.result.marginDb)}`)
+            : t("interiorDoorCriteriaValue").replace("{margin}", `${check.result.marginDb >= 0 ? "+" : ""}${db(check.result.marginDb)}`)}</span>
           : <span className="proof-gaps text-ui-xs muted">{check.gaps.length ? `${t("proofMissing")}: ${check.gaps.map(gap => t(doorGapKeys[gap])).join(", ")}` : "—"}</span>,
       ] }))} /> : <Empty>{t("interiorNoDoors")}</Empty>}
     {canWrite && places.length > 0 && <AddDoor projectId={projectId} proof={proof} places={places} t={t} />}
@@ -317,4 +321,221 @@ function CreateNachweis({ projectId, ready, t }: { projectId: string; ready: num
       {create.data.complete ? t("proofOpenNachweis") : t("proofOpenPartial")}</Link>}
     {create.isError && <Callout tone="error">{errorText(create.error, t)}</Callout>}
   </div>;
+}
+
+const signed = (value: number) => `${value >= 0 ? "+" : ""}${db(value)}`;
+const stairRows = (checks: InteriorStairCheck[]) => [...new Map(checks.map(check => [check.stair.id, check])).values()];
+
+/** Impact sound from common hallways into the protected rooms beside them, and diagonally from the hallway above; derived from room space types. */
+function Impacts({ projectId, proof, t }: { projectId: string; proof: Proof; t: T }) {
+  const done = proof.impacts.filter(check => check.result?.status === "calculated").length;
+  return <Subsection title={t("interiorImpacts")} meta={t("interiorCalculated").replace("{ready}", String(done)).replace("{total}", String(proof.impacts.length))}>
+    {proof.impacts.length ? <Table headers={[t("interiorImpactFrom"), t("interiorImpactPosition"), t("interiorImpactSlab"), t("interiorRequirement"), t("proofResult")]}
+      rows={proof.impacts.map(check => ({ id: check.id, cells: [
+        <span className="text-ui-xs">{storeyPrefix(proof)(check.storeyId)}{check.source.name} → {check.room.name}
+          <span className="muted"> · <Link className="underline underline-offset-2" to={entityLink(projectId, check.wall.id)}>{check.wall.name}</Link></span></span>,
+        <span className="text-ui-xs">{t(check.position === "beside" ? "interiorImpactBeside" : "interiorImpactDiagonal")}</span>,
+        <span className="text-ui-xs">{check.slab ? <Link className="underline underline-offset-2" to={entityLink(projectId, check.slab.id)}>{check.slab.name}</Link> : "—"}</span>,
+        <span className="text-ui-xs muted">{check.requirement ? `L'n,w ≤ ${check.requirement.lnwMaxDb} dB` : "—"}</span>,
+        check.result?.status === "calculated" ? <span className="text-ui-xs"><Verdict meets={check.result.meets} t={t} />{" "}
+          {t("interiorImpactOtherValue").replace("{value}", db(check.result.lnwPrimeDb)).replace("{kt}", db(check.result.kTDb)).replace("{allowance}", db(check.result.uncertaintyDb))
+            .replace("{max}", db(check.result.maxDb)).replace("{margin}", signed(check.result.marginDb))}</span>
+          : check.gaps.length ? <Missing gaps={check.gaps} t={t} /> : <ImpactCell result={check.result} t={t} />,
+      ] }))} /> : <Empty>{t("interiorNoImpacts")}</Empty>}
+  </Subsection>;
+}
+
+/** Stairs in stairwell rooms: their case and covering, then their check into each protected room behind the stairwell wall. */
+function Stairs({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+  const done = proof.stairs.filter(check => check.result?.status === "calculated").length;
+  return <Subsection title={t("interiorStairs")} meta={t("interiorCalculated").replace("{ready}", String(done)).replace("{total}", String(proof.stairs.length))}>
+    {proof.stairs.length ? stairRows(proof.stairs).map(first => <div key={first.stair.id} className="interior-ceiling-block interior-stair-block" role="group" aria-label={first.stair.name}>
+      <div className="interior-ceiling-heading">
+        <h4>{storeyPrefix(proof)(first.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, first.stair.id)}>{first.stair.name}</Link></h4>
+      </div>
+      <StairForm projectId={projectId} proof={proof} check={first} canWrite={canWrite} t={t} />
+      <Table headers={[t("interiorStairRoom"), t("interiorRequirement"), t("proofResult")]}
+        rows={proof.stairs.filter(check => check.stair.id === first.stair.id).map(check => ({ id: check.id, cells: [
+          <span className="text-ui-xs">{check.room?.name ?? "—"}{check.wall && <span className="muted"> · {check.wall.name}</span>}</span>,
+          <span className="text-ui-xs muted">{check.requirement ? `L'n,w ≤ ${check.requirement.lnwMaxDb} dB` : "—"}</span>,
+          check.gaps.length ? <Missing gaps={check.gaps} t={t} /> : <ImpactCell result={check.result} t={t} />,
+        ] }))} />
+    </div>) : <Empty>{t("interiorNoStairs")}</Empty>}
+    {canWrite && <AddElement projectId={projectId} proof={proof} kind="stair" t={t} />}
+  </Subsection>;
+}
+
+function StairForm({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorStairCheck; canWrite: boolean; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  const initial = { stairCase: String(check.stairCase?.value ?? ""), deltaLw: check.deltaLw ? String(check.deltaLw.value) : "" };
+  const [draft, setDraft] = useState(initial);
+  const key = JSON.stringify(initial);
+  useEffect(() => setDraft(initial), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const deltaLw = parseNumber(draft.deltaLw);
+  const valid = !draft.deltaLw.trim() || deltaLw !== null;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const write = (propertyKey: string, value: unknown, unit: string | null = null) => save.mutateAsync({ entityType: "element", entityId: check.stair.id, propertyKey, value, unit });
+    if (draft.stairCase && draft.stairCase !== initial.stairCase) await write("stairCase", draft.stairCase);
+    if (deltaLw !== null && draft.deltaLw !== initial.deltaLw) await write("impactSoundReduction", deltaLw, "dB");
+  };
+  return <form className="interior-ceiling" onSubmit={submit}>
+    <Field label={t("interiorStairCase")}><NativeSelect size="sm" className="w-full" value={draft.stairCase} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, stairCase: event.target.value })}>
+      <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+      {stairCaseSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("stairCase", option, t)}</NativeSelectOption>)}
+    </NativeSelect></Field>
+    <Field label={t("interiorStairDeltaLw")}><Input value={draft.deltaLw} inputMode="decimal" placeholder={t("interiorStairNoCovering")} disabled={!canWrite}
+      onChange={(event) => setDraft({ ...draft, deltaLw: event.target.value })} aria-invalid={!valid} /></Field>
+    {canWrite && <Button type="submit" size="sm" variant="outline" disabled={JSON.stringify(draft) === key || !valid || save.isPending}>{t("noiseSave")}</Button>}
+    {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
+  </form>;
+}
+
+const serviceFailureKeys: Record<string, Key> = {
+  wall_too_light: "interiorServiceWallLight", slab_too_light: "interiorServiceSlabLight", borders_protected_room: "interiorServiceBorders",
+  build_up_unconfirmed: "interiorServiceBuildUp", conditions_unconfirmed: "interiorServiceConditions", not_sanitary: "interiorServiceNotSanitary",
+};
+function ServiceResultCell({ check, t }: { check: InteriorServiceCheck; t: T }) {
+  const result = check.result;
+  if (check.gaps.length) return <Missing gaps={check.gaps} t={t} />;
+  if (!result) return <span className="text-ui-xs muted">—</span>;
+  if (result.status !== "calculated") return <span className="text-ui-xs muted">{t(unsupportedKeys[result.reason] ?? "interiorUnsupportedMethod")}</span>;
+  if (result.method === "level") return <span className="text-ui-xs"><Verdict meets={result.meets} t={t} />{" "}
+    {t("interiorServiceLevelValue").replace("{value}", db(result.valueDb)).replace("{max}", db(result.maxDb)).replace("{margin}", signed(result.marginDb))}</span>;
+  return result.meets ? <span className="text-ui-xs"><Verdict meets t={t} /> {t("interiorServiceReferenceMet")}</span>
+    : <span className="proof-gaps text-ui-xs"><Badge variant="outline">{t("interiorServiceNotCovered")}</Badge> {result.failures.map(item => t(serviceFailureKeys[item] ?? "interiorUnsupportedMethod")).join(", ")}</span>;
+}
+
+/** Building services: per installation its kind and how it is proven, then the result against the protected rooms of other units. */
+function Services({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+  const done = proof.services.filter(check => check.result?.status === "calculated" && check.result.meets).length;
+  return <Subsection title={t("interiorServices")} meta={t("interiorServicesMeta").replace("{ready}", String(done)).replace("{total}", String(proof.services.length))}>
+    {proof.services.length ? proof.services.map(check => <div key={check.id} className="interior-ceiling-block" role="group" aria-label={check.name}>
+      <div className="interior-ceiling-heading">
+        <h4>{storeyPrefix(proof)(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.id)}>{check.name}</Link></h4>
+        <span className="muted text-ui-xs">{[check.room?.name, check.wall?.name].filter(Boolean).join(" · ")}
+          {check.borders.length > 0 && ` · ${t("interiorServiceBordersRooms").replace("{rooms}", check.borders.map(room => room.name).join(", "))}`}</span>
+      </div>
+      <ServiceForm projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />
+      <div className="interior-service-result"><span className="muted text-ui-xs">{check.requirement ? `LAF,max,n ≤ ${check.requirement.maxDb} dB · ` : ""}</span><ServiceResultCell check={check} t={t} /></div>
+    </div>) : <Empty>{t("interiorNoServices")}</Empty>}
+    {canWrite && <AddElement projectId={projectId} proof={proof} kind="installation" t={t} />}
+  </Subsection>;
+}
+
+function ServiceForm({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorServiceCheck; canWrite: boolean; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  const initial = { kind: String(check.kind?.value ?? ""), proof: String(check.proof?.value ?? ""), level: check.level ? String(check.level.value) : "",
+    basis: String(check.basis?.value ?? ""), use: String(check.receivingUse?.value ?? "living"),
+    buildUp: check.buildUpConfirmed?.value === true, conditions: check.conditionsConfirmed?.value === true };
+  const [draft, setDraft] = useState(initial);
+  const key = JSON.stringify(initial);
+  useEffect(() => setDraft(initial), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const level = parseNumber(draft.level);
+  const valid = !draft.level.trim() || level !== null;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const write = (propertyKey: string, value: unknown, unit: string | null = null) => save.mutateAsync({ entityType: "element", entityId: check.id, propertyKey, value, unit });
+    if (draft.kind && draft.kind !== initial.kind) await write("installationKind", draft.kind);
+    if (draft.proof && draft.proof !== initial.proof) await write("installationProof", draft.proof);
+    if (level !== null && draft.level !== initial.level) await write("serviceSoundLevel", level, "dB");
+    if (draft.basis.trim() && draft.basis !== initial.basis) await write("serviceSoundLevelBasis", draft.basis.trim());
+    if (draft.use !== initial.use) await write("serviceReceivingUse", draft.use);
+    if (draft.buildUp !== initial.buildUp) await write("referenceBuildUpConfirmed", draft.buildUp);
+    if (draft.conditions !== initial.conditions) await write("installationConditionsConfirmed", draft.conditions);
+  };
+  const reference = draft.proof === "reference_wall", measured = draft.proof === "level";
+  return <form className="interior-ceiling interior-service" onSubmit={submit}>
+    <Field label={t("interiorServiceKind")}><NativeSelect size="sm" className="w-full" value={draft.kind} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
+      <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+      {installationKindSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("installationKind", option, t)}</NativeSelectOption>)}
+    </NativeSelect></Field>
+    <Field label={t("interiorServiceProof")}><NativeSelect size="sm" className="w-full" value={draft.proof} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, proof: event.target.value })}>
+      <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+      {installationProofSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("installationProof", option, t)}</NativeSelectOption>)}
+    </NativeSelect></Field>
+    {measured && <>
+      <Field label={t("interiorServiceLevel")}><Input value={draft.level} inputMode="decimal" disabled={!canWrite} onChange={(event) => setDraft({ ...draft, level: event.target.value })} aria-invalid={!valid} /></Field>
+      <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("interiorServiceBasisPlaceholder")} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
+      <Field label={t("interiorServiceUse")}><NativeSelect size="sm" className="w-full" value={draft.use} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, use: event.target.value })}>
+        {(["living", "work"] as const).map(option => <NativeSelectOption key={option} value={option}>{optionLabel("serviceReceivingUse", option, t)}</NativeSelectOption>)}
+      </NativeSelect></Field>
+    </>}
+    {reference && <div className="interior-service-checks">
+      <label className="text-ui-sm"><input type="checkbox" checked={draft.conditions} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, conditions: event.target.checked })} /> {t("interiorServiceConditionsConfirm")}</label>
+      <label className="text-ui-sm"><input type="checkbox" checked={draft.buildUp} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, buildUp: event.target.checked })} /> {t("interiorServiceBuildUpConfirm")}</label>
+    </div>}
+    {canWrite && <Button type="submit" size="sm" variant="outline" disabled={JSON.stringify(draft) === key || !valid || save.isPending}>{t("noiseSave")}</Button>}
+    {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
+  </form>;
+}
+
+/** Adds a stair to a room (its stairwell) or an installation on a wall of a room. */
+function AddElement({ projectId, proof, kind, t }: { projectId: string; proof: Proof; kind: "stair" | "installation"; t: T }) {
+  const places = kind === "stair" ? proof.places.map(place => ({ key: place.roomId, roomId: place.roomId, wallId: null as string | null, label: place.roomName, storeyId: place.storeyId }))
+    : proof.places.flatMap(place => place.walls.map(wall => ({ key: `${place.roomId}:${wall.id}`, roomId: place.roomId, wallId: wall.id as string | null, label: `${place.roomName} · ${wall.name}`, storeyId: place.storeyId })));
+  const empty = { place: places[0]?.key ?? "", name: "" };
+  const [draft, setDraft] = useState(empty);
+  const place = places.find(item => item.key === draft.place) ?? places[0];
+  const count = kind === "stair" ? stairRows(proof.stairs).length : proof.services.length;
+  const add = useMutation({
+    mutationFn: () => api(`/projects/${projectId}/exterior-noise/proof/openings`, {
+      baseRevision: baseRevision(projectId, proof), roomId: place!.roomId, wallId: place!.wallId, componentType: kind,
+      name: draft.name.trim() || `${t(kind === "stair" ? "interiorStair" : "interiorInstallation")} ${count + 1}`, area: null, rw: null, basis: null }),
+    onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
+  });
+  if (!places.length) return null;
+  const storeyName = (id: string) => proof.storeys.length > 1 ? `${proof.storeys.find(item => item.id === id)?.name} · ` : "";
+  return <FormPanel title={t(kind === "stair" ? "interiorAddStair" : "interiorAddInstallation")}><form className="interior-door-row interior-add-element" onSubmit={(event) => { event.preventDefault(); add.mutate(); }}>
+    <Field label={t(kind === "stair" ? "interiorStairPlace" : "interiorInstallationPlace")}>
+      <NativeSelect size="sm" className="w-full" value={draft.place} onChange={(event) => setDraft({ ...draft, place: event.target.value })}>
+        {places.map(item => <NativeSelectOption key={item.key} value={item.key}>{storeyName(item.storeyId)}{item.label}</NativeSelectOption>)}
+      </NativeSelect>
+    </Field>
+    <Field label={t("proofOpeningName")}><Input value={draft.name} placeholder={t("proofOptional")} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+    <Button type="submit" size="sm" variant="outline" disabled={add.isPending}>{t(kind === "stair" ? "interiorAddStair" : "interiorAddInstallation")}</Button>
+    {add.isError && <Callout tone="error">{errorText(add.error, t)}</Callout>}
+  </form></FormPanel>;
+}
+
+const liningText = (element: InteriorElement, t: T) => {
+  const parts = [element.lining && [element.componentType === "ceiling" ? t("interiorSuspendedCeiling") : t("interiorLining"), element.lining] as const,
+    element.screedLining && [t("interiorScreedAirborne"), element.screedLining] as const].filter(Boolean) as Array<readonly [string, NonNullable<InteriorElement["lining"]>]>;
+  return parts.map(([label, lining]) => lining.deltaRwDb !== null ? `${label} ΔRw ${signed(lining.deltaRwDb)} dB` : `${label}: ${t(lining.reason === "incomplete" ? "interiorLiningIncomplete" : "interiorLiningOutOfRange")}`).join(" · ");
+};
+
+/** The separating and flanking elements with their catalogue values; lightweight ones pick their catalogue row or take an entered Dn,f,w. */
+function Elements({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+  const storey = storeyPrefix(proof);
+  const lightweight = proof.elements.some(element => !element.massive);
+  const catalogue = useApi(`/projects/${projectId}/interior-sound/catalogue`, lightweight && canWrite);
+  const rows = (catalogue.data as { rows: LightweightCatalogueOption[] } | undefined)?.rows ?? [];
+  return <Subsection title={t("interiorElements")} meta={t("interiorElementsHint")}>
+    {proof.elements.length ? <Table headers={[t("interiorElement"), t("interiorConstruction"), t("interiorMass"), t("interiorElementValue"), t("interiorBasis")]}
+      rows={elementsByStorey(proof).map(element => ({ id: element.id, cells: [
+        <span>{element.storeyId && storey(element.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, element.id)}>{element.name}</Link></span>,
+        <span className="text-ui-xs">{element.construction ? optionLabel("construction", element.construction, t) : "—"}</span>,
+        <span className="text-ui-xs">{element.massKgM2 === null ? "—" : `${element.massKgM2.toFixed(1)} kg/m²`}</span>,
+        <span className="text-ui-xs">{[element.rwDb !== null && `Rw ${db(element.rwDb)} dB`, element.dnfwDb !== null && `Dn,f,w ${db(element.dnfwDb)} dB`, element.lnwDb != null && `Ln,w ${db(element.lnwDb)} dB`].filter(Boolean).join(" · ") || "—"}
+          {(element.lining || element.screedLining) && <span className="muted"><br />{liningText(element, t)}</span>}</span>,
+        element.massive || !canWrite
+          ? element.reason ? <Badge variant="outline">{t(reasonKeys[element.reason])}</Badge>
+            : <span className="text-ui-xs muted interior-basis" title={element.basis ?? undefined}>{element.basis ?? t("interiorEntered")}</span>
+          : <div className="interior-lightweight">
+            <CatalogueRow projectId={projectId} proof={proof} element={element} rows={rows} t={t} />
+            <FlankingLevel projectId={projectId} proof={proof} elementId={element.id} value={element.catalogueRow ? null : element.dnfwDb} t={t} />
+          </div>,
+      ] }))} /> : <Empty>{t("interiorNoElements")}</Empty>}
+  </Subsection>;
+}
+
+function CatalogueRow({ projectId, proof, element, rows, t }: { projectId: string; proof: Proof; element: InteriorElement; rows: LightweightCatalogueOption[]; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  const kinds = element.componentType === "ceiling" ? ["ceiling", "flanking_ceiling"] : ["wall_separating", "flanking_wall"];
+  const options = rows.filter(row => kinds.includes(row.kind));
+  return <NativeSelect size="sm" className="interior-catalogue" aria-label={`${t("interiorCatalogueRow")} · ${element.name}`} value={element.catalogueRow ?? ""} disabled={save.isPending || !options.length}
+    title={element.basis ?? undefined} onChange={(event) => event.target.value && save.mutate({ entityType: "element", entityId: element.id, propertyKey: "lightweightCatalogueRow", value: event.target.value })}>
+    <NativeSelectOption value="">{t("interiorCatalogueRowChoose")}</NativeSelectOption>
+    {options.map(row => <NativeSelectOption key={row.key} value={row.key}>{row.ref.replace(/^DIN 4109-33, /, "")} · {row.description.length > 90 ? `${row.description.slice(0, 90)}…` : row.description}</NativeSelectOption>)}
+  </NativeSelect>;
 }

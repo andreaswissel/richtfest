@@ -1,9 +1,9 @@
 ---
 title: Interior sound insulation
-description: Airborne sound of separating walls, ceilings and entrance doors and impact sound of ceilings, calculated from the building model.
+description: Airborne and impact sound of separating walls, ceilings, entrance doors and stairs, and building services, calculated from the building model.
 ---
 
-Open **Sound insulation** in the project bar and its **Interior sound** step. **Interior sound insulation** checks the separating walls, ceilings and entrance doors of the traced plans against the DIN 4109-1 minimum requirements with the DIN 4109-2 method for massive buildings. Everything is a draft until the planner checks and signs the Nachweis.
+Open **Sound insulation** in the project bar and its **Interior sound** step. **Interior sound insulation** checks the separating walls, ceilings, entrance doors, stairs and building services of the traced plans against DIN 4109-1, or DIN 4109-5 when the building's sound insulation level is set to elevated, with the DIN 4109-2 method. Everything is a draft until the planner checks and signs the Nachweis.
 
 ## What is checked
 
@@ -12,13 +12,19 @@ Open **Sound insulation** in the project bar and its **Interior sound** step. **
 
 - **Entrance doors**: every door in a stairwell or corridor wall, and any door given an entrance role. **Door leads** says whether it opens into the dwelling's hallway or directly into a habitable room; each has its own Rw requirement. The door's tested Rw less the door allowance of DIN 4109-2 is compared with it. A stairwell or corridor wall with such a door into one of its rooms is checked against the lower requirement DIN 4109-1 sets for walls with doors (derived from the door's requirement); the table names the door.
 
-Rooms that touch only diagonally share no separating area and are not checked. Elevated sound insulation and DEGA 103 are not checked; when one is agreed, the view says so and the Nachweis shows only the minimum requirements.
+- **Impact sound in other directions**: from the floor of a common hallway into the protected rooms beside it (across a corridor wall) and diagonally below it.
+- **Stairs**: **Add stair** places a stair in a stairwell room. With its stair type (flight or landing, rigidly connected or separated) and the ΔLw of its covering, it is checked into every room behind the stairwell walls.
+- **Building services**: **Add installation** places an installation on a room's wall. DIN 4109-36 has no calculation method, so a sanitary installation is covered either by the reference installation wall (massive wall of enough mass, or the reference stud wall on a heavy enough slab, not bordering another unit's protected room, with fittings, mounting and decoupling confirmed) or, like any other installation, by a measured or certified level LAF,max,n with its basis.
+
+Rooms that touch only diagonally share no separating area and are not checked. With **Sound insulation level** elevated in the building model, the elevated requirements of DIN 4109-5 apply where it sets one and the minimum requirement elsewhere; DEGA 103 is not checked.
 
 ## How a value is calculated
 
 - **Element values** come from the [component catalogue](/docs/workflows/exterior-noise#wall-rw-from-the-component-catalogue): area mass from thickness and bulk density, Rw from the mass law of the material, for walls and for the concrete slab alike. Construction and material decide the method. A wall or ceiling Rw entered by hand is not used here.
 - **Airborne sound**: the direct path through the separating element plus three flanking paths (Ff, Df, Fd) at each of its four edges, summed energetically. Flanking elements are found in the building model: at each end of a separating wall the wall running across it in each room, at the top the ceiling over the rooms and at the bottom the slab under the storey. Lightweight flanking walls (drywall, timber) contribute only their Dn,f,w, which you enter from a test certificate or catalogue. For a ceiling, the walls of the room below are its flanking elements on the receiving side; on the source side, the walls of the storey above standing on them, read from that storey's plan (aligned to this one by the building outline).
-- **Junctions** are taken as rigid T-junctions. Where walls actually cross, the result errs low. Flanking walls of different mass on the two sides use their mean mass.
+- **Junctions** are rigid T or cross junctions read from the plan: a cross junction where the separating wall continues in line past the flanking wall, or onto the next storey, and for ceilings at inner walls. Corner junctions and elastic interlayers are not corrected. Flanking walls of different mass on the two sides use their mean mass.
+- **Linings**: facing shells, drywall linings and suspended ceilings (mass, dynamic stiffness and cavity) improve the separating and flanking elements after DIN 4109-34, the floating screed improves a ceiling's airborne sound on its source side. A lining on one side of a wall is credited only where it worsens the value; a lining on one side of the separating wall is calculated in both directions and the lower result counts.
+- **Lightweight elements**: a drywall or timber element can take its values from a DIN 4109-33 catalogue row (**Catalogue row** in the elements table) instead of an entered Dn,f,w. A timber ceiling's impact sound uses the DIN 4109-33 method with its wall lining, ceiling underside and screed insulation.
 - **Impact sound**: the bare slab's level from its area mass, less the floating screed's improvement from its area mass and dynamic stiffness s', plus the flanking correction from the mean mass of the room's massive walls. Heavier walls than the method covers are capped at its limit, which errs high.
 - **Safety allowance**: the simplified DIN 4109-2 allowance is taken off R'w and added to L'n,w before comparing. The unrounded value is compared; values show one decimal.
 
@@ -30,7 +36,9 @@ Each table shows **Inputs missing** where a check cannot run, with the list of o
 
 - **Clear room height** per storey, at the top of the section (the same value the exterior noise verification uses).
 - **Ceiling type** and **Floating screed** (mortar, mastic asphalt, dry screed or none), its area mass and dynamic stiffness s', at the top of each ceiling, above its checks into the rooms below. Save stores all four. What every room below still needs is named once for the ceiling.
-- **Dn,f,w** of a lightweight wall, directly in the elements table.
+- **Dn,f,w** or **Catalogue row** of a lightweight wall, directly in the elements table. Lining type, mass, stiffness, cavity and sides of a massive element are in the building model.
+- **Room use** (protected room, common hallway, stairwell) decides which rooms the hallway, stair and services checks look at.
+- **Stair type** and **ΔLw** for each stair, **Kind**, **Proof** and level or confirmations for each installation, in their sections.
 - **Entrance doors**: **Add door** below the doors table places a door in a stairwell or corridor wall, leading into the room you choose, with its role, tested Rw and basis (test certificate). Change role or Rw in the table; a door's other values are in the building model.
 - Construction, material, thickness and bulk density of a massive wall or slab: follow the element's link to the building model.
 - **Flanking wall at the start/end**: the wall that should run across the separating wall is not traced, or not adjacent to the room. Trace it in the building model.
@@ -43,12 +51,12 @@ In Project Chat, ask the Richtfest Agent about the interior sound insulation. It
 
 ## Nachweis
 
-**Create interior Nachweis**, or asking the agent to prepare it, writes a draft Schallschutznachweis Innenbauteile to the project's artifacts: walls, ceilings and entrance doors with requirement, value, check and result, every element with its catalogue basis, the transmission paths of each calculated check, the assumptions and limits, open inputs and signature lines. With open inputs or unconfirmed suggestions it is a Teilstand.
+**Create interior Nachweis**, or asking the agent to prepare it, writes a draft Schallschutznachweis Innenbauteile to the project's artifacts: walls, ceilings, entrance doors, impact sound in other directions, stairs and building services with requirement, value, check and result, every element with its catalogue basis, the transmission paths of each calculated check, the assumptions and limits, open inputs and signature lines. With open inputs or unconfirmed suggestions it is a Teilstand.
 
 ## Limits
 
-- Massive buildings only: lightweight separating elements, two-leaf house separating walls and timber ceilings are not covered.
-- Linings, suspended ceilings and plaster are not credited. The screed's airborne improvement is not credited (errs low).
+- Two-leaf house separating walls are not covered.
 - Doors are checked by their tested Rw; a door Rw from the catalogue (DIN 4109-35) is not derived. Interior doors within a dwelling have no requirement.
 - Where the storey above has no traced wall on a wall below, and always for the top storey, the wall below is taken to continue upwards. When the slab under a storey is not in the model, it is taken to equal the ceiling above.
-- Impact sound is checked only into the room directly below.
+- Impact sound in other directions is checked only from common hallways; timber ceilings only vertically. A stair is checked into the room directly behind a stairwell wall.
+- Building services are checked by the reference wall or a stated level; execution on site (fittings, mounting) stays with the planner's confirmation.

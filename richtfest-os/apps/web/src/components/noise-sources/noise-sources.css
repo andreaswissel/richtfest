@@ -70,3 +70,16 @@
 .interior-ceiling-block th:nth-child(1) { width: 18%; }
 .interior-ceiling-block th:nth-child(2) { width: 12%; }
 .interior-ceiling-block th:nth-child(3) { width: 18%; }
+/* Stairs and building services reuse the ceiling block; their tables and forms have their own columns. */
+.interior-stair-block th:nth-child(1) { width: 34%; }
+.interior-stair-block th:nth-child(2) { width: 18%; }
+.interior-stair-block th:nth-child(3) { width: auto; }
+.interior-service { grid-template-columns: minmax(170px, 14rem) minmax(170px, 14rem) 8rem minmax(160px, 14rem) 12rem auto; }
+.interior-service-checks { grid-column: span 3; display: grid; gap: 4px; }
+.interior-service-checks label { display: flex; align-items: center; gap: 6px; }
+.interior-service-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.interior-lightweight { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.interior-lightweight .proof-inline { flex: none; }
+.interior-catalogue { width: 20rem; max-width: 100%; }
+.interior-add-element { grid-template-columns: minmax(200px, 1.4fr) minmax(160px, 1fr) auto; max-width: 720px; }
+@media (max-width: 720px) { .interior-service, .interior-add-element { grid-template-columns: 1fr; } .interior-service-checks { grid-column: auto; } }

@@ -5,7 +5,7 @@ import { z } from "zod";
  * (sound, thermal, fire, cost) reads the same wall/ceiling record; these keys
  * are stored as ordinary versioned, reviewed building properties.
  */
-export const componentTypeSchema = z.enum(["wall", "ceiling", "floor", "roof", "window", "door", "small_element", "other"]);
+export const componentTypeSchema = z.enum(["wall", "ceiling", "floor", "roof", "window", "door", "small_element", "stair", "installation", "other"]);
 export type ComponentType = z.infer<typeof componentTypeSchema>;
 export const componentConstructionSchema = z.enum(["masonry", "concrete", "drywall", "timber", "steel", "other"]);
 export type ComponentConstruction = z.infer<typeof componentConstructionSchema>;
@@ -17,6 +17,21 @@ export const ceilingRoleSchema = z.enum(["apartment_separating", "over_common_sp
 export type CeilingRole = z.infer<typeof ceilingRoleSchema>;
 /** Where a door leads from a common hallway or stairwell: into the dwelling's hallway, straight into a habitable room, or within one dwelling (no requirement). */
 export const doorRoleSchema = z.enum(["to_dwelling_hallway", "to_habitable_room", "internal"]);
+/** A door leaf closing into a rebate (rebated) or flush into the frame. */
+export const doorLeafTypeSchema = z.enum(["rebated", "flush"]);
+/** A layer on a massive element's face: none, bonded via an insulation layer, or free-standing with a cavity. Ceilings: a suspended ceiling. */
+export const liningTypeSchema = z.enum(["none", "bonded", "free_standing"]);
+/** Which faces of a wall carry the lining; one face counts only where the side is unambiguous. */
+export const liningSidesSchema = z.enum(["one", "both"]);
+/** Timber construction: a wall's lining and a timber ceiling's underside, and the insulation under a mineral or asphalt screed. */
+export const timberWallLiningSchema = z.enum(["gypsum_wood", "gypsum_fibre", "wood_board", "timber_element"]);
+export const timberCeilingUndersideSchema = z.enum(["two_boards_resilient", "one_board_resilient", "battens_or_direct", "open_beams", "solid_timber"]);
+export const screedInsulationSchema = z.enum(["wood_fibre", "mineral"]);
+/** A massive stair: landing or run, how it meets the stairwell wall, and whether a building joint runs through. */
+export const stairCaseSchema = z.enum(["landing_rigid", "run_rigid", "run_separated", "landing_joint", "run_separated_joint", "run_elastic_joint"]);
+/** Building services: sanitary and water installations, or other fixed equipment; proven by a reference installation wall or a measured level. */
+export const installationKindSchema = z.enum(["sanitary", "other"]);
+export const installationProofSchema = z.enum(["reference_wall", "level"]);
 /** A window's frame material; wood frames need fewer rebate seals in the window catalogue, wood-aluminium frames take a correction. */
 export const windowFrameSchema = z.enum(["wood", "plastic", "metal", "wood_aluminium"]);
 /** How a window opens: single or multi-sash casement, twin sash without a fixed mullion (Stulp), or fixed glazing. */
@@ -71,6 +86,35 @@ export const buildingComponentProperties = {
     screedStiffness: { value: z.number().positive().max(1000), unit: "MN/m³" },
     flankingLevelDifference: { value: z.number().min(0).max(120), unit: "dB" },
     doorRole: { value: doorRoleSchema, unit: null },
+    // A door without a declared Rw: its leaf's Rw and type and the RS,w of its rebate and floor seals (catalogue criteria).
+    doorLeafSoundReduction: { value: z.number().min(0).max(100), unit: "dB" },
+    doorLeafType: { value: doorLeafTypeSchema, unit: null },
+    rebateSealSoundReduction: { value: z.number().min(0).max(100), unit: "dB" },
+    floorSealSoundReduction: { value: z.number().min(0).max(100), unit: "dB" },
+    // Lightweight construction: the catalogue row a planner picked (its values stay on the server).
+    lightweightCatalogueRow: { value: z.string().trim().min(1).max(40), unit: null },
+    // A lining (walls), a suspended ceiling (ceilings): its kind and what its resonance frequency needs.
+    liningType: { value: liningTypeSchema, unit: null },
+    liningMass: { value: z.number().positive().max(500), unit: "kg/m²" },
+    liningStiffness: { value: z.number().positive().max(1000), unit: "MN/m³" },
+    liningCavity: { value: z.number().positive().max(100), unit: "cm" },
+    liningSides: { value: liningSidesSchema, unit: null },
+    timberWallLining: { value: timberWallLiningSchema, unit: null },
+    timberCeilingUnderside: { value: timberCeilingUndersideSchema, unit: null },
+    screedInsulation: { value: screedInsulationSchema, unit: null },
+    // A massive stair in a stairwell room, and a covering's or floating screed's ΔLw on it.
+    stairCase: { value: stairCaseSchema, unit: null },
+    impactSoundReduction: { value: z.number().min(0).max(60), unit: "dB" },
+    // Building services in a room, mounted on a wall: kind, how it is proven, and a measured or certified LAF,max,n.
+    installationKind: { value: installationKindSchema, unit: null },
+    installationProof: { value: installationProofSchema, unit: null },
+    serviceSoundLevel: { value: z.number().min(0).max(120), unit: "dB" },
+    serviceSoundLevelBasis: { value: z.string().trim().min(1).max(500), unit: null },
+    serviceReceivingUse: { value: z.enum(["living", "work"]), unit: null },
+    /** A person confirmed the stud wall has the reference build-up. */
+    referenceBuildUpConfirmed: { value: z.boolean(), unit: null },
+    /** A person confirmed the fittings, mounting, decoupling and manufacturer proofs the reference wall presumes. */
+    installationConditionsConfirmed: { value: z.boolean(), unit: null },
     // Window build-up for a catalogue Rw when no tested value is declared: glazing ("6/16/4"), declared glass Rw, frame, seals, opening, frame share, glazing bars.
     glazing: { value: z.string().trim().min(1).max(80), unit: null },
     glassSoundReduction: { value: z.number().min(0).max(100), unit: "dB" },

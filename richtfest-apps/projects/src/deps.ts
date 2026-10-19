@@ -75,14 +75,26 @@ export type AppDeps = {
   /** Interior sound methods and requirements from the norm pack; absent when the pack has no interior part or component catalogue. */
   interiorSound?: {
     editions: { requirements: string; method: string; junctions: string; screeds: string; catalogue: string };
-    wallRequirement: (role: import("@richtfest/shared").InteriorWallRole) => { rwMinDb: number; ref: string } | null;
-    ceilingRequirement: (role: import("@richtfest/shared").InteriorCeilingRole) => { rwMinDb: number | null; lnwMaxDb: number | null; ref: string } | null;
+    /** Requirements per role for a level; null for the elevated level when the pack has no elevated table. */
+    requirements: (level: import("@richtfest/shared").InteriorRequirementLevel) => import("@richtfest/shared").InteriorRequirements | null;
     massiveRw: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
     airborne: (input: import("@richtfest/shared").AirborneInput) => import("@richtfest/shared").AirborneResult;
     impact: (input: import("@richtfest/shared").ImpactInput) => import("@richtfest/shared").ImpactResult;
     /** Door checks; absent with a pack that has no door requirements. */
-    door?: (input: { rwDb: number; role: import("@richtfest/shared").InteriorDoorRole }) => import("@richtfest/shared").DoorResult;
-    wallWithDoorRequirement?: (role: import("@richtfest/shared").InteriorDoorRole) => { rwMinDb: number; ref: string } | null;
+    door?: (input: { rwDb: number; requirement: { rwMinDb: number; ref: string } | null }) => import("@richtfest/shared").DoorResult;
+    /** Doors without a declared Rw under the catalogue criteria; absent with a pack without them. */
+    doorCriteria?: (input: import("@richtfest/shared").DoorConstruction & { requirement: { rwMinDb: number; ref: string } | null }) => import("@richtfest/shared").DoorResult;
+    /** Up to this lateral offset a wall continuing past a flanking wall forms a cross junction; null without cross junctions in the pack. */
+    crossJunctionOffsetM: number | null;
+    /** ΔRw of a lining, suspended ceiling or floating screed on a massive element. */
+    lining: (input: { lining: import("@richtfest/shared").Lining; baseMassKgM2: number; baseRwDb: number }) => import("@richtfest/shared").LiningResult;
+    impactOther: (input: import("@richtfest/shared").ImpactOtherInput) => import("@richtfest/shared").ImpactOtherResult;
+    stair: (input: import("@richtfest/shared").StairInput) => import("@richtfest/shared").StairResult;
+    timberImpact: (input: import("@richtfest/shared").TimberImpactInput) => import("@richtfest/shared").TimberImpactResult;
+    service: (input: import("@richtfest/shared").ServiceInput) => import("@richtfest/shared").ServiceResult;
+    /** Lightweight catalogue rows: the options (no values) and a row's values for a key; empty without the catalogue. */
+    lightweightOptions: () => import("@richtfest/shared").LightweightCatalogueOption[];
+    lightweightRow: (key: string) => { kind: import("@richtfest/shared").LightweightCatalogueOption["kind"]; ref: string; description: string; rwDb: number | null; lnwDb: number | null; dnfwDb: number | null } | null;
   } | null;
   /** The deterministic acoustic calculator (DIN 4109 exterior noise verification), shared with the knowledge app. */
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;

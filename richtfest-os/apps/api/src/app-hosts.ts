@@ -40,7 +40,7 @@ import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
 import { massiveWallRw } from "@richtfest/acoustics/massive-wall";
 import { catalogueWindowRw } from "@richtfest/acoustics/window";
-import { airborneSoundInsulation, impactSoundLevel, doorSoundInsulation, wallWithDoorRequirement } from "@richtfest/acoustics/interior-sound";
+import { airborneSoundInsulation, impactSoundLevel, doorCriteria, doorSoundInsulation, impactOtherDirections, interiorRequirements, liningImprovement, serviceNoise, stairImpact, timberImpact } from "@richtfest/acoustics/interior-sound";
 import { proposeExteriorNoiseInputs, readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
 import { suggestCatalogueValues } from "@richtfest/projects/exterior-noise-catalogue";
 import { proposeInteriorSoundInputs, readInteriorSoundProof } from "@richtfest/projects/interior-sound-proof";
@@ -151,13 +151,24 @@ const interiorSoundHost = (): ProjectsDeps["interiorSound"] => {
   if (!pack || !interior || !catalogue) return null;
   return {
     editions: { ...interior.editions, catalogue: catalogue.edition },
-    wallRequirement: role => interior.requirements.walls[role] ?? null,
-    ceilingRequirement: role => interior.requirements.ceilings[role] ?? null,
+    requirements: level => interiorRequirements(pack, level),
     massiveRw: input => massiveWallRw(pack, input),
     airborne: input => airborneSoundInsulation(pack, input),
     impact: input => impactSoundLevel(pack, input),
-    door: input => doorSoundInsulation(pack, input),
-    wallWithDoorRequirement: role => wallWithDoorRequirement(pack, role),
+    ...(interior.door ? { door: (input: Parameters<typeof doorSoundInsulation>[1]) => doorSoundInsulation(pack, input) } : {}),
+    ...(pack.din4109_35?.doors ? { doorCriteria: (input: Parameters<typeof doorCriteria>[1]) => doorCriteria(pack, input) } : {}),
+    crossJunctionOffsetM: interior.airborne.crossJunction ? interior.airborne.crossJunctionOffsetM ?? null : null,
+    lining: input => liningImprovement(pack, input),
+    impactOther: input => impactOtherDirections(pack, input),
+    stair: input => stairImpact(pack, input),
+    timberImpact: input => timberImpact(pack, input),
+    service: input => serviceNoise(pack, input),
+    // Options carry no values; a row's values stay on the server and enter only the calculation.
+    lightweightOptions: () => (pack.din4109_33?.rows ?? []).map(({ key, ref, kind, description, transmission }) => ({ key, ref, kind, description, transmission })),
+    lightweightRow: key => {
+      const row = pack.din4109_33?.rows.find(item => item.key === key);
+      return row ? { kind: row.kind, ref: `${row.ref} (${pack.din4109_33!.edition})`, description: row.description, rwDb: row.rwDb, lnwDb: row.lnwDb, dnfwDb: row.dnfwDb } : null;
+    },
   };
 };
 const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
