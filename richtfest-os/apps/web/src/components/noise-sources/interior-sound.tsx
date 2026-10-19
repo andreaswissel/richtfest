@@ -144,7 +144,7 @@ function Ceiling({ projectId, proof, first, checks, canWrite, t }: { projectId: 
       <span className="muted text-ui-xs">{t("interiorCeilingMeta").replace("{count}", String(checks.length)).replace("{ready}", String(done))}</span>
     </div>
     <CeilingRow projectId={projectId} proof={proof} check={first} canWrite={canWrite} t={t} />
-    {shared.length > 0 && <p className="text-ui-xs muted">{t("interiorCeilingMissing").replace("{gaps}", shared.join(", "))}</p>}
+    {shared.length > 0 && <Callout>{t("interiorCeilingMissing").replace("{gaps}", shared.join(", "))}</Callout>}
     <Table headers={[t("interiorRoomBelow"), t("interiorArea"), t("interiorRequirement"), t("interiorAirborne"), t("interiorImpact")]}
       rows={checks.map(check => {
         const own = check.gaps.filter(gap => !shared.includes(gapText(gap, t)));

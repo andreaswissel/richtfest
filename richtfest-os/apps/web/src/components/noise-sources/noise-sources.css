@@ -46,12 +46,14 @@
 @media (max-width: 720px) { .proof-row, .proof-opening-row { grid-template-columns: 1fr; } }
 .proof-create { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 /* One ceiling: name, construction, then its checks into the rooms below. */
-.interior-ceiling-block { display: grid; gap: calc(var(--stack) / 2); padding-top: calc(var(--stack) * .75); }
-.subsection-heading + .interior-ceiling-block { padding-top: 0; }
-.interior-ceiling-block + .interior-ceiling-block { margin-top: calc(var(--stack) / 2); border-top: 1px dashed var(--border); }
+.interior-ceiling-block { display: grid; gap: var(--stack); padding-top: var(--stack); }
+.subsection-heading + .interior-ceiling-block { padding-top: calc(var(--stack) / 2); }
+.interior-ceiling-block + .interior-ceiling-block { margin-top: var(--stack); border-top: 1px dashed var(--border); padding-top: calc(var(--stack) * 1.5); }
 .interior-ceiling-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.interior-ceiling-heading h4 { font-size: var(--ui-sm); font-weight: 600; }
-.interior-ceiling { display: grid; grid-template-columns: minmax(170px, 14rem) minmax(170px, 16rem) 10rem 13rem auto; align-items: end; gap: 4px var(--stack); }
+.interior-ceiling-heading h4 { font-size: var(--ui); font-weight: 600; }
+/* The ceiling's construction: one calm panel, so the inputs read as a group apart from the checks. */
+.interior-ceiling { display: grid; grid-template-columns: minmax(170px, 14rem) minmax(170px, 16rem) 10rem 13rem auto; align-items: end; gap: var(--stack) var(--stack);
+  padding: var(--stack); border: 1px solid var(--border); border-radius: var(--radius); background: color-mix(in oklch, var(--muted) 40%, transparent); }
 .interior-ceiling > .callout { grid-column: 1 / -1; }
 .interior-limitations { margin: 0; padding-left: 1rem; list-style: disc; display: grid; gap: 2px; }
 @media (max-width: 720px) { .interior-ceiling { grid-template-columns: 1fr; } }
