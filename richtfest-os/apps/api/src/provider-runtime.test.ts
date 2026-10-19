@@ -38,6 +38,7 @@ test("Chat provider receives reviewed building state and returns a proposal for 
   expect(JSON.stringify(request.input)).toContain(deepLink);
   expect(request.instructions).toContain("never approves or changes a reviewed fact");
   expect(request.instructions).toContain("propose_building_model_change");
+  expect(request.instructions).toContain("propose_exterior_noise_inputs");
   const parsed = outputInput.parse(result);
   expect(validateTool(parsed.tools[0]!.name, parsed.tools[0]!.input)).toEqual(proposal);
 });

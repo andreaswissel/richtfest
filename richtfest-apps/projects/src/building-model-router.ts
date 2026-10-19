@@ -162,7 +162,7 @@ const entityExists = async (db: any, d: AppDeps, modelId: string, type: string, 
   const rows = await db.select({ id: table.id }).from(table).where(and(eq(table.id, entityId), eq(table.modelId, modelId), eq(table.tenantId, d.tenantId))).limit(1);
   return Boolean(rows[0]);
 };
-const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string, evidence: z.infer<typeof buildingEvidenceSchema>[]) => {
+export const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string, evidence: z.infer<typeof buildingEvidenceSchema>[]) => {
   // Correspondence evidence is written only by Richtfest when it reads an inquiry reply.
   if (evidence.some(item => item.kind === "correspondence")) return false;
   const ids = [...new Set(evidence.flatMap(item => "sourceVersionId" in item && item.sourceVersionId ? [item.sourceVersionId] : []))];

@@ -38,7 +38,7 @@ import { trafficCountsInBox } from "@richtfest/public-data/traffic-count-queries
 import { calculateAcoustics } from "@richtfest/acoustics";
 import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
-import { readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
+import { proposeExteriorNoiseInputs, readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
 import { acousticNormPack } from "./acoustic-norm-pack";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
@@ -188,6 +188,8 @@ export const knowledgeDeps = (
     buildingModelContext: (projectId, selection) => readBuildingModelAgentContext(projectsDeps(db, req), projectId,
       selection ? { objectId: selection.entityId } : {}),
     proposeBuildingModelChange: (projectId, input, execution, tx) => proposeBuildingModelChange(
+      { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
+    proposeExteriorNoiseInputs: (projectId, input, execution, tx) => proposeExteriorNoiseInputs(
       { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
     validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
       sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id

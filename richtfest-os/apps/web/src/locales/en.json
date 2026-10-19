@@ -2479,5 +2479,19 @@
   "buildingComponentExteriorNoiseFlankingRequired": "Must be assessed",
   "buildingComponentOpenings": "Openings",
   "buildingComponentInWall": "In wall",
-  "buildingExteriorNoiseBasisHint": "Read by the exterior noise verification. Enter each storey's clear room height; windows and doors are added per room there."
+  "buildingExteriorNoiseBasisHint": "Read by the exterior noise verification. Enter each storey's clear room height; windows and doors are added per room there.",
+  "proofSuggested": "Suggested",
+  "proofSuggestions": "Suggestions to confirm",
+  "proofSuggestionsHint": "Richtfest read these from the project sources. They are calculated with, and the Nachweis stays a draft until you confirm them.",
+  "proofAcceptAll": "Accept all ({count})",
+  "proofAccept": "Accept",
+  "proofReject": "Reject",
+  "proofBuilding": "Building",
+  "proofSuggestionFor": "For",
+  "proofSuggestionField": "Field",
+  "proofSuggestionValue": "Value",
+  "proofSuggestionSource": "Source",
+  "proofPage": "p. {page}",
+  "proofYes": "Yes",
+  "proofNo": "No"
 }

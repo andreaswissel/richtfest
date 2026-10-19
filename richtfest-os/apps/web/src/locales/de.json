@@ -2479,5 +2479,19 @@
   "buildingComponentExteriorNoiseFlankingRequired": "Muss bewertet werden",
   "buildingComponentOpenings": "Öffnungen",
   "buildingComponentInWall": "In Wand",
-  "buildingExteriorNoiseBasisHint": "Grundlage für den Außenlärm-Nachweis. Lichte Raumhöhe je Geschoss eintragen; Fenster und Türen werden dort je Raum erfasst."
+  "buildingExteriorNoiseBasisHint": "Grundlage für den Außenlärm-Nachweis. Lichte Raumhöhe je Geschoss eintragen; Fenster und Türen werden dort je Raum erfasst.",
+  "proofSuggested": "Vorschlag",
+  "proofSuggestions": "Vorschläge zu bestätigen",
+  "proofSuggestionsHint": "Richtfest hat diese Werte aus den Projektunterlagen gelesen. Sie fließen in die Berechnung ein; der Nachweis bleibt ein Teilstand, bis du sie bestätigst.",
+  "proofAcceptAll": "Alle übernehmen ({count})",
+  "proofAccept": "Übernehmen",
+  "proofReject": "Ablehnen",
+  "proofBuilding": "Gebäude",
+  "proofSuggestionFor": "Für",
+  "proofSuggestionField": "Feld",
+  "proofSuggestionValue": "Wert",
+  "proofSuggestionSource": "Quelle",
+  "proofPage": "S. {page}",
+  "proofYes": "Ja",
+  "proofNo": "Nein"
 }

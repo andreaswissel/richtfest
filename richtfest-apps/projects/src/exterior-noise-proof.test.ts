@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { proposeExteriorNoiseRoom, type Point2, type ProofValue } from "@richtfest/shared";
+import { exteriorNoiseAgentContext, proposeExteriorNoiseRoom, type Point2, type ProofValue } from "@richtfest/shared";
 import { assembleExteriorNoiseProof, facadeLengths, overlapAlongWall, type ProofAssemblyInput } from "./exterior-noise-proof";
 
-const value = <T,>(v: T, reviewStatus = "unreviewed"): ProofValue<T> => ({ value: v, reviewStatus, provenance: "manual", propertyId: "p", version: 1 });
+const value = <T,>(v: T, reviewStatus = "unreviewed"): ProofValue<T> => ({ value: v, reviewStatus, provenance: "manual", propertyId: "p", version: 1, reviewRevision: 0 });
 // A 5 × 4 m room in the corner of two exterior walls: north (y = 0) and west (x = 0), 0.3 m thick.
 const room: Point2[] = [[0.3, 0.3], [5.3, 0.3], [5.3, 4.3], [0.3, 4.3]];
 const north = { id: "north", name: "N wall", ring: [[0, 0], [12, 0], [12, 0.3], [0, 0.3]] as Point2[] };
@@ -82,5 +82,20 @@ describe("exterior noise proof assembly", () => {
     expect(proposeExteriorNoiseRoom("Küche", null)).toBe("not_protected");
     expect(proposeExteriorNoiseRoom("Kind 2", null)).toBe("sleeping");
     expect(proposeExteriorNoiseRoom("Raum 3", null)).toBeNull();
+  });
+});
+
+describe("agent context", () => {
+  test("marks unconfirmed inferred values as suggestions and uses the room's La period", () => {
+    const { rooms } = assembleExteriorNoiseProof(input({ openings: [{ ...input().openings[0]!, rw: { ...value(37), provenance: "inferred" } }] }));
+    const proof = { available: true as const, modelRevision: 3, buildingId: "b", page: { fileName: "plan.pdf", page: 1 }, storey: { id: "s", name: "EG", levelIndex: 0 },
+      applicability: value("standard_exterior_noise", "approved"), flanking: null, clearHeight: value(2.5), rooms, suggestions: [], calculation: null, levels: {} as any };
+    const context = exteriorNoiseAgentContext(proof, "p");
+    if (!context.available) throw new Error("expected available");
+    expect(context.applicability).toEqual({ value: "standard_exterior_noise", status: "approved" });
+    const north = context.rooms[0]!.facades.find(facade => facade.wallId === "north")!;
+    expect(north.laDb).toBe(66);
+    expect(north.openings[0]!.rwDb).toEqual({ value: 37, status: "suggested" });
+    expect(north.rwDb).toEqual({ value: 50, status: "unreviewed" });
   });
 });

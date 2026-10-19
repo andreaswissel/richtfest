@@ -96,7 +96,23 @@ Limitations shown under the table: free propagation without screening by other b
 
 The result shows the required value (base requirement plus area correction K_AL), the provided value (R'w,ges less the 2 dB prognosis allowance) and the reserve, or what is still missing.
 
-**Create Nachweis** writes the draft Schallschutznachweis Außenlärm as a document with PDF, without AI: a review summary, room overview, one calculation sheet per room with numbered input evidence (floor areas and facade lengths cite the plan page, entered values are marked as entries), the open inputs, an annex deriving La (sources, traffic, assumptions, facade levels, limits) and a sign-off block. While rooms are open it is titled *Teilstand*. Review and approve it like any other document; recreate it after inputs change. Values entered here are ordinary building-model values (unreviewed until a person reviews them in the building model). The table is a draft: roofs, roller shutter boxes and ventilators are not covered yet, and the plan model's rooms and walls may be incomplete; check facade lengths against the plan before confirming a room.
+### Let the Richtfest Agent fill the gaps
+
+Ask the Richtfest Agent in the project conversation, for example *"Prepare the exterior noise verification"* or *"Take the windows from the Fensterliste"*. It sees the same verification: which rooms are calculated and which inputs are missing. It reads the project sources (plans, Fensterliste, Baubeschreibung, test certificates, sections) and suggests what they state:
+
+- the use of each room, from the plan's room names;
+- windows and doors per room and exterior wall, with their area from the Fensterliste or plan dimensions, and their Rw where a source states it;
+- the Rw of exterior walls and its basis, the construction, the clear room height, and the method and flanking choice.
+
+Every suggestion cites the source page and a short quote. Suggestions never replace a value someone entered or confirmed, and a rejected suggestion is not proposed again. The agent does not estimate acoustic values: where no source states a value, it asks for exactly that input and points to this view.
+
+**Suggestions to confirm** lists the suggested values above the rooms with their source. **Accept** or **Reject** each one, or **Accept all**. Suggested values are calculated right away and marked *Suggested*; until they are confirmed, the Nachweis stays a *Teilstand* and lists them as open items. The agent can also create the draft Nachweis when asked; the planner checks and signs it.
+
+### In the building model
+
+The same values are editable in the [building model](/docs/workflows/project-onboarding): select a room for its **Exterior noise use** and **Exterior surfaces complete**, an exterior wall or roof for **Rw** and **Rw basis**, a window or door for **Opening area**, **Rw** and its basis. A wall lists the openings set into it, a window or door its wall. **Sound insulation → Exterior noise** holds the method, flanking and each storey's **clear room height**.
+
+**Create Nachweis** writes the draft Schallschutznachweis Außenlärm as a document with PDF, without AI: a review summary, room overview, one calculation sheet per room with numbered input evidence (floor areas and facade lengths cite the plan page, entered values are marked as entries), the open inputs, an annex deriving La (sources, traffic, assumptions, facade levels, limits) and a sign-off block. While rooms are open it is titled *Teilstand*. Review and approve it like any other document; recreate it after inputs change. Values entered here are ordinary building-model values (entered, unreviewed until a person reviews them in the building model). The table is a draft: roofs, roller shutter boxes and ventilators are not covered yet, and the plan model's rooms and walls may be incomplete; check facade lengths against the plan before confirming a room.
 
 ## Measure facade distances on the site
 

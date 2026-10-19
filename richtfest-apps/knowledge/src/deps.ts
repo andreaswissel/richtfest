@@ -129,6 +129,8 @@ export type AppDeps = {
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;
   /** Projects assembles the exterior noise verification inputs from the building model and facade levels. */
   exteriorNoiseProof?: (projectId: string) => Promise<import("@richtfest/shared").ExteriorNoiseProof>;
+  /** Writes the agent's cited exterior noise suggestions as unreviewed building-model values (Projects). */
+  proposeExteriorNoiseInputs?: (projectId: string, input: unknown, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
     runId?: string;

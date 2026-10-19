@@ -41,3 +41,16 @@ test("agent proposals require revision and immutable evidence and expose no appr
   expect(() => validateTool("approve_building_model_change", proposal)).toThrow("not allowlisted");
   expect(() => validateTool("merge_building_objects", proposal)).toThrow("not allowlisted");
 });
+
+test("exterior noise suggestions need a cited page and a verification input key", () => {
+  const value = { entityType: "element", entityId, propertyKey: "soundReductionIndex", value: 52, unit: "dB", reason: "Baubeschreibung states it", evidence };
+  expect(validateTool("propose_exterior_noise_inputs", { values: [value] })).toMatchObject({ values: [value], openings: [] });
+  expect(() => validateTool("propose_exterior_noise_inputs", { values: [{ ...value, evidence: [] }] })).toThrow();
+  // Only inputs the verification reads; other building facts go through propose_building_model_change.
+  expect(() => validateTool("propose_exterior_noise_inputs", { values: [{ ...value, propertyKey: "level" }] })).toThrow();
+  expect(() => validateTool("propose_exterior_noise_inputs", {})).toThrow();
+  const opening = { roomId: entityId, wallId: entityId, componentType: "window", name: "F 1.01", area: 2.4, reason: "Fensterliste", evidence };
+  expect(validateTool("propose_exterior_noise_inputs", { openings: [opening] })).toMatchObject({ openings: [opening] });
+  expect(() => validateTool("propose_exterior_noise_inputs", { openings: [{ ...opening, area: 0 }] })).toThrow();
+  expect(validateTool("prepare_exterior_noise_nachweis", {})).toEqual({});
+});

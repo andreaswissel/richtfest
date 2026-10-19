@@ -1,4 +1,6 @@
+import { z } from "zod";
 import type { AcousticCalculationInput, AcousticCalculationResult } from "./acoustic-calculation";
+import { buildingEvidenceSchema } from "./building-model";
 import type { Compass } from "./site-plan";
 import type { FacadeNoiseLevels } from "./exterior-noise-levels";
 
@@ -31,7 +33,24 @@ export const exteriorNoiseCalculationUse = (kind: ExteriorNoiseRoomKind) =>
   kind === "hospital_bedroom" ? "hospital_bedroom" as const : kind === "office" ? "office" as const : "residential_accommodation_classroom" as const;
 
 /** The current, not rejected value of a building-model property. */
-export type ProofValue<T> = { value: T; reviewStatus: string; provenance: string; propertyId: string; version: number };
+export type ProofValue<T> = { value: T; reviewStatus: string; provenance: string; propertyId: string; version: number; reviewRevision: number };
+
+/** Building-model properties the exterior noise verification reads; the agent may suggest any of them. */
+export const exteriorNoiseInputKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
+  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea"] as const;
+
+/**
+ * A value Richtfest suggested (agent or derivation) that nobody has confirmed
+ * yet. It is calculated with, but the Nachweis stays a Teilstand until a
+ * person accepts or replaces it.
+ */
+export type ProofSuggestion = {
+  entityType: "building" | "storey" | "room" | "element"; entityId: string; entityLabel: string;
+  propertyKey: string; value: unknown; unit: string | null;
+  propertyId: string; version: number; reviewRevision: number;
+  /** First cited source page, and a short quote when the source stated it. */
+  evidence: { sourceVersionId: string; page: number; fileName: string | null; quote: string | null } | null;
+};
 
 export type ProofWindow = {
   id: string; name: string; componentType: "window" | "door";
@@ -66,8 +85,54 @@ export type ExteriorNoiseProof =
     storey: { id: string; name: string; levelIndex: number | null };
     applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
     rooms: ProofRoom[];
+    /** Suggested values still waiting for a person, oldest entity first. */
+    suggestions: ProofSuggestion[];
     /** The calculation input for every protected room that has all inputs, and its result. */
     calculation: { input: Extract<AcousticCalculationInput, { method: "exterior_noise_batch" }>; result: AcousticCalculationResult } | null;
     /** The facade levels the La values come from, with their sources, defaults and limitations. */
     levels: Extract<FacadeNoiseLevels, { available: true }>;
   };
+
+/**
+ * The verification state an agent needs to act on: per room what is missing
+ * and which ids to propose values for. Bounded; no norm values.
+ */
+export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: string, maxRooms = 40) {
+  const view = `/projects/${projectId}?view=noise`;
+  if (!proof.available) return { available: false as const, reason: proof.reason, view };
+  const shown = <T,>(item: ProofValue<T> | null) => item ? { value: item.value, status: item.provenance === "inferred" && item.reviewStatus !== "approved" ? "suggested" : item.reviewStatus } : null;
+  return {
+    available: true as const, view, modelRevision: proof.modelRevision, buildingId: proof.buildingId,
+    plan: proof.page, storey: proof.storey,
+    applicability: shown(proof.applicability), flanking: shown(proof.flanking), clearRoomHeightM: shown(proof.clearHeight),
+    rooms: proof.rooms.slice(0, maxRooms).map(room => ({
+      roomId: room.id, label: room.label, roomUse: room.roomUse, kind: shown(room.kind), proposedKind: room.kind ? null : room.proposedKind,
+      floorAreaM2: room.floorAreaM2, surfacesComplete: shown(room.surfacesComplete), gaps: room.gaps,
+      result: room.result && { status: room.result.status, requiredDb: room.result.targetDb, providedDb: room.result.valueDb, marginDb: room.result.marginDb },
+      facades: room.facades.map(facade => ({
+        wallId: facade.wallId, wall: facade.wallName, compass: facade.compass, lengthM: Math.round(facade.lengthM * 100) / 100, areaM2: facade.areaM2,
+        laDb: facade.la ? Math.round((exteriorNoiseLaPeriod((room.kind?.value ?? "living") as ExteriorNoiseRoomKind) === "sleeping" ? facade.la.sleepingDb : facade.la.dayDb) * 10) / 10 : null,
+        construction: facade.construction, rwDb: shown(facade.rw), rwBasis: facade.rwBasis?.value ?? null,
+        openings: facade.windows.map(item => ({ elementId: item.id, name: item.name, type: item.componentType, areaM2: shown(item.area), rwDb: shown(item.rw) })),
+      })),
+    })),
+    omittedRooms: Math.max(0, proof.rooms.length - maxRooms),
+    pendingSuggestions: proof.suggestions.length,
+  };
+}
+
+/** What the Richtfest Agent may suggest for the verification: cited values on existing entities, and windows/doors it read from plans or a Fensterliste. */
+const suggestionEvidence = z.array(buildingEvidenceSchema).min(1).max(5);
+export const exteriorNoiseSuggestionInput = z.object({
+  values: z.array(z.object({
+    entityType: z.enum(["building", "storey", "room", "element"]), entityId: z.string().uuid(),
+    propertyKey: z.enum(exteriorNoiseInputKeys), value: z.union([z.string().trim().min(1).max(500), z.number(), z.boolean()]),
+    unit: z.string().max(20).nullable().optional(), reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
+  }).strict()).max(60).default([]),
+  openings: z.array(z.object({
+    roomId: z.string().uuid(), wallId: z.string().uuid(), componentType: z.enum(["window", "door"]), name: z.string().trim().min(1).max(120),
+    area: z.number().positive().max(10000), rw: z.number().min(0).max(100).nullable().optional(), basis: z.string().trim().min(1).max(500).nullable().optional(),
+    reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
+  }).strict()).max(40).default([]),
+}).strict().refine(input => input.values.length + input.openings.length > 0, "Suggest at least one value or opening");
+export type ExteriorNoiseSuggestionInput = z.infer<typeof exteriorNoiseSuggestionInput>;

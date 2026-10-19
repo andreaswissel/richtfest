@@ -116,6 +116,15 @@ The version-1 contracts live in `richtfest-shared/src/exterior-noise-reference.t
 
 Every expected room is compared on requirement, composite performance, performance after the allowance and reserve, using unrounded values with an absolute 0.1 dB reference tolerance. That tolerance never changes a calculated reserve or grants a compliance pass. Missing element areas block the room instead of being treated as zero or silently omitted. Geometry differences remain in diagnostics rather than being reconciled to force a match. Reference matching is not a released Nachweis: reviewed rules, complete project inputs, deterministic report assembly and human release remain separate requirements. This benchmark is not registered as an agent tool and does not relax the production calculation gates.
 
+#### Exterior noise verification in Project Chat
+
+Project Chat receives `context.exteriorNoise`, a bounded summary of the building-model [exterior noise verification](/docs/workflows/exterior-noise#exterior-noise-verification): per room the use, floor area, facades with La, wall and opening Rw, gaps and result, with each value marked entered, reviewed or suggested. Two tools act on it:
+
+- `propose_exterior_noise_inputs` writes cited suggestions for the verification's input keys (room use, clear room height, method, flanking, construction, Rw and basis, opening area) and creates windows or doors read from a Fensterliste or plan in a room's exterior wall. Values are stored as inferred, unreviewed building-model property versions with page evidence; values a person entered or reviewed are never replaced and rejected values are not repeated. Every evidence item must be a ready source version of the project. Requires `projects:write` and `agent:run`.
+- `prepare_exterior_noise_nachweis` creates the same deterministic draft as **Create Nachweis**, linked to the run. Unconfirmed suggestions are listed as open items and keep the draft a Teilstand. Requires `knowledge:write`.
+
+The prompt tells the agent to report gaps, suggest only what a cited source states, never estimate acoustic values, and leave review and sign-off to the planner.
+
 ### Reviewed supplier component context
 
 The [Components app](/docs/workflows/components) supplies `componentContext` to direct execution and the default supervisor phases through host contracts. Reads inherit the initiating actor's tenant and permissions, including `components:read`; agent execution does not grant catalog access. Goal-based product/category matching selects only current reviewed revisions, excluding rejected and unreviewed records. Context contains at most five complete records within 24,000 UTF-8 bytes of serialized record content, with explicit truncation when matches are omitted. Matching is a bounded reference lookup, not a suitability calculation or exhaustive supplier search.

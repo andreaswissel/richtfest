@@ -2,15 +2,15 @@ import { Router, type Request } from "express";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  exteriorNoiseCalculationUse, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, proposeExteriorNoiseRoom, segmentDistance,
+  buildingComponentProperties, buildingEvidenceSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
-  type ProofFacade, type ProofGap, type ProofRoom, type ProofValue, type ProofWindow,
+  type ProofFacade, type ProofGap, type ProofRoom, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
-import { appendPropertyVersion, modelForProject, modelTransaction, readSitePlan, touchRevision } from "./building-model-router";
+import { appendPropertyVersion, evidenceVersionsForProject, modelForProject, modelTransaction, readSitePlan, touchRevision } from "./building-model-router";
 import { readFacadeNoiseLevels } from "./exterior-noise-levels";
 import {
-  buildingElements, buildingProperties, buildingPropertyVersions, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys,
+  buildingBuildings, buildingElements, buildingModels, buildingProperties, fileVersions, files, buildingPropertyVersions, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys,
 } from "./schema";
 
 /**
@@ -186,11 +186,11 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
 
 // ---- Reading -----------------------------------------------------------------
 
-const proofKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
-  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "componentType"];
+const proofKeys = [...exteriorNoiseInputKeys, "componentType"];
 
+type CurrentValue = ProofValue<any> & { unit: string | null; evidence: unknown };
 async function currentValues(d: AppDeps, modelId: string, entityIds: string[]) {
-  const values = new Map<string, ProofValue<any>>();
+  const values = new Map<string, CurrentValue>();
   if (!entityIds.length) return values;
   const properties = await d.db.select({ id: buildingProperties.id, entityId: buildingProperties.entityId, key: buildingProperties.propertyKey }).from(buildingProperties)
     .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, entityIds), inArray(buildingProperties.propertyKey, proofKeys)));
@@ -204,7 +204,8 @@ async function currentValues(d: AppDeps, modelId: string, entityIds: string[]) {
     const key = `${property.entityId}:${property.key}`;
     // The latest version that is not rejected; a rejected latest falls back to the one before.
     if (values.has(key) || version.reviewStatus === "rejected" || version.value === null) continue;
-    values.set(key, { value: version.value, reviewStatus: version.reviewStatus, provenance: version.provenance, propertyId: property.id, version: version.version });
+    values.set(key, { value: version.value, reviewStatus: version.reviewStatus, provenance: version.provenance, propertyId: property.id, version: version.version,
+      reviewRevision: version.reviewRevision ?? 0, unit: version.unit ?? null, evidence: version.evidence });
   }
   return values;
 }
@@ -240,7 +241,10 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
   const adjacentOf = new Map<string, Set<string>>();
   for (const row of separates) adjacentOf.set(row.roomId, (adjacentOf.get(row.roomId) ?? new Set()).add(row.wallId));
   const values = await currentValues(d, modelId, [storey.buildingId, storey.id, ...roomIds, ...exterior.map(wall => wall.id), ...openingRows.map(row => row.id)]);
-  const value = <T,>(entityId: string, key: string) => (values.get(`${entityId}:${key}`) ?? null) as ProofValue<T> | null;
+  const value = <T,>(entityId: string, key: string) => {
+    const found = values.get(`${entityId}:${key}`);
+    return found ? { value: found.value, reviewStatus: found.reviewStatus, provenance: found.provenance, propertyId: found.propertyId, version: found.version, reviewRevision: found.reviewRevision } as ProofValue<T> : null;
+  };
 
   const levelOf = new Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>();
   for (const facade of levels.facades) {
@@ -278,12 +282,113 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
         reason: item.status === "unsupported" ? item.result?.limitations[0] ?? null : null };
     }
   }
+  const entities: Array<[ProofSuggestion["entityType"], string, string]> = [["building", storey.buildingId, ""], ["storey", storey.id, storey.name],
+    ...assembled.rooms.map(room => ["room", room.id, room.label] as [ProofSuggestion["entityType"], string, string]),
+    ...exterior.map(wall => ["element", wall.id, wall.name] as [ProofSuggestion["entityType"], string, string]),
+    ...openingRows.map(row => ["element", row.id, row.name] as [ProofSuggestion["entityType"], string, string])];
+  const suggestions = await suggestionsOf(d, values, entities);
   return {
     available: true, modelRevision: modelRow.model.revision, buildingId: storey.buildingId,
     page: { fileName: page.fileName, page: page.page }, storey: { id: storey.id, name: storey.name, levelIndex: storey.levelIndex },
     applicability: value(storey.buildingId, "exteriorNoiseApplicability"), flanking: value(storey.buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
-    rooms: assembled.rooms, calculation, levels,
+    rooms: assembled.rooms, suggestions, calculation, levels,
   };
+}
+
+/** Inferred values nobody has confirmed yet, with their first cited page. */
+async function suggestionsOf(d: AppDeps, values: Map<string, CurrentValue>, entities: Array<[ProofSuggestion["entityType"], string, string]>): Promise<ProofSuggestion[]> {
+  const pending = entities.flatMap(([entityType, entityId, entityLabel]) => exteriorNoiseInputKeys.flatMap(key => {
+    const found = values.get(`${entityId}:${key}`);
+    if (!found || found.provenance !== "inferred" || found.reviewStatus !== "unreviewed") return [];
+    const cited = (Array.isArray(found.evidence) ? found.evidence : []).map(item => buildingEvidenceSchema.safeParse(item)).find(item => item.success && item.data.kind === "page");
+    const page = cited?.success && cited.data.kind === "page" ? cited.data : null;
+    return [{ entityType, entityId, entityLabel, propertyKey: key, value: found.value, unit: found.unit, propertyId: found.propertyId, version: found.version, reviewRevision: found.reviewRevision,
+      evidence: page ? { sourceVersionId: page.sourceVersionId, page: page.page, fileName: null as string | null, quote: page.quote ?? null } : null }];
+  }));
+  const versionIds = [...new Set(pending.flatMap(item => item.evidence ? [item.evidence.sourceVersionId] : []))];
+  if (versionIds.length) {
+    const rows = await d.db.select({ id: fileVersions.id, name: files.name }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId))
+      .where(and(eq(fileVersions.tenantId, d.tenantId), inArray(fileVersions.id, versionIds))) as Array<{ id: string; name: string }>;
+    const names = new Map(rows.map(row => [row.id, row.name]));
+    for (const item of pending) if (item.evidence) item.evidence.fileName = names.get(item.evidence.sourceVersionId) ?? null;
+  }
+  return pending;
+}
+
+// ---- Suggestions from the Richtfest Agent -------------------------------------
+
+
+/**
+ * Writes the agent's exterior noise suggestions as inferred, unreviewed
+ * building-model values with their cited pages, and windows/doors it read from
+ * a plan or Fensterliste as new openings with inferred values. Never replaces a
+ * value a person entered or reviewed and never repeats a rejected one; the
+ * planner accepts or rejects each suggestion.
+ */
+export async function proposeExteriorNoiseInputs(d: AppDeps, projectId: string, raw: unknown, execution: { runId?: string; agentId?: string } = {}, tx: any = d.db) {
+  d.requirePermission("projects:write");
+  d.requirePermission("agent:run");
+  const input = exteriorNoiseSuggestionInput.parse(raw);
+  const modelRow = await modelForProject(d, projectId);
+  if (!modelRow) throw Object.assign(new Error("Building model not found"), { status: 404, code: "not_found" });
+  const modelId = modelRow.model.id;
+  const evidence = [...input.values.flatMap(item => item.evidence), ...input.openings.flatMap(item => item.evidence)];
+  if (!(await evidenceVersionsForProject(tx, d, projectId, evidence)))
+    throw Object.assign(new Error("Every evidence item must reference a ready source revision in this project"), { status: 422, code: "invalid_source_revision" });
+  // Lock the model so concurrent edits queue behind the suggestions; the revision moves only when something was written.
+  const [model] = await tx.select({ revision: buildingModels.revision }).from(buildingModels).where(and(eq(buildingModels.id, modelId), eq(buildingModels.tenantId, d.tenantId))).for("update");
+  const tables = { building: buildingBuildings, storey: buildingStoreys, room: buildingRooms, element: buildingElements } as const;
+  const skipped: Array<{ entityId: string; propertyKey: string; reason: string }> = [];
+  let written = 0, openings = 0;
+  const suggest = async (entityType: keyof typeof tables, entityId: string, propertyKey: string, value: unknown, unit: string | null, cited: unknown[]) => {
+    // Each key belongs to one kind of entity; a value on any other is a mistake, not a free-form note.
+    const known = Object.hasOwn((buildingComponentProperties as Record<string, object>)[entityType] ?? {}, propertyKey);
+    const invalid = known ? validateBuildingComponentProperty(entityType, propertyKey, value as any, unit) : `${propertyKey} does not apply to a ${entityType}`;
+    if (invalid) { skipped.push({ entityId, propertyKey, reason: invalid }); return; }
+    const [property] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.entityType, entityType),
+      eq(buildingProperties.entityId, entityId), eq(buildingProperties.propertyKey, propertyKey))).limit(1);
+    const history = property ? await tx.select().from(buildingPropertyVersions).where(eq(buildingPropertyVersions.propertyId, property.id)).orderBy(desc(buildingPropertyVersions.version)) as any[] : [];
+    const latest = history.find(version => version.reviewStatus !== "rejected");
+    if (history.some(version => version.reviewStatus === "approved") || (latest && latest.provenance !== "inferred")) { skipped.push({ entityId, propertyKey, reason: "entered_or_reviewed" }); return; }
+    if (history.some(version => version.reviewStatus === "rejected" && JSON.stringify(version.value) === JSON.stringify(value))) { skipped.push({ entityId, propertyKey, reason: "rejected_before" }); return; }
+    if (latest && JSON.stringify(latest.value) === JSON.stringify(value)) { skipped.push({ entityId, propertyKey, reason: "already_suggested" }); return; }
+    await appendPropertyVersion(tx, d, modelId, { entityType, entityId, propertyKey, value, unit, provenance: "inferred", evidence: cited });
+    written++;
+  };
+  for (const item of input.values) {
+    const table: any = tables[item.entityType];
+    const [entity] = await tx.select({ id: table.id }).from(table).where(and(eq(table.id, item.entityId), eq(table.modelId, modelId), eq(table.tenantId, d.tenantId))).limit(1);
+    if (!entity) { skipped.push({ entityId: item.entityId, propertyKey: item.propertyKey, reason: "not_in_model" }); continue; }
+    await suggest(item.entityType, item.entityId, item.propertyKey, item.value, item.unit ?? null, item.evidence);
+  }
+  for (const item of input.openings) {
+    const [room] = await tx.select().from(buildingRooms).where(and(eq(buildingRooms.id, item.roomId), eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))).limit(1);
+    const [wall] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, item.wallId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId))).limit(1);
+    if (!room || !wall) { skipped.push({ entityId: item.roomId, propertyKey: "opening", reason: "not_in_model" }); continue; }
+    // The same opening named twice in one room and wall is one opening.
+    const [existing] = await tx.select({ id: buildingElements.id }).from(buildingElements).where(and(eq(buildingElements.modelId, modelId), eq(buildingElements.roomId, room.id),
+      eq(buildingElements.name, item.name), inArray(buildingElements.kind, ["window", "door"]))).limit(1);
+    let elementId = existing?.id as string | undefined;
+    if (!elementId) {
+      const [storey] = await tx.select({ buildingId: buildingStoreys.buildingId }).from(buildingStoreys).where(eq(buildingStoreys.id, room.storeyId)).limit(1);
+      const [element] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId, buildingId: storey.buildingId, storeyId: room.storeyId, roomId: room.id,
+        stableKey: `opening:${crypto.randomUUID()}`, kind: item.componentType, name: item.name, constructionState: wall.constructionState, createdBy: d.actorId }).returning();
+      await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
+        relationshipType: "opening_in", metadata: { method: "agent_suggestion" }, reviewStatus: "unreviewed", createdBy: d.actorId });
+      await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey: "componentType", value: item.componentType, unit: null, provenance: "inferred", evidence: item.evidence });
+      elementId = element.id as string;
+      openings++;
+    }
+    await suggest("element", elementId, "openingArea", item.area, "m²", item.evidence);
+    if (item.rw != null) await suggest("element", elementId, "soundReductionIndex", item.rw, "dB", item.evidence);
+    if (item.basis) await suggest("element", elementId, "soundReductionIndexBasis", item.basis, null, item.evidence);
+  }
+  if (!written && !openings) return { status: "unchanged", modelRevision: model.revision, written, openings, skipped, review: `/projects/${projectId}?view=noise` };
+  const revision = await touchRevision(tx, d, modelId, model.revision);
+  await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
+  await d.audit(tx, "projects.building.exterior_noise.suggested", "building_model", modelId, { projectId, modelRevision: revision, written, openings, skipped: skipped.length,
+    actorType: "agent", runId: execution.runId ?? null, agentId: execution.agentId ?? null });
+  return { status: "suggested", modelRevision: revision, written, openings, skipped, review: `/projects/${projectId}?view=noise` };
 }
 
 // ---- Openings ------------------------------------------------------------------

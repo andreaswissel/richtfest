@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { exteriorNoiseRoomKinds, type ExteriorNoiseProof, type ProofFacade, type ProofGap, type ProofRoom, type ProofValue } from "@richtfest/shared";
+import { exteriorNoiseRoomKinds, type ExteriorNoiseProof, type ProofFacade, type ProofGap, type ProofRoom, type ProofSuggestion, type ProofValue } from "@richtfest/shared";
 import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -11,6 +11,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { NativeSelect, NativeSelectOption } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Table } from "../ui/primitives";
+import { fieldLabel, optionLabel } from "../building-model/component-properties";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
@@ -55,7 +56,8 @@ function useSaveProperty(projectId: string, proof: Proof) {
 }
 
 const facadeLabel = (facade: ProofFacade) => `${facade.compass ? `${facade.compass} · ` : ""}${facade.wallName}`;
-const reviewBadge = (value: ProofValue<unknown> | null, t: T) => value && <Badge variant="outline">{value.reviewStatus === "approved" ? t("proofReviewed") : t("proofEntered")}</Badge>;
+const reviewBadge = (value: ProofValue<unknown> | null, t: T) => value && <Badge variant="outline">{value.reviewStatus === "approved" ? t("proofReviewed")
+  : value.provenance === "inferred" ? t("proofSuggested") : t("proofEntered")}</Badge>;
 
 /**
  * Exterior noise verification inputs per protected room, assembled from the
@@ -80,6 +82,7 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
   return <Section title={t("proof")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
     <p className="muted text-ui-xs">{t("proofIntro").replace("{file}", proof.page.fileName ?? "—").replace("{file_page}", String(proof.page.page))}</p>
     <BuildingInputs projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    {proof.suggestions.length > 0 && <Suggestions projectId={projectId} proof={proof} canWrite={canWrite} t={t} />}
     <div className="noise-toolbar">
       <h3 className="site-section-title">{t("proofRooms")}</h3>
       <span className="muted text-ui-xs">{t("proofRoomsCalculated").replace("{ready}", String(ready)).replace("{total}", String(protectedRooms.length))}</span>
@@ -113,6 +116,41 @@ function CreateNachweis({ projectId, proof, ready, total, t }: { projectId: stri
     {create.data && <Link className="underline underline-offset-2 text-ui-sm" to={`/projects/${projectId}?panel=artifacts&artifact=${create.data.artifact.id}&revision=${create.data.revision.id}`}>
       {create.data.complete ? t("proofOpenNachweis") : t("proofOpenPartial")}</Link>}
     {create.isError && <Callout tone="error">{errorText(create.error, t)}</Callout>}
+  </div>;
+}
+
+const enumKeys = new Set(["exteriorNoiseApplicability", "exteriorNoiseFlanking", "exteriorNoiseRoom", "construction"]);
+const suggestedValue = (item: ProofSuggestion, t: T) => typeof item.value === "boolean" ? t(item.value ? "proofYes" : "proofNo")
+  : enumKeys.has(item.propertyKey) ? optionLabel(item.propertyKey, String(item.value), t) : `${String(item.value)}${item.unit ? ` ${item.unit}` : ""}`;
+
+/** Values Richtfest suggested with their cited page; the planner accepts or rejects each, or all at once. */
+function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+  const review = useMutation({
+    mutationFn: (input: { decision: "approved" | "rejected"; items: ProofSuggestion[] }) => api(`/projects/${projectId}/building-model/properties/review`, {
+      baseRevision: baseRevision(projectId, proof), decision: input.decision,
+      items: input.items.map(item => ({ propertyId: item.propertyId, version: item.version, reviewRevision: item.reviewRevision })) }),
+    onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
+  });
+  return <div className="proof-suggestions">
+    <div className="noise-toolbar">
+      <h3 className="site-section-title">{t("proofSuggestions")}</h3>
+      <span className="muted text-ui-xs">{t("proofSuggestionsHint")}</span>
+      {canWrite && <Button size="sm" variant="outline" disabled={review.isPending} onClick={() => review.mutate({ decision: "approved", items: proof.suggestions })}>
+        {t("proofAcceptAll").replace("{count}", String(proof.suggestions.length))}</Button>}
+    </div>
+    <Table headers={[t("proofSuggestionFor"), t("proofSuggestionField"), t("proofSuggestionValue"), t("proofSuggestionSource"), ""]}
+      rows={proof.suggestions.map(item => ({ id: `${item.propertyId}:${item.version}`, cells: [
+        <span>{item.entityLabel || t("proofBuilding")}</span>,
+        <span className="text-ui-xs">{fieldLabel(item.propertyKey, t)}</span>,
+        <span className="text-ui-xs">{suggestedValue(item, t)}</span>,
+        <span className="text-ui-xs muted" title={item.evidence?.quote ?? undefined}>{item.evidence
+          ? `${item.evidence.fileName ?? "—"}, ${t("proofPage").replace("{page}", String(item.evidence.page))}${item.evidence.quote ? ` · „${item.evidence.quote}“` : ""}` : "—"}</span>,
+        canWrite ? <span className="proof-inline">
+          <Button size="sm" variant="ghost" disabled={review.isPending} onClick={() => review.mutate({ decision: "approved", items: [item] })}>{t("proofAccept")}</Button>
+          <Button size="sm" variant="ghost" disabled={review.isPending} onClick={() => review.mutate({ decision: "rejected", items: [item] })}>{t("proofReject")}</Button>
+        </span> : null,
+      ] }))} />
+    {review.isError && <Callout tone="error">{errorText(review.error, t)}</Callout>}
   </div>;
 }
 

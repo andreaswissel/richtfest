@@ -58,11 +58,48 @@ function noiseAnnex(proof: Proof) {
   ].join("\n\n");
 }
 
+const fieldText: Record<string, string> = {
+  exteriorNoiseApplicability: "Anwendbarkeit des Verfahrens", exteriorNoiseFlanking: "Flankenübertragung", clearRoomHeight: "lichte Raumhöhe", exteriorNoiseRoom: "Raumnutzung",
+  exteriorSurfacesComplete: "Vollständigkeit der Außenflächen", construction: "Konstruktion", soundReductionIndex: "Rw", soundReductionIndexBasis: "Nachweis für Rw", openingArea: "Öffnungsfläche",
+};
+
 /**
  * A draft Schallschutznachweis Außenlärm from the building-model inputs: the
  * same saved calculation, report and PDF as the agent input review, created
- * without AI. Rooms with open inputs stay listed as blocked.
+ * without AI. Rooms with open inputs and values Richtfest suggested that no
+ * person has confirmed yet stay listed as open, and the draft is a Teilstand.
  */
+export async function createExteriorNoiseNachweis(d: AppDeps, projectId: string, tx?: any, runId?: string) {
+  if (!d.exteriorNoiseProof || !d.calculateAcoustics) throw conflict("Exterior noise verification is unavailable");
+  const proof = await d.exteriorNoiseProof(projectId);
+  if (!proof.available) throw conflict("Exterior noise verification inputs are unavailable for this project");
+  if (!proof.calculation?.input.rooms.length) throw conflict("No room has complete inputs yet");
+  const blockers = [...proof.rooms.filter(room => room.kind?.value !== "not_protected" && room.gaps.length)
+    .map(room => `Raum ${room.label}: es fehlt ${room.gaps.map(gap => gapText[gap]).join(", ")}.`),
+    ...proof.suggestions.map(item => `${item.entityLabel || "Gebäude"}: ${fieldText[item.propertyKey] ?? item.propertyKey} ${typeof item.value === "boolean" ? (item.value ? "ja" : "nein") : String(item.value)}${item.unit ? ` ${item.unit}` : ""} ist ein Vorschlag von Richtfest und noch nicht bestätigt.`)];
+  const dataset = acousticDatasetSchema.parse({ version: 1,
+    receipt: { ...d.calculateAcoustics(proof.calculation.input), receiptId: crypto.randomUUID() },
+    blockers, basedOn: null });
+  const complete = Boolean(dataset.receipt.batch?.complete) && !blockers.length;
+  const title = complete ? "Schallschutznachweis · Außenlärm" : "Schallschutznachweis · Außenlärm · Teilstand";
+  const placementVersion = proof.levels.placement.sourceVersionId;
+  await sources(d, projectId, [placementVersion]);
+  const content = [
+    `# ${title}`,
+    complete
+      ? "Entwurf aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Alle schutzbedürftigen Räume des Plans sind berechnet; fachliche Prüfung und Freigabe stehen aus."
+      : "Teilstand aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Räume mit offenen Eingaben sind nicht berechnet; offene Eingaben und noch nicht bestätigte Vorschläge sind unten aufgeführt. Fachliche Prüfung und Freigabe stehen aus.",
+    renderAcousticCalculationReceipts([dataset.receipt], "de"),
+    ...(blockers.length ? ["## Offene Eingaben", ...blockers.map(note => `- ${md(note)}`)] : []),
+    noiseAnnex(proof),
+    "## Freigabe",
+    "Aufgestellt: ______________________ Datum: __________\n\nGeprüft: ______________________ Datum: __________",
+  ].join("\n\n");
+  const write = (inner: any) => createArtifact(d, inner, { projectId, title, type: "draft", content, sourceVersionIds: [placementVersion] }, runId, dataset);
+  const created = tx ? await write(tx) : await d.db.transaction(write);
+  return { artifact: created.artifact, revision: created.revision, complete, openItems: blockers.length };
+}
+
 export function exteriorNoiseNachweisRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
   router.post("/projects/:projectId/exterior-noise-nachweis", async (req, res, next) => {
@@ -71,32 +108,7 @@ export function exteriorNoiseNachweisRouter(getDeps: (req: Request) => AppDeps) 
       d.requirePermission("knowledge:read");
       d.requirePermission("knowledge:write");
       const projectId = z.string().uuid().parse(req.params.projectId);
-      if (!d.exteriorNoiseProof || !d.calculateAcoustics) throw conflict("Exterior noise verification is unavailable");
-      const proof = await d.exteriorNoiseProof(projectId);
-      if (!proof.available) throw conflict("Exterior noise verification inputs are unavailable for this project");
-      if (!proof.calculation?.input.rooms.length) throw conflict("No room has complete inputs yet");
-      const blockers = proof.rooms.filter(room => room.kind?.value !== "not_protected" && room.gaps.length)
-        .map(room => `Raum ${room.label}: es fehlt ${room.gaps.map(gap => gapText[gap]).join(", ")}.`);
-      const dataset = acousticDatasetSchema.parse({ version: 1,
-        receipt: { ...d.calculateAcoustics(proof.calculation.input), receiptId: crypto.randomUUID() },
-        blockers, basedOn: null });
-      const complete = Boolean(dataset.receipt.batch?.complete) && !blockers.length;
-      const title = complete ? "Schallschutznachweis · Außenlärm" : "Schallschutznachweis · Außenlärm · Teilstand";
-      const placementVersion = proof.levels.placement.sourceVersionId;
-      await sources(d, projectId, [placementVersion]);
-      const content = [
-        `# ${title}`,
-        complete
-          ? "Entwurf aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Alle schutzbedürftigen Räume des Plans sind berechnet; fachliche Prüfung und Freigabe stehen aus."
-          : "Teilstand aus dem Richtfest-Gebäudemodell und den berechneten Fassadenpegeln. Räume mit offenen Eingaben sind nicht berechnet; fachliche Prüfung und Freigabe stehen aus.",
-        renderAcousticCalculationReceipts([dataset.receipt], "de"),
-        ...(blockers.length ? ["## Offene Eingaben", ...blockers.map(note => `- ${md(note)}`)] : []),
-        noiseAnnex(proof),
-        "## Freigabe",
-        "Aufgestellt: ______________________ Datum: __________\n\nGeprüft: ______________________ Datum: __________",
-      ].join("\n\n");
-      const created = await d.db.transaction((tx: any) => createArtifact(d, tx, { projectId, title, type: "draft", content, sourceVersionIds: [placementVersion] }, undefined, dataset));
-      res.status(201).json(ok({ artifact: created.artifact, revision: created.revision, complete }));
+      res.status(201).json(ok(await createExteriorNoiseNachweis(d, projectId)));
     } catch (error) { next(error); }
   });
   return router;
