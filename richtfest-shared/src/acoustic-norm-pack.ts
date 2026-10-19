@@ -97,7 +97,13 @@ export const acousticNormPackSchema = z.object({
     requirements: z.object({
       walls: z.record(z.enum(["apartment_partition", "corridor_partition", "stairwell"]), z.object({ rwMinDb: db, ref }).strict()),
       ceilings: z.record(z.enum(["apartment_separating", "over_common_space", "under_common_attic", "under_bathroom"]), z.object({ rwMinDb: db.nullable(), lnwMaxDb: db.nullable(), ref }).strict()),
+      /** Rw of doors from common hallways and stairwells into a dwelling. */
+      doors: z.record(z.enum(["to_dwelling_hallway", "to_habitable_room"]), z.object({ rwMinDb: db, ref }).strict()).optional(),
+      /** A stairwell or corridor wall with such a door: R'w(wall) required = Rw(door) required + offsetDb. */
+      wallWithDoor: z.object({ offsetDb: db, ref }).strict().optional(),
     }).strict(),
+    /** The allowance on a door's tested Rw before it is compared with the requirement. */
+    door: z.object({ uncertaintyDb: db, ref }).strict().optional(),
     airborne: z.object({
       referenceLengthM: positive, referenceAbsorptionM2: positive,
       /** Below this common area the requirement applies to Dn,w instead of R'w. */
@@ -149,6 +155,10 @@ export type MassiveWallRw =
 /** Interior sound: inputs and results of the airborne (flanking transmission) and impact sound methods (code in @richtfest/acoustics, numbers in the pack). */
 export type InteriorWallRole = "apartment_partition" | "corridor_partition" | "stairwell";
 export type InteriorCeilingRole = "apartment_separating" | "over_common_space" | "under_common_attic" | "under_bathroom";
+export type InteriorDoorRole = "to_dwelling_hallway" | "to_habitable_room";
+export type DoorResult =
+  | { status: "calculated"; valueDb: number; uncertaintyDb: number; requiredDb: number; marginDb: number; meets: boolean; refs: string[] }
+  | { status: "unsupported"; reason: "method_missing" | "no_requirement" };
 export type FlankElement =
   | { kind: "massive"; id: string; name: string; massKgM2: number; rwDb: number; areaM2: number }
   | { kind: "lightweight"; id: string; name: string; dnfwDb: number };

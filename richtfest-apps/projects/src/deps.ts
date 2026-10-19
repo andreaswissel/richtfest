@@ -78,6 +78,9 @@ export type AppDeps = {
     massiveRw: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
     airborne: (input: import("@richtfest/shared").AirborneInput) => import("@richtfest/shared").AirborneResult;
     impact: (input: import("@richtfest/shared").ImpactInput) => import("@richtfest/shared").ImpactResult;
+    /** Door checks; absent with a pack that has no door requirements. */
+    door?: (input: { rwDb: number; role: import("@richtfest/shared").InteriorDoorRole }) => import("@richtfest/shared").DoorResult;
+    wallWithDoorRequirement?: (role: import("@richtfest/shared").InteriorDoorRole) => { rwMinDb: number; ref: string } | null;
   } | null;
   /** The deterministic acoustic calculator (DIN 4109 exterior noise verification), shared with the knowledge app. */
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;

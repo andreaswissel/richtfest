@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AcousticNormPack, AirborneInput, FlankElement } from "@richtfest/shared";
-import { airborneSoundInsulation, impactSoundLevel } from "./interior-sound";
+import { airborneSoundInsulation, doorSoundInsulation, impactSoundLevel, wallWithDoorRequirement } from "./interior-sound";
 
 // Made-up coefficients: these tests check the method's structure, not normative values.
 const screed = (massLog: number, stiffnessLog: number, massStiffnessLog: number, mass: number, constant: number, ref: string) =>
@@ -9,7 +9,9 @@ const pack = {
   id: "synthetic", rls19: {} as AcousticNormPack["rls19"], din4109: {} as AcousticNormPack["din4109"],
   din4109_interior: {
     editions: { requirements: "R", method: "M", junctions: "J", screeds: "S" },
-    requirements: { walls: { apartment_partition: { rwMinDb: 53, ref: "W" } }, ceilings: { apartment_separating: { rwMinDb: 54, lnwMaxDb: 50, ref: "C" } } },
+    requirements: { walls: { apartment_partition: { rwMinDb: 53, ref: "W" } }, ceilings: { apartment_separating: { rwMinDb: 54, lnwMaxDb: 50, ref: "C" } },
+      doors: { to_dwelling_hallway: { rwMinDb: 30, ref: "D1" }, to_habitable_room: { rwMinDb: 40, ref: "D2" } }, wallWithDoor: { offsetDb: 12, ref: "WD" } },
+    door: { uncertaintyDb: 4, ref: "DU" },
     airborne: {
       referenceLengthM: 1, referenceAbsorptionM2: 10, minSeparatingAreaM2: 10, labEdgeLengthM: { horizontal: 2, vertical: 4 },
       tJunction: { k12: { constant: 4, square: 6 }, k13: { breakM: 0.2, below: { constant: 6, linear: 10, square: 5 }, above: { constant: 7, linear: 5 } } },
@@ -112,5 +114,17 @@ describe("impact sound of massive ceilings", () => {
     expect(impactSoundLevel(pack, { ...ceiling, slabMassKgM2: 700, flankingMassesKgM2: [600, 700] }))
       .toMatchObject({ flankingMeanKgM2: 650, flankingMassCapped: true, kDb: Math.round((1 + 5 * lg(700 / 500)) * 10) / 10 });
     expect(impactSoundLevel(pack, { ...ceiling, screed: null })).toMatchObject({ status: "calculated", deltaLwDb: 0 });
+  });
+});
+
+describe("entrance doors", () => {
+  test("the tested Rw less the door allowance is compared with the role's requirement; the unrounded margin decides", () => {
+    expect(doorSoundInsulation(pack, { rwDb: 34, role: "to_dwelling_hallway" })).toEqual({ status: "calculated", valueDb: 34, uncertaintyDb: 4, requiredDb: 30, marginDb: 0, meets: true, refs: ["D1", "DU"] });
+    expect(doorSoundInsulation(pack, { rwDb: 43.95, role: "to_habitable_room" })).toMatchObject({ requiredDb: 40, marginDb: 0, meets: false });
+    expect(doorSoundInsulation({ ...pack, din4109_interior: { ...pack.din4109_interior!, door: undefined } }, { rwDb: 40, role: "to_habitable_room" })).toEqual({ status: "unsupported", reason: "method_missing" });
+  });
+  test("a wall with an entrance door needs the door's requirement plus the offset", () => {
+    expect(wallWithDoorRequirement(pack, "to_dwelling_hallway")).toEqual({ rwMinDb: 42, ref: "WD; D1" });
+    expect(wallWithDoorRequirement(pack, "to_habitable_room")!.rwMinDb).toBe(52);
   });
 });

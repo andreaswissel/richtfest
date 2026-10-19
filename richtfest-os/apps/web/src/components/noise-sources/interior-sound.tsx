@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { buildingDeepLink, ceilingRoleSchema, screedTypeSchema, type AirborneResult, type ImpactResult, type InteriorCeilingCheck, type InteriorElementReason, type InteriorGap, type InteriorLimitation, type InteriorSoundProof } from "@richtfest/shared";
+import { buildingDeepLink, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, type AirborneResult, type InteriorDoorCheck, type ImpactResult, type InteriorCeilingCheck, type InteriorElementReason, type InteriorGap, type InteriorLimitation, type InteriorSoundProof } from "@richtfest/shared";
 import { api } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
@@ -11,7 +11,7 @@ import { Input } from "../ui/input";
 import { NativeSelect, NativeSelectOption } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, Table } from "../ui/primitives";
 import { optionLabel } from "../building-model/component-properties";
-import { errorText, StoreyHeight, Suggestions, useSaveProperty } from "./proof-inputs";
+import { baseRevision, errorText, invalidate, noteRevision, StoreyHeight, Suggestions, useSaveProperty } from "./proof-inputs";
 
 type T = ReturnType<typeof useT>;
 type Key = Parameters<T>[0];
@@ -83,6 +83,7 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
     <Callout>{t(proof.reason === "norm_pack_missing" ? "interiorUnavailablePack" : proof.reason === "plan_missing" ? "interiorUnavailablePlan" : "proofNoModel")}</Callout>
   </Section>;
   const ceilingIds = [...new Map(proof.ceilings.map(check => [check.ceilingId, check])).values()];
+  const storey = storeyPrefix(proof);
   const wallsDone = proof.walls.filter(check => check.result?.status === "calculated").length;
   const ceilingsDone = proof.ceilings.filter(check => check.airborne?.status === "calculated" || check.impact?.status === "calculated").length;
   return <Section title={t("interiorSound")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
@@ -96,14 +97,16 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
     </div>
     {proof.walls.length ? <Table headers={[t("interiorWall"), t("interiorRooms"), t("interiorArea"), t("interiorRequirement"), t("proofResult")]}
       rows={proof.walls.map(check => ({ id: check.id, cells: [
-        <span><Link className="underline underline-offset-2" to={entityLink(projectId, check.wallId)}>{check.wallName}</Link>
+        <span>{storey(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.wallId)}>{check.wallName}</Link>
           <span className="muted text-ui-xs"> · {optionLabel("wallRole", check.role, t)}</span></span>,
         <span className="text-ui-xs">{check.rooms.map(room => room.name).join(" / ")}</span>,
         <span className="text-ui-xs">{m2(check.areaM2)}</span>,
-        <span className="text-ui-xs muted">{check.requirement ? `R'w ≥ ${check.requirement.rwMinDb} dB` : "—"}</span>,
+        <span className="text-ui-xs muted">{check.requirement ? `R'w ≥ ${check.requirement.rwMinDb} dB` : "—"}
+          {check.requirement?.door && <span> · {t("interiorWallWithDoor").replace("{door}", check.requirement.door.name)}</span>}</span>,
         <AirborneCell result={check.result} gaps={check.gaps} t={t} />,
       ] }))} /> : <Empty>{t("interiorNoWalls")}</Empty>}
     <OpenInputs items={proof.walls.map(check => ({ id: check.id, label: `${check.wallName} (${check.rooms.map(room => room.name).join(" / ")})`, gaps: check.gaps }))} t={t} />
+    <Doors projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
     <div className="noise-toolbar">
       <h3 className="site-section-title">{t("interiorCeilings")}</h3>
       <span className="muted text-ui-xs">{t("interiorCalculated").replace("{ready}", String(ceilingsDone)).replace("{total}", String(proof.ceilings.length))}</span>
@@ -111,7 +114,7 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
     {ceilingIds.map(check => <CeilingInputs key={check.ceilingId} projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />)}
     {proof.ceilings.length ? <Table headers={[t("interiorCeiling"), t("interiorRoomBelow"), t("interiorArea"), t("interiorRequirement"), t("interiorAirborne"), t("interiorImpact")]}
       rows={proof.ceilings.map(check => ({ id: check.id, cells: [
-        <Link className="underline underline-offset-2" to={entityLink(projectId, check.ceilingId)}>{check.ceilingName}</Link>,
+        <span>{storey(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.ceilingId)}>{check.ceilingName}</Link></span>,
         <span className="text-ui-xs">{check.room.name}</span>,
         <span className="text-ui-xs">{m2(check.areaM2)}</span>,
         <span className="text-ui-xs muted">{check.requirement ? [check.requirement.rwMinDb != null && `R'w ≥ ${check.requirement.rwMinDb} dB`, check.requirement.lnwMaxDb != null && `L'n,w ≤ ${check.requirement.lnwMaxDb} dB`].filter(Boolean).join(" · ") : "—"}</span>,
@@ -132,7 +135,7 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
           : <span className="text-ui-xs muted interior-basis" title={element.basis ?? undefined}>{element.basis ?? t("interiorEntered")}</span>,
       ] }))} /> : <Empty>{t("interiorNoElements")}</Empty>}
     <Callout><ul className="interior-limitations">{proof.limitations.map(item => <li key={item}>{t(limitationKeys[item])}</li>)}</ul></Callout>
-    {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone} t={t} />}
+    {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone + proof.doors.filter(check => check.result).length} t={t} />}
   </Section>;
 }
 
@@ -190,6 +193,99 @@ function FlankingLevel({ projectId, proof, elementId, value, t }: { projectId: s
     if (parsed !== null && text !== initial) save.mutate({ entityType: "element", entityId: elementId, propertyKey: "flankingLevelDifference", value: parsed, unit: "dB" }); }}>
     <Input className="interior-dnfw" aria-label={t("interiorDnfw")} placeholder="dB" value={text} inputMode="decimal" onChange={(event) => setText(event.target.value)} aria-invalid={Boolean(text.trim()) && parsed === null} />
     <Button type="submit" size="sm" variant="outline" disabled={parsed === null || text === initial || save.isPending}>{t("noiseSave")}</Button>
+  </form>;
+}
+
+/** With several storeys, which storey a check is on, before its element. */
+const storeyPrefix = (proof: Proof) => (storeyId: string) => proof.storeys.length > 1
+  ? <span className="muted text-ui-xs">{proof.storeys.find(item => item.id === storeyId)?.name} · </span> : null;
+
+const doorGapKeys: Record<InteriorDoorCheck["gaps"][number], Key> = { door_role: "interiorGapDoorRole", door_rw: "interiorGapDoorRw", no_requirement: "interiorGapNoRequirement" };
+
+/**
+ * Entrance doors from stairwells and common hallways: where each leads and its
+ * tested Rw, checked against the requirement less the door allowance. Doors in
+ * stairwell or corridor walls appear here; more can be added per wall and room.
+ */
+function Doors({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
+  const done = proof.doors.filter(check => check.result).length;
+  // Where a door can go: a stairwell or corridor wall and the room on either side it leads into.
+  const places = proof.walls.filter(check => check.role === "stairwell" || check.role === "corridor_partition")
+    .flatMap(check => check.rooms.map(room => ({ key: `${check.wallId}:${room.id}`, wallId: check.wallId, roomId: room.id, label: `${check.wallName} → ${room.name}` })))
+    .filter((place, i, all) => all.findIndex(other => other.key === place.key) === i);
+  if (!proof.doors.length && !places.length) return null;
+  return <>
+    <div className="noise-toolbar">
+      <h3 className="site-section-title">{t("interiorDoors")}</h3>
+      <span className="muted text-ui-xs">{t("interiorCalculated").replace("{ready}", String(done)).replace("{total}", String(proof.doors.length))}</span>
+    </div>
+    {proof.doors.length ? <Table headers={[t("interiorDoor"), t("interiorDoorLeadsTo"), t("interiorDoorRole"), t("interiorDoorRw"), t("interiorRequirement"), t("proofResult")]}
+      rows={proof.doors.map(check => ({ id: check.id, cells: [
+        <span>{storeyPrefix(proof)(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.id)}>{check.name}</Link>
+          {check.wall && <span className="muted text-ui-xs"> · {check.wall.name}</span>}</span>,
+        <span className="text-ui-xs">{check.room?.name ?? "—"}</span>,
+        <DoorRole projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />,
+        <DoorRw projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />,
+        <span className="text-ui-xs muted">{check.requirement ? `Rw ≥ ${check.requirement.rwMinDb} dB` : "—"}</span>,
+        check.result ? <span className="text-ui-xs"><Verdict meets={check.result.meets} t={t} />{" "}
+          {t("interiorDoorValue").replace("{value}", db(check.result.valueDb)).replace("{allowance}", db(check.result.uncertaintyDb)).replace("{required}", db(check.result.requiredDb))
+            .replace("{margin}", `${check.result.marginDb >= 0 ? "+" : ""}${db(check.result.marginDb)}`)}</span>
+          : <span className="text-ui-xs muted">{check.gaps.map(gap => t(doorGapKeys[gap])).join(", ") || "—"}</span>,
+      ] }))} /> : <Empty>{t("interiorNoDoors")}</Empty>}
+    {canWrite && places.length > 0 && <AddDoor projectId={projectId} proof={proof} places={places} t={t} />}
+  </>;
+}
+
+function DoorRole({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorDoorCheck; canWrite: boolean; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  return <NativeSelect size="sm" className="interior-door-role" aria-label={t("interiorDoorRole")} value={String(check.role?.value ?? "")} disabled={!canWrite || save.isPending}
+    onChange={(event) => event.target.value && save.mutate({ entityType: "element", entityId: check.id, propertyKey: "doorRole", value: event.target.value })}>
+    <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+    {doorRoleSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("doorRole", option, t)}</NativeSelectOption>)}
+  </NativeSelect>;
+}
+
+function DoorRw({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorDoorCheck; canWrite: boolean; t: T }) {
+  const save = useSaveProperty(projectId, proof);
+  const initial = check.rw ? String(check.rw.value) : "";
+  const [text, setText] = useState(initial);
+  useEffect(() => setText(initial), [initial]);
+  const parsed = parseNumber(text);
+  if (!canWrite) return <span className="text-ui-xs">{check.rw ? `${db(check.rw.value)} dB` : "—"}</span>;
+  return <form className="proof-inline" title={check.basis?.value} onSubmit={(event) => { event.preventDefault();
+    if (parsed !== null && text !== initial) save.mutate({ entityType: "element", entityId: check.id, propertyKey: "soundReductionIndex", value: parsed, unit: "dB" }); }}>
+    <Input className="interior-dnfw" aria-label={t("interiorDoorRw")} placeholder="dB" value={text} inputMode="decimal" onChange={(event) => setText(event.target.value)} aria-invalid={Boolean(text.trim()) && parsed === null} />
+    <Button type="submit" size="sm" variant="outline" disabled={parsed === null || text === initial || save.isPending}>{t("noiseSave")}</Button>
+  </form>;
+}
+
+function AddDoor({ projectId, proof, places, t }: { projectId: string; proof: Proof; places: Array<{ key: string; wallId: string; roomId: string; label: string }>; t: T }) {
+  const empty = { place: places[0]!.key, name: "", role: "to_dwelling_hallway", rw: "", basis: "" };
+  const [draft, setDraft] = useState(empty);
+  const place = places.find(item => item.key === draft.place) ?? places[0]!;
+  const add = useMutation({
+    mutationFn: () => api(`/projects/${projectId}/exterior-noise/proof/openings`, {
+      baseRevision: baseRevision(projectId, proof), roomId: place.roomId, wallId: place.wallId, componentType: "door",
+      name: draft.name.trim() || `${t("interiorDoor")} ${proof.doors.length + 1}`, area: null, rw: parseNumber(draft.rw), basis: draft.basis.trim() || null, doorRole: draft.role }),
+    onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
+  });
+  const valid = !draft.rw.trim() || parseNumber(draft.rw) !== null;
+  return <form className="interior-door-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+    <Field label={t("interiorDoorPlace")}>
+      <NativeSelect size="sm" className="w-full" value={draft.place} onChange={(event) => setDraft({ ...draft, place: event.target.value })}>
+        {places.map(item => <NativeSelectOption key={item.key} value={item.key}>{item.label}</NativeSelectOption>)}
+      </NativeSelect>
+    </Field>
+    <Field label={t("interiorDoorRole")}>
+      <NativeSelect size="sm" className="w-full" value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })}>
+        {doorRoleSchema.options.filter(option => option !== "internal").map(option => <NativeSelectOption key={option} value={option}>{optionLabel("doorRole", option, t)}</NativeSelectOption>)}
+      </NativeSelect>
+    </Field>
+    <Field label={t("proofOpeningName")}><Input value={draft.name} placeholder={t("proofOptional")} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+    <Field label={t("interiorDoorRw")}><Input value={draft.rw} inputMode="decimal" onChange={(event) => setDraft({ ...draft, rw: event.target.value })} aria-invalid={!valid} /></Field>
+    <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("interiorDoorBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
+    <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t("interiorAddDoor")}</Button>
+    {add.isError && <Callout tone="error">{errorText(add.error, t)}</Callout>}
   </form>;
 }
 

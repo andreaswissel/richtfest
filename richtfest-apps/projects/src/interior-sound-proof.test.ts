@@ -87,6 +87,36 @@ describe("interior sound assembly", () => {
   });
 });
 
+describe("entrance doors", () => {
+  const stairwell = (patch: Partial<InteriorAssemblyInput> = {}) => input({
+    walls: input().walls.map(wall => wall.id === "W" ? { ...wall, role: "stairwell" } : wall),
+    wallRequirement: role => role === "stairwell" ? { rwMinDb: 53, ref: "row 14" } : null,
+    wallWithDoorRequirement: role => ({ rwMinDb: role === "to_habitable_room" ? 52 : 42, ref: "row 14 note" }),
+    door: ({ rwDb, role }) => ({ status: "calculated", valueDb: rwDb, uncertaintyDb: 5, requiredDb: role === "to_habitable_room" ? 37 : 27, marginDb: rwDb - 5 - 27, meets: rwDb - 5 >= 27, refs: ["row 18", "eq 52"] }),
+    ...patch,
+  });
+  const door = (id: string, patch: Record<string, unknown> = {}) => ({ id, name: id, wallId: "W", roomId: "A", role: value("to_dwelling_hallway"), rw: value(32), basis: null, ...patch });
+
+  test("a stairwell wall with an entrance door into one of its rooms takes the door's wall requirement; the door is checked on its own", () => {
+    calls.airborne = [];
+    const { walls, doors } = assembleInteriorSound(stairwell({ doors: [door("D")] }));
+    expect(walls[0]!.requirement).toEqual({ rwMinDb: 42, ref: "row 14 note", door: { id: "D", name: "D" } });
+    expect(calls.airborne.find(request => request.transmission === "horizontal")!.requiredDb).toBe(42);
+    expect(doors).toHaveLength(1);
+    expect(doors[0]).toMatchObject({ wall: { id: "W" }, room: { id: "A", name: "A" }, gaps: [], requirement: { rwMinDb: 27 }, result: { meets: true } });
+    // The stricter door decides when two lead through the same wall.
+    expect(assembleInteriorSound(stairwell({ doors: [door("D"), door("E", { role: value("to_habitable_room"), roomId: "B" })] })).walls[0]!.requirement!.rwMinDb).toBe(52);
+  });
+
+  test("doors in stairwell walls need a role and an Rw; internal doors and doors elsewhere without a role are not checked", () => {
+    const { doors, walls } = assembleInteriorSound(stairwell({ doors: [door("D", { role: null, rw: null }), door("I", { role: value("internal") }), door("N", { wallId: "N", role: null })] }));
+    expect(doors.map(check => [check.id, check.gaps])).toEqual([["D", ["door_role", "door_rw"]]]);
+    expect(doors[0]!.result).toBeNull();
+    // A door without a role does not relax the wall requirement.
+    expect(walls[0]!.requirement).toEqual({ rwMinDb: 53, ref: "row 14", door: null });
+  });
+});
+
 describe("element catalogue values", () => {
   test("lightweight walls need their Dn,f,w; massive ones their material", () => {
     const rw = () => ({ status: "calculated" as const, rwDb: 55, massKgM2: 400, wallDensityKgM3: 1700, refs: ["x"], edition: "e", assumptions: [] });

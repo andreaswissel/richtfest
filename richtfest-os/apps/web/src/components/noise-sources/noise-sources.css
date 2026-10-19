@@ -37,3 +37,8 @@
 .interior-open { margin: 0 0 calc(var(--stack) / 2); padding-left: 1rem; list-style: disc; display: grid; gap: 2px; }
 .interior-basis { display: block; max-width: 34rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .interior-dnfw { width: 5.5rem; }
+/* Entrance door: where it goes, its role, name, Rw and basis in one row. */
+.interior-door-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(180px, 1.2fr) 8rem 7rem minmax(160px, 1.5fr) auto; align-items: end; gap: 4px var(--stack); max-width: 1100px; }
+.interior-door-row > .callout { grid-column: 1 / -1; }
+.interior-door-role { min-width: 14rem; }
+@media (max-width: 720px) { .interior-door-row { grid-template-columns: 1fr; } }

@@ -672,7 +672,7 @@ export async function executeRun(d: AppDeps, run: any) {
               : tool.name === "propose_exterior_noise_inputs" || tool.name === "suggest_catalogue_values"
                 ? `${result.written} exterior noise values suggested; planner review required`
               : tool.name === "propose_interior_sound_inputs"
-                ? `${result.written} interior sound values suggested; planner review required`
+                ? `${result.written} interior sound values${result.doors ? ` and ${result.doors} doors` : ""} suggested; planner review required`
               : "Draft or question persisted; review required",
         );
       });

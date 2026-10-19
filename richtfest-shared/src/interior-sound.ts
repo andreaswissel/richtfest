@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AirborneResult, ImpactResult, InteriorWallRole } from "./acoustic-norm-pack";
+import type { AirborneResult, DoorResult, ImpactResult, InteriorWallRole } from "./acoustic-norm-pack";
 import { suggestionEvidence, type ProofSuggestion, type ProofValue } from "./exterior-noise-proof";
 
 /**
@@ -9,9 +9,9 @@ import { suggestionEvidence, type ProofSuggestion, type ProofValue } from "./ext
  * building-model properties; the planner reviews them before a Nachweis.
  */
 
-/** Building-model properties the interior verification reads; the agent may suggest any of them. */
+/** Building-model properties the interior verification reads; the agent may suggest any of them. A door's tested Rw comes only with a door entry. */
 export const interiorSoundInputKeys = ["clearRoomHeight", "construction", "material", "thickness", "bulkDensity", "wallRole",
-  "ceilingRole", "screedType", "screedMass", "screedStiffness", "flankingLevelDifference"] as const;
+  "ceilingRole", "screedType", "screedMass", "screedStiffness", "flankingLevelDifference", "doorRole"] as const;
 
 /** Why an element has no catalogue value: an input is missing, or the element is outside the catalogue method. */
 export type InteriorElementReason =
@@ -34,7 +34,8 @@ export type InteriorWallCheck = {
   id: string; storeyId: string; wallId: string; wallName: string; role: InteriorWallRole;
   rooms: [{ id: string; name: string }, { id: string; name: string }];
   lengthM: number; areaM2: number | null;
-  requirement: { rwMinDb: number; ref: string } | null;
+  /** The role's requirement, or the lower one of a stairwell or corridor wall with an entrance door (`door` names it). */
+  requirement: { rwMinDb: number; ref: string; door: { id: string; name: string } | null } | null;
   /** Flanking elements per edge on the side of the first room and the second. */
   edges: Array<{ edge: string; source: string | null; receiving: string | null }>;
   gaps: InteriorGap[];
@@ -51,6 +52,16 @@ export type InteriorCeilingCheck = {
   airborne: AirborneResult | null; impact: ImpactResult | null;
 };
 
+/** A door from a common hallway or stairwell into a dwelling: its tested Rw less the allowance against the requirement. */
+export type InteriorDoorCheck = {
+  id: string; storeyId: string; name: string;
+  wall: { id: string; name: string } | null; room: { id: string; name: string } | null;
+  role: ProofValue<string> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
+  requirement: { rwMinDb: number; ref: string } | null;
+  gaps: Array<"door_role" | "door_rw" | "no_requirement">;
+  result: Extract<DoorResult, { status: "calculated" }> | null;
+};
+
 export type InteriorLimitation =
   | "t_junctions" | "floor_like_ceiling" | "walls_above_like_below" | "without_linings" | "screed_not_credited_airborne"
   | "doors_not_checked" | "impact_vertical_only" | "minimum_requirements_only";
@@ -65,7 +76,7 @@ export type InteriorSoundProof =
     level: string | null;
     editions: { requirements: string; method: string; junctions: string; screeds: string; catalogue: string } | null;
     elements: InteriorElement[];
-    walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[];
+    walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; doors: InteriorDoorCheck[];
     suggestions: ProofSuggestion[];
     limitations: InteriorLimitation[];
   };
@@ -93,6 +104,10 @@ export function interiorSoundAgentContext(proof: InteriorSoundProof, projectId: 
     ceilings: proof.ceilings.slice(0, maxChecks).map(check => ({ storeyId: check.storeyId, ceilingId: check.ceilingId, ceiling: check.ceilingName, roomBelow: check.room.name, role: shown(check.role),
       screed: { type: shown(check.screed.type), massKgM2: shown(check.screed.mass), stiffnessMNm3: shown(check.screed.stiffness) },
       gaps: check.gaps.map(gapText), airborne: outcome(check.airborne), impact: outcome(check.impact) })),
+    doors: proof.doors.slice(0, maxChecks).map(check => ({ storeyId: check.storeyId, doorId: check.id, door: check.name, wallId: check.wall?.id ?? null, wall: check.wall?.name ?? null,
+      roomId: check.room?.id ?? null, room: check.room?.name ?? null,
+      role: shown(check.role), rwDb: shown(check.rw), gaps: check.gaps,
+      result: check.result && { status: check.result.meets ? "meets" : "below", valueDb: check.result.valueDb, requiredDb: check.result.requiredDb, marginDb: check.result.marginDb } })),
     omitted: Math.max(0, proof.walls.length - maxChecks) + Math.max(0, proof.ceilings.length - maxChecks),
     limitations: proof.limitations,
     pendingSuggestions: proof.suggestions.length,
@@ -105,6 +120,13 @@ export const interiorSoundSuggestionInput = z.object({
     entityType: z.enum(["building", "storey", "room", "element"]), entityId: z.string().uuid(),
     propertyKey: z.enum(interiorSoundInputKeys), value: z.union([z.string().trim().min(1).max(500), z.number(), z.boolean()]),
     unit: z.string().max(20).nullable().optional(), reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
-  }).strict()).min(1).max(60),
-}).strict();
+  }).strict()).max(60).default([]),
+  /** Entrance doors read from a plan or Türliste: the room they lead into and the stairwell or corridor wall they sit in. */
+  doors: z.array(z.object({
+    roomId: z.string().uuid(), wallId: z.string().uuid(), name: z.string().trim().min(1).max(120),
+    role: z.enum(["to_dwelling_hallway", "to_habitable_room", "internal"]).nullable().optional(),
+    rw: z.number().min(0).max(100).nullable().optional(), basis: z.string().trim().min(1).max(500).nullable().optional(),
+    reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
+  }).strict()).max(40).default([]),
+}).strict().refine(input => input.values.length + input.doors.length > 0, "Suggest at least one value or door");
 export type InteriorSoundSuggestionInput = z.infer<typeof interiorSoundSuggestionInput>;

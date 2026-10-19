@@ -1,4 +1,4 @@
-import type { AcousticNormPack, AirborneInput, AirbornePath, AirborneResult, ImpactInput, ImpactResult } from "@richtfest/shared";
+import type { AcousticNormPack, AirborneInput, AirbornePath, AirborneResult, DoorResult, ImpactInput, ImpactResult, InteriorDoorRole } from "@richtfest/shared";
 
 /**
  * Interior sound insulation in massive buildings (DIN 4109-2): the airborne
@@ -102,3 +102,22 @@ export function impactSoundLevel(pack: AcousticNormPack, input: ImpactInput): Im
     edition: `${method.editions.method}; ${method.editions.junctions}; ${method.editions.screeds}` };
 }
 
+
+/** A door's tested Rw less the door allowance against the Rw its role requires; the unrounded margin decides. */
+export function doorSoundInsulation(pack: AcousticNormPack, input: { rwDb: number; role: InteriorDoorRole }): DoorResult {
+  const method = pack.din4109_interior;
+  if (!method?.door) return { status: "unsupported", reason: "method_missing" };
+  const requirement = method.requirements.doors?.[input.role];
+  if (!requirement) return { status: "unsupported", reason: "no_requirement" };
+  const margin = input.rwDb - method.door.uncertaintyDb - requirement.rwMinDb;
+  return { status: "calculated", valueDb: input.rwDb, uncertaintyDb: method.door.uncertaintyDb, requiredDb: requirement.rwMinDb,
+    // + 0 turns a margin rounded from just below zero into 0 rather than -0.
+    marginDb: round(margin, method.roundingDecimals) + 0, meets: margin >= 0, refs: [requirement.ref, method.door.ref] };
+}
+
+/** R'w a stairwell or corridor wall needs where it holds a door of this role: the door's requirement plus the offset. */
+export function wallWithDoorRequirement(pack: AcousticNormPack, role: InteriorDoorRole): { rwMinDb: number; ref: string } | null {
+  const requirements = pack.din4109_interior?.requirements;
+  const door = requirements?.doors?.[role], offset = requirements?.wallWithDoor;
+  return door && offset ? { rwMinDb: door.rwMinDb + offset.offsetDb, ref: `${offset.ref}; ${door.ref}` } : null;
+}

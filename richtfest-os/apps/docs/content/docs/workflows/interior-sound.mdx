@@ -1,14 +1,16 @@
 ---
 title: Interior sound insulation
-description: Airborne sound of separating walls and ceilings and impact sound of ceilings, calculated from the building model.
+description: Airborne sound of separating walls, ceilings and entrance doors and impact sound of ceilings, calculated from the building model.
 ---
 
-Open **Sound insulation** in the project bar. Below the exterior noise verification, **Interior sound insulation** checks the separating walls and ceilings of the traced plans against the DIN 4109-1 minimum requirements with the DIN 4109-2 method for massive buildings. Everything is a draft until the planner checks and signs the Nachweis.
+Open **Sound insulation** in the project bar. Below the exterior noise verification, **Interior sound insulation** checks the separating walls, ceilings and entrance doors of the traced plans against the DIN 4109-1 minimum requirements with the DIN 4109-2 method for massive buildings. Everything is a draft until the planner checks and signs the Nachweis.
 
 ## What is checked
 
 - **Separating walls**: every wall with the role apartment partition, corridor wall or stairwell wall, for each pair of rooms on its two sides. The separating area is the length both rooms share along the wall times the storey's clear room height. Below the minimum area the requirement applies to Dn,w instead of R'w.
 - **Ceilings**: every ceiling over traced rooms whose **Ceiling type** carries a requirement (between apartments, over a basement, hallway or stairwell, under a shared attic, under a bathroom). Each room below gets an airborne check (R'w) and an impact check (L'n,w). A ceiling within one apartment is not checked.
+
+- **Entrance doors**: every door in a stairwell or corridor wall, and any door given an entrance role. **Door leads** says whether it opens into the dwelling's hallway or directly into a habitable room; each has its own Rw requirement. The door's tested Rw less the door allowance of DIN 4109-2 is compared with it. A stairwell or corridor wall with such a door into one of its rooms is checked against the lower requirement DIN 4109-1 sets for walls with doors (derived from the door's requirement); the table names the door.
 
 Rooms that touch only diagonally share no separating area and are not checked. Elevated sound insulation and DEGA 103 are not checked; when one is agreed, the view says so and the Nachweis shows only the minimum requirements.
 
@@ -29,6 +31,7 @@ Each table shows **Inputs missing** where a check cannot run, with the list of o
 - **Clear room height** per storey, at the top of the section (the same value the exterior noise verification uses).
 - **Ceiling type** and **Floating screed** (mortar, mastic asphalt, dry screed or none), its area mass and dynamic stiffness s', in one row per ceiling. Save stores all four.
 - **Dn,f,w** of a lightweight wall, directly in the elements table.
+- **Entrance doors**: **Add door** below the doors table places a door in a stairwell or corridor wall, leading into the room you choose, with its role, tested Rw and basis (test certificate). Change role or Rw in the table; a door's other values are in the building model.
 - Construction, material, thickness and bulk density of a massive wall or slab: follow the element's link to the building model.
 - **Flanking wall at the start/end**: the wall that should run across the separating wall is not traced, or not adjacent to the room. Trace it in the building model.
 
@@ -36,16 +39,16 @@ All values are ordinary building-model properties, also editable in the building
 
 ## Let the Richtfest Agent fill the gaps
 
-In Project Chat, ask the Richtfest Agent about the interior sound insulation. It sees the checks, their gaps and the element values, says what is calculated and what is missing, and suggests construction, material, thickness, density, wall and ceiling types, screed values and Dn,f,w that a project source states, each with its page and a short quote. It never supplies Rw or other acoustic values; Richtfest calculates those. Suggestions are calculated with but keep the Nachweis a Teilstand until you accept them.
+In Project Chat, ask the Richtfest Agent about the interior sound insulation. It sees the checks, their gaps and the element values, says what is calculated and what is missing, and suggests construction, material, thickness, density, wall and ceiling types, screed values, Dn,f,w and entrance doors with their role and tested Rw (adding doors a plan or Türliste names that are not in the model yet) that a project source states, each with its page and a short quote. Apart from a door's tested Rw it never supplies Rw or other acoustic values; Richtfest calculates those. Suggestions are calculated with but keep the Nachweis a Teilstand until you accept them.
 
 ## Nachweis
 
-**Create interior Nachweis**, or asking the agent to prepare it, writes a draft Schallschutznachweis Innenbauteile to the project's artifacts: walls and ceilings with requirement, value, check and result, every element with its catalogue basis, the transmission paths of each calculated check, the assumptions and limits, open inputs and signature lines. With open inputs or unconfirmed suggestions it is a Teilstand.
+**Create interior Nachweis**, or asking the agent to prepare it, writes a draft Schallschutznachweis Innenbauteile to the project's artifacts: walls, ceilings and entrance doors with requirement, value, check and result, every element with its catalogue basis, the transmission paths of each calculated check, the assumptions and limits, open inputs and signature lines. With open inputs or unconfirmed suggestions it is a Teilstand.
 
 ## Limits
 
 - Massive buildings only: lightweight separating elements, two-leaf house separating walls and timber ceilings are not covered.
 - Linings, suspended ceilings and plaster are not credited. The screed's airborne improvement is not credited (errs low).
-- Doors and walls with doors are not checked.
+- Doors are checked by their tested Rw; a door Rw from the catalogue (DIN 4109-35) is not derived. Interior doors within a dwelling have no requirement.
 - The storey above a ceiling is taken to repeat the walls of the room below. When the slab under a storey is not in the model, it is taken to equal the ceiling above.
 - Impact sound is checked only into the room directly below.

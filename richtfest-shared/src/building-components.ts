@@ -15,6 +15,8 @@ export type WallRole = z.infer<typeof wallRoleSchema>;
 /** What a ceiling separates; it selects the interior requirement. Internal ceilings have none. */
 export const ceilingRoleSchema = z.enum(["apartment_separating", "over_common_space", "under_common_attic", "under_bathroom", "internal"]);
 export type CeilingRole = z.infer<typeof ceilingRoleSchema>;
+/** Where a door leads from a common hallway or stairwell: into the dwelling's hallway, straight into a habitable room, or within one dwelling (no requirement). */
+export const doorRoleSchema = z.enum(["to_dwelling_hallway", "to_habitable_room", "internal"]);
 /** Floating screed: mortar (cement, calcium sulphate, …), mastic asphalt, prefabricated dry screed, or none. */
 export const screedTypeSchema = z.enum(["mortar", "mastic_asphalt", "prefab", "none"]);
 export const spaceTypeSchema = z.enum(["apartment", "common_corridor", "stairwell", "common_other", "exterior"]);
@@ -56,6 +58,7 @@ export const buildingComponentProperties = {
     screedMass: { value: z.number().positive().max(1000), unit: "kg/m²" },
     screedStiffness: { value: z.number().positive().max(1000), unit: "MN/m³" },
     flankingLevelDifference: { value: z.number().min(0).max(120), unit: "dB" },
+    doorRole: { value: doorRoleSchema, unit: null },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },

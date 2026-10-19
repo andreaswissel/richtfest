@@ -63,5 +63,9 @@ test("interior sound suggestions take element inputs, never acoustic results", (
   // Richtfest computes Rw itself from the element inputs.
   expect(() => validateTool("propose_interior_sound_inputs", { values: [{ ...value, propertyKey: "soundReductionIndex" }] })).toThrow();
   expect(() => validateTool("propose_interior_sound_inputs", { values: [] })).toThrow();
+  // A door's tested Rw is the one acoustic value it may state, only with the door it belongs to.
+  const door = { roomId: entityId, wallId: entityId, name: "T 0.01", role: "to_dwelling_hallway", rw: 32, basis: "Türliste", reason: "Türliste", evidence };
+  expect(validateTool("propose_interior_sound_inputs", { doors: [door] })).toMatchObject({ values: [], doors: [door] });
+  expect(() => validateTool("propose_interior_sound_inputs", { doors: [{ ...door, role: "fire_door" }] })).toThrow();
   expect(validateTool("prepare_interior_sound_nachweis", {})).toEqual({});
 });

@@ -3,14 +3,14 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles,
-  type AirborneInput, type FlankElement, type FlankingEdge, type InteriorCeilingCheck, type InteriorCeilingRole, type InteriorElement, type InteriorElementReason,
+  type AirborneInput, type DoorResult, type FlankElement, type InteriorDoorCheck, type InteriorDoorRole, type FlankingEdge, type InteriorCeilingCheck, type InteriorCeilingRole, type InteriorElement, type InteriorElementReason,
   type InteriorGap, type InteriorLimitation, type InteriorSoundProof, type InteriorWallCheck, type InteriorWallRole, type MassiveWallInput, type MassiveWallRw,
   type Point2, type ProofSuggestion, type ProofValue,
 } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { evidenceVersionsForProject, modelForProject, readSitePlan, touchRevision } from "./building-model-router";
 import { classifyMassiveWall, catalogueBasis } from "./exterior-noise-catalogue";
-import { currentValues, distanceToRing, inside, overlapAlongWall, polygonArea, suggestionsOf, writeSuggestion, type CurrentValue } from "./exterior-noise-proof";
+import { currentValues, distanceToRing, inside, overlapAlongWall, polygonArea, suggestedOpening, suggestionsOf, writeSuggestion, type CurrentValue } from "./exterior-noise-proof";
 import { buildingBuildings, buildingElements, buildingModels, buildingRelationships, buildingRevisions, buildingRooms, buildingStoreys } from "./schema";
 
 /**
@@ -77,11 +77,17 @@ export type InteriorAssemblyInput = {
   ceilingRequirement: (role: InteriorCeilingRole) => { rwMinDb: number | null; lnwMaxDb: number | null; ref: string } | null;
   airborne: (input: AirborneInput) => import("@richtfest/shared").AirborneResult;
   impact: (input: import("@richtfest/shared").ImpactInput) => import("@richtfest/shared").ImpactResult;
+  /** Doors of this storey with the wall they sit in and the room they lead into. */
+  doors?: Array<{ id: string; name: string; wallId: string | null; roomId: string | null; role: ProofValue<string> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null }>;
+  door?: (input: { rwDb: number; role: InteriorDoorRole }) => DoorResult;
+  wallWithDoorRequirement?: (role: InteriorDoorRole) => { rwMinDb: number; ref: string } | null;
 };
+const doorWallRoles = new Set(["stairwell", "corridor_partition"]);
+const doorRoleOf = (door: { role: ProofValue<string> | null }) => door.role?.value === "to_dwelling_hallway" || door.role?.value === "to_habitable_room" ? door.role.value as InteriorDoorRole : null;
 
 const MIN_COMMON_M = 0.1, FLANK_DISTANCE_M = 0.6, MIN_EDGE_M = 0.3, SAMPLE_M = 0.05;
 
-export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; floorAssumed: boolean; usedElementIds: Set<string> } {
+export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; doors: InteriorDoorCheck[]; floorAssumed: boolean; usedElementIds: Set<string> } {
   const h = input.clearHeight;
   // Every element a check reads, so the inputs list and suggestions cover exactly these.
   const usedElementIds = new Set<string>();
@@ -157,7 +163,15 @@ export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: In
         const areaA = areaOf(a), areaB = areaOf(b);
         if (fe && re && !fe.reason && !re.reason && areaA && areaB) edges.push({ edge, couplingLengthM: length, source: flank(fe, areaA), receiving: flank(re, areaB) });
       }
-      const requirement = input.wallRequirement(role);
+      // A stairwell or corridor wall with an entrance door into one of the two rooms needs only the door's requirement plus the offset.
+      const roleRequirement = input.wallRequirement(role);
+      let requirement: InteriorWallCheck["requirement"] = roleRequirement && { ...roleRequirement, door: null };
+      if (doorWallRoles.has(role)) for (const door of input.doors ?? []) {
+        const doorRole = doorRoleOf(door);
+        if (door.wallId !== wall.id || !doorRole || (door.roomId !== a.id && door.roomId !== b.id)) continue;
+        const relaxed = input.wallWithDoorRequirement?.(doorRole);
+        if (relaxed && (!requirement?.door || relaxed.rwMinDb > requirement.rwMinDb)) requirement = { ...relaxed, door: { id: door.id, name: door.name } };
+      }
       if (!requirement) gaps.push({ code: "no_requirement" });
       const finalGaps = unique(gaps);
       const area = h === null ? null : round2(length * h);
@@ -211,12 +225,31 @@ export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: In
         room: { id: room.id, name: room.name }, areaM2: area, requirement, screed: ceiling.screed, gaps: finalGaps, airborne, impact });
     }
   }
-  return { walls, ceilings, floorAssumed, usedElementIds };
+  // Doors in stairwell and corridor walls, and any door given an entrance role.
+  const doors: InteriorDoorCheck[] = [];
+  const roomName = new Map(input.rooms.map(room => [room.id, room.name]));
+  for (const door of input.doors ?? []) {
+    const wall = door.wallId ? wallById.get(door.wallId) : undefined;
+    if (door.role?.value === "internal" || (!door.role && !(wall?.role && doorWallRoles.has(wall.role)))) continue;
+    const doorRole = doorRoleOf(door);
+    const gaps: InteriorDoorCheck["gaps"] = [];
+    if (!doorRole) gaps.push("door_role");
+    if (!door.rw) gaps.push("door_rw");
+    const result = doorRole && door.rw && input.door ? input.door({ rwDb: door.rw.value, role: doorRole }) : null;
+    if (result?.status === "unsupported" && result.reason === "no_requirement") gaps.push("no_requirement");
+    doors.push({ id: door.id, storeyId: input.storeyId, name: door.name, wall: wall ? { id: wall.id, name: wall.name } : null,
+      room: door.roomId && roomName.has(door.roomId) ? { id: door.roomId, name: roomName.get(door.roomId)! } : null,
+      role: door.role, rw: door.rw, basis: door.basis,
+      requirement: result?.status === "calculated" ? { rwMinDb: result.requiredDb, ref: result.refs[0]! } : null, gaps,
+      result: result?.status === "calculated" ? result : null });
+  }
+  return { walls, ceilings, doors, floorAssumed, usedElementIds };
 }
 
 // ---- Reading -----------------------------------------------------------------
 
-const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole", "ceilingRole", "screedType", "screedMass", "screedStiffness", "flankingLevelDifference"];
+const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole", "ceilingRole", "screedType", "screedMass", "screedStiffness", "flankingLevelDifference",
+  "doorRole", "soundReductionIndex", "soundReductionIndexBasis"];
 
 export async function readInteriorSoundProof(d: AppDeps, projectId: string): Promise<InteriorSoundProof> {
   const host = d.interiorSound;
@@ -232,7 +265,7 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
     .filter(room => room.constructionState !== "demolished");
   const elementRows = await d.db.select().from(buildingElements).where(and(eq(buildingElements.modelId, scope.modelId), eq(buildingElements.tenantId, scope.tenantId))) as any[];
   const relationships = await d.db.select().from(buildingRelationships).where(and(eq(buildingRelationships.modelId, scope.modelId), eq(buildingRelationships.tenantId, scope.tenantId),
-    inArray(buildingRelationships.relationshipType, ["separates", "covers", "under_storey"]))) as any[];
+    inArray(buildingRelationships.relationshipType, ["separates", "covers", "under_storey", "opening_in"]))) as any[];
   const storeyRows = await d.db.select().from(buildingStoreys).where(and(eq(buildingStoreys.modelId, scope.modelId), eq(buildingStoreys.tenantId, scope.tenantId))) as any[];
   const [building] = await d.db.select({ id: buildingBuildings.id }).from(buildingBuildings).where(and(eq(buildingBuildings.modelId, scope.modelId), eq(buildingBuildings.tenantId, scope.tenantId))).limit(1) as any[];
   const values = await currentValues(d, modelId, [...elementRows.map(row => row.id), ...storeyRows.map(row => row.id), ...(building ? [building.id] : [])],
@@ -251,14 +284,16 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
     elements.set(row.id, evaluateElement(row.id, row.name, type, Object.fromEntries(["construction", "material", "thickness", "bulkDensity", "flankingLevelDifference"]
       .map(key => [key, raw(row.id, key)?.value ?? null])) as Values, host.massiveRw));
   }
-  const adjacent = new Map<string, Set<string>>(), covers = new Map<string, string[]>(), underStorey = new Map<string, string>();
+  const adjacent = new Map<string, Set<string>>(), covers = new Map<string, string[]>(), underStorey = new Map<string, string>(), hostOf = new Map<string, string>();
   for (const row of relationships) {
-    if (row.relationshipType === "separates") adjacent.set(row.toEntityId, (adjacent.get(row.toEntityId) ?? new Set()).add(row.fromEntityId));
+    if (row.relationshipType === "opening_in") hostOf.set(row.fromEntityId, row.toEntityId);
+    else if (row.relationshipType === "separates") adjacent.set(row.toEntityId, (adjacent.get(row.toEntityId) ?? new Set()).add(row.fromEntityId));
     else if (row.relationshipType === "covers") covers.set(row.fromEntityId, [...(covers.get(row.fromEntityId) ?? []), row.toEntityId]);
     else underStorey.set(row.fromEntityId, row.toEntityId);
   }
   const ceilingRows = elementRows.filter(row => elements.get(row.id)?.componentType === "ceiling");
-  const walls: InteriorWallCheck[] = [], ceilings: InteriorCeilingCheck[] = [], storeys: Extract<InteriorSoundProof, { available: true }>["storeys"] = [];
+  const doorRows = elementRows.filter(row => row.constructionState !== "demolished" && (raw(row.id, "componentType")?.value ?? row.kind) === "door");
+  const walls: InteriorWallCheck[] = [], ceilings: InteriorCeilingCheck[] = [], doors: InteriorDoorCheck[] = [], storeys: Extract<InteriorSoundProof, { available: true }>["storeys"] = [];
   let floorAssumed = false;
   const used = new Set<string>();
   for (const page of pages) {
@@ -280,23 +315,31 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
         screed: { type: value<string>(row.id, "screedType"), mass: value<number>(row.id, "screedMass"), stiffness: value<number>(row.id, "screedStiffness") } })),
       floorId: ceilingRows.find(row => underStorey.get(row.id) === storey.id)?.id ?? null,
       elements, wallRequirement: host.wallRequirement, ceilingRequirement: host.ceilingRequirement, airborne: host.airborne, impact: host.impact,
+      doors: doorRows.filter(row => row.storeyId === storey.id).map(row => ({ id: row.id, name: row.name, wallId: hostOf.get(row.id) ?? null, roomId: row.roomId ?? null,
+        role: value<string>(row.id, "doorRole"), rw: value<number>(row.id, "soundReductionIndex"), basis: value<string>(row.id, "soundReductionIndexBasis") })),
+      door: host.door, wallWithDoorRequirement: host.wallWithDoorRequirement,
     });
-    walls.push(...assembled.walls); ceilings.push(...assembled.ceilings);
+    walls.push(...assembled.walls); ceilings.push(...assembled.ceilings); doors.push(...assembled.doors);
     floorAssumed ||= assembled.floorAssumed;
     for (const id of assembled.usedElementIds) used.add(id);
   }
-  const limitations: InteriorLimitation[] = ["minimum_requirements_only", "t_junctions", "without_linings", "doors_not_checked"];
+  const limitations: InteriorLimitation[] = ["minimum_requirements_only", "t_junctions", "without_linings"];
+  if (!host.door) limitations.push("doors_not_checked");
   if (floorAssumed) limitations.push("floor_like_ceiling");
   if (ceilings.length) limitations.push("walls_above_like_below", "screed_not_credited_airborne", "impact_vertical_only");
-  const entities: Array<[ProofSuggestion["entityType"], string, string]> = [
-    ...storeys.map(storey => ["storey", storey.id, storey.name] as [ProofSuggestion["entityType"], string, string]),
-    ...elementRows.filter(row => used.has(row.id)).map(row => ["element", row.id, row.name] as [ProofSuggestion["entityType"], string, string])];
-  const suggestions = await suggestionsOf(d, values as Map<string, CurrentValue>, entities, interiorSoundInputKeys);
+  type Entity = [ProofSuggestion["entityType"], string, string];
+  // Doors carry their role and Rw; walls and ceilings their build-up (an exterior wall's Rw belongs to the exterior check).
+  const doorKeys = ["doorRole", "soundReductionIndex", "soundReductionIndexBasis"];
+  const suggestions = [
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, [...storeys.map(storey => ["storey", storey.id, storey.name] as Entity),
+      ...elementRows.filter(row => used.has(row.id)).map(row => ["element", row.id, row.name] as Entity)], interiorSoundInputKeys.filter(key => key !== "doorRole")),
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, doors.map(door => ["element", door.id, door.name] as Entity), doorKeys),
+  ];
   return {
     available: true, modelRevision: modelRow.model.revision, buildingId: building?.id ?? storeyRows[0]?.buildingId,
     storeys, level: (raw(building?.id ?? "", "soundInsulationLevel")?.value as string | undefined) ?? null, editions: host.editions,
     elements: [...elements.values()].filter(element => used.has(element.id)).sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true })),
-    walls, ceilings, suggestions, limitations,
+    walls, ceilings, doors, suggestions, limitations,
   };
 }
 
@@ -304,8 +347,8 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
 
 /**
  * Writes the agent's interior sound suggestions (element construction, material,
- * thickness, density, roles, screed, Dn,f,w; storey clear height) as inferred,
- * unreviewed values with their cited pages. Never replaces a value a person
+ * thickness, density, roles, screed, Dn,f,w; storey clear height) and entrance
+ * doors (role, Rw) as inferred, unreviewed values with their cited pages. Never replaces a value a person
  * entered or reviewed and never repeats a rejected one.
  */
 export async function proposeInteriorSoundInputs(d: AppDeps, projectId: string, raw: unknown, execution: { runId?: string; agentId?: string } = {}, tx: any = d.db) {
@@ -315,7 +358,7 @@ export async function proposeInteriorSoundInputs(d: AppDeps, projectId: string, 
   const modelRow = await modelForProject(d, projectId);
   if (!modelRow) throw Object.assign(new Error("Building model not found"), { status: 404, code: "not_found" });
   const modelId = modelRow.model.id;
-  if (!(await evidenceVersionsForProject(tx, d, projectId, input.values.flatMap(item => item.evidence))))
+  if (!(await evidenceVersionsForProject(tx, d, projectId, [...input.values.flatMap(item => item.evidence), ...input.doors.flatMap(item => item.evidence)])))
     throw Object.assign(new Error("Every evidence item must reference a ready source revision in this project"), { status: 422, code: "invalid_source_revision" });
   const [model] = await tx.select({ revision: buildingModels.revision }).from(buildingModels).where(and(eq(buildingModels.id, modelId), eq(buildingModels.tenantId, d.tenantId))).for("update");
   const tables = { building: buildingBuildings, storey: buildingStoreys, room: buildingRooms, element: buildingElements } as const;
@@ -328,13 +371,26 @@ export async function proposeInteriorSoundInputs(d: AppDeps, projectId: string, 
     const reason = await writeSuggestion(tx, d, modelId, { entityType: item.entityType, entityId: item.entityId, propertyKey: item.propertyKey, value: item.value, unit: item.unit ?? null, evidence: item.evidence });
     if (reason) skipped.push({ entityId: item.entityId, propertyKey: item.propertyKey, reason }); else written++;
   }
+  let doors = 0;
+  for (const item of input.doors) {
+    const door = await suggestedOpening(tx, d, modelId, { ...item, componentType: "door" });
+    if (!door) { skipped.push({ entityId: item.roomId, propertyKey: "door", reason: "not_in_model" }); continue; }
+    if (door.created) doors++;
+    const suggest = async (propertyKey: string, value: unknown, unit: string | null) => {
+      const reason = await writeSuggestion(tx, d, modelId, { entityType: "element", entityId: door.elementId, propertyKey, value, unit, evidence: item.evidence });
+      if (reason) skipped.push({ entityId: door.elementId, propertyKey, reason }); else written++;
+    };
+    if (item.role) await suggest("doorRole", item.role, null);
+    if (item.rw != null) await suggest("soundReductionIndex", item.rw, "dB");
+    if (item.basis) await suggest("soundReductionIndexBasis", item.basis, null);
+  }
   const review = `/projects/${projectId}?view=noise`;
-  if (!written) return { status: "unchanged", modelRevision: model.revision, written, skipped, review };
+  if (!written && !doors) return { status: "unchanged", modelRevision: model.revision, written, doors, skipped, review };
   const revision = await touchRevision(tx, d, modelId, model.revision);
   await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
-  await d.audit(tx, "projects.building.interior_sound.suggested", "building_model", modelId, { projectId, modelRevision: revision, written, skipped: skipped.length,
+  await d.audit(tx, "projects.building.interior_sound.suggested", "building_model", modelId, { projectId, modelRevision: revision, written, doors, skipped: skipped.length,
     actorType: "agent", runId: execution.runId ?? null, agentId: execution.agentId ?? null });
-  return { status: "suggested", modelRevision: revision, written, skipped, review };
+  return { status: "suggested", modelRevision: revision, written, doors, skipped, review };
 }
 
 export function createInteriorSoundProofRouter(getDeps: (req: Request) => AppDeps) {

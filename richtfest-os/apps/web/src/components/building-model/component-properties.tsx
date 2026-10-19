@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { bebauungsplanSchema, ceilingRoleSchema, screedTypeSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -21,7 +21,7 @@ const enumOptions: Record<string, readonly string[]> = {
   storeyInventory: ["complete", "incomplete"], gfzCountingBasis: ["full_storeys_only", "include_other_storeys"],
   exteriorNoiseRoom: exteriorNoiseRoomKinds, exteriorNoiseApplicability: ["standard_exterior_noise", "special_assessment_required"],
   exteriorNoiseFlanking: ["negligible", "required"], exteriorSurfacesComplete: ["true", "false"],
-  ceilingRole: ceilingRoleSchema.options, screedType: screedTypeSchema.options,
+  ceilingRole: ceilingRoleSchema.options, screedType: screedTypeSchema.options, doorRole: doorRoleSchema.options,
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
 const booleanKeys = new Set(["exteriorSurfacesComplete"]);
@@ -34,7 +34,7 @@ const openingKeys = ["componentType", "openingArea", ...acousticKeys];
 const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
 // Interior sound: a ceiling's requirement and floating screed; a lightweight wall's Dn,f,w when it flanks a separating element.
 const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness"];
-const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "window" || componentType === "door" ? openingKeys
+const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door" ? [...openingKeys, "doorRole"] : componentType === "window" ? openingKeys
   : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : []),
     ...(componentType === "ceiling" ? ceilingKeys : []),
     ...(componentType === "wall" && (construction === "drywall" || construction === "timber" || construction === "steel") ? ["flankingLevelDifference"] : [])];

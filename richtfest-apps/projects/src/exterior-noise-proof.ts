@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  buildingComponentProperties, buildingEvidenceSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
+  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
   type ProofFacade, type ProofGap, type ProofRoom, type SitePlanPage, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
@@ -369,6 +369,29 @@ export async function writeSuggestion(tx: any, d: AppDeps, modelId: string, inpu
 
 
 /**
+ * The window or door the agent read from a plan or list, in a room and the wall
+ * it sits in: the existing one of that name in the room, else a new element
+ * linked to its wall, typed as an inferred value. Null when room or wall is not
+ * in the model.
+ */
+export async function suggestedOpening(tx: any, d: AppDeps, modelId: string, item: { roomId: string; wallId: string; componentType: "window" | "door"; name: string; evidence: unknown[] }) {
+  const [room] = await tx.select().from(buildingRooms).where(and(eq(buildingRooms.id, item.roomId), eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))).limit(1);
+  const [wall] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, item.wallId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId))).limit(1);
+  if (!room || !wall) return null;
+  // The same opening named twice in one room is one opening.
+  const [existing] = await tx.select({ id: buildingElements.id }).from(buildingElements).where(and(eq(buildingElements.modelId, modelId), eq(buildingElements.roomId, room.id),
+    eq(buildingElements.name, item.name), inArray(buildingElements.kind, ["window", "door"]))).limit(1);
+  if (existing) return { elementId: existing.id as string, created: false };
+  const [storey] = await tx.select({ buildingId: buildingStoreys.buildingId }).from(buildingStoreys).where(eq(buildingStoreys.id, room.storeyId)).limit(1);
+  const [element] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId, buildingId: storey.buildingId, storeyId: room.storeyId, roomId: room.id,
+    stableKey: `opening:${crypto.randomUUID()}`, kind: item.componentType, name: item.name, constructionState: wall.constructionState, createdBy: d.actorId }).returning();
+  await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
+    relationshipType: "opening_in", metadata: { method: "agent_suggestion" }, reviewStatus: "unreviewed", createdBy: d.actorId });
+  await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey: "componentType", value: item.componentType, unit: null, provenance: "inferred", evidence: item.evidence });
+  return { elementId: element.id as string, created: true };
+}
+
+/**
  * Writes the agent's exterior noise suggestions as inferred, unreviewed
  * building-model values with their cited pages, and windows/doors it read from
  * a plan or Fensterliste as new openings with inferred values. Never replaces a
@@ -401,26 +424,12 @@ export async function proposeExteriorNoiseInputs(d: AppDeps, projectId: string, 
     await suggest(item.entityType, item.entityId, item.propertyKey, item.value, item.unit ?? null, item.evidence);
   }
   for (const item of input.openings) {
-    const [room] = await tx.select().from(buildingRooms).where(and(eq(buildingRooms.id, item.roomId), eq(buildingRooms.modelId, modelId), eq(buildingRooms.tenantId, d.tenantId))).limit(1);
-    const [wall] = await tx.select().from(buildingElements).where(and(eq(buildingElements.id, item.wallId), eq(buildingElements.modelId, modelId), eq(buildingElements.tenantId, d.tenantId))).limit(1);
-    if (!room || !wall) { skipped.push({ entityId: item.roomId, propertyKey: "opening", reason: "not_in_model" }); continue; }
-    // The same opening named twice in one room and wall is one opening.
-    const [existing] = await tx.select({ id: buildingElements.id }).from(buildingElements).where(and(eq(buildingElements.modelId, modelId), eq(buildingElements.roomId, room.id),
-      eq(buildingElements.name, item.name), inArray(buildingElements.kind, ["window", "door"]))).limit(1);
-    let elementId = existing?.id as string | undefined;
-    if (!elementId) {
-      const [storey] = await tx.select({ buildingId: buildingStoreys.buildingId }).from(buildingStoreys).where(eq(buildingStoreys.id, room.storeyId)).limit(1);
-      const [element] = await tx.insert(buildingElements).values({ tenantId: d.tenantId, modelId, buildingId: storey.buildingId, storeyId: room.storeyId, roomId: room.id,
-        stableKey: `opening:${crypto.randomUUID()}`, kind: item.componentType, name: item.name, constructionState: wall.constructionState, createdBy: d.actorId }).returning();
-      await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
-        relationshipType: "opening_in", metadata: { method: "agent_suggestion" }, reviewStatus: "unreviewed", createdBy: d.actorId });
-      await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey: "componentType", value: item.componentType, unit: null, provenance: "inferred", evidence: item.evidence });
-      elementId = element.id as string;
-      openings++;
-    }
-    await suggest("element", elementId, "openingArea", item.area, "m²", item.evidence);
-    if (item.rw != null) await suggest("element", elementId, "soundReductionIndex", item.rw, "dB", item.evidence);
-    if (item.basis) await suggest("element", elementId, "soundReductionIndexBasis", item.basis, null, item.evidence);
+    const opening = await suggestedOpening(tx, d, modelId, item);
+    if (!opening) { skipped.push({ entityId: item.roomId, propertyKey: "opening", reason: "not_in_model" }); continue; }
+    if (opening.created) openings++;
+    await suggest("element", opening.elementId, "openingArea", item.area, "m²", item.evidence);
+    if (item.rw != null) await suggest("element", opening.elementId, "soundReductionIndex", item.rw, "dB", item.evidence);
+    if (item.basis) await suggest("element", opening.elementId, "soundReductionIndexBasis", item.basis, null, item.evidence);
   }
   if (!written && !openings) return { status: "unchanged", modelRevision: model.revision, written, openings, skipped, review: `/projects/${projectId}?view=noise` };
   const revision = await touchRevision(tx, d, modelId, model.revision);
@@ -440,7 +449,9 @@ const openingInput = z.object({
   area: z.number().positive().max(10000).nullable(),
   rw: z.number().min(0).max(100).nullable(),
   basis: z.string().trim().min(1).max(500).nullable(),
-}).strict();
+  /** Interior: where an entrance door leads; only for doors. */
+  doorRole: doorRoleSchema.nullable().optional(),
+}).strict().refine(input => !input.doorRole || input.componentType === "door", "Only doors take a door role");
 
 export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
@@ -454,7 +465,7 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
     } catch (error) { next(error); }
   });
 
-  // A window or door in an exterior wall of a room, with its area and installed Rw.
+  // A window or door in a wall of a room, with its area and installed Rw; an entrance door also with its role.
   router.post("/projects/:projectId/exterior-noise/proof/openings", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write");
@@ -472,7 +483,8 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
           stableKey: `opening:${crypto.randomUUID()}`, kind: input.componentType, name: input.name, constructionState: wall.constructionState, createdBy: d.actorId }).returning();
         await tx.insert(buildingRelationships).values({ tenantId: d.tenantId, modelId, fromEntityType: "element", fromEntityId: element.id, toEntityType: "element", toEntityId: wall.id,
           relationshipType: "opening_in", metadata: { method: "manual" }, reviewStatus: "approved", createdBy: d.actorId });
-        const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], ["openingArea", input.area, "m²"], ["soundReductionIndex", input.rw, "dB"], ["soundReductionIndexBasis", input.basis, null]];
+        const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], ["openingArea", input.area, "m²"], ["soundReductionIndex", input.rw, "dB"],
+          ["soundReductionIndexBasis", input.basis, null], ["doorRole", input.doorRole ?? null, null]];
         for (const [propertyKey, value, unit] of entries) if (value !== null)
           await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey, value, unit, provenance: "manual", evidence: [] });
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
