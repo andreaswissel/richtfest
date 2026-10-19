@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
-import { discoveryPolygons, planningLawAt, type BerlinParcel, type BerlinSiteContext, type PlanningLaw, type SiteDiscovery } from "./site-lookups";
+import { discoveryPolygons, hasBerlinRegisters, planningLawAt, type BerlinParcel, type BerlinSiteContext, type PlanningLaw, type SiteDiscovery } from "./site-lookups";
 
 type Point = [number, number];
 type Bounds = [number, number, number, number];
@@ -186,7 +186,7 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
     <svg role="img" aria-label={label("Title")} viewBox={viewBox.join(" ")} preserveAspectRatio="xMidYMid meet"
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => { drag.current = null; }}
       data-aerial={layers.aerial && !aerialFailed} data-picking={picking || undefined}>
-      {layers.aerial && !aerialFailed && <image href={`/api/feasibility/projects/${projectId}/aerial?e=${aerial[0]}&n=${aerial[1]}`}
+      {layers.aerial && !aerialFailed && hasBerlinRegisters(context) && <image href={`/api/feasibility/projects/${projectId}/aerial?e=${aerial[0]}&n=${aerial[1]}`}
         x={-AERIAL_WINDOW_M} y={-AERIAL_WINDOW_M} width={AERIAL_WINDOW_M * 2} height={AERIAL_WINDOW_M * 2}
         preserveAspectRatio="none" onError={() => setAerialFailed(true)} />}
       {layers.overlay && planOverlay && (() => {
@@ -263,6 +263,6 @@ export function SiteParcelMap({ projectId, context, discovery, selected, adopted
     </div>
 
     <div className="site-map-scale text-ui-2xs" aria-hidden="true"><span style={{ width: scale / m }} />{scale} m</div>
-    <p className="site-map-attribution text-ui-2xs">{aerialFailed && layers.aerial ? `${label("AerialUnavailable")} · ` : ""}{ATTRIBUTION}</p>
+    <p className="site-map-attribution text-ui-2xs">{(aerialFailed || !hasBerlinRegisters(context)) && layers.aerial ? `${label("AerialUnavailable")} · ` : ""}{context.attribution ?? ATTRIBUTION}</p>
   </div>;
 }

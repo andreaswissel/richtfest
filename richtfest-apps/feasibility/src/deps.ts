@@ -1,5 +1,8 @@
 import type { FeasibilitySiteFigures, FeatureFlagKey, PermissionKey } from "@richtfest/shared";
 
+/** A resolved site: its state register and the address point in EPSG:25833, the assessment's frame. */
+export type AssessmentSite = { region: "BE" | "HH"; address: string; origin: [number, number]; sources: { label: string; url: string }[] };
+
 /** What the feasibility app needs from Richtfest OS, adapted by richtfest-os/apps/api/src/feasibility-host.ts. */
 export type AppDeps = {
   evidence?: import("./evidence").EvidenceHost;
@@ -14,8 +17,8 @@ export type AppDeps = {
   /** The project's name and address in this tenant, or null when it does not exist here. */
   project: (projectId: string, tx?: any) => Promise<{ id: string; name: string; address: string | null } | null>;
   /** Approved parcel area, Bebauungsplan GRZ/GFZ and existing Geschossfläche from the project's building model. */
-  /** Exact Berlin address resolution, supplied by the host. No project geometry is changed. */
-  resolveBerlinSite?: (projectId: string, signal: AbortSignal) => Promise<{ address: string; origin: [number, number]; sources: { label: string; url: string }[] }>;
+  /** Exact Berlin or Hamburg address resolution, supplied by the host. No project geometry is changed. */
+  resolveSite?: (projectId: string, signal: AbortSignal) => Promise<AssessmentSite>;
   /** Berlin TrueDOP orthophoto (JPEG) for a square window around an EPSG:25833 point, cached by the host. */
   aerialImage?: (projectId: string, origin: [number, number], halfWidth: number) => Promise<{ body: Buffer; stale: boolean; fetchedAt: Date; freshUntil: Date; attribution: string }>;
   siteFigures: (projectId: string) => Promise<FeasibilitySiteFigures>;

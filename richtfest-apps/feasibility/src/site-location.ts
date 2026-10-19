@@ -1,15 +1,15 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
-import type { AppDeps } from "./deps";
+import type { AppDeps, AssessmentSite } from "./deps";
 import { features } from "./berlin-site-context";
 export const mapLocationSchema = z.object({ mapOrigin:z.tuple([z.number().min(350000).max(430000),z.number().min(5780000).max(5860000)]), mapLabel:z.string().trim().min(1).max(300) });
-export async function resolveAssessmentLocation(d:AppDeps,id:string,body:unknown,signal:AbortSignal) {
+export async function resolveAssessmentLocation(d:AppDeps,id:string,body:unknown,signal:AbortSignal):Promise<AssessmentSite> {
   const selected=mapLocationSchema.safeParse(body);
-  if(selected.success) return {address:selected.data.mapLabel,origin:selected.data.mapOrigin,sources:[{label:"User-selected map position; verify parcel identity",url:"https://gdi.berlin.de/"}]};
+  if(selected.success) return {region:"BE",address:selected.data.mapLabel,origin:selected.data.mapOrigin,sources:[{label:"User-selected map position; verify parcel identity",url:"https://gdi.berlin.de/"}]};
   if (body && typeof body==="object" && "mapOrigin" in body) mapLocationSchema.parse(body);
-  if(!d.resolveBerlinSite) throw Object.assign(new Error("Berlin address lookup unavailable"),{status:503});
-  return d.resolveBerlinSite(id,signal);
+  if(!d.resolveSite) throw Object.assign(new Error("Site address lookup unavailable"),{status:503});
+  return d.resolveSite(id,signal);
 }
 export function createSiteLocationRouter(getDeps:(req:Request)=>AppDeps) {
   const router=Router();

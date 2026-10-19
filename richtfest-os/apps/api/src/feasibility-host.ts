@@ -3,7 +3,8 @@ import { resolveLocationAddress } from "@richtfest/projects/location-context";
 import { aerialWindow } from "@richtfest/projects/location-images";
 import type { Request } from "express";
 import { and, eq } from "drizzle-orm";
-import { aerialSourceFor, formatProjectAddress } from "@richtfest/shared";
+import { locateAddressPoint } from "@richtfest/projects/address-points";
+import { aerialSourceFor, formatProjectAddress, toUtm } from "@richtfest/shared";
 import type { AppDeps } from "@richtfest/feasibility/deps";
 import { projects } from "@richtfest/projects/schema";
 import { readFeasibilitySiteFigures } from "@richtfest/projects/building-model";
@@ -29,14 +30,16 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
       const [row] = await (tx ? query.for("key share") : query);
       return row ? { id: row.id, name: row.name, address: formatProjectAddress(row) || null } : null;
     },
-    resolveBerlinSite: async (projectId, signal) => {
+    resolveSite: async (projectId, signal) => {
       const [row] = await db.select().from(projects).where(and(eq(projects.id, projectId), eq(projects.tenantId, actor.tenantId))).limit(1);
       if (!row) throw new HttpError(404, "not_found", "Project not found");
-      if (row.city?.trim().toLowerCase() !== "berlin") throw new HttpError(422, "berlin_address_required", "Save a complete Berlin site address in project details first");
+      const city = row.city?.trim().toLowerCase();
+      if (city !== "berlin" && city !== "hamburg") throw new HttpError(422, "site_address_unsupported", "Save a complete Berlin or Hamburg site address in project details first");
       try {
-        return await resolveLocationAddress(row, signal);
+        if (city === "hamburg") return await resolveHamburgSite(row, signal);
+        return { region: "BE" as const, ...await resolveLocationAddress(row, signal) };
       } catch (error) {
-        if (signal.aborted || !(error instanceof Error)) throw error;
+        if (signal.aborted || !(error instanceof Error) || error instanceof HttpError) throw error;
         // Address-register messages tell the user what to fix in project details; keep them instead of a generic 500.
         if (/unavailable|invalid coordinates|retry/i.test(error.message)) throw new HttpError(502, "site_address_service_unavailable", error.message);
         throw new HttpError(422, "site_address_unresolved", error.message);
@@ -49,4 +52,14 @@ export function feasibilityDeps(db: Database, req: Request): AppDeps {
     },
     siteFigures: projectId => readFeasibilitySiteFigures(projectsDeps(db, req), projectId),
   };
+}
+
+/** Hamburg house coordinates (LGV) as an EPSG:25833 point, the assessment's frame. */
+async function resolveHamburgSite(row: Parameters<typeof formatProjectAddress>[0], signal: AbortSignal) {
+  const lookup = await locateAddressPoint(row, signal);
+  if (!lookup.point) throw new HttpError(422, "site_address_unresolved", lookup.message);
+  if (lookup.point.state !== "HH") throw new HttpError(422, "site_address_unresolved", "Site address was not found in the Hamburg house coordinates; check project details");
+  const { point } = lookup;
+  return { region: "HH" as const, address: point.address, origin: toUtm(point.longitude, point.latitude, 33),
+    sources: [{ label: `${point.attribution}; house coordinate, not a surveyed setting-out point`, url: point.sourceUrl }] };
 }

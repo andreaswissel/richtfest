@@ -4,7 +4,7 @@ import type {AppDeps} from "./deps";
 
 test("explicit map locations stay inside Berlin bounds and malformed selections never fall back",async()=>{
  let calls=0;
- const deps={resolveBerlinSite:async()=>{calls++;return {address:"saved",origin:[397136,5824134],sources:[]};}} as unknown as AppDeps;
+ const deps={resolveSite:async()=>{calls++;return {region:"BE",address:"saved",origin:[397136,5824134],sources:[]};}} as unknown as AppDeps;
  const signal=new AbortController().signal;
  const selected=await resolveAssessmentLocation(deps,"project",{mapOrigin:[395384,5820083],mapLabel:"Eldenaer Straße 60"},signal);
  expect(selected.address).toBe("Eldenaer Straße 60");expect(calls).toBe(0);

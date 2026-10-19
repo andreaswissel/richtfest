@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
-import type { AppDeps } from "./deps";
+import type { AppDeps, AssessmentSite } from "./deps";
 import { mapLocationSchema, resolveAssessmentLocation } from "./site-location";
 
 type Point = [number, number];
@@ -38,27 +38,33 @@ export const publicLink = (value: unknown) => {
 };
 export async function features(url: string, signal: AbortSignal, limit = 100): Promise<Feature[]> {
   const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`Berlin service unavailable (${response.status})`);
+  if (!response.ok) throw new Error(`Public service unavailable (${response.status})`);
   // Bounded public-service reads, independent of customer upload limits.
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("Empty Berlin service response");
+  if (!reader) throw new Error("Empty public service response");
   const parts: Uint8Array[] = []; let size = 0;
   try {
     for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.byteLength;
-      if (size > 8_000_000) throw new Error("Berlin response exceeds lookup budget"); parts.push(part.value); }
+      if (size > 8_000_000) throw new Error("Public service response exceeds lookup budget"); parts.push(part.value); }
   } finally { await reader.cancel().catch(() => {}); }
   const body = JSON.parse(Buffer.concat(parts).toString());
   if (!Array.isArray(body.features) || body.features.length > limit || Number(body.numberMatched) > body.features.length || body.features.length === limit)
-    throw new Error("Berlin lookup incomplete; inspect the official map");
+    throw new Error("Public lookup incomplete; inspect the official map");
   const parsed = z.array(z.object({
-    id: z.string().optional(),
+    // WFS ids are strings; OGC API Features (Hamburg) uses numbers.
+    id: z.union([z.string(), z.number().transform(String)]).optional(),
     properties: z.record(z.unknown()),
     geometry: z.object({ type: z.string(), coordinates: z.unknown() }).nullable(),
   })).safeParse(body.features);
-  if (!parsed.success) throw new Error("Malformed Berlin service response");
+  if (!parsed.success) throw new Error("Malformed public service response");
   return parsed.data;
 }
-export async function lookupBerlinContext(site: { address: string; origin: Point; sources: { label: string; url: string }[] }, signal: AbortSignal) {
+/** Parcel and planning context for the resolved site, from the register of its state. */
+export async function lookupSiteContext(site: AssessmentSite, signal: AbortSignal) {
+  if (site.region === "HH") return (await import("./hamburg-site-context")).lookupHamburgContext(site, signal);
+  return lookupBerlinContext(site, signal);
+}
+export async function lookupBerlinContext(site: Omit<AssessmentSite, "region">, signal: AbortSignal) {
   const parcelUrl = serviceUrl("alkis_flurstuecke", "flurstuecke", site.origin);
   const planUrls = [serviceUrl("bplan", "b_bp_fs", site.origin), serviceUrl("bplan", "a_bp_iv", site.origin)];
   const hintLayers = [["denkmale", "denkmale"], ["erhaltungsverordnungsgebiete", "erhaltgeb_em"], ["erhaltungsverordnungsgebiete", "erhaltgeb_es"]] as const;
@@ -92,11 +98,12 @@ export async function lookupBerlinContext(site: { address: string; origin: Point
     const polygons = polygonsOf(feature), label = text(feature.properties.nutzungsart);
     return polygons.length && label ? [{ id: text(feature.properties.gisid) || text(feature.id), label, purpose: text(feature.properties.zweckbestimmung) || null, category: landUseCategory(label), sourceUrl: landUseUrl, polygons, containsAddress: containsPoint(polygons, site.origin) }] : [];
   });
-  return { locality, landUse, landUseStatus: landUseResult!.status === "fulfilled" ? "available" : "unavailable", hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
+  return { region: "BE" as const, attribution: BERLIN_ATTRIBUTION, locality, landUse, landUseStatus: landUseResult!.status === "fulfilled" ? "available" : "unavailable", hints, hintStatus: hintResults.every(r => r.status === "fulfilled") ? "available" : "unavailable", address: site.address, origin: site.origin, crs: "EPSG:25833", retrievedAt, parcels, plans,
     parcelStatus: parcelResult.status === "fulfilled" ? "available" : "unavailable",
     planStatus: planResults.every(r => r.status === "fulfilled") ? "available" : "unavailable",
     sources: [...site.sources, { label: "ALKIS Berlin · dl-de/zero-2-0", url: parcelUrl }, ...planUrls.map(url => ({ label: "Berlin B-Plan register", url }))] };
 }
+const BERLIN_ATTRIBUTION = "Geoportal Berlin / TrueDOP 2024, ALKIS, B-Plan · dl-de/zero-2-0";
 /** FNP land use as a planning-law hint, never a determination: building land → § 34 likely, open land → § 35 likely. */
 export function landUseCategory(label: string): "building" | "open" | "other" {
   if (/baufläche|bauflaeche/i.test(label)) return "building";
@@ -105,6 +112,7 @@ export function landUseCategory(label: string): "building" | "open" | "other" {
 }
 export function createBerlinSiteContextRouter(getDeps: (req: Request) => AppDeps) {
   const router = Router();
+  // Historic path: serves Berlin and Hamburg sites.
   router.post("/projects/:projectId/berlin-context", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:read");
@@ -113,7 +121,7 @@ export function createBerlinSiteContextRouter(getDeps: (req: Request) => AppDeps
       const signal = AbortSignal.timeout(15000);
       const site = await resolveAssessmentLocation(d, id, req.body, signal);
       res.setHeader("Cache-Control", "private, no-store");
-      res.json(ok(await lookupBerlinContext(site, signal)));
+      res.json(ok(await lookupSiteContext(site, signal)));
     } catch (e) { next(e); }
   });
   // Orthophoto under the parcel map: a fixed window around a Berlin point, snapped so nearby lookups share one cached image.

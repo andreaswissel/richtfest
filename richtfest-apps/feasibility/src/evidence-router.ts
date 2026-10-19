@@ -6,7 +6,7 @@ import type { AppDeps } from "./deps";
 import { evidenceRequestSchema, planLinesRequestSchema } from "./evidence";
 import { siteEvidenceProposals } from "./schema";
 import { mapLocationSchema, resolveAssessmentLocation } from "./site-location";
-import { lookupBerlinContext } from "./berlin-site-context";
+import { lookupSiteContext } from "./berlin-site-context";
 const uuid = z.string().uuid();
 const error = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
 export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
@@ -27,7 +27,7 @@ export function createEvidenceRouter(getDeps: (req: Request) => AppDeps) {
     const {d,projectId,host}=await deps(req,true);
     const {url}=z.object({url:z.string().url().max(2000),mapOrigin:mapLocationSchema.shape.mapOrigin.optional(),mapLabel:mapLocationSchema.shape.mapLabel.optional()}).strict().parse(req.body);
     const signal=AbortSignal.timeout(15000);
-    const context=await lookupBerlinContext(await resolveAssessmentLocation(d,projectId,req.body,signal),signal);
+    const context=await lookupSiteContext(await resolveAssessmentLocation(d,projectId,req.body,signal),signal);
     if(!context.plans.some(p=>p.documentUrl===url||p.explanationUrl===url))throw error(422,"unverified_plan_url","Select a document from the current official plan lookup");
     res.json(ok(await host.importOfficialPdf(projectId,url)));
   }catch(e){next(e);}});

@@ -90,7 +90,10 @@ export async function discoverSiteReferences(site:{address:string;origin:Point;s
 }
 /** ALKIS `namlag` often already includes the house number ("Giersstraße 20"); avoid "Giersstraße 20 20". */
 export function referenceLabel(street:string,houseNumber:string){if(!houseNumber)return street;const escaped=houseNumber.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");return new RegExp(`(^|\\s)${escaped}$`,"i").test(street)?street:[street,houseNumber].filter(Boolean).join(" ");}
-export function createSiteReferencesRouter(getDeps:(req:Request)=>AppDeps){const router=Router();router.post("/projects/:projectId/references/discover",async(req,res,next)=>{try{const d=getDeps(req);d.requirePermission("projects:read");const id=z.string().uuid().parse(req.params.projectId);if(!await d.project(id))throw Object.assign(new Error("Project not found"),{status:404});const signal=AbortSignal.timeout(30000),site=await resolveAssessmentLocation(d,id,req.body,signal);res.json(ok(await discoverSiteReferences(site,signal)));}catch(e){next(e);}});return router;}
+export function createSiteReferencesRouter(getDeps:(req:Request)=>AppDeps){const router=Router();router.post("/projects/:projectId/references/discover",async(req,res,next)=>{try{const d=getDeps(req);d.requirePermission("projects:read");const id=z.string().uuid().parse(req.params.projectId);if(!await d.project(id))throw Object.assign(new Error("Project not found"),{status:404});const signal=AbortSignal.timeout(30000),site=await resolveAssessmentLocation(d,id,req.body,signal);
+ // Building heights and footprints are read from Berlin's registers only.
+ if(site.region!=="BE")throw Object.assign(new Error("Nearby buildings are connected for Berlin sites only; Hamburg shows parcels without neighbour ratios"),{status:422,code:"site_region_not_connected"});
+ res.json(ok(await discoverSiteReferences(site,signal)));}catch(e){next(e);}});return router;}
 
 /** ALKIS building functions (gfk) that count only towards GRZ 2 under § 19 (4) BauNVO; anything underground does too. */
 const ANCILLARY_FUNCTIONS=new Set([1312,1313,1610,1611,2460,2461,2462,2463,2464,2465,2523,2612,2723,2741]);

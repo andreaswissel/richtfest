@@ -11,6 +11,10 @@ export type BerlinLandUse = { id: string; label: string; purpose: string | null;
 /** Heritage monuments and preservation areas (Erhaltungsverordnungen): social (Milieuschutz) or urban character. */
 export type BerlinHint = { id: string; kind: "heritage" | "social_preservation" | "urban_preservation" | "preservation"; type?: string | null; label: string; sourceUrl: string; detailUrl: string | null; effectiveDate?: string | null; polygons?: Point[][][]; containsAddress: boolean };
 export type BerlinSiteContext = {
+  /** State register of the site; absent in lookups cached before Hamburg was connected (always Berlin). */
+  region?: "BE" | "HH";
+  /** Source attribution for the parcel map. */
+  attribution?: string;
   /** Ortsteil at the address; absent in lookups cached before it was returned. */
   locality?: { name: string; key: string; sourceUrl: string } | null;
   landUse?: BerlinLandUse[]; landUseStatus?: string;
@@ -18,6 +22,9 @@ export type BerlinSiteContext = {
   hintStatus?: string; address: string; origin: Point; retrievedAt: string; parcelStatus: string; planStatus: string; parcels: BerlinParcel[]; plans: BerlinPlan[];
 };
 export type SiteDiscovery = { address: string; origin: Point; longitude: number; latitude: number; retrievedAt: string; references: SiteReference[]; buildings: LocationBuilding[]; sources: string[]; status: string[] };
+
+/** Aerial image, plans, protection registers and nearby buildings are connected for Berlin only; Hamburg has parcels. */
+export const hasBerlinRegisters = (context?: Pick<BerlinSiteContext, "region">) => !!context && (context.region ?? "BE") === "BE";
 
 const body = (locator?: Locator) => (locator ? { mapOrigin: locator.origin, mapLabel: locator.label } : {});
 const locatorKey = (locator?: Locator) => [locator?.origin ?? null, locator?.label ?? null];
@@ -93,6 +100,6 @@ export function protectionAt(context: BerlinSiteContext, parcel: Pick<BerlinParc
     social: hints.filter((h) => h.kind === "social_preservation" && inside(h)),
     urban: hints.filter((h) => h.kind === "urban_preservation" && inside(h)),
     /** Without polygons (older cached lookups) or with the lookup down, absence is not evidence. */
-    known: context.hintStatus !== "unavailable" && (context.hints ?? []).every((h) => h.polygons),
+    known: context.hintStatus !== "unavailable" && context.hintStatus !== "not_connected" && (context.hints ?? []).every((h) => h.polygons),
   };
 }

@@ -16,7 +16,7 @@ import { Badge, Callout } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { compareSiteReferences, type SiteAssessmentConstraint, type SiteAssessmentInput, type SiteReference } from "@richtfest/shared";
 
-import { protectionAt, useBerlinContext, useSiteDiscovery, type BerlinHint, type BerlinParcel as Parcel } from "./site-lookups";
+import { hasBerlinRegisters, protectionAt, useBerlinContext, useSiteDiscovery, type BerlinHint, type BerlinParcel as Parcel } from "./site-lookups";
 import { SiteParcelMap } from "./site-parcel-map";
 import { correctReferenceStoreys, parcelReference, storeysFromHeight } from "./site-summary";
 const VISIBLE_PARCELS = 5;
@@ -52,7 +52,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
   const discovery = discoveryQuery.data;
   // Neighbour GRZ/GFZ and storeys come from the nearby-buildings lookup; run it with the parcel lookup so the map shows them.
   useEffect(() => {
-    if (context && !discoveryQuery.data && !discoveryQuery.isFetching && !discoveryQuery.isError) void discoveryQuery.refetch();
+    if (hasBerlinRegisters(context) && !discoveryQuery.data && !discoveryQuery.isFetching && !discoveryQuery.isError) void discoveryQuery.refetch();
   }, [lookup.dataUpdatedAt]);
   useEffect(() => {
     if (active && !lookup.data && !lookup.isFetching && !lookup.error) void lookup.refetch();
@@ -119,6 +119,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
     {context && <>
       <p className="text-ui-xs">{context.address} · {label("Retrieved")} {new Date(context.retrievedAt).toLocaleString(locale)}</p>
       {context.parcelStatus !== "available" && <Callout>{label("ParcelsUnavailable")}</Callout>}
+      {context.region === "HH" && <Callout>{label("HamburgCoverage")}</Callout>}
       {onReferences && references.length > 0 && <p className="site-reference-frame text-ui-xs" role="status">
         <strong>{label("ReferencesChosen").replace("{count}", String(references.length))}</strong>
         <span>GRZ {range(frame.grz)}</span><span>GFZ {range(frame.gfz)}</span><span>{label("Storeys")} {range(frame.storeys)}</span>
@@ -133,7 +134,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
               <dt>{label("Area")}</dt><dd className="tabular-nums">{area(parcel.area)}</dd>
               <dt>{label("Relation")}</dt><dd>{parcel.containsAddress ? <Badge variant="outline">{label("Contains")}</Badge> : label("Nearby")}</dd>
               <dt>{label("LastChange")}</dt><dd>{parcel.sourceDate ? new Date(parcel.sourceDate).toLocaleDateString(locale) : "–"}</dd>
-              <dt>GRZ 1</dt><dd className="tabular-nums">{facts.grz != null ? num(facts.grz) : <span className="muted">{label(discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</span>}</dd>
+              <dt>GRZ 1</dt><dd className="tabular-nums">{facts.grz != null ? num(facts.grz) : <span className="muted">{label(!hasBerlinRegisters(context) ? "RatiosNotConnected" : discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</span>}</dd>
               {facts.grz != null && <><dt>GRZ 2</dt><dd className="tabular-nums">{facts.grz2 != null ? `≥ ${num(facts.grz2)}` : "–"}</dd>
               <dt>GFZ</dt><dd className="tabular-nums">{facts.gfz != null ? num(facts.gfz) : "–"}</dd>
               <dt>{label("Storeys")}</dt><dd className="tabular-nums">{facts.storeys != null ? facts.storeys : "–"}</dd></>}
@@ -172,7 +173,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
               return <dl className="site-map-facts text-ui-xs" aria-label={label("Protection")}>
                 {rows.map(([key, items]) => <div key={key} className="contents">
                   <dt>{label(key)}</dt>
-                  <dd className="site-map-protections">{items.length ? items.map(item) : <span className="muted">{label(p.known ? "ProtectionNone" : "ProtectionUnknown")}</span>}</dd>
+                  <dd className="site-map-protections">{items.length ? items.map(item) : <span className="muted">{label(p.known ? "ProtectionNone" : context.hintStatus === "not_connected" ? "RatiosNotConnected" : "ProtectionUnknown")}</span>}</dd>
                 </div>)}
               </dl>;
             })()}
@@ -201,7 +202,7 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
                 <dt>GFZ</dt><dd className="tabular-nums">{range(facts.frame.gfz)}</dd>
                 <dt>{label("Storeys")}</dt><dd className="tabular-nums">{range(facts.frame.storeys)}</dd>
                 <dt>{label("Section34Basis")}</dt><dd>{label("Section34Count").replace("{count}", String(facts.frame.count))}</dd>
-              </dl> : <p className="muted">{label(discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</p>}
+              </dl> : <p className="muted">{label(!hasBerlinRegisters(context) ? "RatiosNotConnected" : discovery ? "NoRatios" : discoveryQuery.isFetching ? "RatiosLoading" : "RatiosAfterDiscovery")}</p>}
             </details>
             <div className="site-map-panel-actions">
               {adopted?.id === parcel.id ? <Badge variant="outline">{label("AdoptedShort")}</Badge>
@@ -234,7 +235,8 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
         </div>
       </div> : context.parcelStatus === "available" && <p className="muted text-ui-xs">{label("NoParcels")}</p>}
       <h3 className="berlin-subtitle text-ui-sm font-medium">{label("Plans")}</h3>
-      {context.planStatus !== "available" && <Callout>{label("PlansUnavailable")}</Callout>}
+      {context.planStatus === "unavailable" && <Callout>{label("PlansUnavailable")}</Callout>}
+      {context.planStatus === "not_connected" && <p className="muted text-ui-xs">{label("NotConnected")}</p>}
       {context.plans.length > 0 ? <Table>
         <TableHeader><TableRow><TableHead>{label("Plan")}</TableHead><TableHead>{t("status")}</TableHead><TableHead>{label("Relation")}</TableHead><TableHead>{label("Documents")}</TableHead></TableRow></TableHeader>
         <TableBody>{context.plans.map(plan => <TableRow key={plan.id}>
@@ -251,15 +253,16 @@ export function BerlinContext({ projectId, disabled, onAdopt, onParcel, onDesign
       <p className="muted text-ui-2xs">{label("PlanHint")}</p>
       <h3 className="berlin-subtitle text-ui-sm font-medium">{label("HeritageTitle")}</h3>
       {context.hintStatus === "unavailable" && <Callout>{label("HeritageUnavailable")}</Callout>}
+      {context.hintStatus === "not_connected" && <p className="muted text-ui-xs">{label("NotConnected")}</p>}
       {context.hints?.length ? <ul className="berlin-hints text-ui-xs">{context.hints.map(hint => <li key={`${hint.kind}:${hint.id}`}>
         <span>{hint.label}</span>{hint.containsAddress ? <Badge variant="outline">{label("Contains")}</Badge> : <span className="muted">{label("Nearby")}</span>}
         <a href={hint.detailUrl ?? hint.sourceUrl} target="_blank" rel="noreferrer">{label("Source")}</a>
-      </li>)}</ul> : context.hintStatus !== "unavailable" && <p className="muted text-ui-xs">{label("NoHeritage")}</p>}
+      </li>)}</ul> : context.hintStatus === "available" && <p className="muted text-ui-xs">{label("NoHeritage")}</p>}
       <p className="muted text-ui-2xs">{label("HeritageHint")}</p>
     </>}
     <p className="berlin-links text-ui-xs">
       <Link to={`/projects/${projectId}?view=location`}>{label("Location")} ↗</Link>
-      <a href="https://www.berlin.de/sen/stadtentwicklung/planung/bebauungsplanverfahren/bebauungsplanverfahren-in-berlin/bebauungsplaene-online/" target="_blank" rel="noreferrer">{label("OfficialMap")} ↗</a>
+      <a href={context?.region === "HH" ? "https://geoportal-hamburg.de/geo-online/" : "https://www.berlin.de/sen/stadtentwicklung/planung/bebauungsplanverfahren/bebauungsplanverfahren-in-berlin/bebauungsplaene-online/"} target="_blank" rel="noreferrer">{label("OfficialMap")} ↗</a>
     </p>
   </Section>;
 }

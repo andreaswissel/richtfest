@@ -67,7 +67,7 @@ import type { createViewport, ViewportState } from "../location/viewport";
 import "./site-geometry-editor.css";
 import { SitePlanAlignment, usePlanRaster } from "./site-plan-overlay";
 import { applyTrace } from "./plan-lines";
-import { containsPoint, useBerlinContext, useSiteDiscovery, type BerlinParcel } from "./site-lookups";
+import { containsPoint, hasBerlinRegisters, useBerlinContext, useSiteDiscovery, type BerlinParcel } from "./site-lookups";
 
 type Engine = typeof import("@richtfest/shared/site-geometry");
 type SelectionKind = "parcel" | "line" | "envelope" | "exclusion" | "building" | "staffel" | "edge";
@@ -372,7 +372,7 @@ export function SiteGeometryEditor({
     if (!berlin.data && !berlin.isFetching && !berlin.error) void berlin.refetch();
   }, [berlin.data, berlin.error]);
   useEffect(() => {
-    if (berlin.data && !discovery && !discoveryQuery.isFetching && !discoveryQuery.error) void discoveryQuery.refetch();
+    if (hasBerlinRegisters(berlin.data) && !discovery && !discoveryQuery.isFetching && !discoveryQuery.error) void discoveryQuery.refetch();
   }, [berlin.data, discovery, discoveryQuery.error]);
   const parcelRatios = useMemo(() => {
     const byParcel = new Map<string, { grz: number | null; gfz: number | null; storeys: number | null }>();
@@ -1283,7 +1283,7 @@ export function SiteGeometryEditor({
                 ["parcels", label("LayerParcels"), alkis.length, !alkis.length],
                 ["ratios", label("LayerRatios"), parcelRatios.size, !parcelRatios.size],
                 ["setbacks", label("LayerSetbacks"), setbackChecks.length, !geometry.parcel],
-                ["aerial", label("LayerAerial"), null, !berlin.data],
+                ["aerial", label("LayerAerial"), null, !hasBerlinRegisters(berlin.data)],
                 ["bplans", label("LayerBPlans"), berlin.data?.plans.length ?? 0, !berlin.data?.plans.length],
                 ["protection", label("LayerProtection"), berlin.data?.hints?.filter((h) => h.polygons?.length).length ?? 0, !berlin.data?.hints?.some((h) => h.polygons?.length)],
               ] as const).map(([key, name, count, off]) => (
@@ -1423,7 +1423,7 @@ export function SiteGeometryEditor({
                   }}
                 >
                   <svg viewBox={`0 0 ${width} ${height}`} aria-label={label("Plan")}>
-                    {layers.aerial && berlin.data && (() => {
+                    {layers.aerial && berlin.data && hasBerlinRegisters(berlin.data) && (() => {
                       // Same orthophoto window as the Site map (400 m, snapped to 25 m around the address).
                       const e = Math.round(berlin.data.origin[0] / 25) * 25, n = Math.round(berlin.data.origin[1] / 25) * 25, [x, y] = project([e - 200, n + 200]);
                       return <image className="geometry-aerial" href={`/api/feasibility/projects/${projectId}/aerial?e=${e}&n=${n}`} x={x} y={y} width={400 / metresPerPixel} height={400 / metresPerPixel} preserveAspectRatio="none" />;

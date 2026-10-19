@@ -3,7 +3,7 @@ title: Feasibility
 description: Review Berlin site constraints and compare keeping, densifying or rebuilding a site by residual land value.
 ---
 
-The project view **Feasibility** opens the Berlin site assessment (Grundstücksprüfung): may this parcel be built on, and how much? The residual land value study described further down (keep, densify or rebuild) is enabled per person with the [feature flag](/docs/platform/accounts#feature-flags) `feasibility_financial_study`. With the flag, a tab switch at the start of the header row offers **Site assessment** and **Residual land value**; the selected study is kept in the link (`&study=financial`), and the site assessment keeps its current step. Without the flag there is no tab, the view is the site assessment only, and a `study=financial` link opens the site assessment instead.
+The project view **Feasibility** opens the site assessment (Grundstücksprüfung) for Berlin and, with parcels only, Hamburg: may this parcel be built on, and how much? The residual land value study described further down (keep, densify or rebuild) is enabled per person with the [feature flag](/docs/platform/accounts#feature-flags) `feasibility_financial_study`. With the flag, a tab switch at the start of the header row offers **Site assessment** and **Residual land value**; the selected study is kept in the link (`&study=financial`), and the site assessment keeps its current step. Without the flag there is no tab, the view is the site assessment only, and a `study=financial` link opens the site assessment instead.
 
 ## Berlin site assessment
 
@@ -37,6 +37,12 @@ If the project address cannot be resolved (for example a wrong postal code), the
 Candidates also appear in a headed table below the map; the five most relevant are shown first, with **Show all** for the rest. The adopted parcel stays marked in both.
 
 Plan candidates link to their records and available plan PDFs. Check the coverage, legal status, amendments and relevant Baufeld. Empty results or unavailable services never establish that § 34 applies. Use **Find address candidates** when an exact suffix is unavailable; selecting a nearby address requires explicit confirmation of the intended parcel. Heritage and preservation-area hints retain their official sources; absent or failed lookups do not establish that restrictions are absent.
+
+### Hamburg sites
+
+For a project address in Hamburg, the address is located in the Hamburg house coordinates (LGV) and the Site step queries the parcels of ALKIS Hamburg (`api.hamburg.de`, ALKIS vereinfacht, dl-de/by-2-0) within a 100 m square. Parcels show Gemarkung, number, official area and the date of their last update; the parcel containing the address point is selected, and **Use parcel area** and **Design on this parcel** work as in Berlin. The service delivers EPSG:25832; outlines are converted into the assessment's EPSG:25833 frame. At Hamburg's longitude this makes drawn areas about 0.2 % larger than in EPSG:25832 and turns grid north about 4° from true north. The adopted parcel area is the official ALKIS figure, not the drawn area.
+
+Development plans, land use, heritage and preservation areas, the aerial image and nearby buildings (neighbour GRZ/GFZ, § 34 references) are not connected for Hamburg yet. The panel says so instead of showing "none found", the planning basis stays unresolved in the site summary, and **Official B-Plan map** opens Hamburg Geo-Online. Other cities are rejected with a message to save a Berlin or Hamburg address.
 
 ### Plan sources and nearby references
 
