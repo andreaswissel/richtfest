@@ -298,8 +298,8 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
   for (const row of elementRows) {
     const type = typeOf(row);
     if (!type || row.constructionState === "demolished") continue;
-    elements.set(row.id, evaluateElement(row.id, row.name, type, Object.fromEntries(["construction", "material", "thickness", "bulkDensity", "flankingLevelDifference"]
-      .map(key => [key, raw(row.id, key)?.value ?? null])) as Values, host.massiveRw));
+    elements.set(row.id, { ...evaluateElement(row.id, row.name, type, Object.fromEntries(["construction", "material", "thickness", "bulkDensity", "flankingLevelDifference"]
+      .map(key => [key, raw(row.id, key)?.value ?? null])) as Values, host.massiveRw), storeyId: row.storeyId ?? null });
   }
   const adjacent = new Map<string, Set<string>>(), covers = new Map<string, string[]>(), underStorey = new Map<string, string>(), hostOf = new Map<string, string>();
   for (const row of relationships) {
@@ -412,7 +412,7 @@ export async function proposeInteriorSoundInputs(d: AppDeps, projectId: string, 
     if (item.rw != null) await suggest("soundReductionIndex", item.rw, "dB");
     if (item.basis) await suggest("soundReductionIndexBasis", item.basis, null);
   }
-  const review = `/projects/${projectId}?view=noise`;
+  const review = `/projects/${projectId}?view=noise&step=interior`;
   if (!written && !doors) return { status: "unchanged", modelRevision: model.revision, written, doors, skipped, review };
   const revision = await touchRevision(tx, d, modelId, model.revision);
   await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });

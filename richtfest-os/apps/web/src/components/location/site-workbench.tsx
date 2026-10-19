@@ -474,7 +474,7 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
           ) : (
             <p className="text-ui-xs muted">
               {t("siteNoMeasuredSources")}{" "}
-              <Link className="underline underline-offset-2" to={`/projects/${projectId}?view=noise`}>{t("buildingExteriorNoiseOpen")}</Link>
+              <Link className="underline underline-offset-2" to={`/projects/${projectId}?view=noise&step=sources`}>{t("buildingExteriorNoiseOpen")}</Link>
             </p>
           )}
         </div>

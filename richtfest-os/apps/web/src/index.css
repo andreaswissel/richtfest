@@ -251,6 +251,13 @@ nav a:hover .nav-arrow, nav a.active .nav-arrow { opacity: .65; }
 .header-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .section-heading h2 { color: var(--muted-foreground); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.subsection { display: grid; gap: calc(var(--stack) / 2); min-width: 0; padding-top: var(--stack); border-top: 1px solid var(--border); }
+.subsection-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: var(--control-sm); }
+.subsection-heading h3 { font-size: var(--ui-sm); font-weight: 600; }
+.subsection-meta { color: var(--muted-foreground); font-size: var(--ui-xs); }
+.subsection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-left: auto; }
+.form-panel { display: grid; gap: calc(var(--stack) / 2); padding: calc(var(--stack) * .75) var(--stack); border: 1px dashed var(--border); border-radius: var(--radius); background: color-mix(in oklch, var(--muted) 45%, transparent); }
+.form-panel-title { color: var(--muted-foreground); font-size: var(--ui-xs); font-weight: 600; }
 .section-intro { max-width: 760px; margin-bottom: 16px; color: var(--muted-foreground); }
 .overview-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .metric-card { display: grid; min-width: 0; gap: 7px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }

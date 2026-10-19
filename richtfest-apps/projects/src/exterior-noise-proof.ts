@@ -487,12 +487,12 @@ export async function proposeExteriorNoiseInputs(d: AppDeps, projectId: string, 
     if (item.dnew != null) await suggest("element", element.elementId, "normalizedLevelDifference", item.dnew, "dB", item.evidence);
     if (item.basis) await suggest("element", element.elementId, "soundReductionIndexBasis", item.basis, null, item.evidence);
   }
-  if (!written && !openings) return { status: "unchanged", modelRevision: model.revision, written, openings, skipped, review: `/projects/${projectId}?view=noise` };
+  if (!written && !openings) return { status: "unchanged", modelRevision: model.revision, written, openings, skipped, review: `/projects/${projectId}?view=noise&step=exterior` };
   const revision = await touchRevision(tx, d, modelId, model.revision);
   await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
   await d.audit(tx, "projects.building.exterior_noise.suggested", "building_model", modelId, { projectId, modelRevision: revision, written, openings, skipped: skipped.length,
     actorType: "agent", runId: execution.runId ?? null, agentId: execution.agentId ?? null });
-  return { status: "suggested", modelRevision: revision, written, openings, skipped, review: `/projects/${projectId}?view=noise` };
+  return { status: "suggested", modelRevision: revision, written, openings, skipped, review: `/projects/${projectId}?view=noise&step=exterior` };
 }
 
 // ---- Openings ------------------------------------------------------------------

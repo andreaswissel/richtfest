@@ -54,3 +54,37 @@ export function Section({
     </section>
   );
 }
+
+/** A titled part of a Section: a sentence-case heading, a short status and its actions on one line. */
+export function Subsection({
+  title,
+  meta,
+  actions,
+  children,
+}: {
+  title: string;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="subsection">
+      <div className="subsection-heading">
+        <h3>{title}</h3>
+        {meta && <span className="subsection-meta">{meta}</span>}
+        {actions && <div className="subsection-actions">{actions}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** An inline form for adding a record below its table, set apart by a tinted panel and a small title. */
+export function FormPanel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="form-panel" role="group" aria-label={title}>
+      <div className="form-panel-title">{title}</div>
+      {children}
+    </div>
+  );
+}

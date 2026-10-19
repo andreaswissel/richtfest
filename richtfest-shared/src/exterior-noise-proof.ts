@@ -121,7 +121,7 @@ export type ExteriorNoiseProof =
  * and which ids to propose values for. Bounded; no norm values.
  */
 export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: string, maxRooms = 40) {
-  const view = `/projects/${projectId}?view=noise`;
+  const view = `/projects/${projectId}?view=noise&step=exterior`;
   if (!proof.available) return { available: false as const, reason: proof.reason, view };
   const shown = <T,>(item: ProofValue<T> | null) => item ? { value: item.value, status: item.provenance === "inferred" && item.reviewStatus !== "approved" ? "suggested" : item.reviewStatus } : null;
   return {

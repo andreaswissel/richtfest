@@ -106,7 +106,7 @@ function InquiryView({ projectId, inquiryId, t }: { projectId: string; inquiryId
           {inquiry.progress.outstanding.length ? (inquiry.progress as NoiseRequestProgress).outstanding.map((item) => <span key={item.sourceId} className="muted text-ui-xs">
             {item.name}: {item.fields.map((field) => noiseInputLabel(field, t)).join(", ")}
           </span>) : <span className="muted text-ui-xs">{t("inquiryAllAnswered")}</span>}
-          <Link className="text-ui-xs" to={`/projects/${projectId}?view=noise`}>{t("inquiryOpenNoise")} →</Link>
+          <Link className="text-ui-xs" to={`/projects/${projectId}?view=noise&step=sources`}>{t("inquiryOpenNoise")} →</Link>
         </dd>
       </>}
       {inquiry.progress && inquiry.kind === "component_data" && <>

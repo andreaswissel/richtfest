@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { noiseInputKeys, noiseInputUnit, requestableNoiseInputs, roadSurfaceTypes, type LocationState, type MappedNoiseSource, type NoiseInputValue, type NoiseSource, type NoiseSourceKind } from "@richtfest/shared";
 import { api, ApiError, type RecordData } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
-import { Section } from "../layout";
+import { FormPanel, Section } from "../layout";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input, Textarea } from "../ui/input";
@@ -44,24 +44,51 @@ const displayValue = (state: NoiseInputValue | undefined) => state ? `${state.va
  * inputs a road/rail emission calculation needs. Mapped objects come from the
  * environment survey; traffic data is entered with its basis or requested.
  */
+const steps = ["sources", "levels", "exterior", "interior"] as const;
+type Step = (typeof steps)[number];
+const stepKeys = { sources: "noiseStepSources", levels: "noiseStepLevels", exterior: "noiseStepExterior", interior: "noiseStepInterior" } as const;
+export const noiseStepLink = (projectId: string, step: Step) => `/projects/${projectId}?view=noise&step=${step}`;
+
+/**
+ * Sound insulation in the order the work happens: the noise sources and their
+ * inputs, the facade levels calculated from them, then the exterior noise and
+ * interior sound verifications. Each step is its own link, so a step can be
+ * shared or opened in a new tab.
+ */
 export function NoiseSources({ projectId, selectedId }: { projectId: string; selectedId: string | null }) {
   const t = useT();
+  const [params] = useSearchParams();
   const path = `/projects/${projectId}/noise-sources`;
   const query = useApi(path);
   const data = query.data as NoiseData | undefined;
   const session = useApi("/auth/me");
   const canWrite = (session.data?.permissions || session.data?.user?.permissions || []).includes("projects:write");
+  const sources = data?.sources ?? [];
+  const requested = params.get("step");
+  // A selected source opens its inputs; a project without sources starts with finding them.
+  const step: Step = (steps as readonly string[]).includes(requested ?? "") ? requested as Step : selectedId || !sources.length ? "sources" : "exterior";
+  return <div className="noise-sources">
+    <Segmented aria-label={t("noiseSteps")} value={step} items={steps.map(item => ({ value: item, label: t(stepKeys[item]), to: noiseStepLink(projectId, item) }))} />
+    {query.isError && <Callout tone="error">{errorText(query.error)}</Callout>}
+    {step === "sources" && <SourcesStep projectId={projectId} selectedId={selectedId} data={data} pending={query.isPending} canWrite={canWrite} t={t} />}
+    {step === "levels" && data && <FacadeLevels projectId={projectId} />}
+    {step === "exterior" && data && <ProofInputs projectId={projectId} canWrite={canWrite} />}
+    {step === "interior" && data && <InteriorSound projectId={projectId} canWrite={canWrite} />}
+  </div>;
+}
+
+/** Which roads and railways reach the facades, their inputs, and where the missing inputs come from. */
+function SourcesStep({ projectId, selectedId, data, pending, canWrite, t }: { projectId: string; selectedId: string | null; data: NoiseData | undefined; pending: boolean; canWrite: boolean; t: T }) {
   const [adding, setAdding] = useState<NoiseSourceKind | null>(null);
   const sources = data?.sources ?? [];
   const selected = sources.find((source) => source.id === selectedId);
-  return <div className="noise-sources">
+  return <>
     <Section title={t("noiseSources")} meta={canWrite && <div className="inline-actions">
       <Button size="sm" variant="outline" onClick={() => setAdding((value) => value === "road" ? null : "road")} aria-expanded={adding === "road"}>＋ {t("noiseAddRoad")}</Button>
       <Button size="sm" variant="outline" onClick={() => setAdding((value) => value === "rail" ? null : "rail")} aria-expanded={adding === "rail"}>＋ {t("noiseAddRail")}</Button>
     </div>}>
-      <Callout>{t("noiseScopeHint")}</Callout>
+      <p className="noise-intro muted text-ui-xs">{t("noiseScopeHint")}</p>
       {adding && <AddSource projectId={projectId} kind={adding} t={t} onDone={() => setAdding(null)} />}
-      {query.isError && <Callout tone="error">{errorText(query.error)}</Callout>}
       {sources.length ? <Table headers={[t("noiseSourceName"), t("noiseSourceKind"), t("noiseInputs"), t("noiseRequested")]}
         rows={sources.map((source) => {
           const total = noiseInputKeys(source.kind).length;
@@ -72,18 +99,16 @@ export function NoiseSources({ projectId, selectedId }: { projectId: string; sel
               : <Badge variant="secondary">{t("noiseInputsComplete")}</Badge>,
             source.inquiryId ? <Link className="text-ui-xs underline underline-offset-2" to={inquiryLink(projectId, source.inquiryId)}>{t("noiseOpenInquiry")}</Link> : <span className="muted text-ui-xs">—</span>,
           ] };
-        })} /> : !query.isPending && <Empty>{t("noiseSourcesEmpty")}</Empty>}
+        })} /> : !pending && <Empty>{t("noiseSourcesEmpty")}</Empty>}
     </Section>
     {selected && <SourceInputs key={selected.id} projectId={projectId} source={selected} canWrite={canWrite} t={t} />}
-    {selectedId && !selected && query.isSuccess && <Callout>{t("noiseSourceNotFound")}</Callout>}
-    {data && <FacadeLevels projectId={projectId} />}
-    {data && <ProofInputs projectId={projectId} canWrite={canWrite} />}
-    {data && <InteriorSound projectId={projectId} canWrite={canWrite} />}
+    {selectedId && !selected && data && <Callout>{t("noiseSourceNotFound")}</Callout>}
     {data && <SuggestedSources projectId={projectId} canWrite={canWrite} t={t} />}
     {data && <MappedSources projectId={projectId} survey={data.survey} sources={sources} canWrite={canWrite} t={t} />}
     {canWrite && sources.some((source) => source.missing.some((field) => (requestableNoiseInputs[source.kind] as readonly string[]).includes(field)))
       && <RequestData projectId={projectId} sources={sources} address={data?.survey?.address ?? null} t={t} />}
-  </div>;
+    {sources.length > 0 && <p className="muted text-ui-xs"><Link className="underline underline-offset-2" to={noiseStepLink(projectId, "levels")}>{t("noiseStepNextLevels")} →</Link></p>}
+  </>;
 }
 
 function AddSource({ projectId, kind, t, onDone }: { projectId: string; kind: NoiseSourceKind; t: T; onDone: () => void }) {
@@ -92,13 +117,13 @@ function AddSource({ projectId, kind, t, onDone }: { projectId: string; kind: No
     mutationFn: () => api<RecordData>(`/projects/${projectId}/noise-sources`, { kind, name: name.trim() }),
     onSuccess: async () => { await invalidate(projectId); onDone(); },
   });
-  return <form className="noise-form-row" onSubmit={(event) => { event.preventDefault(); if (name.trim()) add.mutate(); }}>
+  return <FormPanel title={kind === "road" ? t("noiseAddRoad") : t("noiseAddRail")}><form className="noise-form-row" onSubmit={(event) => { event.preventDefault(); if (name.trim()) add.mutate(); }}>
     <Field label={kind === "road" ? t("noiseRoadName") : t("noiseRailName")} hint={kind === "road" ? t("noiseRoadNameHint") : t("noiseRailNameHint")}>
       <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus required />
     </Field>
     <Button type="submit" size="sm" disabled={add.isPending || !name.trim()}>{kind === "road" ? t("noiseAddRoad") : t("noiseAddRail")}</Button>
     {add.isError && <Callout tone="error">{errorText(add.error)}</Callout>}
-  </form>;
+  </form></FormPanel>;
 }
 
 /** Roads and railways the official topographic model maps around the address, nearest first. */

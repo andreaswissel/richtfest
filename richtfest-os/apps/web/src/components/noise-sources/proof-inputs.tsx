@@ -5,7 +5,7 @@ import { exteriorNoiseRoomKinds, type ExteriorNoiseProof, type ProofFacade, type
 import { api, ApiError } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
-import { Section } from "../layout";
+import { FormPanel, Section, Subsection } from "../layout";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -79,31 +79,34 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
   const protectedRooms = proof.rooms.filter(room => room.kind?.value !== "not_protected");
   const ready = proof.rooms.filter(room => room.result?.status === "calculated").length;
   const selected = proof.rooms.find(room => room.id === open) ?? null;
+  const missingRw = canWrite && protectedRooms.some(room => room.facades.some(facade => !facade.rw || facade.windows.some(item => item.componentType === "window" && !item.rw)));
   return <Section title={t("proof")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
-    <p className="muted text-ui-xs">{t("proofIntro").replace("{plans}", proof.storeys.map(storey => t("proofPlan").replace("{storey}", storey.name)
+    <p className="noise-intro muted text-ui-xs">{t("proofIntro").replace("{plans}", proof.storeys.map(storey => t("proofPlan").replace("{storey}", storey.name)
       .replace("{file}", storey.page.fileName ?? "—").replace("{page}", String(storey.page.page))).join(", "))}</p>
-    <BuildingInputs projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    <Subsection title={t("proofBuildingInputs")}>
+      <BuildingInputs projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    </Subsection>
     {proof.suggestions.length > 0 && <Suggestions projectId={projectId} proof={proof} canWrite={canWrite} t={t} />}
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("proofRooms")}</h3>
-      <span className="muted text-ui-xs">{t("proofRoomsCalculated").replace("{ready}", String(ready)).replace("{total}", String(protectedRooms.length))}</span>
-      {canWrite && protectedRooms.some(room => room.facades.some(facade => !facade.rw)) && <CatalogueSuggestions projectId={projectId} t={t} />}
-    </div>
+    <Subsection title={t("proofRooms")} meta={t("proofRoomsCalculated").replace("{ready}", String(ready)).replace("{total}", String(protectedRooms.length))}>
+    {missingRw && <CatalogueSuggestions projectId={projectId} t={t} />}
     {proof.rooms.length ? <Table headers={[t("proofRoom"), t("proofUse"), t("proofFloorArea"), t("proofFacades"), t("proofResult"), ""]}
       rows={proof.rooms.map(room => ({ id: room.id, sort: [room.label, room.kind?.value ?? "", String(room.floorAreaM2 ?? 0), String(room.facades.length), room.result?.status ?? room.gaps.join(), ""], cells: [
         <span>{room.label}{room.roomUse && <span className="muted text-ui-xs"> · {room.roomUse}</span>}</span>,
         <RoomKind projectId={projectId} proof={proof} room={room} canWrite={canWrite} t={t} />,
         <span className="text-ui-xs">{room.floorAreaM2 === null ? "—" : `${m(room.floorAreaM2)} m²`}</span>,
-        <span className="text-ui-xs muted">{[...room.facades.map(facade => `${facade.compass ?? "—"} ${m(facade.lengthM)} m${facade.la ? ` · La ${db(facade.la.dayDb)}/${db(facade.la.sleepingDb)}` : ""}`),
+        <span className="proof-facades text-ui-xs muted">{[...room.facades.map(facade => `${facade.compass ?? "—"} ${m(facade.lengthM)} m${facade.la ? ` · La ${db(facade.la.dayDb)}/${db(facade.la.sleepingDb)}` : ""}`),
           ...room.roofs.map(roof => `${t("proofRoof")}${roof.area ? ` ${m(roof.area.value)} m²` : ""}`)].join("; ") || "—"}</span>,
         <RoomResult room={room} t={t} />,
         room.kind?.value !== "not_protected"
           ? <Button size="sm" variant={open === room.id ? "outline" : "ghost"} aria-expanded={open === room.id} onClick={() => setOpen(open === room.id ? null : room.id)}>
             {open === room.id ? t("proofCloseRoom") : t("proofEditRoom")}</Button> : null,
       ] }))} /> : <Empty>{t("proofNoRooms")}</Empty>}
-    {selected && <RoomEditor key={selected.id} projectId={projectId} proof={proof} room={selected} canWrite={canWrite} t={t} />}
-    <Callout>{t("proofLimitations")}</Callout>
-    {canWrite && <CreateNachweis projectId={projectId} proof={proof} ready={ready} total={protectedRooms.length} t={t} />}
+    {selected && <RoomEditor key={selected.id} projectId={projectId} proof={proof} room={selected} canWrite={canWrite} t={t} onClose={() => setOpen(null)} />}
+    </Subsection>
+    <Subsection title={t("proofNachweis")}>
+      <Callout>{t("proofLimitations")}</Callout>
+      {canWrite && <CreateNachweis projectId={projectId} proof={proof} ready={ready} total={protectedRooms.length} t={t} />}
+    </Subsection>
   </Section>;
 }
 
@@ -137,18 +140,14 @@ export function Suggestions({ projectId, proof, canWrite, t }: { projectId: stri
   // Long lists stay scannable: the first rows, then all on request; Accept all still covers every suggestion.
   const [all, setAll] = useState(false);
   const shown = all ? proof.suggestions : proof.suggestions.slice(0, SUGGESTIONS_SHOWN);
-  return <div className="proof-suggestions">
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("proofSuggestions")}</h3>
-      <span className="muted text-ui-xs">{t("proofSuggestionsHint")}</span>
-      {canWrite && <Button size="sm" variant="outline" disabled={review.isPending} onClick={() => review.mutate({ decision: "approved", items: proof.suggestions })}>
-        {t("proofAcceptAll").replace("{count}", String(proof.suggestions.length))}</Button>}
-    </div>
+  return <Subsection title={t("proofSuggestions")} meta={t("proofSuggestionsHint")}
+    actions={canWrite && <Button size="sm" variant="outline" disabled={review.isPending} onClick={() => review.mutate({ decision: "approved", items: proof.suggestions })}>
+      {t("proofAcceptAll").replace("{count}", String(proof.suggestions.length))}</Button>}>
     <Table headers={[t("proofSuggestionFor"), t("proofSuggestionField"), t("proofSuggestionValue"), t("proofSuggestionSource"), ""]}
       rows={shown.map(item => ({ id: `${item.propertyId}:${item.version}`, cells: [
         <span>{item.entityLabel || t("proofBuilding")}</span>,
         <span className="text-ui-xs">{fieldLabel(item.propertyKey, t)}</span>,
-        <span className="text-ui-xs">{suggestedValue(item, t)}</span>,
+        <span className="text-ui-xs proof-value" title={suggestedValue(item, t)}>{suggestedValue(item, t)}</span>,
         <span className="text-ui-xs muted" title={item.evidence?.quote ?? undefined}>{item.evidence
           ? `${item.evidence.fileName ?? "—"}, ${t("proofPage").replace("{page}", String(item.evidence.page))}${item.evidence.quote ? ` · „${item.evidence.quote}“` : ""}` : "—"}</span>,
         canWrite ? <span className="proof-inline">
@@ -158,7 +157,7 @@ export function Suggestions({ projectId, proof, canWrite, t }: { projectId: stri
       ] }))} />
     {shown.length < proof.suggestions.length && <div><Button size="sm" variant="ghost" onClick={() => setAll(true)}>{t("proofShowAllSuggestions").replace("{count}", String(proof.suggestions.length))}</Button></div>}
     {review.isError && <Callout tone="error">{errorText(review.error, t)}</Callout>}
-  </div>;
+  </Subsection>;
 }
 const SUGGESTIONS_SHOWN = 6;
 
@@ -181,15 +180,16 @@ function CatalogueSuggestions({ projectId, t }: { projectId: string; t: T }) {
   const result = suggest.data;
   const open = [...(result?.walls ?? []).map(wall => ({ name: wall.wall, status: wall.status, reason: wall.reason })),
     ...(result?.windows ?? []).map(item => ({ name: item.window, status: item.status, reason: item.reason }))].filter(item => item.status !== "suggested");
-  return <span className="proof-inline">
+  return <div className="proof-catalogue">
     <Button size="sm" variant="outline" disabled={suggest.isPending} onClick={() => suggest.mutate()}>{suggest.isPending ? t("loading") : t("proofCatalogueSuggest")}</Button>
     {result && <span className="muted text-ui-xs" role="status">
       {result.status === "unavailable" ? t(catalogueReasons[result.reason ?? ""] ?? "proofCatalogueMissing")
         : [t("proofCatalogueResult").replace("{count}", String(result.written)),
           ...open.map(item => `${item.name}: ${item.reason ? t(catalogueReasons[item.reason] ?? "proofCatalogueMaterialUnknown") : "—"}`)].join(" · ")}
     </span>}
+    {!result && !suggest.isPending && <span className="muted text-ui-xs">{t("proofCatalogueHint")}</span>}
     {suggest.isError && <small className="noise-input-error">{errorText(suggest.error, t)}</small>}
-  </span>;
+  </div>;
 }
 
 function RoomResult({ room, t }: { room: ProofRoom; t: T }) {
@@ -199,8 +199,8 @@ function RoomResult({ room, t }: { room: ProofRoom; t: T }) {
       <Badge variant={room.result.marginDb >= 0 ? "outline" : "destructive"}>{room.result.marginDb >= 0 ? t("proofMeets") : t("proofBelow")}</Badge>{" "}
       {t("proofValues").replace("{value}", db(room.result.valueDb)).replace("{target}", db(room.result.targetDb)).replace("{margin}", `${room.result.marginDb >= 0 ? "+" : ""}${db(room.result.marginDb)}`)}
     </span>;
-  if (room.result?.reason) return <span className="text-ui-xs muted">{room.result.reason}</span>;
-  return <span className="text-ui-xs muted">{t("proofMissing")}: {room.gaps.map(gap => t(gapKeys[gap])).join(", ")}</span>;
+  if (room.result?.reason) return <span className="proof-gaps text-ui-xs muted">{room.result.reason}</span>;
+  return <span className="proof-gaps text-ui-xs muted">{t("proofMissing")}: {room.gaps.map(gap => t(gapKeys[gap])).join(", ")}</span>;
 }
 
 function RoomKind({ projectId, proof, room, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; canWrite: boolean; t: T }) {
@@ -265,10 +265,14 @@ export function StoreyHeight({ projectId, proof, storey, canWrite, t }: { projec
 }
 
 
-function RoomEditor({ projectId, proof, room, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; canWrite: boolean; t: T }) {
+function RoomEditor({ projectId, proof, room, canWrite, t, onClose }: { projectId: string; proof: Proof; room: ProofRoom; canWrite: boolean; t: T; onClose: () => void }) {
   const save = useSaveProperty(projectId, proof);
-  return <div className="proof-room">
-    <h3 className="site-section-title">{room.label}</h3>
+  return <div className="proof-room" role="region" aria-label={room.label}>
+    <div className="proof-room-heading">
+      <h4>{room.label}</h4>
+      <span className="muted text-ui-xs">{t("proofRoomFacades").replace("{count}", String(room.facades.length))}</span>
+      <Button size="sm" variant="ghost" onClick={onClose}>{t("proofCloseRoom")}</Button>
+    </div>
     {room.facades.map(facade => <FacadeEditor key={facade.wallId} projectId={projectId} proof={proof} room={room} facade={facade} canWrite={canWrite} t={t} />)}
     <Roofs projectId={projectId} proof={proof} room={room} canWrite={canWrite} t={t} />
     <label className="proof-confirm text-ui-sm">
@@ -294,7 +298,7 @@ function FacadeEditor({ projectId, proof, room, facade, canWrite, t }: { project
   const kind = room.kind?.value;
   const la = facade.la && (kind === "sleeping" || kind === "hospital_bedroom" ? facade.la.sleepingDb : facade.la.dayDb);
   return <div className="proof-facade">
-    <p className="text-ui-sm"><strong>{facadeLabel(facade)}</strong>{" "}
+    <p className="proof-part-title"><strong>{facadeLabel(facade)}</strong>{" "}
       <span className="muted text-ui-xs">
         {facade.areaM2 === null ? t("proofFacadeLength").replace("{length}", m(facade.lengthM)) : t("proofFacadeArea").replace("{length}", m(facade.lengthM)).replace("{height}", String(proof.storeys.find(storey => storey.id === room.storeyId)?.clearHeight?.value ?? "")).replace("{area}", m(facade.areaM2))}
         {" · "}{la === null || la === undefined ? t("proofGapFacadeLevel") : `La ${db(la)} dB`}
@@ -346,7 +350,7 @@ function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: 
         <span className="text-ui-xs muted proof-basis" title={item.basis?.value}>{item.basis?.value ?? "—"}</span>,
         canWrite ? <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(item.id)}>{t("proofRemove")}</Button> : null,
       ] }))} />}
-    {canWrite && <form className={`proof-opening-row${draft.componentType === "window" ? " with-glazing" : ""}`} onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+    {canWrite && <FormPanel title={t("proofAddOpeningTitle")}><form className={`proof-opening-row${draft.componentType === "window" ? " with-glazing" : ""}`} onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
       <Field label={t("proofOpeningType")}>
         <NativeSelect size="sm" className="w-full" value={draft.componentType} onChange={(event) => setDraft({ ...draft, componentType: event.target.value as Kind })}>
           <NativeSelectOption value="window">{t("proofWindow")}</NativeSelectOption>
@@ -362,7 +366,7 @@ function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: 
       <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("proofRwBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
       {draft.componentType === "window" && <Field label={t("proofGlazing")}><Input value={draft.glazing} placeholder="6/16/4" title={t("proofGlazingHint")} onChange={(event) => setDraft({ ...draft, glazing: event.target.value })} /></Field>}
       <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t(small ? "proofAddSmallElement" : "proofAddOpening")}</Button>
-    </form>}
+    </form></FormPanel>}
     {(add.isError || remove.isError) && <Callout tone="error">{errorText(add.error ?? remove.error, t)}</Callout>}
   </div>;
 }
@@ -390,7 +394,7 @@ function Roofs({ projectId, proof, room, canWrite, t }: { projectId: string; pro
   const valid = parseNumber(draft.area) !== null && (!draft.rw.trim() || parseNumber(draft.rw) !== null);
   if (!room.roofs.length && !canWrite) return null;
   return <div className="proof-facade">
-    <p className="text-ui-sm"><strong>{t("proofRoofs")}</strong> <span className="muted text-ui-xs">{t("proofRoofsHint")}</span></p>
+    <p className="proof-part-title"><strong>{t("proofRoofs")}</strong> <span className="muted text-ui-xs">{t("proofRoofsHint")}</span></p>
     {room.roofs.length > 0 && <Table headers={[t("proofRoof"), t("proofRoofArea"), t("proofOpeningRating"), t("noiseBasis"), " "]}
       rows={room.roofs.map(roof => ({ id: roof.id, cells: [
         <span>{roof.name} <span className="muted text-ui-xs">· {t(roof.construction === "massive" ? "proofConstructionMassive" : roof.construction === "lightweight" ? "proofConstructionLightweight" : "proofConstructionUnknown")}</span></span>,
@@ -399,7 +403,7 @@ function Roofs({ projectId, proof, room, canWrite, t }: { projectId: string; pro
         <span className="text-ui-xs muted">{roof.basis?.value ?? "—"}</span>,
         canWrite ? <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(roof.id)}>{t("proofRemove")}</Button> : null,
       ] }))} />}
-    {canWrite && <form className="proof-opening-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+    {canWrite && <FormPanel title={t("proofAddRoof")}><form className="proof-opening-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
       <Field label={t("proofOpeningName")}><Input value={draft.name} placeholder={t("proofOptional")} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
       <Field label={t("proofRoofConstruction")}>
         <NativeSelect size="sm" className="w-full" value={draft.construction} onChange={(event) => setDraft({ ...draft, construction: event.target.value })}>
@@ -410,7 +414,7 @@ function Roofs({ projectId, proof, room, canWrite, t }: { projectId: string; pro
       <Field label={t("proofOpeningRw")}><Input value={draft.rw} inputMode="decimal" onChange={(event) => setDraft({ ...draft, rw: event.target.value })} /></Field>
       <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("proofRwBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
       <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t("proofAddRoof")}</Button>
-    </form>}
+    </form></FormPanel>}
     {(add.isError || remove.isError) && <Callout tone="error">{errorText(add.error ?? remove.error, t)}</Callout>}
   </div>;
 }

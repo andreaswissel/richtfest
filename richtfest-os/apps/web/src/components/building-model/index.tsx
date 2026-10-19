@@ -867,7 +867,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               pending={saveBuildingProperty.isPending || saveStoreyProperty.isPending || reviewComponentProperty.isPending}
               onSaveBuilding={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onSaveStorey={(storeyId, save) => saveStoreyProperty.mutate({ storeyId, save })}
               onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />}
-            <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise`}>{t("buildingExteriorNoiseOpen")} →</Link>
+            <Link className="text-ui-xs underline underline-offset-2" to={`/projects/${projectId}?view=noise&step=exterior`}>{t("buildingExteriorNoiseOpen")} →</Link>
             <h2 className="building-model-panel-title">{t("buildingSoundInsulation")}</h2>
             <SoundInsulationOverview components={modelComponents} level={model.buildings[0]?.componentProperties.soundInsulationLevel} t={t}
               pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}

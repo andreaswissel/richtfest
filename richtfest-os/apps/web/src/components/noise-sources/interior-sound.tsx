@@ -5,7 +5,7 @@ import { buildingDeepLink, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, 
 import { api } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
-import { Section } from "../layout";
+import { FormPanel, Section, Subsection } from "../layout";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect, NativeSelectOption } from "../ui/native-select";
@@ -52,15 +52,11 @@ function AirborneCell({ result, gaps, t }: { result: AirborneResult | null; gaps
     {t("interiorAirborneValue").replace("{quantity}", result.quantity).replace("{value}", db(result.valueDb)).replace("{allowance}", db(result.uncertaintyDb)).replace("{required}", db(result.requiredDb))
       .replace("{margin}", `${result.marginDb >= 0 ? "+" : ""}${db(result.marginDb)}`)}</span>;
   if (result) return <span className="text-ui-xs muted">{t(unsupportedKeys[result.reason] ?? "interiorUnsupportedMethod")}</span>;
-  return gaps.length ? <Badge variant="outline">{t("interiorInputsMissing")}</Badge> : <span className="text-ui-xs muted">—</span>;
+  return gaps.length ? <Missing gaps={gaps} t={t} /> : <span className="text-ui-xs muted">—</span>;
 }
-/** What each check still needs, one line per check, below its table. */
-function OpenInputs({ items, t }: { items: Array<{ id: string; label: string; gaps: InteriorGap[] }>; t: T }) {
-  const open = items.filter(item => item.gaps.length);
-  if (!open.length) return null;
-  return <ul className="interior-open text-ui-xs">
-    {open.map(item => <li key={item.id}><span className="font-medium">{item.label}</span><span className="muted"> · {t("proofMissing")}: {item.gaps.map(gap => gapText(gap, t)).join(", ")}</span></li>)}
-  </ul>;
+/** What a check still needs, in its result cell. */
+function Missing({ gaps, t }: { gaps: InteriorGap[]; t: T }) {
+  return <span className="proof-gaps text-ui-xs muted">{t("proofMissing")}: {gaps.map(gap => gapText(gap, t)).join(", ")}</span>;
 }
 function ImpactCell({ result, t }: { result: ImpactResult | null; t: T }) {
   if (result?.status === "calculated") return <span className="text-ui-xs"><Verdict meets={result.meets} t={t} />{" "}
@@ -87,14 +83,13 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
   const wallsDone = proof.walls.filter(check => check.result?.status === "calculated").length;
   const ceilingsDone = proof.ceilings.filter(check => check.airborne?.status === "calculated" || check.impact?.status === "calculated").length;
   return <Section title={t("interiorSound")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
-    <p className="muted text-ui-xs">{t("interiorIntro")}</p>
+    <p className="noise-intro muted text-ui-xs">{t("interiorIntro")}</p>
     {proof.level && proof.level !== "statutory_minimum" && <Callout>{t("interiorElevatedLevel")}</Callout>}
-    <StoreyHeights projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    <Subsection title={t("proofBuildingInputs")}>
+      <StoreyHeights projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
+    </Subsection>
     {proof.suggestions.length > 0 && <Suggestions projectId={projectId} proof={proof} canWrite={canWrite} t={t} />}
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("interiorWalls")}</h3>
-      <span className="muted text-ui-xs">{t("interiorCalculated").replace("{ready}", String(wallsDone)).replace("{total}", String(proof.walls.length))}</span>
-    </div>
+    <Subsection title={t("interiorWalls")} meta={t("interiorCalculated").replace("{ready}", String(wallsDone)).replace("{total}", String(proof.walls.length))}>
     {proof.walls.length ? <Table headers={[t("interiorWall"), t("interiorRooms"), t("interiorArea"), t("interiorRequirement"), t("proofResult")]}
       rows={proof.walls.map(check => ({ id: check.id, cells: [
         <span>{storey(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.wallId)}>{check.wallName}</Link>
@@ -105,27 +100,26 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
           {check.requirement?.door && <span> · {t("interiorWallWithDoor").replace("{door}", check.requirement.door.name)}</span>}</span>,
         <AirborneCell result={check.result} gaps={check.gaps} t={t} />,
       ] }))} /> : <Empty>{t("interiorNoWalls")}</Empty>}
-    <OpenInputs items={proof.walls.map(check => ({ id: check.id, label: `${check.wallName} (${check.rooms.map(room => room.name).join(" / ")})`, gaps: check.gaps }))} t={t} />
+    </Subsection>
     <Doors projectId={projectId} proof={proof} canWrite={canWrite} t={t} />
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("interiorCeilings")}</h3>
-      <span className="muted text-ui-xs">{t("interiorCalculated").replace("{ready}", String(ceilingsDone)).replace("{total}", String(proof.ceilings.length))}</span>
-    </div>
-    {ceilingIds.map(check => <CeilingInputs key={check.ceilingId} projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />)}
-    {proof.ceilings.length ? <Table headers={[t("interiorCeiling"), t("interiorRoomBelow"), t("interiorArea"), t("interiorRequirement"), t("interiorAirborne"), t("interiorImpact")]}
+    <Subsection title={t("interiorCeilings")} meta={t("interiorCalculated").replace("{ready}", String(ceilingsDone)).replace("{total}", String(proof.ceilings.length))}>
+    {ceilingIds.length > 0 && <CeilingInputs projectId={projectId} proof={proof} checks={ceilingIds} canWrite={canWrite} t={t} />}
+    {proof.ceilings.length ? <>
+      <p className="proof-part-title"><strong>{t("interiorCeilingChecks")}</strong></p>
+      <Table headers={[t("interiorCeiling"), t("interiorRoomBelow"), t("interiorArea"), t("interiorRequirement"), t("interiorAirborne"), t("interiorImpact")]}
       rows={proof.ceilings.map(check => ({ id: check.id, cells: [
         <span>{storey(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.ceilingId)}>{check.ceilingName}</Link></span>,
         <span className="text-ui-xs">{check.room.name}</span>,
         <span className="text-ui-xs">{m2(check.areaM2)}</span>,
         <span className="text-ui-xs muted">{check.requirement ? [check.requirement.rwMinDb != null && `R'w ≥ ${check.requirement.rwMinDb} dB`, check.requirement.lnwMaxDb != null && `L'n,w ≤ ${check.requirement.lnwMaxDb} dB`].filter(Boolean).join(" · ") : "—"}</span>,
         <AirborneCell result={check.airborne} gaps={check.gaps} t={t} />,
-        check.impact || !check.gaps.length ? <ImpactCell result={check.impact} t={t} /> : <Badge variant="outline">{t("interiorInputsMissing")}</Badge>,
-      ] }))} /> : <Empty>{t("interiorNoCeilings")}</Empty>}
-    <OpenInputs items={proof.ceilings.map(check => ({ id: check.id, label: `${check.ceilingName} · ${check.room.name}`, gaps: check.gaps }))} t={t} />
-    <h3 className="site-section-title">{t("interiorElements")}</h3>
+        check.impact || !check.gaps.length ? <ImpactCell result={check.impact} t={t} /> : <span className="text-ui-xs muted">—</span>,
+      ] }))} /></> : <Empty>{t("interiorNoCeilings")}</Empty>}
+    </Subsection>
+    <Subsection title={t("interiorElements")} meta={t("interiorElementsHint")}>
     {proof.elements.length ? <Table headers={[t("interiorElement"), t("interiorConstruction"), t("interiorMass"), t("interiorElementValue"), t("interiorBasis")]}
-      rows={proof.elements.map(element => ({ id: element.id, cells: [
-        <Link className="underline underline-offset-2" to={entityLink(projectId, element.id)}>{element.name}</Link>,
+      rows={elementsByStorey(proof).map(element => ({ id: element.id, cells: [
+        <span>{element.storeyId && storey(element.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, element.id)}>{element.name}</Link></span>,
         <span className="text-ui-xs">{element.construction ? optionLabel("construction", element.construction, t) : "—"}</span>,
         <span className="text-ui-xs">{element.massKgM2 === null ? "—" : `${element.massKgM2.toFixed(1)} kg/m²`}</span>,
         element.massive || !canWrite
@@ -134,16 +128,30 @@ export function InteriorSound({ projectId, canWrite }: { projectId: string; canW
         element.reason ? <Badge variant="outline">{t(reasonKeys[element.reason])}</Badge>
           : <span className="text-ui-xs muted interior-basis" title={element.basis ?? undefined}>{element.basis ?? t("interiorEntered")}</span>,
       ] }))} /> : <Empty>{t("interiorNoElements")}</Empty>}
-    <Callout><ul className="interior-limitations">{proof.limitations.map(item => <li key={item}>{t(limitationKeys[item])}</li>)}</ul></Callout>
-    {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone + proof.doors.filter(check => check.result).length} t={t} />}
+    </Subsection>
+    <Subsection title={t("proofNachweis")}>
+      <Callout><ul className="interior-limitations">{proof.limitations.map(item => <li key={item}>{t(limitationKeys[item])}</li>)}</ul></Callout>
+      {canWrite && <CreateNachweis projectId={projectId} ready={wallsDone + ceilingsDone + proof.doors.filter(check => check.result).length} t={t} />}
+    </Subsection>
   </Section>;
 }
 
 function StoreyHeights({ projectId, proof, canWrite, t }: { projectId: string; proof: Proof; canWrite: boolean; t: T }) {
   return <div className="proof-building">{proof.storeys.map(storey => <StoreyHeight key={storey.id} projectId={projectId} proof={proof} storey={storey} canWrite={canWrite} t={t} />)}</div>;
 }
-/** What a ceiling separates and its floating screed; saved together, so one Save enters the ceiling. */
-function CeilingInputs({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorCeilingCheck; canWrite: boolean; t: T }) {
+/** What each ceiling separates and its floating screed, one row per ceiling; a row's Save enters that ceiling. */
+function CeilingInputs({ projectId, proof, checks, canWrite, t }: { projectId: string; proof: Proof; checks: InteriorCeilingCheck[]; canWrite: boolean; t: T }) {
+  return <div className="interior-ceilings" role="group" aria-label={t("interiorCeilingConstruction")}>
+    <p className="proof-part-title"><strong>{t("interiorCeilingConstruction")}</strong></p>
+    <div className="interior-ceiling interior-ceiling-head text-ui-xs muted" aria-hidden="true">
+      <span>{t("interiorCeiling")}</span><span>{t("interiorCeilingRole")}</span><span>{t("interiorScreedType")}</span>
+      <span>{t("interiorScreedMass")}</span><span>{t("interiorScreedStiffness")}</span><span />
+    </div>
+    {checks.map(check => <CeilingRow key={check.ceilingId} projectId={projectId} proof={proof} check={check} canWrite={canWrite} t={t} />)}
+  </div>;
+}
+
+function CeilingRow({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorCeilingCheck; canWrite: boolean; t: T }) {
   const save = useSaveProperty(projectId, proof);
   const initial = { role: String(check.role?.value ?? ""), type: String(check.screed.type?.value ?? ""),
     mass: check.screed.mass ? String(check.screed.mass.value) : "", stiffness: check.screed.stiffness ? String(check.screed.stiffness.value) : "" };
@@ -162,22 +170,20 @@ function CeilingInputs({ projectId, proof, check, canWrite, t }: { projectId: st
     if (stiffness !== null && draft.stiffness !== initial.stiffness) await write("screedStiffness", stiffness, "MN/m³");
   };
   const floating = draft.type !== "none";
+  const label = (text: string) => `${text} · ${check.ceilingName}`;
   return <form className="interior-ceiling" onSubmit={submit}>
-    <Field label={`${t("interiorCeilingRole")} · ${check.ceilingName}`}>
-      <NativeSelect size="sm" className="w-full" value={draft.role} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, role: event.target.value })}>
-        <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
-        {ceilingRoleSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("ceilingRole", option, t)}</NativeSelectOption>)}
-      </NativeSelect>
-    </Field>
-    <Field label={t("interiorScreedType")}>
-      <NativeSelect size="sm" className="w-full" value={draft.type} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, type: event.target.value })}>
-        <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
-        {screedTypeSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("screedType", option, t)}</NativeSelectOption>)}
-      </NativeSelect>
-    </Field>
-    <Field label={t("interiorScreedMass")}><Input value={draft.mass} inputMode="decimal" disabled={!canWrite || !floating} onChange={(event) => setDraft({ ...draft, mass: event.target.value })} aria-invalid={Boolean(draft.mass.trim()) && mass === null} /></Field>
-    <Field label={t("interiorScreedStiffness")}><Input value={draft.stiffness} inputMode="decimal" disabled={!canWrite || !floating} onChange={(event) => setDraft({ ...draft, stiffness: event.target.value })} aria-invalid={Boolean(draft.stiffness.trim()) && stiffness === null} /></Field>
-    {canWrite && <Button type="submit" size="sm" variant="outline" disabled={!changed || !valid || save.isPending}>{t("noiseSave")}</Button>}
+    <span className="interior-ceiling-name">{storeyPrefix(proof)(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.ceilingId)}>{check.ceilingName}</Link></span>
+    <NativeSelect size="sm" className="w-full" aria-label={label(t("interiorCeilingRole"))} value={draft.role} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, role: event.target.value })}>
+      <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+      {ceilingRoleSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("ceilingRole", option, t)}</NativeSelectOption>)}
+    </NativeSelect>
+    <NativeSelect size="sm" className="w-full" aria-label={label(t("interiorScreedType"))} value={draft.type} disabled={!canWrite} onChange={(event) => setDraft({ ...draft, type: event.target.value })}>
+      <NativeSelectOption value="">{t("proofChoose")}</NativeSelectOption>
+      {screedTypeSchema.options.map(option => <NativeSelectOption key={option} value={option}>{optionLabel("screedType", option, t)}</NativeSelectOption>)}
+    </NativeSelect>
+    <Input aria-label={label(t("interiorScreedMass"))} value={draft.mass} inputMode="decimal" disabled={!canWrite || !floating} onChange={(event) => setDraft({ ...draft, mass: event.target.value })} aria-invalid={Boolean(draft.mass.trim()) && mass === null} />
+    <Input aria-label={label(t("interiorScreedStiffness"))} value={draft.stiffness} inputMode="decimal" disabled={!canWrite || !floating} onChange={(event) => setDraft({ ...draft, stiffness: event.target.value })} aria-invalid={Boolean(draft.stiffness.trim()) && stiffness === null} />
+    {canWrite ? <Button type="submit" size="sm" variant="outline" disabled={!changed || !valid || save.isPending}>{t("noiseSave")}</Button> : <span />}
     {save.isError && <Callout tone="error">{errorText(save.error, t)}</Callout>}
   </form>;
 }
@@ -195,6 +201,13 @@ function FlankingLevel({ projectId, proof, elementId, value, t }: { projectId: s
     <Button type="submit" size="sm" variant="outline" disabled={parsed === null || text === initial || save.isPending}>{t("noiseSave")}</Button>
   </form>;
 }
+
+/** Elements storey by storey, in the order of the storeys; the server sorts them by name. */
+const elementsByStorey = (proof: Proof) => {
+  const order = new Map(proof.storeys.map((storey, index) => [storey.id, index]));
+  return proof.elements.map((element, index) => ({ element, index }))
+    .sort((a, b) => (order.get(a.element.storeyId ?? "") ?? order.size) - (order.get(b.element.storeyId ?? "") ?? order.size) || a.index - b.index).map(item => item.element);
+};
 
 /** With several storeys, which storey a check is on, before its element. */
 const storeyPrefix = (proof: Proof) => (storeyId: string) => proof.storeys.length > 1
@@ -214,11 +227,7 @@ function Doors({ projectId, proof, canWrite, t }: { projectId: string; proof: Pr
     .flatMap(check => check.rooms.map(room => ({ key: `${check.wallId}:${room.id}`, wallId: check.wallId, roomId: room.id, label: `${check.wallName} → ${room.name}` })))
     .filter((place, i, all) => all.findIndex(other => other.key === place.key) === i);
   if (!proof.doors.length && !places.length) return null;
-  return <>
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("interiorDoors")}</h3>
-      <span className="muted text-ui-xs">{t("interiorCalculated").replace("{ready}", String(done)).replace("{total}", String(proof.doors.length))}</span>
-    </div>
+  return <Subsection title={t("interiorDoors")} meta={t("interiorCalculated").replace("{ready}", String(done)).replace("{total}", String(proof.doors.length))}>
     {proof.doors.length ? <Table headers={[t("interiorDoor"), t("interiorDoorLeadsTo"), t("interiorDoorRole"), t("interiorDoorRw"), t("interiorRequirement"), t("proofResult")]}
       rows={proof.doors.map(check => ({ id: check.id, cells: [
         <span>{storeyPrefix(proof)(check.storeyId)}<Link className="underline underline-offset-2" to={entityLink(projectId, check.id)}>{check.name}</Link>
@@ -230,10 +239,10 @@ function Doors({ projectId, proof, canWrite, t }: { projectId: string; proof: Pr
         check.result ? <span className="text-ui-xs"><Verdict meets={check.result.meets} t={t} />{" "}
           {t("interiorDoorValue").replace("{value}", db(check.result.valueDb)).replace("{allowance}", db(check.result.uncertaintyDb)).replace("{required}", db(check.result.requiredDb))
             .replace("{margin}", `${check.result.marginDb >= 0 ? "+" : ""}${db(check.result.marginDb)}`)}</span>
-          : <span className="text-ui-xs muted">{check.gaps.map(gap => t(doorGapKeys[gap])).join(", ") || "—"}</span>,
+          : <span className="proof-gaps text-ui-xs muted">{check.gaps.length ? `${t("proofMissing")}: ${check.gaps.map(gap => t(doorGapKeys[gap])).join(", ")}` : "—"}</span>,
       ] }))} /> : <Empty>{t("interiorNoDoors")}</Empty>}
     {canWrite && places.length > 0 && <AddDoor projectId={projectId} proof={proof} places={places} t={t} />}
-  </>;
+  </Subsection>;
 }
 
 function DoorRole({ projectId, proof, check, canWrite, t }: { projectId: string; proof: Proof; check: InteriorDoorCheck; canWrite: boolean; t: T }) {
@@ -270,7 +279,7 @@ function AddDoor({ projectId, proof, places, t }: { projectId: string; proof: Pr
     onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
   });
   const valid = !draft.rw.trim() || parseNumber(draft.rw) !== null;
-  return <form className="interior-door-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+  return <FormPanel title={t("interiorAddDoor")}><form className="interior-door-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
     <Field label={t("interiorDoorPlace")}>
       <NativeSelect size="sm" className="w-full" value={draft.place} onChange={(event) => setDraft({ ...draft, place: event.target.value })}>
         {places.map(item => <NativeSelectOption key={item.key} value={item.key}>{item.label}</NativeSelectOption>)}
@@ -286,7 +295,7 @@ function AddDoor({ projectId, proof, places, t }: { projectId: string; proof: Pr
     <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("interiorDoorBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
     <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t("interiorAddDoor")}</Button>
     {add.isError && <Callout tone="error">{errorText(add.error, t)}</Callout>}
-  </form>;
+  </form></FormPanel>;
 }
 
 function CreateNachweis({ projectId, ready, t }: { projectId: string; ready: number; t: T }) {

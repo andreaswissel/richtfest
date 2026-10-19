@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import type { FacadeLevelSource, FacadeNoiseLevels } from "@richtfest/shared";
 import { useApi } from "../../query";
 import { useT } from "../../i18n";
-import { Section } from "../layout";
+import { Section, Subsection } from "../layout";
 import { Badge, Callout, Empty, Segmented, Table } from "../ui/primitives";
 
 type T = ReturnType<typeof useT>;
@@ -66,14 +66,14 @@ export function FacadeLevels({ projectId }: { projectId: string }) {
   const facades = data.facades.filter((facade) => String(facade.storey.levelIndex) === shown);
   const nameOf = new Map(data.sources.map((source) => [source.id, source.name]));
   return <Section title={t("facadeLevels")} meta={<Badge variant="outline">{t("facadeLevelsDraft")}</Badge>}>
-    <p className="muted text-ui-xs">
+    <p className="noise-intro muted text-ui-xs">
       {t("facadeLevelsBasis").replace("{rls}", data.editions.rls19).replace("{din}", data.editions.din4109)}{" "}
       {t("facadeLevelsPlacement").replace("{file}", data.placement.fileName ?? "—").replace("{page}", String(data.placement.page))}{" "}
       {data.placement.alignmentStatus !== "reviewed" && t("facadeLevelsPlacementApproximate")}{" "}
       {data.pages.length > 1 && t("facadeLevelsAlignedPages").replace("{pages}", data.pages.slice(1)
         .map((page) => `${page.storey?.name ?? "—"} (${page.fileName ?? "—"}, ${t("facadeLevelsPage").replace("{page}", String(page.page))})`).join(", "))}
     </p>
-    <h3 className="site-section-title">{t("facadeLevelsSources")}</h3>
+    <Subsection title={t("facadeLevelsSources")}>
     {data.sources.length ? <Table headers={[t("noiseSourceName"), t("facadeLevelsStatus"), t("facadeLevelsTrafficDayNight"), t("facadeLevelsLineLevel"), t("facadeLevelsAssumptions")]}
       rows={data.sources.map((source) => ({ id: source.id, cells: [
         <Link className="underline underline-offset-2" to={sourceLink(projectId, source.id)}>{source.name}</Link>,
@@ -84,10 +84,9 @@ export function FacadeLevels({ projectId }: { projectId: string }) {
         <span className="text-ui-xs">{source.emission ? `${db(source.emission.day.lineLevelDb)} / ${db(source.emission.night.lineLevelDb)} dB` : "—"}</span>,
         <span className="facade-levels-wrap text-ui-xs muted">{sourceBasis(source, t)}</span>,
       ] }))} /> : <Empty>{t("noiseSourcesEmpty")}</Empty>}
-    <div className="noise-toolbar">
-      <h3 className="site-section-title">{t("facadeLevelsFacades")}</h3>
-      {storeys.length > 1 && <Segmented items={storeys.map((item) => ({ value: String(item.levelIndex), label: storeyName(item) }))} value={shown} onChange={setStorey} />}
-    </div>
+    </Subsection>
+    <Subsection title={t("facadeLevelsFacades")} actions={storeys.length > 1
+      && <Segmented items={storeys.map((item) => ({ value: String(item.levelIndex), label: storeyName(item) }))} value={shown} onChange={setStorey} />}>
     {facades.length ? <Table headers={[t("facadeLevelsFacade"), t("facadeLevelsRatingLevelsColumn"), t("facadeLevelsLaDay"), t("facadeLevelsLaNight"), t("facadeLevelsLaSleeping"), t("facadeLevelsBasisColumn")]}
       rows={facades.map((facade) => ({ id: facade.id, sort: [facade.compass, "", String(facade.level?.dayDb ?? -1), String(facade.level?.nightDb ?? -1), String(facade.level?.sleepingDb ?? -1), facade.basis], cells: [
         <span>{facade.compass} · <span className="muted text-ui-xs">{facade.wallName} · {t("facadeLevelsHeight").replace("{height}", String(facade.receiver.heightM))}</span></span>,
@@ -97,6 +96,7 @@ export function FacadeLevels({ projectId }: { projectId: string }) {
         <strong className="text-ui-xs">{facade.level ? db(facade.level.sleepingDb) : "—"}</strong>,
         <Badge variant="outline">{t(facade.basis === "calculated" ? "facadeLevelsBasisCalculated" : facade.basis === "turned_away" ? "facadeLevelsBasisTurnedAway" : "facadeLevelsBasisNone")}</Badge>,
       ] }))} /> : <Empty>{t("facadeLevelsNoFacades")}</Empty>}
+    </Subsection>
     <Callout>
       <strong>{t("facadeLevelsLimitationsTitle")}</strong>{" "}
       {data.limitations.map((item) => t(limitationKeys[item]).replace("{height}", String(data.storeyHeightM))).join(" ")}

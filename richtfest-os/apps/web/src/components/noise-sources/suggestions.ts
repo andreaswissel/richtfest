@@ -56,7 +56,7 @@ export function useNoiseSiteSuggestions(projectId: string): SiteSuggestionDomain
     key: "noise",
     title: t("noiseSuggestedShort"),
     hint: `${t("noiseSuggestedHintShort")} ${noiseReferenceText(reference, t)}`,
-    link: `/projects/${projectId}?view=noise`,
+    link: `/projects/${projectId}?view=noise&step=sources`,
     available,
     suggestions: suggestions.map(({ item, distanceMeters, radiusMeters, addressDistanceMeters }) => ({
       id: item.ref,

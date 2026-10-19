@@ -28,6 +28,8 @@ export type InteriorElement = {
   /** Catalogue values of a massive element; Dn,f,w of a lightweight one. */
   massKgM2: number | null; rwDb: number | null; dnfwDb: number | null;
   basis: string | null; reason: InteriorElementReason | null;
+  /** The storey the element is on, when it has one. */
+  storeyId?: string | null;
 };
 
 export type InteriorWallCheck = {
@@ -91,7 +93,7 @@ const gapText = (gap: InteriorGap) => gap.code === "element" ? `${gap.elementNam
  * missing and which element ids to propose values for. Bounded; no norm values.
  */
 export function interiorSoundAgentContext(proof: InteriorSoundProof, projectId: string, maxChecks = 40) {
-  const view = `/projects/${projectId}?view=noise`;
+  const view = `/projects/${projectId}?view=noise&step=interior`;
   if (!proof.available) return { available: false as const, reason: proof.reason, view };
   const shown = <T,>(item: ProofValue<T> | null) => item ? { value: item.value, status: item.provenance === "inferred" && item.reviewStatus !== "approved" ? "suggested" : item.reviewStatus } : null;
   return {
