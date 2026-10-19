@@ -530,10 +530,12 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
   const hasUnreviewedCandidates = Array.isArray(rawCandidates) && rawCandidates.some((item) => item && typeof item === "object" && (!((item as RecordData).status) || (item as RecordData).status === "unreviewed"));
   const coverage = raw.extractionCoverage || rawExtraction?.coverage;
   const extractionJobsById = new Map(extractions.map((job) => [job.id, job]));
-  const withPlanSourcePage = (items: BuildingRegion[]) => items.map((region) => ({
-    ...region,
-    page: region.sourceVersionId ? region.page : planSources.find((source) => source.storeyId && source.storeyId === region.storeyId)?.page ?? region.page,
-  }));
+  // Entities without plan geometry (openings entered in a verification or suggested from a schedule) belong to their storey's plan page.
+  const withPlanSourcePage = (items: BuildingRegion[]) => items.map((region) => {
+    if (region.sourceVersionId) return region;
+    const storeySource = planSources.find((source) => source.storeyId && source.storeyId === region.storeyId);
+    return { ...region, page: storeySource?.page ?? region.page, ...(storeySource?.source?.versionId ? { sourceVersionId: storeySource.source.versionId } : {}) };
+  });
   const separates = separatesByWall(Array.isArray(raw.relationships) ? raw.relationships : []);
   const covers = coversByCeiling(Array.isArray(raw.relationships) ? raw.relationships : []);
   const openings = openingsInWalls(Array.isArray(raw.relationships) ? raw.relationships : []);

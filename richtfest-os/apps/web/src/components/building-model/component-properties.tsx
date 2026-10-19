@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { bebauungsplanSchema, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
@@ -48,6 +49,11 @@ const keysFor = (componentType: ComponentType | null, construction: unknown = nu
 const camel = (value: string) => value.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase());
 export const fieldLabel = (key: string, t: T) => t(`buildingComponentField${camel(key)}` as Key);
 export const optionLabel = (key: string, option: string, t: T) => t(`buildingComponent${camel(key)}${camel(option)}` as Key);
+
+function ElementLink({ id, names, href }: { id: string; names?: Map<string, string>; href?: (id: string) => string }) {
+  const name = names?.get(id) || id;
+  return href ? <Link to={href(id)}>{name}</Link> : <>{name}</>;
+}
 
 /** The element's component type: an entered value, otherwise implied by an accepted draft wall or a derived ceiling. */
 export function regionComponentType(region: BuildingRegion): ComponentType | null {
@@ -121,7 +127,9 @@ export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: {
 const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
 /** Shared component data for a selected wall/ceiling or room, laid out as property rows. */
-export function ComponentProperties({ region, roomNames, elementNames, storeyNames, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; elementNames?: Map<string, string>; storeyNames?: Map<string, string>; t: T; pending: boolean;
+export function ComponentProperties({ region, roomNames, elementNames, storeyNames, elementHref, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; elementNames?: Map<string, string>; storeyNames?: Map<string, string>;
+  /** Link that selects another element, such as an opening in this wall or the wall an opening sits in. */
+  elementHref?: (id: string) => string; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation; copy?: WallTypeCopy }) {
   const states = region.componentProperties ?? {};
   const isRoom = region.entityType === "room";
@@ -147,11 +155,11 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
       </>}
       {componentType === "wall" && region.openings && <>
         <dt>{t("buildingComponentOpenings")}</dt>
-        <dd>{region.openings.map((id) => elementNames?.get(id) || id).join(", ")}</dd>
+        <dd>{region.openings.map((id, index) => <Fragment key={id}>{index > 0 && ", "}<ElementLink id={id} names={elementNames} href={elementHref} /></Fragment>)}</dd>
       </>}
       {region.inWall && <>
         <dt>{t("buildingComponentInWall")}</dt>
-        <dd>{elementNames?.get(region.inWall) || region.inWall}</dd>
+        <dd><ElementLink id={region.inWall} names={elementNames} href={elementHref} /></dd>
       </>}
       {componentType === "ceiling" && region.covers && <>
         <dt>{t("buildingComponentOverRooms")}</dt>

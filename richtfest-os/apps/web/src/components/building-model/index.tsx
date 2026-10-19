@@ -320,6 +320,13 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     && (!sourceStoreyId || region.storeyId === sourceStoreyId)
     && (!sourceVersionId || region.sourceVersionId === sourceVersionId);
   const selectedById = regions.find((region) => region.id === selectedId);
+  // An entity-only link: the view moves to the entity's own plan page.
+  const entityHref = (id: string) => {
+    const next = new URLSearchParams(params);
+    for (const key of ["page", "storey", "sourceVersion", "sourceSelection", "object"]) next.delete(key);
+    next.set("entity", `element:${id}`);
+    return `?${next.toString()}`;
+  };
   const explicitPage = params.has("page");
   const selected = selectedById && (!explicitPage || regionMatchesView(selectedById)) ? selectedById : explicitPage ? regions.find(regionMatchesView) : regions[0];
   const candidates = useMemo(() => model.extractionCandidates.filter((candidate) => candidate.status === "unreviewed"), [model.extractionCandidates]);
@@ -938,7 +945,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
               : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
                 onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
-                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} elementNames={elementNames} storeyNames={storeyNames} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} elementNames={elementNames} storeyNames={storeyNames} elementHref={entityHref} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
