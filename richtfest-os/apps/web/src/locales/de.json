@@ -2493,5 +2493,18 @@
   "proofSuggestionSource": "Quelle",
   "proofPage": "S. {page}",
   "proofYes": "Ja",
-  "proofNo": "Nein"
+  "proofNo": "Nein",
+  "proofCatalogueSuggest": "Wand-Rw nach DIN 4109-32 vorschlagen",
+  "proofCatalogueResult": "{count} Wände vorgeschlagen",
+  "proofCatalogueNotMassive": "keine Massivwand",
+  "proofCatalogueMaterialUnknown": "Baustoff unklar",
+  "proofCatalogueMultiLeaf": "gedämmter oder mehrschaliger Aufbau, eigener Nachweis nötig",
+  "proofCatalogueThicknessMissing": "Dicke fehlt",
+  "proofCatalogueDensityMissing": "Rohdichte fehlt",
+  "proofCatalogueOutOfRange": "außerhalb des Katalogbereichs",
+  "proofCataloguePerforated": "Lochsteine, Rw aus Zulassung oder Prüfung",
+  "proofCatalogueMissing": "Katalogwerte sind auf diesem Server nicht eingerichtet",
+  "proofCatalogueEntered": "Wert bereits eingetragen",
+  "proofCatalogueRejected": "Vorschlag wurde abgelehnt",
+  "proofCatalogueAlready": "bereits vorgeschlagen"
 }

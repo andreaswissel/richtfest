@@ -53,4 +53,6 @@ test("exterior noise suggestions need a cited page and a verification input key"
   expect(validateTool("propose_exterior_noise_inputs", { openings: [opening] })).toMatchObject({ openings: [opening] });
   expect(() => validateTool("propose_exterior_noise_inputs", { openings: [{ ...opening, area: 0 }] })).toThrow();
   expect(validateTool("prepare_exterior_noise_nachweis", {})).toEqual({});
+  expect(validateTool("suggest_catalogue_values", {})).toEqual({});
+  expect(() => validateTool("suggest_catalogue_values", { rwDb: 60 })).toThrow();
 });

@@ -42,6 +42,12 @@ const surface = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 
+const massLawSegment = z.object({
+  slope: db, intercept: db, minKgM2: positive, maxKgM2: positive, minInclusive: z.boolean(), maxInclusive: z.boolean(), ref: z.string().trim().min(1).max(40),
+}).strict();
+export const massLawMaterials = ["dense", "lightweight_concrete", "aerated_concrete"] as const;
+export type MassLawMaterial = (typeof massLawMaterials)[number];
+
 export const acousticNormPackSchema = z.object({
   id: z.string().trim().min(1).max(100),
   rls19: z.object({
@@ -70,5 +76,34 @@ export const acousticNormPackSchema = z.object({
     railReductionDb: db,
     turnedAwayReductionDb: z.object({ open: db, closed: db }).strict(),
   }).strict(),
+  /** Component catalogue for single-leaf massive walls: wall density from the density class and the mass law per material. Optional; without it no catalogue values are suggested. */
+  din4109_32: z.object({
+    edition: z.string().trim().min(1).max(200),
+    /** Masonry wall density = factor · density class + offset, per mortar, within its density class range. */
+    masonryWallDensity: z.array(z.object({ mortar: z.enum(["normal", "lightweight", "thin_bed"]), factor: positive, offset: db,
+      minRdk: z.number().min(0), maxRdk: positive, minExclusive: z.boolean(), ref: z.string().trim().min(1).max(40) }).strict()).min(1),
+    concreteDensityKgM3: z.object({ plain: positive, reinforced: positive }).strict(),
+    /** Rw = slope · lg(m') + intercept within each segment's mass range. */
+    massLaws: z.object({ dense: z.array(massLawSegment).min(1), lightweight_concrete: z.array(massLawSegment).min(1), aerated_concrete: z.array(massLawSegment).min(1) }).strict(),
+    /** When perforated masonry may still be treated as homogeneous. */
+    perforated: z.object({ maxThicknessMm: positive, clayMinRdkAboveMaxThickness: positive, blockMinRdk: positive }).strict(),
+    roundingDecimals: z.number().int().min(0).max(3),
+  }).strict().optional(),
 }).strict();
 export type AcousticNormPack = z.infer<typeof acousticNormPackSchema>;
+
+/** Input and result of the catalogue Rw of a single-leaf massive wall (method in @richtfest/acoustics, numbers in the pack). */
+export type MassiveWallInput = {
+  material: MassLawMaterial;
+  /** Masonry is laid from units of a density class; concrete is cast or precast. */
+  form: "masonry" | "concrete";
+  /** Perforated units: clay (Hochlochziegel) or blocks (hollow lightweight or concrete blocks). */
+  perforated: "none" | "clay" | "block";
+  thicknessCm: number | null;
+  /** Unit density (density class × 1000) for masonry, material density for concrete; kg/m³. */
+  densityKgM3: number | null;
+};
+export type MassiveWallRw =
+  | { status: "calculated"; rwDb: number; massKgM2: number; wallDensityKgM3: number; refs: string[]; edition: string;
+    assumptions: Array<"mortar_unknown_lowest" | "without_plaster" | "reinforced_concrete_density"> }
+  | { status: "unavailable"; reason: "catalogue_missing" | "thickness_missing" | "density_missing" | "density_class_out_of_range" | "perforated_not_homogeneous" | "mass_out_of_range" };

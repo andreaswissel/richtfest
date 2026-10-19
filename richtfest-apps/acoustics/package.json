@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/calculations.ts",
     "./road-noise": "./src/road-noise.ts",
-    "./exterior-noise-level": "./src/exterior-noise-level.ts"
+    "./exterior-noise-level": "./src/exterior-noise-level.ts",
+    "./massive-wall": "./src/massive-wall.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

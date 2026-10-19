@@ -317,6 +317,28 @@ async function suggestionsOf(d: AppDeps, values: Map<string, CurrentValue>, enti
 
 // ---- Suggestions from the Richtfest Agent -------------------------------------
 
+/**
+ * Writes one suggested value as an inferred, unreviewed version. Returns why it
+ * was skipped: a value a person entered or reviewed, a value rejected before,
+ * the same suggestion again, or a key that does not apply. Null when written.
+ */
+export async function writeSuggestion(tx: any, d: AppDeps, modelId: string, input: { entityType: string; entityId: string; propertyKey: string; value: unknown; unit: string | null; evidence: unknown[] }) {
+  const { entityType, entityId, propertyKey, value, unit } = input;
+  // Each key belongs to one kind of entity; a value on any other is a mistake, not a free-form note.
+  const known = Object.hasOwn((buildingComponentProperties as Record<string, object>)[entityType] ?? {}, propertyKey);
+  const invalid = known ? validateBuildingComponentProperty(entityType, propertyKey, value as any, unit) : `${propertyKey} does not apply to a ${entityType}`;
+  if (invalid) return invalid;
+  const [property] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.entityType, entityType),
+    eq(buildingProperties.entityId, entityId), eq(buildingProperties.propertyKey, propertyKey))).limit(1);
+  const history = property ? await tx.select().from(buildingPropertyVersions).where(eq(buildingPropertyVersions.propertyId, property.id)).orderBy(desc(buildingPropertyVersions.version)) as any[] : [];
+  const latest = history.find(version => version.reviewStatus !== "rejected");
+  if (history.some(version => version.reviewStatus === "approved") || (latest && latest.provenance !== "inferred")) return "entered_or_reviewed";
+  if (history.some(version => version.reviewStatus === "rejected" && JSON.stringify(version.value) === JSON.stringify(value))) return "rejected_before";
+  if (latest && JSON.stringify(latest.value) === JSON.stringify(value)) return "already_suggested";
+  await appendPropertyVersion(tx, d, modelId, { entityType, entityId, propertyKey, value, unit, provenance: "inferred", evidence: input.evidence });
+  return null;
+}
+
 
 /**
  * Writes the agent's exterior noise suggestions as inferred, unreviewed
@@ -341,19 +363,8 @@ export async function proposeExteriorNoiseInputs(d: AppDeps, projectId: string, 
   const skipped: Array<{ entityId: string; propertyKey: string; reason: string }> = [];
   let written = 0, openings = 0;
   const suggest = async (entityType: keyof typeof tables, entityId: string, propertyKey: string, value: unknown, unit: string | null, cited: unknown[]) => {
-    // Each key belongs to one kind of entity; a value on any other is a mistake, not a free-form note.
-    const known = Object.hasOwn((buildingComponentProperties as Record<string, object>)[entityType] ?? {}, propertyKey);
-    const invalid = known ? validateBuildingComponentProperty(entityType, propertyKey, value as any, unit) : `${propertyKey} does not apply to a ${entityType}`;
-    if (invalid) { skipped.push({ entityId, propertyKey, reason: invalid }); return; }
-    const [property] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.entityType, entityType),
-      eq(buildingProperties.entityId, entityId), eq(buildingProperties.propertyKey, propertyKey))).limit(1);
-    const history = property ? await tx.select().from(buildingPropertyVersions).where(eq(buildingPropertyVersions.propertyId, property.id)).orderBy(desc(buildingPropertyVersions.version)) as any[] : [];
-    const latest = history.find(version => version.reviewStatus !== "rejected");
-    if (history.some(version => version.reviewStatus === "approved") || (latest && latest.provenance !== "inferred")) { skipped.push({ entityId, propertyKey, reason: "entered_or_reviewed" }); return; }
-    if (history.some(version => version.reviewStatus === "rejected" && JSON.stringify(version.value) === JSON.stringify(value))) { skipped.push({ entityId, propertyKey, reason: "rejected_before" }); return; }
-    if (latest && JSON.stringify(latest.value) === JSON.stringify(value)) { skipped.push({ entityId, propertyKey, reason: "already_suggested" }); return; }
-    await appendPropertyVersion(tx, d, modelId, { entityType, entityId, propertyKey, value, unit, provenance: "inferred", evidence: cited });
-    written++;
+    const reason = await writeSuggestion(tx, d, modelId, { entityType, entityId, propertyKey, value, unit, evidence: cited });
+    if (reason) skipped.push({ entityId, propertyKey, reason }); else written++;
   };
   for (const item of input.values) {
     const table: any = tables[item.entityType];

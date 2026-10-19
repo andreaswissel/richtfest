@@ -75,7 +75,7 @@ Authenticated users with project write permission can search through `/api/proje
 
 ### Acoustic norm pack
 
-Facade levels in [Exterior noise](/docs/workflows/exterior-noise#facade-levels) need the licensed coefficients of RLS-19 and DIN 4109. They are never in the repository, the web bundle, responses or logs: the API reads them at start from `ACOUSTIC_NORM_PACK` (the pack JSON, or its base64) or from a file named by `ACOUSTIC_NORM_PACK_PATH`. The pack's shape is `acousticNormPackSchema` in `@richtfest/shared`; a pack that fails validation is ignored and only the failing field paths are logged. Without a pack, facade levels report that the server is not configured.
+Facade levels in [Exterior noise](/docs/workflows/exterior-noise#facade-levels) need the licensed coefficients of RLS-19 and DIN 4109. They are never in the repository, the web bundle, responses or logs: the API reads them at start from `ACOUSTIC_NORM_PACK` (the pack JSON, or its base64) or from a file named by `ACOUSTIC_NORM_PACK_PATH`. The pack's shape is `acousticNormPackSchema` in `@richtfest/shared`; a pack that fails validation is ignored and only the failing field paths are logged. Without a pack, facade levels report that the server is not configured. The optional `din4109_32` part holds the component catalogue for single-leaf massive walls (wall density per mortar, mass law per material, limits for perforated units); without it, **Suggest wall Rw** reports that catalogue values are not configured.
 
 `richtfest-apps/acoustics/scripts/check-norm-pack.ts <pack.json> <cases.json>` checks a pack against test tasks such as TEST-20 before it is set.
 

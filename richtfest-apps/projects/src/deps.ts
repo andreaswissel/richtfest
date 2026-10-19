@@ -67,6 +67,8 @@ export type AppDeps = {
     turnedAwayReductionDb: { open: number; closed: number };
     roadRatingLevels: (sources: RoadNoiseSource[], receivers: RoadNoiseReceiver[]) => RoadRatingLevel[];
     exteriorNoiseLevel: (contributions: RatingLevelContribution[]) => ExteriorNoiseLevel | null;
+    /** Rw of a single-leaf massive wall from the component catalogue; absent when the pack has no catalogue. */
+    massiveWallRw?: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
   } | null;
   /** The deterministic acoustic calculator (DIN 4109 exterior noise verification), shared with the knowledge app. */
   calculateAcoustics?: (input: AcousticCalculationInput) => AcousticCalculationResult;

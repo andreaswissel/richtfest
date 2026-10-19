@@ -2493,5 +2493,18 @@
   "proofSuggestionSource": "Source",
   "proofPage": "p. {page}",
   "proofYes": "Yes",
-  "proofNo": "No"
+  "proofNo": "No",
+  "proofCatalogueSuggest": "Suggest wall Rw from DIN 4109-32",
+  "proofCatalogueResult": "{count} walls suggested",
+  "proofCatalogueNotMassive": "not a massive wall",
+  "proofCatalogueMaterialUnknown": "material unclear",
+  "proofCatalogueMultiLeaf": "insulated or multi-leaf build-up, needs its own value",
+  "proofCatalogueThicknessMissing": "thickness missing",
+  "proofCatalogueDensityMissing": "density missing",
+  "proofCatalogueOutOfRange": "outside the catalogue's range",
+  "proofCataloguePerforated": "perforated units, Rw from approval or test",
+  "proofCatalogueMissing": "Catalogue values are not configured on this server",
+  "proofCatalogueEntered": "value already entered",
+  "proofCatalogueRejected": "suggestion was rejected",
+  "proofCatalogueAlready": "already suggested"
 }

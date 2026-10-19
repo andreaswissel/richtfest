@@ -86,6 +86,7 @@ export function ProofInputs({ projectId, canWrite }: { projectId: string; canWri
     <div className="noise-toolbar">
       <h3 className="site-section-title">{t("proofRooms")}</h3>
       <span className="muted text-ui-xs">{t("proofRoomsCalculated").replace("{ready}", String(ready)).replace("{total}", String(protectedRooms.length))}</span>
+      {canWrite && protectedRooms.some(room => room.facades.some(facade => !facade.rw)) && <CatalogueSuggestions projectId={projectId} t={t} />}
     </div>
     {proof.rooms.length ? <Table headers={[t("proofRoom"), t("proofUse"), t("proofFloorArea"), t("proofFacades"), t("proofResult"), ""]}
       rows={proof.rooms.map(room => ({ id: room.id, sort: [room.name, room.kind?.value ?? "", String(room.floorAreaM2 ?? 0), String(room.facades.length), room.result?.status ?? room.gaps.join(), ""], cells: [
@@ -152,6 +153,33 @@ function Suggestions({ projectId, proof, canWrite, t }: { projectId: string; pro
       ] }))} />
     {review.isError && <Callout tone="error">{errorText(review.error, t)}</Callout>}
   </div>;
+}
+
+type CatalogueResult = { status: string; reason?: string; written: number; walls: Array<{ wallId: string; wall: string; status: string; rwDb: number | null; reason: string | null }> };
+const catalogueReasons: Record<string, Key> = {
+  not_massive: "proofCatalogueNotMassive", material_unknown: "proofCatalogueMaterialUnknown", multi_leaf: "proofCatalogueMultiLeaf",
+  thickness_missing: "proofCatalogueThicknessMissing", density_missing: "proofCatalogueDensityMissing", density_class_out_of_range: "proofCatalogueOutOfRange",
+  perforated_not_homogeneous: "proofCataloguePerforated", mass_out_of_range: "proofCatalogueOutOfRange", catalogue_missing: "proofCatalogueMissing",
+  entered_or_reviewed: "proofCatalogueEntered", rejected_before: "proofCatalogueRejected", already_suggested: "proofCatalogueAlready",
+};
+
+/** Suggests the Rw of massive exterior walls without one from the component catalogue; unclear walls say what is missing. */
+function CatalogueSuggestions({ projectId, t }: { projectId: string; t: T }) {
+  const suggest = useMutation({
+    mutationFn: () => api<CatalogueResult>(`/projects/${projectId}/exterior-noise/proof/catalogue`, {}),
+    onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
+  });
+  const result = suggest.data;
+  const open = result?.walls.filter(wall => wall.status !== "suggested") ?? [];
+  return <span className="proof-inline">
+    <Button size="sm" variant="outline" disabled={suggest.isPending} onClick={() => suggest.mutate()}>{suggest.isPending ? t("loading") : t("proofCatalogueSuggest")}</Button>
+    {result && <span className="muted text-ui-xs" role="status">
+      {result.status === "unavailable" ? t(catalogueReasons[result.reason ?? ""] ?? "proofCatalogueMissing")
+        : [t("proofCatalogueResult").replace("{count}", String(result.written)),
+          ...open.map(wall => `${wall.wall}: ${wall.reason ? t(catalogueReasons[wall.reason] ?? "proofCatalogueMaterialUnknown") : "—"}`)].join(" · ")}
+    </span>}
+    {suggest.isError && <small className="noise-input-error">{errorText(suggest.error, t)}</small>}
+  </span>;
 }
 
 function RoomResult({ room, t }: { room: ProofRoom; t: T }) {

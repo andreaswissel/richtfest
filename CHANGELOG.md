@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Richtfest Agent fills the exterior noise verification:** Ask the agent to prepare the Schallschutznachweis: it reports which rooms are missing what, suggests room uses, windows from the Fensterliste, Rw values and heights from the project sources with the cited page, and can create the draft Nachweis. Accept or reject its suggestions in Exterior noise, one by one or all at once; unconfirmed suggestions keep the Nachweis a Teilstand.
+- **Wall Rw from DIN 4109-32:** Exterior noise suggests the Rw of massive exterior walls from their material, thickness and density (mass law), with the calculation as its basis; insulated or multi-leaf walls and perforated units outside the catalogue are named instead of guessed.
 - **Exterior noise in the building model:** Rooms, exterior walls, windows and doors show their exterior noise values (use, Rw and basis, opening area, surfaces complete); walls list their openings, and Sound insulation holds the method, flanking and each storey's clear room height.
 
 ## 2026-10-19

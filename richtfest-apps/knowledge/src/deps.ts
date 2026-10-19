@@ -131,6 +131,8 @@ export type AppDeps = {
   exteriorNoiseProof?: (projectId: string) => Promise<import("@richtfest/shared").ExteriorNoiseProof>;
   /** Writes the agent's cited exterior noise suggestions as unreviewed building-model values (Projects). */
   proposeExteriorNoiseInputs?: (projectId: string, input: unknown, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
+  /** Suggests wall Rw from the component catalogue for walls of the verification without one (Projects). */
+  suggestExteriorNoiseCatalogue?: (projectId: string, tx: any) => Promise<{ written: number }>;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
     runId?: string;

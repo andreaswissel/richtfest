@@ -126,6 +126,7 @@ export const toolInputs = {
   }).strict().refine(input => JSON.stringify(input.value).length <= 8000, "Proposed value exceeds context limit"),
   propose_exterior_noise_inputs: exteriorNoiseSuggestionInput,
   prepare_exterior_noise_nachweis: z.object({}).strict(),
+  suggest_catalogue_values: z.object({}).strict(),
   send_thread_message: agentMessageInputSchema,
   search_company_knowledge: companyKnowledgeSearchSchema,
   delegate_source_review: z
@@ -511,6 +512,10 @@ export async function executeRun(d: AppDeps, run: any) {
           if (!d.proposeExteriorNoiseInputs) throw conflict("Exterior noise suggestions are unavailable");
           result = await d.proposeExteriorNoiseInputs(run.projectId, input, { runId: run.id, agentId: run.agentId ?? "richtfest-agent" }, tx);
         }
+        else if (tool.name === "suggest_catalogue_values") {
+          if (!d.suggestExteriorNoiseCatalogue) throw conflict("Catalogue suggestions are unavailable");
+          result = await d.suggestExteriorNoiseCatalogue(run.projectId, tx);
+        }
         else if (tool.name === "prepare_exterior_noise_nachweis") {
           const created = await createExteriorNoiseNachweis(runDeps, run.projectId, tx, run.id);
           result = { status: "draft_created", artifactId: created.artifact.id, revisionId: created.revision.id, complete: created.complete, openItems: created.openItems,
@@ -645,7 +650,7 @@ export async function executeRun(d: AppDeps, run: any) {
                 ? `${result.status}: ${result.entries.length} approved company references retrieved`
               : tool.name === "send_thread_message"
                 ? "Message delivered; recipient execution unchanged"
-              : tool.name === "propose_exterior_noise_inputs"
+              : tool.name === "propose_exterior_noise_inputs" || tool.name === "suggest_catalogue_values"
                 ? `${result.written} exterior noise values suggested; planner review required`
               : "Draft or question persisted; review required",
         );

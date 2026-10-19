@@ -38,7 +38,9 @@ import { trafficCountsInBox } from "@richtfest/public-data/traffic-count-queries
 import { calculateAcoustics } from "@richtfest/acoustics";
 import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
+import { massiveWallRw } from "@richtfest/acoustics/massive-wall";
 import { proposeExteriorNoiseInputs, readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
+import { suggestCatalogueValues } from "@richtfest/projects/exterior-noise-catalogue";
 import { acousticNormPack } from "./acoustic-norm-pack";
 
 const actorFrom = (req: Request) => (req as any).actor as Actor;
@@ -148,6 +150,7 @@ const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
     turnedAwayReductionDb: pack.din4109.turnedAwayReductionDb,
     roadRatingLevels: (sources, receivers) => roadRatingLevels(pack, sources, receivers),
     exteriorNoiseLevel: (contributions) => exteriorNoiseLevel(pack, contributions),
+    ...(pack.din4109_32 ? { massiveWallRw: (input) => massiveWallRw(pack, input) } : {}),
   };
 };
 export const knowledgeDeps = (
@@ -191,6 +194,7 @@ export const knowledgeDeps = (
       { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
     proposeExteriorNoiseInputs: (projectId, input, execution, tx) => proposeExteriorNoiseInputs(
       { ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
+    suggestExteriorNoiseCatalogue: (projectId, tx) => suggestCatalogueValues({ ...projectsDeps(db, req), db: tx }, projectId, tx),
     validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
       sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid

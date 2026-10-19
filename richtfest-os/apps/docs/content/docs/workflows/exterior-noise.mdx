@@ -108,6 +108,12 @@ Every suggestion cites the source page and a short quote. Suggestions never repl
 
 **Suggestions to confirm** lists the suggested values above the rooms with their source. **Accept** or **Reject** each one, or **Accept all**. Suggested values are calculated right away and marked *Suggested*; until they are confirmed, the Nachweis stays a *Teilstand* and lists them as open items. The agent can also create the draft Nachweis when asked; the planner checks and signs it.
 
+### Wall Rw from the component catalogue
+
+**Suggest wall Rw from DIN 4109-32** (next to the room count) rates every exterior wall of the verification that has no Rw yet as a single-leaf massive wall: area mass from the wall's thickness and density, then the mass law of its material (concrete, calcium silicate, clay, lightweight or aerated concrete). Masonry takes the lowest wall density any mortar allows for its density class, and plaster is left out, so the value errs low. The value and its basis (method, area mass, assumptions) become a suggestion citing the pages its material, thickness and density came from.
+
+Walls the method does not cover get no value and say why: insulated or multi-leaf build-ups (ETICS, facing leaves, filled units), perforated units outside the catalogue's limits, timber or drywall, or a missing thickness or density. Enter those from the manufacturer's data or test certificate. The agent uses the same function when asked.
+
 ### In the building model
 
 The same values are editable in the [building model](/docs/workflows/project-onboarding): select a room for its **Exterior noise use** and **Exterior surfaces complete**, an exterior wall or roof for **Rw** and **Rw basis**, a window or door for **Opening area**, **Rw** and its basis. A wall lists the openings set into it, a window or door its wall. **Sound insulation → Exterior noise** holds the method, flanking and each storey's **clear room height**.
