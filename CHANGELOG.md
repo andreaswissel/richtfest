@@ -2,6 +2,7 @@
 
 ## 2026-10-19
 
+- **Landing page paused:** The public landing page is offline until its relaunch. `richtfest.ai` and the other marketing domains now forward to the app sign-in at `app.richtfest.ai`.
 - **Messages with room to breathe:** Notes, errors and empty states that follow each other in a section no longer touch. Several notices on the building model plan now form a stack, the first in front and the others peeking out behind it; open it to read them all.
 - **Walls from the plan:** Plan extraction now proposes nearly every wall of a real architect plan. Corners, T and cross junctions and short piers between windows are split into straight walls instead of being left as unsupported shapes; each plan set gets a **Wall colours** list in Plan context where you set what each fill colour means (planned, existing, demolished or not a wall; the usual DIN 1356-1 colours are preselected), so demolished walls stay out of the planned building's sound checks. Plans without layers (flattened prints) now get walls too, read from the outlines of the wall pen, and their rooms are separated along those lines. Existing plans are re-extracted automatically.
 - **Hamburg parcels:** The site assessment now looks up official parcels for Hamburg addresses (ALKIS Hamburg, LGV): the parcel at the address point with its number, official area and last change, the parcels around it on the map, and adoption into the assessment and Design. Development plans, heritage, aerial image and neighbour GRZ/GFZ are still Berlin-only and say so for Hamburg sites.

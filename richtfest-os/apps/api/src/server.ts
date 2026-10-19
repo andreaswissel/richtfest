@@ -99,13 +99,12 @@ export const createApp = (db: Database, options: { webAssets?: WebAssetArchive; 
   app.post("/api/agent/run", async (req, res, next) => { try { const actor = (req as any).actor; const provider = await getActiveProvider(db, actor.tenantId); const selected = await configuredProvider(db, actor.tenantId, actor.id, provider); if (!selected) return res.status(503).json(fail("agent_unconfigured", `No configured ${provider} connection is available for this user.`)); return res.status(400).json(fail("project_context_required", "Start a scoped run at /api/knowledge/runs with an explicit projectId.")); } catch (e) { next(e); } });
   app.use("/api", (_req, res) => res.status(404).json(fail("not_found", "Route not found")));
   if (env.NODE_ENV === "production") {
-    const landingDirectory = path.resolve(import.meta.dir, "../../../../richtfest-landing");
-    const serveLanding = express.static(landingDirectory, { index: "index.html", redirect: true });
-    // Keep a shareable Railway preview URL while the custom root domain is being configured.
-    app.use("/landing", serveLanding);
+    // The landing page is offline until its relaunch; marketing domains send visitors to the app.
+    // Temporary redirects, so browsers do not cache them past the relaunch.
+    app.use("/landing", (_req, res) => res.redirect(302, "/"));
     app.use((req, res, next) => {
       if (["richtfest.ai", "richtfest.si", "www.richtfest.si", "richtfest.andreaswissel.com"].includes(req.hostname.toLowerCase())) {
-        return serveLanding(req, res, next);
+        return res.redirect(302, `https://app.richtfest.ai${req.originalUrl}`);
       }
       return next();
     });

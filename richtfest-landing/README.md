@@ -2,8 +2,7 @@
 
 Static marketing page (EN/DE), independent of the Richtfest OS build and served by the existing `richtfest-monorepo` Railway service.
 
-- The Railway preview is available at `/landing/` on the service's public domain.
-- Requests to `richtfest.si/` serve this page once the domain's DNS is active.
+**Offline until relaunch.** The API currently redirects the marketing domains to `app.richtfest.ai` and `/landing/` to `/` (see `richtfest-os/apps/api/src/server.ts`). To relaunch, serve this directory again at `/landing/` and at `/` on `richtfest.ai`, `richtfest.si`, `www.richtfest.si` and `richtfest.andreaswissel.com`.
 
 - `index.html`: the page. Three.js (r128) loads from jsDelivr for the interactive house; everything else is inline.
 - `og-image.png`, `og-image-de.png`: 1200×630 share images. Open Graph image paths are relative so they work at both `/` and `/landing/`.
