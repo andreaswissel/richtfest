@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PlanBarrierLine, PlanDoorSwing, PlanFootprint, PlanFillRegion } from "./plan-footprints";
 import type { PlanLabel, PlanWord } from "./plan-extraction";
+import { wallRunMethod, wallRuns } from "./plan-wall-runs";
 
 type Point = { x: number; y: number };
 const box = (points: Point[]) => {
@@ -87,6 +88,20 @@ export function draftWallEvidence(footprint: PlanFootprint, pageAspectRatio = 1)
     pageAspectRatio: aspect, physicalAspectRatio, rectangularity, pageRelativeMinorDimension: shortSide, minorDimensionBand };
 }
 
+/**
+ * Construction state from a fill colour, after the DIN 1356-1 colours for alterations:
+ * yellow is demolished; grey, on the existing/demolition layer only, is existing and retained.
+ * Other colours say nothing about the state (null).
+ */
+export function fillState(colour: string | undefined, existingLayer: boolean): "retained" | "demolished" | null {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(colour ?? "");
+  if (!match) return null;
+  const [r, g, b] = match.slice(1).map(v => Number.parseInt(v, 16)) as [number, number, number];
+  if (r >= 0xc0 && g >= 0xc0 && Math.abs(r - g) <= 0x30 && r - b >= 0x30) return "demolished";
+  if (existingLayer && Math.max(r, g, b) - Math.min(r, g, b) <= 0x10 && r >= 0x50 && r <= 0xd8) return "retained";
+  return null;
+}
+
 /** Printed areas remain observations: proximity is not a verified measurement or room use. */
 export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) {
   const ambiguous = new Set<string>();
@@ -158,27 +173,68 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const a = footprint.geometry.planRegion, b = label.geometry.planRegion;
     return a.x < b.x+b.width && a.x+a.width > b.x && a.y < b.y+b.height && a.y+a.height > b.y;
   });
-  const wallIndexes = new Set(footprints.map((footprint, index) => draftWallEvidence(footprint, pageAspectRatio).wallLike && !collidesWithLabel(footprint) ? index : -1).filter(index => index >= 0));
-  const wallEntries=[...wallIndexes].map(index=>({index,classification:draftWallEvidence(footprints[index],pageAspectRatio)}));
-  const bandCounts=new Map<number,number>();
-  for(const entry of wallEntries)bandCounts.set(entry.classification.minorDimensionBand,(bandCounts.get(entry.classification.minorDimensionBand)??0)+1);
-  const walls = wallEntries.map(({index,classification}, i) => {
-    const footprint = footprints[index],thicknessBandCount=bandCounts.get(classification.minorDimensionBand)??1;
-    return { sourceKey: `draft-wall:${hash([footprint.sourceKey])}`, entityType: "element" as const,
-      name: `Draft wall ${i + 1}`, quote: "Exact elongated rectangular fill from source construction layer",
-      layerId: footprint.layerId, layerName: footprint.layerName,
-      geometry: { quality: "draft_wall" as const, semanticKind: "draft_wall" as const,
-        constructionState: "proposed" as const,
-        phaseEvidence: { state: "proposed" as const, method: "source_layer_role" as const, layerId: footprint.layerId, layerName: footprint.layerName, status: "unreviewed" as const },
-        coordinateSpace: "normalized-page" as const, polygon: footprint.geometry.polygon,
-        sourceFootprintKeys: [footprint.sourceKey], planRegion: footprint.geometry.planRegion,
-        classification:{...classification,thicknessBandCount,contextualContactCount:adjacency[index].size,evidenceTier:thicknessBandCount>=3&&adjacency[index].size>=2?"high" as const:"medium" as const},
-        limitations: "Unreviewed wall-like source construction fill selected by conservative shape and label-collision checks. High evidence additionally requires a repeated thickness band and at least two source contacts. Exact source polygon is preserved. Bands and contacts are page-relative evidence, not a measured thickness or verified continuity. Material, construction state, physical scale, openings and completeness are not established." } };
+  // Construction states by fill colour (DIN 1356-1 conventions): yellow is demolished on any layer;
+  // grey on the existing/demolition layer is existing and retained. Everything else on the
+  // construction layer is the proposed building. Demolished and retained walls are proposed
+  // with their state, so the proposed building's checks leave demolished walls out.
+  type WallSource = { footprint: PlanFootprint; index: number | null; state: "proposed" | "retained" | "demolished" };
+  const sources: WallSource[] = [
+    ...footprints.map((footprint, index) => ({ footprint, index, state: fillState(footprint.fillColor, false) === "demolished" ? "demolished" as const : "proposed" as const })),
+    ...supplementary.flatMap(footprint => { const state = fillState(footprint.fillColor, true); return state ? [{ footprint, index: null, state }] : []; }),
+  ];
+  const contactsOf = (source: WallSource) => source.index === null ? 0 : adjacency[source.index].size;
+  const aspect = Number.isFinite(pageAspectRatio) && pageAspectRatio > 0 ? pageAspectRatio : 1;
+  const wallSources = new Set(sources.filter(source => draftWallEvidence(source.footprint, pageAspectRatio).wallLike && !collidesWithLabel(source.footprint)));
+  const bandCounts = new Map<number, number>();
+  for (const source of wallSources) { const band = draftWallEvidence(source.footprint, pageAspectRatio).minorDimensionBand; bandCounts.set(band, (bandCounts.get(band) ?? 0) + 1); }
+  // Fills that are not one straight wall (an L, T or cross of walls, a wall with a step, a short
+  // pier between windows) are split into straight runs. A short run counts only where its
+  // thickness repeats among the walls or it comes from a fill that holds several runs.
+  const rectCollides = (rect: { x: number; y: number; width: number; height: number }) => labels.some(label => {
+    const b = label.geometry.planRegion; return rect.x < b.x+b.width && rect.x+rect.width > b.x && rect.y < b.y+b.height && rect.y+rect.height > b.y;
   });
+  const splitSources = new Set<WallSource>();
+  const runEntries = sources.flatMap(source => {
+    if (wallSources.has(source)) return [];
+    const split = wallRuns(footprintRings(source.footprint), aspect, .025, source.footprint.geometry.fillRule ?? "evenodd");
+    if (!split) return [];
+    const runs = split.runs.filter(run => run.thickness > 0 && run.length >= .005 && !rectCollides(run.rect)).map(run => ({ source, run, band: Math.round(run.thickness / .0005) * .0005 }));
+    const accepted = runs.filter(entry => entry.run.length / entry.run.thickness >= 4
+      || entry.run.length / entry.run.thickness >= 1.5 && (split.runs.length > 1 || (bandCounts.get(entry.band) ?? 0) >= 3));
+    // Fully explained: every run is a wall, or a stub shorter than the shortest wall (a reveal or notch).
+    if (accepted.length && !split.leftover && split.runs.every(run => accepted.some(entry => entry.run === run) || run.length < .005)) splitSources.add(source);
+    return accepted;
+  });
+  for (const entry of runEntries) bandCounts.set(entry.band, (bandCounts.get(entry.band) ?? 0) + 1);
+  const stateEvidence = (source: WallSource) => ({ state: source.state, method: source.state === "proposed" && !source.footprint.fillColor ? "source_layer_role" as const : "source_layer_and_fill_colour" as const,
+    layerId: source.footprint.layerId, layerName: source.footprint.layerName, ...(source.footprint.fillColor ? { fillColor: source.footprint.fillColor } : {}), status: "unreviewed" as const });
+  const walls = [
+    ...[...wallSources].map(source => {
+      const footprint = source.footprint, classification = draftWallEvidence(footprint, pageAspectRatio), thicknessBandCount = bandCounts.get(classification.minorDimensionBand) ?? 1, contacts = contactsOf(source);
+      return { sourceKey: `draft-wall:${hash([footprint.sourceKey])}`, quote: "Exact elongated rectangular fill from source construction layer", source, polygon: footprint.geometry.polygon, planRegion: footprint.geometry.planRegion,
+        classification: { ...classification, thicknessBandCount, contextualContactCount: contacts, evidenceTier: thicknessBandCount >= 3 && contacts >= 2 ? "high" as const : "medium" as const },
+        limitations: "Unreviewed wall-like source construction fill selected by conservative shape and label-collision checks. High evidence additionally requires a repeated thickness band and at least two source contacts. Exact source polygon is preserved. Bands and contacts are page-relative evidence, not a measured thickness or verified continuity. Material, construction state, physical scale, openings and completeness are not established." };
+    }),
+    ...runEntries.map(({ source, run, band }) => {
+      const { x, y, width, height } = run.rect, thicknessBandCount = bandCounts.get(band) ?? 1;
+      return { sourceKey: `draft-wall:${hash([source.footprint.sourceKey, `${x.toFixed(7)},${y.toFixed(7)},${width.toFixed(7)},${height.toFixed(7)}`])}`, quote: "Straight run of a source construction fill", source,
+        polygon: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }], planRegion: run.rect,
+        classification: { wallLike: true, method: wallRunMethod, sourcePolygonExact: false as const, pageAspectRatio: aspect, physicalAspectRatio: run.length / run.thickness,
+          rectangularity: 1, pageRelativeMinorDimension: run.thickness, minorDimensionBand: band, thicknessBandCount, contextualContactCount: contactsOf(source),
+          evidenceTier: thicknessBandCount >= 3 ? "high" as const : "medium" as const },
+        limitations: "Unreviewed straight run cut from a source construction fill that is not one rectangle (corner, junction, step or short pier). Corners and junctions are given to the longer or through-running wall. Thickness is page-relative evidence, not a measurement; material, construction state, openings and completeness are not established." };
+    }),
+  ].map((wall, i) => ({ sourceKey: wall.sourceKey, entityType: "element" as const, name: `Draft wall ${i + 1}`, quote: wall.quote,
+    layerId: wall.source.footprint.layerId, layerName: wall.source.footprint.layerName,
+    geometry: { quality: "draft_wall" as const, semanticKind: "draft_wall" as const, constructionState: wall.source.state, phaseEvidence: stateEvidence(wall.source),
+      coordinateSpace: "normalized-page" as const, polygon: wall.polygon, sourceFootprintKeys: [wall.source.footprint.sourceKey], planRegion: wall.planRegion,
+      classification: wall.classification, limitations: wall.limitations } }));
   // Unsupported construction fills are grouped only through direct contact with
   // each other. A wall-like polygon may not bridge unrelated fragments into a
-  // false assembly.
-  const fragmentIndexes = footprints.map((_, index) => index).filter(index => !wallIndexes.has(index));
+  // false assembly. Demolished fills are not part of the proposed building.
+  const handled = new Set([...wallSources, ...splitSources].flatMap(source => source.index === null ? [] : [source.index]));
+  const demolishedIndexes = new Set(sources.flatMap(source => source.index !== null && source.state === "demolished" ? [source.index] : []));
+  const fragmentIndexes = footprints.map((_, index) => index).filter(index => !handled.has(index) && !demolishedIndexes.has(index));
   const fragmentParent = new Map(fragmentIndexes.map(index => [index, index]));
   const fragmentRoot = (index: number): number => { let p = fragmentParent.get(index)!; while (p !== fragmentParent.get(p)) p = fragmentParent.get(p)!; return p; };
   for (const index of fragmentIndexes) for (const neighbor of adjacency[index]) if (fragmentParent.has(neighbor))
@@ -312,7 +368,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }
   // Wall thickness in grid cells along the axis that crosses the wall: the grid
   // is n×n over a possibly non-square page, so x and y cells differ in size.
-  const thicknesses=wallEntries.map(({index})=>{const r=footprints[index].geometry.planRegion;return (r.width*horizontalCost<r.height?r.width:r.height)*n;}).sort((a,b)=>a-b);
+  const thicknesses=[...wallSources].filter(source=>source.index!==null&&source.state==="proposed").map(({footprint})=>{const r=footprint.geometry.planRegion;return (r.width*horizontalCost<r.height?r.width:r.height)*n;}).sort((a,b)=>a-b);
   closeRadius=closeRadius || (thicknesses.length>=3&&(unitFills.length>0||labels.length<=2)?Math.min(4,Math.max(1,Math.round(thicknesses[Math.floor(thicknesses.length/2)]))):0);
   // Openings (doors, windows, passages) are gaps between facing wall ends. They
   // are closed in the segmentation grid only, so rooms do not leak into each
@@ -535,7 +591,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     }
   }
   return { rooms, assemblies, selectionMask: { gridSize: n, cells: selectionCells }, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,
-    highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
+    retainedWallCount:walls.filter(w=>w.geometry.constructionState==="retained").length,demolishedWallCount:walls.filter(w=>w.geometry.constructionState==="demolished").length,splitFillCount:splitSources.size,highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
     areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, straightSeamCount:chordSeamCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
     openingEvidence:openings.slice(0,500).map(({sideProbes:_probes,...opening},o)=>({...opening,sides:openingSides[o].map(side=>typeof side==="number"?`topology-v5:${labels[side].sourceKey}`:side)})),

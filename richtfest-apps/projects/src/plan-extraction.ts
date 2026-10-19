@@ -9,9 +9,10 @@ import { createHash } from "node:crypto";
 import { SaxesParser } from "saxes";
 import { extractPlanFootprints } from "./plan-footprints";
 import { inferPlanTopology } from "./plan-topology";
+import { outlineWallFootprints } from "./plan-outline-walls";
 import { encodeSelectionMask, selectionMaskEncoding } from "./plan-selection";
 
-export const buildingExtractorVersion = "topology-v9";
+export const buildingExtractorVersion = "topology-v10";
 
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number; confidence?: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text" | "confidence">;
@@ -124,7 +125,11 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
     const labels = allLabels.slice(0,500);
     let footprints: Awaited<ReturnType<typeof extractPlanFootprints>> | null = null;
     try { footprints = await extractPlanFootprints(path,page,signal); } catch { signal.throwIfAborted(); }
-    const { candidates: footprintCandidates, supplementaryBarriers = [], fillRegions = [], doorSwings = [], barrierLines = [], pageAspectRatio = 1, ...geometryExtraction } = footprints ?? {candidates:[],status:"unavailable",limitations:"Native PDF geometry could not be read; only text anchors are available."};
+    const { candidates: layerCandidates, supplementaryBarriers = [], fillRegions = [], doorSwings = [], barrierLines: layerBarrierLines = [], penSegments = [], pageAspectRatio = 1, ...geometryExtraction } = footprints ?? {candidates:[],status:"unavailable",limitations:"Native PDF geometry could not be read; only text anchors are available."};
+    // A flattened print has no construction layer: walls are read from the outlines of the wall pen instead.
+    const outline = !layerCandidates.length && penSegments.length ? outlineWallFootprints({ penSegments, doorSwings, aspect: pageAspectRatio, roomLabels: labels.map(label => label.geometry.planRegion) }) : null;
+    const footprintCandidates = outline?.footprints.length ? outline.footprints : layerCandidates;
+    const barrierLines = outline?.footprints.length ? outline.barrierLines : layerBarrierLines;
     const scales=[...new Set(words.flatMap(w=>/^1:\d{2,4}$/.test(w.text)?[Number(w.text.slice(2))]:[]))];
     const scaleObservation=scales.length===1?{denominator:scales[0],quote:`1:${scales[0]}`,status:"unreviewed",limitations:"Title-block scale is not used for physical area validation until a source dimension chain corroborates it."}:null;
     // The printed scale is unreviewed: it only bounds plausible opening widths and room sizes, never measures them.
@@ -133,7 +138,7 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
     const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines});
     // The barrier raster goes to its own table (magic selection), never into the job result.
     const selectionMask = { gridSize: topology.selectionMask.gridSize, encoding: selectionMaskEncoding, data: encodeSelectionMask(topology.selectionMask.cells) };
-    return { labels:topology.rooms, footprints: topology.assemblies, selectionMask, pageScale: { pageAspectRatio, metresPerPageHeight }, geometryExtraction,topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",
+    return { labels:topology.rooms, footprints: topology.assemblies, selectionMask, pageScale: { pageAspectRatio, metresPerPageHeight }, geometryExtraction:{...geometryExtraction,...(outline?{outlineWalls:outline.stats}:{})},topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",
       scaleObservation,
       truncated: allLabels.length > labels.length,
       reason: "Unreviewed source labels, apartment-contained regions or explicitly approximate wall-constrained partitions, conservative draft-wall proposals from exact elongated rectangular construction fills, and separate unsupported construction fragments. Openings between facing wall ends (optionally supported by door-swing arcs) are closed for segmentation and recorded as unreviewed room connections. Alternative construction-state geometry is retained as evidence but never unioned into the active barrier scenario. Printed areas guide relative partition capacity and flag severe mismatches; the printed scale only bounds plausible opening widths and room sizes. Partition seams are not source walls. Verified doors, wall continuity, thickness, materials, state, physical scale and completeness remain unestablished." };

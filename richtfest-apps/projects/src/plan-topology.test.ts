@@ -229,3 +229,16 @@ test.skipIf(!reference)("reference basement page demotes the audited whole-apart
   expect(result.coverage.approximateRegionCount).toBeGreaterThanOrEqual(25);
   expect(Math.max(...result.rooms.flatMap(room=>room.geometry.polygon?[room.geometry.planRegion.width*room.geometry.planRegion.height]:[]))).toBeLessThan(.08);
 });
+test("an L-shaped construction fill becomes two draft walls; fill colours give existing and demolished walls their state",()=>{
+  const lShape:PlanFootprint={...footprint("corner",.1,.1,.3,.01),geometry:{...footprint("corner",.1,.1,.3,.01).geometry,
+    polygon:[{x:.1,y:.1},{x:.4,y:.1},{x:.4,y:.11},{x:.11,y:.11},{x:.11,y:.3},{x:.1,y:.3}],planRegion:{x:.1,y:.1,width:.3,height:.2}}};
+  const result=inferPlanTopology([],[lShape,{...footprint("old",.5,.1,.01,.2),fillColor:"#e6e699"}],[],200,
+    [{...footprint("kept",.6,.1,.01,.2),layerName:"Abbruch/Bestand",fillColor:"#949494"},{...footprint("gone",.7,.1,.01,.2),layerName:"Abbruch/Bestand",fillColor:"#e6e699"},{...footprint("other",.8,.1,.01,.2),layerName:"Abbruch/Bestand",fillColor:"#00cdcd"}]);
+  const walls=result.assemblies.filter(a=>a.geometry.quality==="draft_wall");
+  // The corner goes to the longer, horizontal arm; the vertical arm starts below it.
+  expect(walls.filter(w=>w.geometry.sourceFootprintKeys[0]==="corner").map(w=>w.geometry.planRegion)).toEqual([
+    {x:.1,y:.1,width:expect.closeTo(.3,6),height:expect.closeTo(.01,6)},{x:.1,y:expect.closeTo(.11,6),width:expect.closeTo(.01,6),height:expect.closeTo(.19,6)}]);
+  expect(result.coverage.fragmentAssemblyCount).toBe(0);
+  const state=(key:string)=>walls.filter(w=>w.geometry.sourceFootprintKeys[0]===key).map(w=>w.geometry.constructionState);
+  expect([state("old"),state("kept"),state("gone"),state("other")]).toEqual([["demolished"],["retained"],["demolished"],[]]);
+});

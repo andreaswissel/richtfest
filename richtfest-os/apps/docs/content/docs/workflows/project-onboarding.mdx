@@ -77,6 +77,16 @@ When a newer plan set replaces an older one (for example a revised approval pack
 
 The workspace keeps **Existing**, **Demolition** and **Proposed** as views of one shared record. Retained objects keep the same stable ID in every relevant view. A demolished object and its proposed replacement are separate records even when they occupy the same area. Unreviewed candidates inferred from the proposed-construction source layer appear only in the Proposed view. Existing and Demolition disclose how many wall hypotheses are hidden for the exact source page and link directly to that Proposed review context. In Proposed, **Wall hypotheses** can be toggled independently; construction assemblies start hidden so the plan stays readable. PDF layers change only the evidence rendering and never hide, delete or redefine model objects.
 
+### Where wall hypotheses come from
+
+The plan trace proposes walls ("Draft wall …") from the drawing itself:
+
+- **Layered CAD plans**: every filled shape on the construction layer ("Konstruktion"). A straight fill is one wall. A fill that joins several walls (a corner, a T or cross junction, a wall with a step, a short pier between windows) is split into straight runs; a corner or junction goes to the wall running through it, else to the longer one. Columns and other blocks thicker than a wall stay unsupported fragments.
+- **Construction state by colour**: following the usual colours for alterations, a yellow fill is a demolished wall on any layer, and a grey fill on the existing/demolition layer ("Abbruch/Bestand") is an existing wall that stays. Demolished walls appear only in the Existing and Demolition views and are left out of the planned building's checks; retained walls appear in every view. Accepting such a wall keeps its state.
+- **Plans without layers** (a flattened print or scan export): walls are drawn as outlines there. The wall pen is the colour the door swings are drawn in, joined by a colour whose lines end on it (often existing walls). Each thin region enclosed by the wall pen that splits cleanly into straight runs and borders a room is a wall. Door swings, stair flights and dimension strips fail these tests. The wall pen's lines also separate the rooms.
+
+All of these are unreviewed proposals with their source page; thickness stays page-relative until **Derive from plan** measures it at the printed scale.
+
 ### The building model workbench
 
 The building model fills the page as one workbench:

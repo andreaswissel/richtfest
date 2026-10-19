@@ -114,7 +114,7 @@ export function roomSpaceContext(room: { name: string; groupLabel?: string | nul
 
 export type ModelProperty = { entityType: string; entityId: string; propertyKey: string;
   current: { value: unknown; reviewStatus: string; provenance: string } | null; reviewed: { value: unknown } | null };
-type ModelEntity = { id: string; name: string; kind?: string; geometry: unknown };
+type ModelEntity = { id: string; name: string; kind?: string; constructionState?: string; geometry: unknown };
 type PlanGeometry = { polygon?: Point[]; holes?: Point[][]; groupLabel?: string | null; planRegion?: { x: number; y: number; width: number; height: number };
   source?: { sourceVersionId?: string; page?: number } };
 
@@ -164,7 +164,8 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
   for (const element of input.elements) {
     const g = geometry(element), key = sourceKey(g);
     const isWall = element.kind === "draft_wall" || effectiveValue(prop("element", element.id, "componentType")) === "wall";
-    if (!isWall || !key || !Array.isArray(g.polygon)) continue;
+    // A demolished wall separates nothing in the planned building.
+    if (!isWall || element.constructionState === "demolished" || !key || !Array.isArray(g.polygon)) continue;
     const rooms = roomsBySource.get(key) ?? [];
     const sides = wallSides(g.polygon, rooms, [...rooms, ...(candidatesBySource.get(key) ?? [])]);
     if (!sides) continue;

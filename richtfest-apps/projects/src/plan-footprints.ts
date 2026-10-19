@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import type { PenSegment } from "./plan-outline-walls";
 
 type Matrix = [number,number,number,number,number,number];
 type Point = {x:number;y:number};
 type Box = {x:number;y:number;width:number;height:number};
 export type PlanFillRegion = {sourceKey:string;layerId:string;layerName:string;rings:Point[][];fillRule:"evenodd"|"nonzero"};
-export type PlanFootprint = {sourceKey:string;entityType:"element";name:string;layerId:string;layerName:string;quote:string;
+export type PlanFootprint = {sourceKey:string;entityType:"element";name:string;layerId:string;layerName:string;quote:string;fillColor?:string;
   geometry:{quality:"footprint";coordinateSpace:"normalized-page";polygon:Point[];rings?:Point[][];fillRule?:"evenodd"|"nonzero";curvesFlattened?:true;planRegion:{x:number;y:number;width:number;height:number};limitations:string}};
 const identity:Matrix=[1,0,0,1,0,0];
 export const multiplyPlanTransform=(a:Matrix,b:Matrix):Matrix=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
@@ -93,7 +94,7 @@ function segmentChains(segments:{a:Point;b:Point}[]) {
   }
   return chains;
 }
-export type PlanDoorSwing={sourceKey:string;layerId:string|null;layerName:string|null;hinge:Point;start:Point;end:Point;radius:number;sweepDegrees:number};
+export type PlanDoorSwing={sourceKey:string;layerId:string|null;layerName:string|null;strokeColor?:string|null;hinge:Point;start:Point;end:Point;radius:number;sweepDegrees:number};
 /** A stroked cubic that is a circular arc of roughly 90° is the conventional
  * door swing symbol. Its centre (the hinge) is recovered from the end normals;
  * it is drawing evidence for an opening, not a verified door. */
@@ -111,18 +112,20 @@ export function doorSwingFromCurve({from,c1,c2,to}:Omit<PathSegment,"ring">) {
 
 export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},codes:Record<string,number>,layers:Map<string,string>,viewport:{transform:number[];width:number;height:number}, layerPattern = /\bKonstruktion\b/i, excludePattern:RegExp|null = alternativeConstructionLayer, hidden?:Set<string>) {
   let transform:Matrix=[...identity],clip:{x:number;y:number;width:number;height:number}|null=null,unsupportedClip=false,pendingClip=false;
-  let dashed=false;
-  const saves:{transform:Matrix;clip:Box|null;unsupportedClip:boolean;dashed:boolean}[]=[];const marked:(string|null)[]=[];
+  let dashed=false,fillColor:string|null=null,strokeColor:string|null=null;
+  const saves:{transform:Matrix;clip:Box|null;unsupportedClip:boolean;dashed:boolean;fillColor:string|null;strokeColor:string|null}[]=[];const marked:(string|null)[]=[];
   const barrierLines:(PlanBarrierLine|null)[]=[];let barrierPoints=0;
   // Single-segment strokes, chained after the walk: CAD exports often draw an arc as many separate lines.
-  const segments:{a:Point;b:Point;layerId:string|null;barrier:number}[]=[];
+  const segments:{a:Point;b:Point;layerId:string|null;barrier:number;colour:string|null}[]=[];
+  // A plan without layers (a flattened print) keeps its straight strokes with their pen colour: walls are drawn as outlines there.
+  const collectPens=layers.size===0&&excludePattern!==null;const penSegments:PenSegment[]=[];
   const candidates:PlanFootprint[]=[];const seen=new Set<string>();
   const fillRegions:PlanFillRegion[]=[];
   const doorSwings:PlanDoorSwing[]=[];
   const stats={constructionFilledPaths:0,retainedFootprints:0,omittedSmall:0,omittedUnsupported:0,omittedDuplicate:0,omittedHiddenLayer:0,flattenedCurveFootprints:0,compoundFootprints:0,truncated:false,fillRegionsTruncated:false,barrierLineCount:0,omittedDashedLines:0,barrierLinesTruncated:false};
-  const save=()=>saves.push({transform:[...transform],clip,unsupportedClip,dashed});
-  const restore=()=>{const s=saves.pop();if(s){transform=s.transform;clip=s.clip;unsupportedClip=s.unsupportedClip;dashed=s.dashed;}};
-  const maxOps=300000;
+  const save=()=>saves.push({transform:[...transform],clip,unsupportedClip,dashed,fillColor,strokeColor});
+  const restore=()=>{const s=saves.pop();if(s){transform=s.transform;clip=s.clip;unsupportedClip=s.unsupportedClip;dashed=s.dashed;fillColor=s.fillColor;strokeColor=s.strokeColor;}};
+  const maxOps=500000;
   for(let i=0;i<Math.min(ops.fnArray.length,maxOps);i++) {
     const op=ops.fnArray[i],a=ops.argsArray[i]??[];
     if(op===codes.save)save();else if(op===codes.restore)restore();
@@ -138,6 +141,12 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     else if(op===codes.beginMarkedContent)marked.push(null);
     else if(op===codes.endMarkedContent)marked.pop();
     else if(op===codes.clip||op===codes.eoClip)pendingClip=true;
+    // The fill colour tells construction states apart where one layer holds several (grey existing, yellow demolished).
+    else if(op===codes.setStrokeRGBColor)strokeColor=typeof a[0]==="string"?a[0].toLowerCase():null;
+    else if(op===codes.setStrokeCMYKColor||op===codes.setStrokeColorN||op===codes.setStrokeColor)strokeColor=null;
+    else if(op===codes.setFillRGBColor)fillColor=typeof a[0]==="string"?a[0].toLowerCase():null;
+    else if(op===codes.setFillGray)fillColor=typeof a[0]==="number"?`#${Math.round(a[0]*255).toString(16).padStart(2,"0").repeat(3)}`:null;
+    else if(op===codes.setFillCMYKColor||op===codes.setFillColorN||op===codes.setFillColor)fillColor=null;
     else if(op===codes.setDash)dashed=Array.isArray(a[0])?a[0].some((v:number)=>v>0):Boolean(a[0]?.length);
     else if(op===codes.constructPath) {
       const matrix=multiplyPlanTransform(viewport.transform as Matrix,transform);
@@ -171,15 +180,22 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
           const swing=curves.length?curves.map(doorSwingFromCurve).find(Boolean)??null:walked.closed[r]?null:doorSwingFromPolyline(ring);
           // A subpath that is only the arc (no leaf or wall segments) is not a barrier.
           if(swing&&(!curves.length||ring.length===curves.length*8+1))arcRings.add(r);
-          if(!swing&&!curves.length&&!walked.closed[r]&&ring.length===2&&segments.length<100000)pendingSegments.set(r,segments.push({a:ring[0],b:ring[1],layerId:layerId??null,barrier:-1})-1);
+          if(!swing&&!curves.length&&!walked.closed[r]&&ring.length===2&&segments.length<100000)pendingSegments.set(r,segments.push({a:ring[0],b:ring[1],layerId:layerId??null,barrier:-1,colour:strokeColor})-1);
           return swing;
         });
         for(const swing of arcs){
           if(!swing||[swing.hinge,swing.start,swing.end].some(p=>p.x<0||p.y<0||p.x>viewport.width||p.y>viewport.height))continue;
           const norm=(p:Point)=>({x:p.x/viewport.width,y:p.y/viewport.height});
           const hinge=norm(swing.hinge),key=createHash("sha256").update(`${hinge.x.toFixed(6)},${hinge.y.toFixed(6)},${swing.radius.toFixed(3)}`).digest("hex");
-          if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId:layerId??null,layerName:layerId?layers.get(layerId)??null:null,
+          if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId:layerId??null,layerName:layerId?layers.get(layerId)??null:null,strokeColor,
             hinge,start:norm(swing.start),end:norm(swing.end),radius:swing.radius/viewport.height,sweepDegrees:swing.sweepDegrees});}
+      }
+      if(collectPens&&walked&&!dashed&&!unsupportedClip&&penSegments.length<200000)for(const [r,ring] of walked.rings.entries()){
+        if(walked.curves.some(c=>c.ring===r))continue;
+        const points=walked.closed[r]?[...ring,ring[0]]:ring;
+        for(let k=0;k+1<points.length;k++){const p=points[k],q=points[k+1];
+          if(p.x<0||p.y<0||p.x>viewport.width||p.y>viewport.height||q.x<0||q.y<0||q.x>viewport.width||q.y>viewport.height)continue;
+          penSegments.push({a:{x:p.x/viewport.width,y:p.y/viewport.height},b:{x:q.x/viewport.width,y:q.y/viewport.height},colour:strokeColor});}
       }
       // Solid strokes on the primary construction layer outline walls, partitions, door leaves and
       // windows on many CAD exports. They are kept as barrier lines; dashed strokes mean overhead or hidden.
@@ -215,7 +231,7 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
       if(seen.has(key)){stats.omittedDuplicate++;continue;}seen.add(key);
       if(candidates.length>=500){stats.truncated=true;continue;}
       if(parsed.curved)stats.flattenedCurveFootprints++;if(rings.length>1)stats.compoundFootprints++;
-      candidates.push({sourceKey:`footprint:${key}`,entityType:"element",name:`Construction footprint ${candidates.length+1}`,layerId,layerName,quote:"Closed filled source path",
+      candidates.push({sourceKey:`footprint:${key}`,entityType:"element",name:`Construction footprint ${candidates.length+1}`,layerId,layerName,quote:"Closed filled source path",...(fillColor?{fillColor}:{}),
         geometry:{quality:"footprint",coordinateSpace:"normalized-page",polygon:normalized,...(rings.length>1?{rings:normalizedRings,fillRule:evenOdd?"evenodd" as const:"nonzero" as const}:{}),
           ...(parsed.curved?{curvesFlattened:true as const}:{}),planRegion:bounds(normalizedRings.flat()),limitations}});
     }
@@ -228,12 +244,12 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     const layerId=segments[chain.members[0]].layerId;
     const norm=(p:Point)=>({x:p.x/viewport.width,y:p.y/viewport.height});
     const hinge=norm(swing.hinge),key=createHash("sha256").update(`${hinge.x.toFixed(6)},${hinge.y.toFixed(6)},${swing.radius.toFixed(3)}`).digest("hex");
-    if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId,layerName:layerId?layers.get(layerId)??null:null,
+    if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId,layerName:layerId?layers.get(layerId)??null:null,strokeColor:segments[chain.members[0]].colour,
       hinge,start:norm(swing.start),end:norm(swing.end),radius:swing.radius/viewport.height,sweepDegrees:swing.sweepDegrees});
   }
   const barriers=barrierLines.filter((line):line is PlanBarrierLine=>line!==null);
   stats.barrierLineCount=barriers.length;
-  return {candidates,fillRegions,doorSwings,barrierLines:barriers,...stats,limitations};
+  return {candidates,fillRegions,doorSwings,barrierLines:barriers,penSegments,...stats,limitations};
 }
 
 export async function extractPlanFootprints(path:string,pageNumber:number,signal:AbortSignal) {
