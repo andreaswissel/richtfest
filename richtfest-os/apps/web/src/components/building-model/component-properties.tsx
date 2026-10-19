@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { bebauungsplanSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
@@ -70,29 +70,33 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
   const current = state && state.reviewStatus !== "rejected" ? state.value : null;
   const text = current === null || current === undefined ? "" : String(current);
   const [draft, setDraft] = useState(text);
-  useEffect(() => setDraft(text), [text]);
+  // Enter and the blur that follows commit the same entry once, even before the saved value reloads.
+  const committed = useRef(text);
+  useEffect(() => { setDraft(text); committed.current = text; }, [text]);
   const unit = units[propertyKey] ?? null;
   const label = unit ? `${fieldLabel(propertyKey, t)} (${unit})` : fieldLabel(propertyKey, t);
   const options = enumOptions[propertyKey];
   const commit = (raw: string) => {
     const trimmed = raw.trim();
-    if (trimmed === text) return;
+    if (trimmed === committed.current) return;
     const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit ? Number(trimmed.replace(",", ".")) : trimmed;
     if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" || propertyKey === "soundReductionIndex" ? value >= 0 : value > 0))) { setDraft(text); return; }
+    committed.current = trimmed;
     onSave({ key: propertyKey, value, unit: value === null ? null : unit });
   };
+  // Fields stay editable while a save runs: saves queue, so quick consecutive entries all land.
   return <>
     <dt>{label}</dt>
     <dd>
       {options
-        ? <NativeSelect aria-label={label} value={draft} disabled={pending} onChange={(event) => { setDraft(event.target.value); commit(event.target.value); }}>
+        ? <NativeSelect aria-label={label} value={draft} onChange={(event) => { setDraft(event.target.value); commit(event.target.value); }}>
             <option value="">{placeholder ? `${t("buildingComponentInferredPrefix")} ${optionLabel(propertyKey, placeholder, t)}` : t("buildingModelUnknownValue")}</option>
             {options.map((option) => <option key={option} value={option}>{optionLabel(propertyKey, option, t)}</option>)}
           </NativeSelect>
-        : longText.has(propertyKey) ? <Textarea aria-label={label} rows={propertyKey === "bebauungsplanNoise" ? 3 : 2} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
+        : longText.has(propertyKey) ? <Textarea aria-label={label} rows={propertyKey === "bebauungsplanNoise" ? 3 : 2} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) commit(event.currentTarget.value); }} />
-        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} disabled={pending} title={state?.evidenceQuote ?? undefined}
+        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />}
       <StatusLine state={state} t={t} pending={pending} onReview={onReview} />

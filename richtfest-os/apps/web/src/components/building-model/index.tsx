@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
@@ -284,6 +284,24 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
   const model = useMemo(() => adaptBuildingModel(modelQuery.data), [modelQuery.data]);
+  // Property and review writes run one at a time and continue from the revision the previous write
+  // returned, so quick consecutive edits are not rejected as stale before the model reloads.
+  const writeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const writtenRevision = useRef({ projectId, revision: 0 });
+  const loadedRevision = useRef(model.revision ?? 0);
+  loadedRevision.current = model.revision ?? 0;
+  const modelApi = useCallback(<T = RecordData,>(path: string, body?: unknown, method?: string): Promise<T> => {
+    const run = writeQueue.current.catch(() => undefined).then(async () => {
+      const written = writtenRevision.current.projectId === projectId ? writtenRevision.current.revision : 0;
+      const revision = Math.max(loadedRevision.current, written);
+      const result = await api<T>(path, body && typeof body === "object" && "baseRevision" in body ? { ...body, baseRevision: revision } : body, method);
+      const next = (result as { revision?: unknown } | null)?.revision;
+      if (typeof next === "number") writtenRevision.current = { projectId, revision: Math.max(written, next) };
+      return result;
+    });
+    writeQueue.current = run;
+    return run;
+  }, [projectId]);
   const missingModelOrSource = (modelQuery.isError && modelError instanceof ApiError && modelError.status === 404) || (!modelQuery.isError && (!modelQuery.data || !model.planSources.length));
   const filesQuery = useApi(`/projects/${projectId}/files`, missingModelOrSource);
   const [bootstrapFileId, setBootstrapFileId] = useState("");
@@ -377,7 +395,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
-      api(`/projects/${projectId}/building-model/${entityType}/${id}`, {
+      modelApi(`/projects/${projectId}/building-model/${entityType}/${id}`, {
         ...body,
         baseRevision: model.revision,
       }, "PATCH"),
@@ -390,7 +408,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     },
   });
   const createMeasurement = useMutation({
-    mutationFn: ({ region, measurement, value }: { region: BuildingRegion; measurement: NonNullable<BuildingRegion["measurements"]>[number]; value: number }) => api(`/projects/${projectId}/building-model/measurements`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id, quantity: measurement.semanticQuantity || "distance", value, unit: measurement.unit || "m", method: measurement.method || "manual", uncertainty: measurement.uncertainty ?? null, evidence: measurement.evidence || [] }, "POST"),
+    mutationFn: ({ region, measurement, value }: { region: BuildingRegion; measurement: NonNullable<BuildingRegion["measurements"]>[number]; value: number }) => modelApi(`/projects/${projectId}/building-model/measurements`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id, quantity: measurement.semanticQuantity || "distance", value, unit: measurement.unit || "m", method: measurement.method || "manual", uncertainty: measurement.uncertainty ?? null, evidence: measurement.evidence || [] }, "POST"),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -398,7 +416,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const saveComponentProperty = useMutation({
     mutationFn: ({ region, save }: { region: BuildingRegion; save: ComponentPropertySave }) => {
       const sourceVersion = region.sourceVersionId || evidence.sourceVersionId;
-      return api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id,
+      return modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id,
         propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual",
         evidence: sourceVersion ? [{ kind: "page", sourceVersionId: sourceVersion, page: region.page, ...(region.box ? { region: region.box } : {}) }] : [] });
     },
@@ -408,7 +426,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   });
   const reviewComponentProperty = useMutation({
     mutationFn: ({ state, decision }: { state: BuildingComponentPropertyState; decision: "approved" | "rejected" }) =>
-      api(`/projects/${projectId}/building-model/properties/${state.propertyId}/versions/${state.version}/review`, { baseRevision: model.revision, reviewRevision: state.reviewRevision, decision }),
+      modelApi(`/projects/${projectId}/building-model/properties/${state.propertyId}/versions/${state.version}/review`, { baseRevision: model.revision, reviewRevision: state.reviewRevision, decision }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -426,14 +444,14 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const reviewWallType = useMutation({
-    mutationFn: (items: Array<{ propertyId: string; version: number; reviewRevision: number }>) => api<{ reviewed: number; skipped: number }>(`/projects/${projectId}/building-model/properties/review`, { baseRevision: model.revision, decision: "approved", items }),
+    mutationFn: (items: Array<{ propertyId: string; version: number; reviewRevision: number }>) => modelApi<{ reviewed: number; skipped: number }>(`/projects/${projectId}/building-model/properties/review`, { baseRevision: model.revision, decision: "approved", items }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   // The agreed sound insulation level belongs to the building; it is a requirement, not an observation.
   const saveBuildingProperty = useMutation({
-    mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+    mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       // Zoning check areas and the exterior noise assessment are observations of the site and building; everything else here is a requirement.
       entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: ["parcelArea", "footprintArea", "exteriorNoiseApplicability", "exteriorNoiseFlanking"].includes(save.key) ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
@@ -464,14 +482,14 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const saveStoreyLevel = useMutation({
-    mutationFn: ({ storeyId, level }: { storeyId: string; level: number | null }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+    mutationFn: ({ storeyId, level }: { storeyId: string; level: number | null }) => modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       entityType: "storey", entityId: storeyId, propertyKey: "level", value: level, unit: null, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const saveStoreyProperty = useMutation({
-    mutationFn: ({ storeyId, save }: { storeyId: string; save: ComponentPropertySave }) => api(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
+    mutationFn: ({ storeyId, save }: { storeyId: string; save: ComponentPropertySave }) => modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       entityType: "storey", entityId: storeyId, propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
