@@ -1,13 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2026-10-19
 
 - **Richtfest Agent fills the exterior noise verification:** Ask the agent to prepare the Schallschutznachweis: it reports which rooms are missing what, suggests room uses, windows from the Fensterliste, Rw values and heights from the project sources with the cited page, and can create the draft Nachweis. Accept or reject its suggestions in Exterior noise, one by one or all at once; unconfirmed suggestions keep the Nachweis a Teilstand.
 - **Wall Rw from DIN 4109-32:** Exterior noise suggests the Rw of massive exterior walls from their material, thickness and density (mass law), with the calculation as its basis; insulated or multi-leaf walls and perforated units outside the catalogue are named instead of guessed.
 - **Exterior noise in the building model:** Rooms, exterior walls, windows and doors show their exterior noise values (use, Rw and basis, opening area, surfaces complete); walls list their openings, and Sound insulation holds the method, flanking and each storey's clear room height.
-
-## 2026-10-19
-
 - **Exterior noise verification:** Exterior noise lists the rooms of the placed plan with their exterior facades and La. Enter room use, clear room height, wall Rw and windows; complete rooms are checked against the DIN 4109-1 requirement right away. **Create Nachweis** writes the draft Schallschutznachweis Außenlärm with calculation sheets, the derivation of La and a sign-off block as a document and PDF.
 
 - **Facade levels:** Exterior noise shows draft road rating levels after RLS-19 and relevant exterior noise levels La per facade and storey after DIN 4109-2, with every assumption and limitation listed. Roads take a surface type and gradient; railways take rating levels from a study. Needs the acoustic norm pack configured on the server.
