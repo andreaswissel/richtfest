@@ -1760,6 +1760,7 @@
   "buildingModelNoMatches": "Keine passenden Objekte",
   "buildingModelNoOutline": "Noch kein Umriss",
   "buildingModelOtherPages": "Andere Seiten",
+  "buildingModelOpenStoreyPlan": "Planseite {page} öffnen",
   "buildingModelOutlineMethod": "Methode",
   "buildingModelOutliner": "Gliederung",
   "buildingModelPageShort": "S.",

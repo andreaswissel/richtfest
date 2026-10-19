@@ -722,6 +722,22 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   if (acceptedElements.length) outlinerCategories.unshift({ key: "category:elements", label: t("buildingModelAcceptedElements"), items: acceptedElements, visible: acceptedElements.some(regionVisible), onVisible: (visible) => setVisible(acceptedElements, visible) });
   const otherPageRegions = regions.filter((region) => !pageRegions.includes(region));
   const storeyLabel = model.storeys.find((storey) => storey.id === currentSource?.storeyId)?.name || `${t("buildingModelPage")} ${page}`;
+  // Every storey of the shown plan set (and any storey with rooms), top floor first; the shown one is expanded.
+  const planSetVersion = sourceForEvidence?.source?.versionId;
+  const outlinerStoreys: OutlinerStorey[] = model.storeys.flatMap((storey) => {
+    const source = model.planSources.find((item) => item.storeyId === storey.id && item.source?.versionId === planSetVersion) || model.planSources.find((item) => item.storeyId === storey.id);
+    const current = storey.id === currentSource?.storeyId;
+    const items = current ? [] : [...otherPageRegions.filter((region) => region.storeyId === storey.id && isRoom(region)),
+      ...stateCandidates.filter((candidate) => candidate.storeyId === storey.id && isRoom(candidate) && candidate.kind !== "unknown-room" && (!planSetVersion || candidate.sourceVersionId === planSetVersion))].sort(byLabel);
+    if (!current && !source && !items.length) return [];
+    const state = storey.componentProperties?.level;
+    const level = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null;
+    return [{ id: storey.id, label: storeyNames.get(storey.id) ?? storey.name ?? storey.id, level, current, page: source?.page ?? null, items,
+      onOpen: source && !current ? () => selectSourcePage(source.page, source.source?.versionId || "", storey.id) : undefined }];
+  }).sort((a, b) => (b.level ?? -1e3) - (a.level ?? -1e3) || (a.page ?? 0) - (b.page ?? 0));
+  if (!outlinerStoreys.some((storey) => storey.current)) outlinerStoreys.unshift({ id: "page", label: storeyLabel, level: null, current: true, page, items: [] });
+  const listedStoreys = new Set(outlinerStoreys.map((storey) => storey.id));
+  const unlistedRegions = otherPageRegions.filter((region) => !region.storeyId || !listedStoreys.has(region.storeyId));
   const areaOf = (region: BuildingRegion) => region.polygon && region.polygon.length >= 3 ? outlineAreaM2({ polygon: region.polygon, holes: region.holes ?? [] }, pageScale) : null;
 
   // Properties, status bar and keys.
@@ -922,7 +938,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
         </div>
       </div>
       <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
-        <Outliner t={t} storeyLabel={storeyLabel} groups={outlinerGroups} categories={outlinerCategories} otherPages={otherPageRegions}
+        <Outliner t={t} storeys={outlinerStoreys} groups={outlinerGroups} categories={outlinerCategories} otherPages={unlistedRegions}
           layers={sourceLayers} layerVisible={(layer) => layers[layer.id] ?? layer.visible !== false} onLayer={(id, visible) => setLayers((current) => ({ ...current, [id]: visible }))}
           selectedId={selectedCandidate?.id || selected?.id} isVisible={regionVisible} onVisible={setVisible} areaOf={areaOf}
           onSelect={(region) => region.isCandidate ? selectCandidate(region as BuildingExtractionCandidate) : selectRegion(region.id)}
@@ -1463,6 +1479,7 @@ function PropertySection({ title, defaultOpen = true, children }: { title: strin
   </details>;
 }
 
+type OutlinerStorey = { id: string; label: string; level: number | null; current: boolean; page: number | null; items: BuildingRegion[]; onOpen?: () => void };
 type OutlinerNode = { key: string; label: string; items: BuildingRegion[]; visible?: boolean; onVisible?: (visible: boolean) => void };
 
 function VisibilityToggle({ visible, label, onToggle }: { visible: boolean; label: string; onToggle: () => void }) {
@@ -1470,8 +1487,8 @@ function VisibilityToggle({ visible, label, onToggle }: { visible: boolean; labe
   return <button type="button" className={`building-model-eye${visible ? "" : " is-hidden"}`} aria-pressed={visible} aria-label={label} title={label} onClick={onToggle}><Icon className="size-icon-sm" aria-hidden="true" /></button>;
 }
 
-export function Outliner({ t, storeyLabel, groups, categories, otherPages, layers, layerVisible, onLayer, selectedId, isVisible, onVisible, areaOf, onSelect, addRegion, footer }: {
-  t: ReturnType<typeof useT>; storeyLabel: string; groups: OutlinerNode[]; categories: OutlinerNode[]; otherPages: BuildingRegion[];
+export function Outliner({ t, storeys, groups, categories, otherPages, layers, layerVisible, onLayer, selectedId, isVisible, onVisible, areaOf, onSelect, addRegion, footer }: {
+  t: ReturnType<typeof useT>; storeys: OutlinerStorey[]; groups: OutlinerNode[]; categories: OutlinerNode[]; otherPages: BuildingRegion[];
   layers: Array<{ id: string; label: string; visible?: boolean }>; layerVisible: (layer: { id: string; visible?: boolean }) => boolean; onLayer: (id: string, visible: boolean) => void;
   selectedId?: string; isVisible: (region: BuildingRegion) => boolean; onVisible: (regions: BuildingRegion[], visible: boolean) => void;
   areaOf: (region: BuildingRegion) => number | null; onSelect: (region: BuildingRegion) => void; addRegion: ReactNode; footer?: ReactNode;
@@ -1525,12 +1542,24 @@ export function Outliner({ t, storeyLabel, groups, categories, otherPages, layer
     </div>
     <label className="building-model-outliner-search"><Search className="size-icon-sm" aria-hidden="true" /><Input className="h-control-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("buildingModelSearchObjects")} aria-label={t("buildingModelSearchObjects")} /></label>
     <div ref={tree} className="building-model-tree">
-      {branch("storey", storeyLabel, 0, true, storeyCount)}
-      <div hidden={!open("storey", true)}>
-        {groups.map((group) => node(group, 1, true, areaMeta))}
-        {categories.map((category) => node(category, 1, false, () => ""))}
-        {!storeyCount && <p className="building-model-tree-empty">{needle ? t("buildingModelNoMatches") : t("buildingModelNoObjects")}</p>}
-      </div>
+      {storeys.map((storey) => {
+        const key = `storey:${storey.id}`;
+        if (storey.current) return <div key={key} role="group" aria-label={storey.label} className="building-model-tree-storey is-current">
+          {branch(key, storey.label, 0, true, storeyCount)}
+          <div hidden={!open(key, true)}>
+            {groups.map((group) => node(group, 1, true, areaMeta))}
+            {categories.map((category) => node(category, 1, false, () => ""))}
+            {!storeyCount && <p className="building-model-tree-empty">{needle ? t("buildingModelNoMatches") : t("buildingModelNoObjects")}</p>}
+          </div>
+        </div>;
+        const items = storey.items.filter(matches);
+        if (needle && !items.length) return null;
+        const openLabel = storey.page ? t("buildingModelOpenStoreyPlan").replace("{page}", String(storey.page)) : "";
+        return <div key={key} role="group" aria-label={storey.label} className="building-model-tree-storey">
+          {branch(key, storey.label, 0, false, items.length, storey.onOpen && <button type="button" className="building-model-eye" aria-label={`${openLabel}: ${storey.label}`} title={openLabel} onClick={storey.onOpen}><FileText className="size-icon-sm" aria-hidden="true" /></button>)}
+          <div hidden={!open(key, false)}>{items.map((region) => item(region, 1, `${t("buildingModelPageShort")} ${region.page}`))}</div>
+        </div>;
+      })}
       {otherPages.some(matches) && <div role="group" aria-label={t("buildingModelOtherPages")}>
         {branch("other", t("buildingModelOtherPages"), 0, false, otherPages.filter(matches).length)}
         <div hidden={!open("other", false)}>{otherPages.filter(matches).map((region) => item(region, 1, `${t("buildingModelPageShort")} ${region.page}`))}</div>

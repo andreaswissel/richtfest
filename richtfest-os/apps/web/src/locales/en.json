@@ -1760,6 +1760,7 @@
   "buildingModelNoMatches": "No matching objects",
   "buildingModelNoOutline": "No outline yet",
   "buildingModelOtherPages": "Other pages",
+  "buildingModelOpenStoreyPlan": "Open plan page {page}",
   "buildingModelOutlineMethod": "Method",
   "buildingModelOutliner": "Outliner",
   "buildingModelPageShort": "p.",
