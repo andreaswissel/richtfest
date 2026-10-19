@@ -70,6 +70,7 @@ const fieldText: Record<string, string> = {
   exteriorNoiseApplicability: "Anwendbarkeit des Verfahrens", exteriorNoiseFlanking: "Flankenübertragung", clearRoomHeight: "lichte Raumhöhe", exteriorNoiseRoom: "Raumnutzung",
   exteriorSurfacesComplete: "Vollständigkeit der Außenflächen", construction: "Konstruktion", soundReductionIndex: "Rw", soundReductionIndexBasis: "Nachweis für Rw", openingArea: "Öffnungsfläche",
   normalizedLevelDifference: "Dn,e,w", elementCount: "Anzahl", surfaceArea: "Dachfläche",
+  glazing: "Glasaufbau", glassSoundReduction: "Rw,GLAS", windowFrame: "Rahmenmaterial", rebateSeals: "Falzdichtungen", windowOpening: "Öffnungsart", frameShare: "Rahmenanteil", glazingBars: "Sprossen",
 };
 
 /**

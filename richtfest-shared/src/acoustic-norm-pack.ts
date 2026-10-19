@@ -91,6 +91,22 @@ export const acousticNormPackSchema = z.object({
     perforated: z.object({ maxThicknessMm: positive, clayMinRdkAboveMaxThickness: positive, blockMinRdk: positive }).strict(),
     roundingDecimals: z.number().int().min(0).max(3),
   }).strict().optional(),
+  /** Window catalogue: single windows with insulating glass, rated from their glazing, seals and corrections. Optional; without it no window values are suggested. */
+  din4109_35: z.object({
+    edition: z.string().trim().min(1).max(200),
+    /** Rows in ascending Rw; a window takes the highest row its glass and seals meet. */
+    insulatingGlass: z.array(z.object({
+      rwDb: db, ref,
+      /** The declared glass Rw that qualifies, or else the glazing build-up: total glass thickness or the two outer panes, and the cavity. */
+      glassRwMinDb: db,
+      buildUp: z.object({ totalMinMm: positive.optional(), panesMinMm: z.tuple([positive, positive]).optional(), cavityMinMm: positive }).strict().nullable(),
+      seals: z.number().int().min(0).max(4), woodSeals: z.number().int().min(0).max(4),
+      corrections: z.object({ frameShare: db, twinSash: db, fixedGlazing: db, smallWindow: db, glazingBars: db }).strict(),
+    }).strict()).min(1),
+    /** Constant corrections and the limits that trigger them. */
+    woodAluminiumDb: db, largePaneDb: db, largePaneM2: positive, smallWindowM2: positive, frameSharePct: positive,
+    equationRef: ref,
+  }).strict().optional(),
   /** Interior sound insulation in massive buildings: requirements, the flanking transmission method and impact sound. Optional; without it nothing is calculated. */
   din4109_interior: z.object({
     editions: z.object({ requirements: edition, method: edition, junctions: edition, screeds: edition }).strict(),
@@ -191,3 +207,46 @@ export type ImpactResult =
     flankingMassCapped: boolean; lnwPrimeDb: number; uncertaintyDb: number;
     maxDb: number; marginDb: number; meets: boolean; refs: string[]; edition: string }
   | { status: "unsupported"; reason: "method_missing" | "slab_mass_out_of_range" | "flanking_mass_out_of_range" | "no_massive_flanking" | "screed_out_of_range" };
+
+/** Input and result of a window's catalogue Rw (method in @richtfest/acoustics, rows in the pack). Unknown conditions are taken at their least favourable. */
+export type WindowRwInput = {
+  glassRwDb: number | null;
+  glazing: Glazing | null;
+  frame: "wood" | "plastic" | "metal" | "wood_aluminium" | null;
+  seals: number | null;
+  opening: "casement" | "twin_sash" | "fixed" | null;
+  frameSharePct: number | null;
+  glazingBars: boolean | null;
+  areaM2: number | null;
+};
+export type WindowCorrection = "wood_aluminium" | "frame_share" | "twin_sash" | "fixed_glazing" | "small_window" | "large_pane" | "glazing_bars";
+export type WindowRw =
+  | { status: "calculated"; rwDb: number; tableRwDb: number; ref: string; edition: string; equationRef: string;
+    corrections: Array<{ kind: WindowCorrection; db: number; assumed: boolean }>;
+    /** The pack's limits behind the frame-share, small-window and large-pane corrections, for the basis text. */
+    limits: { frameSharePct: number; smallWindowM2: number; largePaneM2: number };
+    assumptions: Array<"insulating_glass_single_window" | "seals_assumed" | "frame_unknown"> }
+  | { status: "unavailable"; reason: "catalogue_missing" | "glazing_missing" | "glazing_unreadable" | "below_catalogue" };
+
+/** Panes and cavities of a glazing build-up, outer pane first, in mm. */
+export type Glazing = { panesMm: number[]; cavitiesMm: number[] };
+/**
+ * Reads a glazing build-up as plans and window schedules write it: panes and
+ * cavities separated by slashes, "6/16/4" or "4/12/4/12/4". Laminated panes
+ * in the "44.2" notation count as their two plies (8 mm); a trailing word such as
+ * "VSG" or "Ar" is ignored. Anything else is unreadable.
+ */
+export function parseGlazing(text: string | null | undefined): Glazing | null {
+  if (!text) return null;
+  const parts = text.split("/").map(part => part.trim());
+  if (parts.length < 3 || parts.length % 2 === 0) return null;
+  const values: number[] = [];
+  for (const [index, part] of parts.entries()) {
+    const laminated = index % 2 === 0 ? /^(\d)(\d)\.\d\b/.exec(part) : null;
+    const plain = /^(\d+(?:[.,]\d+)?)\s*(?:mm)?\s*[A-Za-zÄÖÜäöü.-]*$/.exec(part);
+    const value = laminated ? Number(laminated[1]) + Number(laminated[2]) : plain ? Number(plain[1].replace(",", ".")) : NaN;
+    if (!Number.isFinite(value) || value <= 0 || value > 100) return null;
+    values.push(value);
+  }
+  return { panesMm: values.filter((_, index) => index % 2 === 0), cavitiesMm: values.filter((_, index) => index % 2 === 1) };
+}

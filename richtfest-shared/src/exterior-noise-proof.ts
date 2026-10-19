@@ -37,7 +37,9 @@ export type ProofValue<T> = { value: T; reviewStatus: string; provenance: string
 
 /** Building-model properties the exterior noise verification reads; the agent may suggest any of them. */
 export const exteriorNoiseInputKeys = ["exteriorNoiseApplicability", "exteriorNoiseFlanking", "clearRoomHeight", "exteriorNoiseRoom", "exteriorSurfacesComplete",
-  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "normalizedLevelDifference", "elementCount", "surfaceArea"] as const;
+  "construction", "soundReductionIndex", "soundReductionIndexBasis", "openingArea", "normalizedLevelDifference", "elementCount", "surfaceArea",
+  // A window's build-up, for its catalogue Rw when no tested value is declared.
+  "glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"] as const;
 
 /**
  * A value Richtfest suggested (agent or derivation) that nobody has confirmed
@@ -57,6 +59,8 @@ export type ProofWindow = {
   id: string; name: string; componentType: "window" | "door" | "small_element";
   area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
   count: ProofValue<number> | null; dnew: ProofValue<number> | null;
+  /** A window's glazing build-up, read for its catalogue Rw. */
+  glazing: ProofValue<string> | null;
 };
 /** A roof surface over a room: its area and Rw. It takes the loudest La of the room's facades. */
 export type ProofRoof = {
@@ -152,6 +156,8 @@ export const exteriorNoiseSuggestionInput = z.object({
   openings: z.array(z.object({
     roomId: z.string().uuid(), wallId: z.string().uuid(), componentType: z.enum(["window", "door"]), name: z.string().trim().min(1).max(120),
     area: z.number().positive().max(10000), rw: z.number().min(0).max(100).nullable().optional(), basis: z.string().trim().min(1).max(500).nullable().optional(),
+    /** A window's glazing build-up ("6/16/4") and declared glass Rw, when the source states them instead of a tested window Rw. */
+    glazing: z.string().trim().min(1).max(80).nullable().optional(), glassRw: z.number().min(0).max(100).nullable().optional(),
     reason: z.string().trim().min(1).max(1000), evidence: suggestionEvidence,
   }).strict()).max(40).default([]),
   /** Ventilators, roller shutter boxes and similar elements rated by Dn,e,w, in a room's exterior wall. */

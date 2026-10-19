@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { buildingEvidenceSchema, ok, type MassiveWallInput, type MassiveWallRw } from "@richtfest/shared";
+import { buildingEvidenceSchema, ok, parseGlazing, type MassiveWallInput, type MassiveWallRw, type WindowCorrection, type WindowRw, type WindowRwInput } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { modelForProject, touchRevision } from "./building-model-router";
 import { readExteriorNoiseProof, writeSuggestion } from "./exterior-noise-proof";
@@ -10,8 +10,9 @@ import { buildingModels, buildingProperties, buildingPropertyVersions, buildingR
 /**
  * Catalogue values for the exterior noise verification: the Rw of single-leaf
  * massive exterior walls from their construction, material, thickness and
- * density (DIN 4109-32 mass law, numbers from the server's norm pack). Values
- * are written as suggestions citing the pages their inputs came from.
+ * density (DIN 4109-32 mass law), and of windows from their glazing, seals and
+ * corrections (DIN 4109-35), numbers from the server's norm pack. Values are
+ * written as suggestions citing the pages their inputs came from.
  */
 
 export type WallClass = Pick<MassiveWallInput, "material" | "form" | "perforated">;
@@ -46,11 +47,28 @@ export function catalogueBasis(result: Extract<MassiveWallRw, { status: "calcula
   return `${result.edition}, ${result.refs.join(", ")}: m' = ${de(input.thicknessCm! / 100, 3)} m × ${result.wallDensityKgM3} kg/m³ = ${de(result.massKgM2)} kg/m² (${density}; ${notes.join("; ")})`;
 }
 
+const correctionText = (kind: WindowCorrection, limits: Extract<WindowRw, { status: "calculated" }>["limits"]) => ({
+  wood_aluminium: "Holz-Aluminium", frame_share: `Rahmenanteil < ${String(limits.frameSharePct).replace(".", ",")} %`, twin_sash: "Stulpfenster", fixed_glazing: "Festverglasung",
+  small_window: `Fenster < ${String(limits.smallWindowM2).replace(".", ",")} m²`, large_pane: `Einzelscheibe > ${String(limits.largePaneM2).replace(".", ",")} m²`, glazing_bars: "glasteilende Sprossen",
+} satisfies Record<WindowCorrection, string>)[kind];
+const signed = (value: number) => `${value > 0 ? "+" : "−"}${Math.abs(value)} dB`;
+/** German basis text for a catalogue window: the row it meets, each correction and what was assumed. */
+export function windowBasis(result: Extract<WindowRw, { status: "calculated" }>, input: WindowRwInput) {
+  const glass = [input.glassRwDb !== null ? `Rw,GLAS ${de(input.glassRwDb, 0)} dB` : null, input.glazing ? `Glasaufbau ${input.glazing.panesMm.map((pane, index) => [pane, input.glazing!.cavitiesMm[index]].filter(value => value !== undefined).join("/")).join("/")}` : null].filter(Boolean).join(", ");
+  const corrections = result.corrections.map(item => `${correctionText(item.kind, result.limits)} ${signed(item.db)}${item.assumed ? " (angenommen, da nicht angegeben)" : ""}`);
+  const notes = [
+    "Einfachfenster mit Mehrscheiben-Isolierglas",
+    ...(result.assumptions.includes("seals_assumed") ? ["eine umlaufende Falzdichtung angenommen"] : []),
+    ...(result.assumptions.includes("frame_unknown") ? ["Rahmenmaterial nicht angegeben"] : []),
+  ];
+  return `${result.edition}, ${result.ref}, ${result.equationRef}: ${glass} → Rw ${result.tableRwDb} dB${corrections.length ? `; ${corrections.join(", ")}` : ""} = Rw ${result.rwDb} dB (${notes.join("; ")})`;
+}
+
 type Latest = { value: unknown; evidence: unknown[] };
-async function wallInputs(d: AppDeps, modelId: string, wallIds: string[]) {
-  const keys = ["construction", "material", "thickness", "bulkDensity"];
+const windowKeys = ["glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"];
+async function latestInputs(d: AppDeps, modelId: string, entityIds: string[], keys = ["construction", "material", "thickness", "bulkDensity"]) {
   const properties = await d.db.select({ id: buildingProperties.id, entityId: buildingProperties.entityId, key: buildingProperties.propertyKey }).from(buildingProperties)
-    .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, wallIds), inArray(buildingProperties.propertyKey, keys))) as any[];
+    .where(and(eq(buildingProperties.modelId, modelId), eq(buildingProperties.tenantId, d.tenantId), inArray(buildingProperties.entityId, entityIds), inArray(buildingProperties.propertyKey, keys))) as any[];
   const values = new Map<string, Latest>();
   if (!properties.length) return values;
   const byId = new Map(properties.map(row => [row.id, row]));
@@ -65,34 +83,57 @@ async function wallInputs(d: AppDeps, modelId: string, wallIds: string[]) {
 }
 
 export type CatalogueWallResult = { wallId: string; wall: string; status: "suggested" | "skipped" | "unavailable"; rwDb: number | null; reason: string | null };
+export type CatalogueWindowResult = { windowId: string; window: string; status: "suggested" | "skipped" | "unavailable"; rwDb: number | null; reason: string | null };
+const citedFrom = (inputs: Map<string, Latest>, entityId: string, keys: string[]) => keys.flatMap(key => inputs.get(`${entityId}:${key}`)?.evidence ?? [])
+  .filter(item => buildingEvidenceSchema.safeParse(item).success)
+  .filter((item, index, all) => all.findIndex(other => JSON.stringify(other) === JSON.stringify(item)) === index).slice(0, 5);
 
-/** Suggests Rw for every exterior wall of the verification that has none yet. */
+/** Suggests Rw for every exterior wall and window of the verification that has none yet. */
 export async function suggestCatalogueValues(d: AppDeps, projectId: string, tx: any = d.db) {
   d.requirePermission("projects:write");
-  const massiveWallRw = d.exteriorNoise?.massiveWallRw;
-  if (!massiveWallRw) return { status: "unavailable" as const, reason: "catalogue_missing", walls: [] as CatalogueWallResult[], written: 0 };
+  const massiveWallRw = d.exteriorNoise?.massiveWallRw, windowRw = d.exteriorNoise?.windowRw;
+  const empty = { walls: [] as CatalogueWallResult[], windows: [] as CatalogueWindowResult[], written: 0 };
+  if (!massiveWallRw && !windowRw) return { status: "unavailable" as const, reason: "catalogue_missing", ...empty };
   const proof = await readExteriorNoiseProof(d, projectId);
-  if (!proof.available) return { status: "unavailable" as const, reason: proof.reason, walls: [] as CatalogueWallResult[], written: 0 };
+  if (!proof.available) return { status: "unavailable" as const, reason: proof.reason, ...empty };
   const modelRow = await modelForProject(d, projectId);
-  if (!modelRow) return { status: "unavailable" as const, reason: "model_missing", walls: [] as CatalogueWallResult[], written: 0 };
+  if (!modelRow) return { status: "unavailable" as const, reason: "model_missing", ...empty };
   const modelId = modelRow.model.id;
-  const walls = new Map(proof.rooms.flatMap(room => room.facades.filter(facade => !facade.rw).map(facade => [facade.wallId, facade.wallName] as const)));
-  const inputs = await wallInputs(d, modelId, [...walls.keys()]);
+  // Storeys repeat wall and window names; name them with their storey as the verification does.
+  const storeyOf = (room: (typeof proof.rooms)[number]) => proof.storeys.length > 1 ? `${proof.storeys.find(storey => storey.id === room.storeyId)?.name ?? ""} · ` : "";
+  const walls = new Map(massiveWallRw ? proof.rooms.flatMap(room => room.facades.filter(facade => !facade.rw).map(facade => [facade.wallId, `${storeyOf(room)}${facade.wallName}`] as const)) : []);
+  const windows = new Map(windowRw ? proof.rooms.flatMap(room => room.facades.flatMap(facade => facade.windows.map(item => ({ ...item, name: `${storeyOf(room)}${item.name}` }))))
+    .filter(item => item.componentType === "window" && !item.rw).map(item => [item.id, item] as const) : []);
+  const inputs = await latestInputs(d, modelId, [...walls.keys()]);
+  const windowInputs = windows.size ? await latestInputs(d, modelId, [...windows.keys()], windowKeys) : new Map<string, Latest>();
   const results: CatalogueWallResult[] = [];
-  const writes: Array<{ wallId: string; rw: number; basis: string; evidence: unknown[] }> = [];
+  const windowResults: CatalogueWindowResult[] = [];
+  const writes: Array<{ entityId: string; rw: number; basis: string; evidence: unknown[] }> = [];
+  for (const [windowId, item] of windows) {
+    const value = (key: string) => windowInputs.get(`${windowId}:${key}`)?.value;
+    const text = (key: string) => typeof value(key) === "string" ? value(key) as string : null;
+    const number = (key: string) => typeof value(key) === "number" ? value(key) as number : null;
+    const glazing = parseGlazing(text("glazing"));
+    if (text("glazing") && !glazing && number("glassSoundReduction") === null) { windowResults.push({ windowId, window: item.name, status: "unavailable", rwDb: null, reason: "glazing_unreadable" }); continue; }
+    const input: WindowRwInput = { glassRwDb: number("glassSoundReduction"), glazing, frame: text("windowFrame") as WindowRwInput["frame"], seals: number("rebateSeals"),
+      opening: text("windowOpening") as WindowRwInput["opening"], frameSharePct: number("frameShare"),
+      glazingBars: typeof value("glazingBars") === "boolean" ? value("glazingBars") as boolean : null, areaM2: item.area?.value ?? null };
+    const result = windowRw!(input);
+    if (result.status !== "calculated") { windowResults.push({ windowId, window: item.name, status: "unavailable", rwDb: null, reason: result.reason }); continue; }
+    writes.push({ entityId: windowId, rw: result.rwDb, basis: windowBasis(result, input), evidence: citedFrom(windowInputs, windowId, windowKeys) });
+    windowResults.push({ windowId, window: item.name, status: "suggested", rwDb: result.rwDb, reason: null });
+  }
   for (const [wallId, wall] of walls) {
     const value = (key: string) => inputs.get(`${wallId}:${key}`)?.value;
     const classified = classifyMassiveWall(typeof value("construction") === "string" ? value("construction") as string : null, typeof value("material") === "string" ? value("material") as string : null);
     if ("reason" in classified) { results.push({ wallId, wall, status: "unavailable", rwDb: null, reason: classified.reason }); continue; }
     const input: MassiveWallInput = { ...classified, thicknessCm: typeof value("thickness") === "number" ? value("thickness") as number : null,
       densityKgM3: typeof value("bulkDensity") === "number" ? value("bulkDensity") as number : null };
-    const result = massiveWallRw(input);
+    const result = massiveWallRw!(input);
     if (result.status !== "calculated") { results.push({ wallId, wall, status: "unavailable", rwDb: null, reason: result.reason }); continue; }
     // Cite the pages the wall's material, thickness and density were read from.
-    const evidence = ["material", "thickness", "bulkDensity", "construction"].flatMap(key => inputs.get(`${wallId}:${key}`)?.evidence ?? [])
-      .filter(item => buildingEvidenceSchema.safeParse(item).success)
-      .filter((item, index, all) => all.findIndex(other => JSON.stringify(other) === JSON.stringify(item)) === index).slice(0, 5);
-    writes.push({ wallId, rw: result.rwDb, basis: catalogueBasis(result, input), evidence });
+    const evidence = citedFrom(inputs, wallId, ["material", "thickness", "bulkDensity", "construction"]);
+    writes.push({ entityId: wallId, rw: result.rwDb, basis: catalogueBasis(result, input), evidence });
     results.push({ wallId, wall, status: "suggested", rwDb: result.rwDb, reason: null });
   }
   let written = 0;
@@ -100,19 +141,22 @@ export async function suggestCatalogueValues(d: AppDeps, projectId: string, tx: 
     // Lock the model so concurrent edits queue behind the suggestions; the revision moves only when something was written.
     const [model] = await tx.select({ revision: buildingModels.revision }).from(buildingModels).where(and(eq(buildingModels.id, modelId), eq(buildingModels.tenantId, d.tenantId))).for("update");
     for (const item of writes) {
-      const skipped = await writeSuggestion(tx, d, modelId, { entityType: "element", entityId: item.wallId, propertyKey: "soundReductionIndex", value: item.rw, unit: "dB", evidence: item.evidence });
-      if (skipped) { const entry = results.find(result => result.wallId === item.wallId)!; entry.status = "skipped"; entry.reason = skipped; continue; }
-      await writeSuggestion(tx, d, modelId, { entityType: "element", entityId: item.wallId, propertyKey: "soundReductionIndexBasis", value: item.basis, unit: null, evidence: item.evidence });
+      const skipped = await writeSuggestion(tx, d, modelId, { entityType: "element", entityId: item.entityId, propertyKey: "soundReductionIndex", value: item.rw, unit: "dB", evidence: item.evidence });
+      if (skipped) {
+        const entry = results.find(result => result.wallId === item.entityId) ?? windowResults.find(result => result.windowId === item.entityId)!;
+        entry.status = "skipped"; entry.reason = skipped; continue;
+      }
+      await writeSuggestion(tx, d, modelId, { entityType: "element", entityId: item.entityId, propertyKey: "soundReductionIndexBasis", value: item.basis, unit: null, evidence: item.evidence });
       written++;
     }
     if (written) {
       const revision = await touchRevision(tx, d, modelId, model.revision);
       await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });
       await d.audit(tx, "projects.building.exterior_noise.catalogue_suggested", "building_model", modelId, { projectId, modelRevision: revision, written, packId: d.exteriorNoise?.packId ?? null });
-      return { status: "suggested" as const, modelRevision: revision, written, walls: results };
+      return { status: "suggested" as const, modelRevision: revision, written, walls: results, windows: windowResults };
     }
   }
-  return { status: "unchanged" as const, modelRevision: modelRow.model.revision, written, walls: results };
+  return { status: "unchanged" as const, modelRevision: modelRow.model.revision, written, walls: results, windows: windowResults };
 }
 
 export function createExteriorNoiseCatalogueRouter(getDeps: (req: Request) => AppDeps) {

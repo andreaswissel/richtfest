@@ -17,6 +17,10 @@ export const ceilingRoleSchema = z.enum(["apartment_separating", "over_common_sp
 export type CeilingRole = z.infer<typeof ceilingRoleSchema>;
 /** Where a door leads from a common hallway or stairwell: into the dwelling's hallway, straight into a habitable room, or within one dwelling (no requirement). */
 export const doorRoleSchema = z.enum(["to_dwelling_hallway", "to_habitable_room", "internal"]);
+/** A window's frame material; wood frames need fewer rebate seals in the window catalogue, wood-aluminium frames take a correction. */
+export const windowFrameSchema = z.enum(["wood", "plastic", "metal", "wood_aluminium"]);
+/** How a window opens: single or multi-sash casement, twin sash without a fixed mullion (Stulp), or fixed glazing. */
+export const windowOpeningSchema = z.enum(["casement", "twin_sash", "fixed"]);
 /** Floating screed: mortar (cement, calcium sulphate, …), mastic asphalt, prefabricated dry screed, or none. */
 export const screedTypeSchema = z.enum(["mortar", "mastic_asphalt", "prefab", "none"]);
 export const spaceTypeSchema = z.enum(["apartment", "common_corridor", "stairwell", "common_other", "exterior"]);
@@ -64,6 +68,14 @@ export const buildingComponentProperties = {
     screedStiffness: { value: z.number().positive().max(1000), unit: "MN/m³" },
     flankingLevelDifference: { value: z.number().min(0).max(120), unit: "dB" },
     doorRole: { value: doorRoleSchema, unit: null },
+    // Window build-up for a catalogue Rw when no tested value is declared: glazing ("6/16/4"), declared glass Rw, frame, seals, opening, frame share, glazing bars.
+    glazing: { value: z.string().trim().min(1).max(80), unit: null },
+    glassSoundReduction: { value: z.number().min(0).max(100), unit: "dB" },
+    windowFrame: { value: windowFrameSchema, unit: null },
+    rebateSeals: { value: z.number().int().min(0).max(4), unit: null },
+    windowOpening: { value: windowOpeningSchema, unit: null },
+    frameShare: { value: z.number().min(0).max(100), unit: "%" },
+    glazingBars: { value: z.boolean(), unit: null },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },

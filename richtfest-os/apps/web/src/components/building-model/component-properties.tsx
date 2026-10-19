@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { bebauungsplanSchema, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, ceilingRoleSchema, doorRoleSchema, screedTypeSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -22,21 +22,25 @@ const enumOptions: Record<string, readonly string[]> = {
   exteriorNoiseRoom: exteriorNoiseRoomKinds, exteriorNoiseApplicability: ["standard_exterior_noise", "special_assessment_required"],
   exteriorNoiseFlanking: ["negligible", "required"], exteriorSurfacesComplete: ["true", "false"],
   ceilingRole: ceilingRoleSchema.options, screedType: screedTypeSchema.options, doorRole: doorRoleSchema.options,
+  windowFrame: windowFrameSchema.options, windowOpening: windowOpeningSchema.options, glazingBars: ["true", "false"],
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
-const booleanKeys = new Set(["exteriorSurfacesComplete"]);
+const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars"]);
 // Unitless numbers, such as how many of a small element sit in a wall.
-const countKeys = new Set(["elementCount"]);
+const countKeys = new Set(["elementCount", "rebateSeals"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
-  soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB" };
+  soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB",
+  glassSoundReduction: "dB", frameShare: "%" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
 const openingKeys = ["componentType", "openingArea", ...acousticKeys];
+// Without a tested Rw, a window's build-up gives its catalogue Rw.
+const windowKeys = [...openingKeys, "glazing", "glassSoundReduction", "windowFrame", "rebateSeals", "windowOpening", "frameShare", "glazingBars"];
 const roomKeys = ["apartmentUnit", "spaceType", "exteriorNoiseRoom", "exteriorSurfacesComplete"];
 // Interior sound: a ceiling's requirement and floating screed; a lightweight wall's Dn,f,w when it flanks a separating element.
 const ceilingKeys = ["ceilingRole", "screedType", "screedMass", "screedStiffness"];
-const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door" ? [...openingKeys, "doorRole"] : componentType === "window" ? openingKeys
+const keysFor = (componentType: ComponentType | null, construction: unknown = null) => componentType === "door" ? [...openingKeys, "doorRole"] : componentType === "window" ? windowKeys
   : componentType === "small_element" ? ["componentType", "elementCount", "normalizedLevelDifference", "openingArea", "soundReductionIndexBasis"]
   : [...elementKeys.filter((key) => key !== "wallRole" || componentType === "wall"), ...(componentType === "wall" || componentType === "roof" ? acousticKeys : []),
     ...(componentType === "ceiling" ? ceilingKeys : []), ...(componentType === "roof" ? ["surfaceArea"] : []),

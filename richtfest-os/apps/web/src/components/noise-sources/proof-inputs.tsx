@@ -162,28 +162,31 @@ export function Suggestions({ projectId, proof, canWrite, t }: { projectId: stri
 }
 const SUGGESTIONS_SHOWN = 6;
 
-type CatalogueResult = { status: string; reason?: string; written: number; walls: Array<{ wallId: string; wall: string; status: string; rwDb: number | null; reason: string | null }> };
+type CatalogueResult = { status: string; reason?: string; written: number; walls: Array<{ wallId: string; wall: string; status: string; rwDb: number | null; reason: string | null }>;
+  windows?: Array<{ windowId: string; window: string; status: string; rwDb: number | null; reason: string | null }> };
 const catalogueReasons: Record<string, Key> = {
   not_massive: "proofCatalogueNotMassive", material_unknown: "proofCatalogueMaterialUnknown", multi_leaf: "proofCatalogueMultiLeaf",
   thickness_missing: "proofCatalogueThicknessMissing", density_missing: "proofCatalogueDensityMissing", density_class_out_of_range: "proofCatalogueOutOfRange",
   perforated_not_homogeneous: "proofCataloguePerforated", mass_out_of_range: "proofCatalogueOutOfRange", catalogue_missing: "proofCatalogueMissing",
   entered_or_reviewed: "proofCatalogueEntered", rejected_before: "proofCatalogueRejected", already_suggested: "proofCatalogueAlready",
+  glazing_missing: "proofCatalogueGlazingMissing", glazing_unreadable: "proofCatalogueGlazingUnreadable", below_catalogue: "proofCatalogueBelowCatalogue",
 };
 
-/** Suggests the Rw of massive exterior walls without one from the component catalogue; unclear walls say what is missing. */
+/** Suggests the Rw of massive exterior walls and windows without one from the component catalogue; unclear ones say what is missing. */
 function CatalogueSuggestions({ projectId, t }: { projectId: string; t: T }) {
   const suggest = useMutation({
     mutationFn: () => api<CatalogueResult>(`/projects/${projectId}/exterior-noise/proof/catalogue`, {}),
     onSuccess: (result) => { noteRevision(projectId, result); return invalidate(projectId); },
   });
   const result = suggest.data;
-  const open = result?.walls.filter(wall => wall.status !== "suggested") ?? [];
+  const open = [...(result?.walls ?? []).map(wall => ({ name: wall.wall, status: wall.status, reason: wall.reason })),
+    ...(result?.windows ?? []).map(item => ({ name: item.window, status: item.status, reason: item.reason }))].filter(item => item.status !== "suggested");
   return <span className="proof-inline">
     <Button size="sm" variant="outline" disabled={suggest.isPending} onClick={() => suggest.mutate()}>{suggest.isPending ? t("loading") : t("proofCatalogueSuggest")}</Button>
     {result && <span className="muted text-ui-xs" role="status">
       {result.status === "unavailable" ? t(catalogueReasons[result.reason ?? ""] ?? "proofCatalogueMissing")
         : [t("proofCatalogueResult").replace("{count}", String(result.written)),
-          ...open.map(wall => `${wall.wall}: ${wall.reason ? t(catalogueReasons[wall.reason] ?? "proofCatalogueMaterialUnknown") : "—"}`)].join(" · ")}
+          ...open.map(item => `${item.name}: ${item.reason ? t(catalogueReasons[item.reason] ?? "proofCatalogueMaterialUnknown") : "—"}`)].join(" · ")}
     </span>}
     {suggest.isError && <small className="noise-input-error">{errorText(suggest.error, t)}</small>}
   </span>;
@@ -315,7 +318,7 @@ function FacadeEditor({ projectId, proof, room, facade, canWrite, t }: { project
 /** Windows and doors in one facade of a room; Enter in the last field adds the row. */
 function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: string; proof: Proof; room: ProofRoom; facade: ProofFacade; canWrite: boolean; t: T }) {
   type Kind = "window" | "door" | "small_element";
-  const empty = { componentType: "window" as Kind, name: "", area: "", rw: "", basis: "", count: "1" };
+  const empty = { componentType: "window" as Kind, name: "", area: "", rw: "", basis: "", count: "1", glazing: "" };
   const [draft, setDraft] = useState(empty);
   const small = draft.componentType === "small_element";
   const add = useMutation({
@@ -323,7 +326,8 @@ function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: 
       baseRevision: baseRevision(projectId, proof), roomId: room.id, wallId: facade.wallId, componentType: draft.componentType,
       name: draft.name.trim() || `${t(openingKeys[draft.componentType])} ${facade.windows.length + 1}`,
       area: parseNumber(draft.area), basis: draft.basis.trim() || null,
-      ...(small ? { rw: null, dnew: parseNumber(draft.rw), count: parseNumber(draft.count) } : { rw: parseNumber(draft.rw) }) }),
+      ...(small ? { rw: null, dnew: parseNumber(draft.rw), count: parseNumber(draft.count) } : { rw: parseNumber(draft.rw) }),
+      ...(draft.componentType === "window" && draft.glazing.trim() ? { glazing: draft.glazing.trim() } : {}) }),
     onSuccess: async (result) => { noteRevision(projectId, result); setDraft(empty); await invalidate(projectId); },
   });
   const remove = useRemoveElement(projectId, proof);
@@ -338,11 +342,11 @@ function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: 
           ? `${item.count?.value ?? 1} ×${item.area ? ` ${m(item.area.value)} m²` : ""}` : item.area ? `${m(item.area.value)} m²` : "—"}</span>,
         <span className="text-ui-xs">{item.componentType === "small_element"
           ? item.dnew ? `Dn,e,w ${db(item.dnew.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>
-          : item.rw ? `Rw ${db(item.rw.value)} dB` : <Badge variant="outline">{t("noiseMissing")}</Badge>}</span>,
-        <span className="text-ui-xs muted">{item.basis?.value ?? "—"}</span>,
+          : item.rw ? `Rw ${db(item.rw.value)} dB` : <><Badge variant="outline">{t("noiseMissing")}</Badge>{item.glazing ? <span className="muted"> · {item.glazing.value}</span> : null}</>}</span>,
+        <span className="text-ui-xs muted proof-basis" title={item.basis?.value}>{item.basis?.value ?? "—"}</span>,
         canWrite ? <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(item.id)}>{t("proofRemove")}</Button> : null,
       ] }))} />}
-    {canWrite && <form className="proof-opening-row" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
+    {canWrite && <form className={`proof-opening-row${draft.componentType === "window" ? " with-glazing" : ""}`} onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate(); }}>
       <Field label={t("proofOpeningType")}>
         <NativeSelect size="sm" className="w-full" value={draft.componentType} onChange={(event) => setDraft({ ...draft, componentType: event.target.value as Kind })}>
           <NativeSelectOption value="window">{t("proofWindow")}</NativeSelectOption>
@@ -356,6 +360,7 @@ function Openings({ projectId, proof, room, facade, canWrite, t }: { projectId: 
         : <Field label={t("proofOpeningArea")}><Input value={draft.area} inputMode="decimal" onChange={(event) => setDraft({ ...draft, area: event.target.value })} /></Field>}
       <Field label={small ? t("proofSmallElementDnew") : t("proofOpeningRw")}><Input value={draft.rw} inputMode="decimal" onChange={(event) => setDraft({ ...draft, rw: event.target.value })} /></Field>
       <Field label={t("noiseBasis")}><Input value={draft.basis} placeholder={t("proofRwBasisPlaceholder")} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} /></Field>
+      {draft.componentType === "window" && <Field label={t("proofGlazing")}><Input value={draft.glazing} placeholder="6/16/4" title={t("proofGlazingHint")} onChange={(event) => setDraft({ ...draft, glazing: event.target.value })} /></Field>}
       <Button type="submit" size="sm" variant="outline" disabled={!valid || add.isPending}>{t(small ? "proofAddSmallElement" : "proofAddOpening")}</Button>
     </form>}
     {(add.isError || remove.isError) && <Callout tone="error">{errorText(add.error ?? remove.error, t)}</Callout>}

@@ -27,6 +27,8 @@
 .proof-openings { display: grid; gap: calc(var(--stack) / 2); padding-left: var(--stack); }
 .proof-suggestions { display: grid; gap: calc(var(--stack) / 2); }
 .proof-opening-row { display: grid; grid-template-columns: 8rem minmax(120px, 1fr) 7rem 8rem minmax(160px, 1.5fr) auto; align-items: end; gap: 4px var(--stack); max-width: 1040px; }
+.proof-basis { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; max-width: 36rem; }
+.proof-opening-row.with-glazing { grid-template-columns: 8rem minmax(120px, 1fr) 7rem 8rem minmax(160px, 1.5fr) 7rem auto; max-width: 1160px; }
 .proof-confirm { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 720px) { .proof-row, .proof-opening-row { grid-template-columns: 1fr; } }
 .proof-create { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }

@@ -99,7 +99,8 @@ export const exteriorNoiseRoomSchema = z.object({
 
 const facadeElement = { id: label, facadeId: label, provenance,
   ratingBasis: z.enum(["installed_configuration", "unadjusted_lab", "unknown"]),
-  configuration: label.describe("Evidence for installed size, joints and operating state; ventilation at design airflow, shading in the assessed state. Include corrections in the supplied rating, not twice."),
+  // As long as the building model's Rw basis, which it carries.
+  configuration: z.string().trim().min(1).max(500).describe("Evidence for installed size, joints and operating state; ventilation at design airflow, shading in the assessed state. Include corrections in the supplied rating, not twice."),
 };
 export const exteriorNoiseFacadeSchema = exteriorNoiseRoomSchema.extend({
   fieldEvidence: z.array(z.object({ field: label, provenance }).strict()).max(3000).optional(),

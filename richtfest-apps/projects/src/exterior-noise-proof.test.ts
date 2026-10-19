@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exteriorNoiseAgentContext, proposeExteriorNoiseRoom, type Point2, type ProofValue } from "@richtfest/shared";
+import { acousticCalculationSchema, exteriorNoiseAgentContext, proposeExteriorNoiseRoom, type Point2, type ProofValue } from "@richtfest/shared";
 import { assembleExteriorNoiseProof, facadeLengths, overlapAlongWall, type ProofAssemblyInput } from "./exterior-noise-proof";
 
 const value = <T,>(v: T, reviewStatus = "unreviewed"): ProofValue<T> => ({ value: v, reviewStatus, provenance: "manual", propertyId: "p", version: 1, reviewRevision: 0 });
@@ -87,6 +87,13 @@ describe("exterior noise proof assembly", () => {
     // Missing ratings are gaps: a vent without Dn,e,w, a roof without Rw or construction.
     const open = assembleExteriorNoiseProof(input({ openings: [{ ...vent, dnew: null }], roofs: [{ ...roof, rw: null, construction: null }] }));
     expect(open.rooms[0]!.gaps.sort()).toEqual(["roof_construction", "roof_rw", "small_element_dnew"]);
+  });
+
+  test("a basis as long as the building model allows still makes a valid calculation input", () => {
+    // A catalogue window's basis names its row, every correction and what was assumed: well over 200 characters.
+    const basis = value("x".repeat(500));
+    const { batch } = assembleExteriorNoiseProof(input({ openings: [{ ...input().openings[0]!, basis }] }));
+    expect(acousticCalculationSchema.safeParse(batch).success).toBe(true);
   });
 
   test("openings larger than the facade are reported, not silently clipped", () => {

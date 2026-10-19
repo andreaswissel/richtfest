@@ -94,7 +94,7 @@ export type ProofAssemblyInput = {
   levels: Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>;
   openings: Array<{ id: string; name: string; componentType: "window" | "door" | "small_element"; roomId: string; wallId: string | null;
     area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
-    count?: ProofValue<number> | null; dnew?: ProofValue<number> | null }>;
+    count?: ProofValue<number> | null; dnew?: ProofValue<number> | null; glazing?: ProofValue<string> | null }>;
   /** Roof surfaces over rooms (top storey, sloped ceilings). */
   roofs?: Array<{ id: string; name: string; roomId: string; construction: unknown; area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null }>;
 };
@@ -126,7 +126,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       const lengthM = round2(lengths.get(wall.id)!);
       const areaM2 = height === null ? null : round2(lengthM * height);
       const windows: ProofWindow[] = input.openings.filter(opening => opening.roomId === room.id && opening.wallId === wall.id)
-        .map(({ id, name, componentType, area, rw, basis, count, dnew }) => ({ id, name, componentType, area, rw, basis, count: count ?? null, dnew: dnew ?? null }));
+        .map(({ id, name, componentType, area, rw, basis, count, dnew, glazing }) => ({ id, name, componentType, area, rw, basis, count: count ?? null, dnew: dnew ?? null, glazing: glazing ?? null }));
       // A small element's area is per element; without one it takes no facade area.
       const openingArea = windows.reduce((sum, item) => sum + (item.area?.value ?? 0) * (item.componentType === "small_element" ? item.count?.value ?? 1 : 1), 0);
       const level = input.levels.get(wall.id);
@@ -315,7 +315,7 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       openings: openingRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name,
         componentType: row.kind === "door" ? "door" : row.kind === "small_element" ? "small_element" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
         area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis"),
-        count: value(row.id, "elementCount"), dnew: value(row.id, "normalizedLevelDifference") })),
+        count: value(row.id, "elementCount"), dnew: value(row.id, "normalizedLevelDifference"), glazing: value(row.id, "glazing") })),
       roofs: roofRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name, roomId: row.roomId,
         construction: value(row.id, "construction")?.value ?? null, area: value(row.id, "surfaceArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis") })),
     });
@@ -464,6 +464,8 @@ export async function proposeExteriorNoiseInputs(d: AppDeps, projectId: string, 
     await suggest("element", opening.elementId, "openingArea", item.area, "m²", item.evidence);
     if (item.rw != null) await suggest("element", opening.elementId, "soundReductionIndex", item.rw, "dB", item.evidence);
     if (item.basis) await suggest("element", opening.elementId, "soundReductionIndexBasis", item.basis, null, item.evidence);
+    if (item.componentType === "window" && item.glazing) await suggest("element", opening.elementId, "glazing", item.glazing, null, item.evidence);
+    if (item.componentType === "window" && item.glassRw != null) await suggest("element", opening.elementId, "glassSoundReduction", item.glassRw, "dB", item.evidence);
   }
   for (const item of input.smallElements) {
     const element = await suggestedOpening(tx, d, modelId, { ...item, componentType: "small_element" });
@@ -500,7 +502,10 @@ const openingInput = z.object({
   count: z.number().int().min(1).max(100).nullable().optional(),
   /** Interior: where an entrance door leads; only for doors. */
   doorRole: doorRoleSchema.nullable().optional(),
+  /** A window's glazing build-up ("6/16/4"), for its catalogue Rw; only for windows. */
+  glazing: z.string().trim().min(1).max(80).nullable().optional(),
 }).strict()
+  .refine(input => !input.glazing || input.componentType === "window", "Only windows take a glazing")
   .refine(input => !input.doorRole || input.componentType === "door", "Only doors take a door role")
   .refine(input => (input.componentType === "roof") === (input.wallId === null), "Openings and small elements sit in a wall; roofs do not")
   .refine(input => input.componentType === "small_element" || (input.dnew == null && input.count == null), "Only small elements take Dn,e,w and a count")
@@ -538,7 +543,7 @@ export function createExteriorNoiseProofRouter(getDeps: (req: Request) => AppDep
           relationshipType: "opening_in", metadata: { method: "manual" }, reviewStatus: "approved", createdBy: d.actorId });
         const entries: Array<[string, unknown, string | null]> = [["componentType", input.componentType, null], [input.componentType === "roof" ? "surfaceArea" : "openingArea", input.area, "m²"],
           ["soundReductionIndex", input.rw, "dB"], ["soundReductionIndexBasis", input.basis, null], ["doorRole", input.doorRole ?? null, null],
-          ["normalizedLevelDifference", input.dnew ?? null, "dB"], ["elementCount", input.count ?? null, null], ["construction", input.construction ?? null, null]];
+          ["normalizedLevelDifference", input.dnew ?? null, "dB"], ["elementCount", input.count ?? null, null], ["construction", input.construction ?? null, null], ["glazing", input.glazing ?? null, null]];
         for (const [propertyKey, value, unit] of entries) if (value !== null)
           await appendPropertyVersion(tx, d, modelId, { entityType: "element", entityId: element.id, propertyKey, value, unit, provenance: "manual", evidence: [] });
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId, revision, status: "draft", createdBy: d.actorId });

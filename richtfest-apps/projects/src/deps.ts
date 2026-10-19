@@ -69,6 +69,8 @@ export type AppDeps = {
     exteriorNoiseLevel: (contributions: RatingLevelContribution[]) => ExteriorNoiseLevel | null;
     /** Rw of a single-leaf massive wall from the component catalogue; absent when the pack has no catalogue. */
     massiveWallRw?: (input: import("@richtfest/shared").MassiveWallInput) => import("@richtfest/shared").MassiveWallRw;
+    /** Rw of a single window with insulating glass from the window catalogue; absent when the pack has none. */
+    windowRw?: (input: import("@richtfest/shared").WindowRwInput) => import("@richtfest/shared").WindowRw;
   } | null;
   /** Interior sound methods and requirements from the norm pack; absent when the pack has no interior part or component catalogue. */
   interiorSound?: {

@@ -39,6 +39,7 @@ import { calculateAcoustics } from "@richtfest/acoustics";
 import { roadRatingLevels } from "@richtfest/acoustics/road-noise";
 import { exteriorNoiseLevel } from "@richtfest/acoustics/exterior-noise-level";
 import { massiveWallRw } from "@richtfest/acoustics/massive-wall";
+import { catalogueWindowRw } from "@richtfest/acoustics/window";
 import { airborneSoundInsulation, impactSoundLevel, doorSoundInsulation, wallWithDoorRequirement } from "@richtfest/acoustics/interior-sound";
 import { proposeExteriorNoiseInputs, readExteriorNoiseProof } from "@richtfest/projects/exterior-noise-proof";
 import { suggestCatalogueValues } from "@richtfest/projects/exterior-noise-catalogue";
@@ -169,6 +170,7 @@ const exteriorNoiseHost = (): ProjectsDeps["exteriorNoise"] => {
     roadRatingLevels: (sources, receivers) => roadRatingLevels(pack, sources, receivers),
     exteriorNoiseLevel: (contributions) => exteriorNoiseLevel(pack, contributions),
     ...(pack.din4109_32 ? { massiveWallRw: (input) => massiveWallRw(pack, input) } : {}),
+    ...(pack.din4109_35 ? { windowRw: (input) => catalogueWindowRw(pack, input) } : {}),
   };
 };
 export const knowledgeDeps = (
