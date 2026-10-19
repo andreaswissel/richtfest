@@ -129,3 +129,65 @@ export function outlineProblem(polygon: Point[]) {
   }
   return null;
 }
+
+export const roomMergeMethod = "room_merge_v1";
+
+/** One outline from several neighbouring room outlines, as a planner merges rooms the extractor
+ * split (an open space, a walk-in wardrobe). The outlines are rastered on the page grid; a partition
+ * up to `bridgeM` thick between two of them (a wall, a seam, a doorway) becomes floor, nothing else
+ * grows. Null when the outlines do not all join up across such partitions. */
+export function mergeOutlines(outlines: Array<{ polygon: Point[]; holes?: Point[][] }>, scale: PageScale, n = 1200, bridgeM = .6) {
+  if (outlines.length < 2) return null;
+  const size = n * n, aspect = scale.pageAspectRatio > 0 ? scale.pageAspectRatio : 1;
+  const mpp = scale.metresPerPageHeight && scale.metresPerPageHeight > 0 ? scale.metresPerPageHeight : null;
+  const ry = mpp ? Math.max(1, Math.ceil(bridgeM / (mpp / n))) : Math.ceil(n * .006), rx = mpp ? Math.max(1, Math.ceil(bridgeM / (mpp * aspect / n))) : ry;
+  const member = new Int32Array(size).fill(-1);
+  let minX = n, minY = n, maxX = 0, maxY = 0;
+  outlines.forEach(({ polygon, holes = [] }, index) => {
+    const rings = [polygon, ...holes], ys = polygon.map(p => p.y);
+    for (let y = Math.max(0, Math.floor(Math.min(...ys) * n)); y <= Math.min(n - 1, Math.ceil(Math.max(...ys) * n)); y++) {
+      const py = (y + .5) / n, crossings: number[] = [];
+      for (const ring of rings) for (let i = 0; i < ring.length; i++) {
+        const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+        if ((a.y > py) !== (b.y > py)) crossings.push((a.x + (py - a.y) * (b.x - a.x) / (b.y - a.y)) * n);
+      }
+      crossings.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < crossings.length; i += 2)
+        for (let x = Math.max(0, Math.ceil(crossings[i]! - .5)); x <= Math.min(n - 1, Math.floor(crossings[i + 1]! - .5)); x++) {
+          if (member[y * n + x] < 0) member[y * n + x] = index;
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        }
+    }
+  });
+  if (minX > maxX) return null;
+  const box = { minX, minY, maxX, maxY };
+  // A gap of at most the bridge distance straight between two different outlines (a wall, a seam,
+  // a doorway) becomes floor, along rows and columns, so nothing grows past the rooms' own extent.
+  const grid = new Int32Array(size), bridged: number[] = [];
+  for (const horizontal of [true, false]) for (let line = horizontal ? minY : minX; line <= (horizontal ? maxY : maxX); line++) {
+    let last = -1, lastAt = -Infinity;
+    const limit = horizontal ? rx : ry;
+    for (let t = horizontal ? minX : minY; t <= (horizontal ? maxX : maxY); t++) {
+      const p = horizontal ? line * n + t : t * n + line, id = member[p];
+      if (id < 0) continue;
+      if (last >= 0 && last !== id && t - lastAt > 1 && t - lastAt - 1 <= limit) for (let k = lastAt + 1; k < t; k++) bridged.push(horizontal ? line * n + k : k * n + line);
+      last = id; lastAt = t;
+    }
+  }
+  let start = -1, cells = 0;
+  for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) { const p = y * n + x; if (member[p] >= 0) { grid[p] = 1; cells++; if (start < 0) start = p; } }
+  for (const p of bridged) if (!grid[p]) { grid[p] = 1; cells++; }
+  // All outlines must join into one piece.
+  const stack = [start]; grid[start] = 2; let joined = 0;
+  while (stack.length) {
+    const p = stack.pop()!, x = p % n; joined++;
+    for (const q of [x > 0 ? p - 1 : -1, x < n - 1 ? p + 1 : -1, p - n, p + n]) if (q >= 0 && q < size && grid[q] === 1) { grid[q] = 2; stack.push(q); }
+  }
+  if (joined !== cells) return null;
+  const traced = traceRegion(grid, n, 2, box);
+  if (!traced) return null;
+  const tolerance = Math.min(6, Math.max(1.5, mpp ? .15 / (mpp / n) : 2)) / n, polygon = simplifyRing(traced.polygon, tolerance, aspect);
+  const outerArea = ringArea(polygon);
+  const holes = traced.holes.filter(hole => ringArea(hole) >= outerArea * .005).map(hole => simplifyRing(hole, tolerance, aspect));
+  return { polygon, holes, areaM2: outlineAreaM2(polygon, holes, scale) };
+}

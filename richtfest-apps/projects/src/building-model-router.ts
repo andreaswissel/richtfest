@@ -199,7 +199,19 @@ const planColourLegend = (jobs: any[], saved: any | null) => {
   const entries: Array<{ colour: string; layer: string; state: string }> = Array.isArray(saved?.entries) ? saved.entries : [];
   return { colours: [...colours.values()].sort((a, b) => b.count - a.count).map(item => ({ ...item, pages: item.pages.sort((a, b) => a - b),
     state: entries.find(entry => entry.colour === item.colour && entry.layer === item.layer)?.state ?? null })),
-    savedAt: saved?.updatedAt ?? null };
+    savedAt: entries.length ? saved?.updatedAt ?? null : null };
+};
+
+/** The scale each plan page was read at, and the plan set's scale where a person set one. */
+const planScaleSummary = (jobs: any[], saved: any | null) => {
+  const latest = new Map<number, any>();
+  for (const job of jobs) if (job.status === "complete" && (!latest.has(job.page) || latest.get(job.page).updatedAt < job.updatedAt)) latest.set(job.page, job);
+  const pages = [...latest.values()].sort((a, b) => a.page - b.page).map(job => {
+    const scale = job.result?.scaleObservation;
+    return { page: job.page, denominator: typeof scale?.denominator === "number" ? scale.denominator : null, source: typeof scale?.source === "string" ? scale.source : null,
+      agreeingPairs: typeof scale?.agreeingPairs === "number" ? scale.agreeingPairs : 0, quote: typeof scale?.quote === "string" ? scale.quote : null };
+  });
+  return { pages, savedDenominator: typeof saved?.scaleDenominator === "number" ? saved.scaleDenominator : null };
 };
 
 const readModel = async (d: AppDeps, model: any) => {
@@ -306,7 +318,8 @@ const readModel = async (d: AppDeps, model: any) => {
       registeredPageCount: metadata?.registeredPageCount ?? 0, coverageTruncated: metadata?.coverageTruncated ?? false,
       floorPlanPages: metadata?.floorPlanPages ?? [], nonFloorPlanPages: metadata?.nonFloorPlanPages ?? [],
       unresolvedPages: metadata?.unresolvedPages ?? [], reason: metadata?.reason ?? null, jobStatuses, errors,
-      colourLegend: planColourLegend(extractionJobs, (colourLegendRows as any[]).find(row => row.sourceVersionId === source.sourceVersionId) ?? null) };
+      colourLegend: planColourLegend(extractionJobs, (colourLegendRows as any[]).find(row => row.sourceVersionId === source.sourceVersionId) ?? null),
+      planScale: planScaleSummary(extractionJobs, (colourLegendRows as any[]).find(row => row.sourceVersionId === source.sourceVersionId) ?? null) };
   });
   return {
     model,
@@ -1252,6 +1265,31 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", label: "Plan colours set", createdBy: d.actorId });
         await d.audit(tx, "projects.building.colour_legend.saved", "file_version", sourceVersionId, { projectId, entries, requeuedJobCount: requeued.length, modelRevision: revision });
         return { legend, revision, requeuedJobCount: requeued.length };
+      });
+      if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  // The plan set's scale as a person sets it (1:n on its sheets); null returns to reading it from the plan.
+  router.put("/projects/:projectId/building-model/plan-scales/:sourceVersionId", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId)); const sourceVersionId = uuid.parse(id(req.params.sourceVersionId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), denominator: z.number().int().min(10).max(5000).nullable() }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const [version] = await d.db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId))
+        .where(and(eq(fileVersions.id, sourceVersionId), eq(fileVersions.tenantId, d.tenantId), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
+      if (!version) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "The plan set must be a file revision in this project" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const [settings] = await tx.insert(buildingColourLegends).values({ tenantId: d.tenantId, modelId: modelRow.model.id, sourceVersionId, scaleDenominator: input.denominator, updatedBy: d.actorId })
+          .onConflictDoUpdate({ target: [buildingColourLegends.modelId, buildingColourLegends.sourceVersionId], set: { scaleDenominator: input.denominator, updatedBy: d.actorId, updatedAt: new Date() } }).returning();
+        const requeued = await tx.update(buildingExtractionJobs).set({ status: "queued", attempts: 0, leaseToken: null, leaseUntil: null, result: null, updatedAt: new Date() })
+          .where(and(eq(buildingExtractionJobs.modelId, modelRow.model.id), eq(buildingExtractionJobs.tenantId, d.tenantId), eq(buildingExtractionJobs.sourceVersionId, sourceVersionId),
+            inArray(buildingExtractionJobs.status, ["complete", "failed"]))).returning({ id: buildingExtractionJobs.id });
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", label: "Plan scale set", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.plan_scale.saved", "file_version", sourceVersionId, { projectId, denominator: input.denominator, requeuedJobCount: requeued.length, modelRevision: revision });
+        return { scaleDenominator: settings.scaleDenominator, revision, requeuedJobCount: requeued.length };
       });
       if ((result as any).conflict !== undefined) return revisionConflict(res, (result as any).conflict); return send(res, 200, ok(result));
     } catch (e) { return next(e); }

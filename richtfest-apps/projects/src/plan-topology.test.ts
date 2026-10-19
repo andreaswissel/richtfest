@@ -64,20 +64,38 @@ test("printed areas guide partition capacities before page-local QC",()=>{
   for(const r of result.rooms.filter(r=>r.geometry.polygon))expect(r.geometry).toMatchObject({capacityQc:{status:"unreviewed"}});
 });
 
-test("open-plan rooms are split by a straight wall-to-wall cut, not a staircase seam",()=>{
-  // A 100 m² living room opening into a 30 m² corridor at x=.3 (1 page-height unit = 50 m).
+test("a room open to a hall it does not share with a living space is split by a straight wall-to-wall cut",()=>{
+  // A 100 m² bedroom opening into a 30 m² corridor at x=.3 (1 page-height unit = 50 m). Bedrooms never join an open space.
   const sourceFill={...fill,rings:[[{x:.1,y:.1},{x:.5,y:.1},{x:.5,y:.16},{x:.3,y:.16},{x:.3,y:.3},{x:.1,y:.3}]]};
-  const labels=[word("Wohnen",.17,.2),word("Flur",.42,.12)];
+  const labels=[word("Schlafen",.17,.2),word("Flur",.42,.12)];
   const areas=[word("100,00",.17,.212),word("m²",.201,.212),word("30,00",.42,.132),word("m²",.451,.132)];
   const result=inferPlanTopology(planLabels(labels),[],[...labels,...areas],200,[],0,[sourceFill],1,undefined,{metresPerPageHeight:50});
-  expect(result.coverage).toMatchObject({straightSeamCount:1});
-  const flur=result.rooms.find(r=>r.name==="Flur")!.geometry,wohnen=result.rooms.find(r=>r.name==="Wohnen")!.geometry;
+  expect(result.coverage).toMatchObject({straightSeamCount:1,openSpaceCount:0});
+  const flur=result.rooms.find(r=>r.name==="Flur")!.geometry,schlafen=result.rooms.find(r=>r.name==="Schlafen")!.geometry;
   expect(flur).toMatchObject({quality:"approximate_partition"});
   // The seam is one vertical line near the junction (area-guided); a geodesic seam steps diagonally through many x positions.
   const seamX=Math.min(...flur.polygon!.map(p=>p.x));
   expect(seamX).toBeGreaterThan(.29);expect(seamX).toBeLessThan(.35);
   expect(new Set(flur.polygon!.map(p=>p.x.toFixed(3))).size).toBeLessThanOrEqual(3);
-  expect(wohnen.polygon!.filter(p=>p.x>.31).every(p=>Math.abs(p.x-seamX)<1e-9)).toBe(true);
+  expect(schlafen.polygon!.filter(p=>p.x>.31).every(p=>Math.abs(p.x-seamX)<1e-9)).toBe(true);
+});
+
+test("a living room open to its hall is one room with both labels as zones, only when the space holds their printed areas",()=>{
+  const sourceFill={...fill,rings:[[{x:.1,y:.1},{x:.5,y:.1},{x:.5,y:.16},{x:.3,y:.16},{x:.3,y:.3},{x:.1,y:.3}]]};
+  const labels=[word("Wohnen",.17,.2),word("Diele",.42,.12)];
+  // The traced space is 0.052 page-height² = 130 m² at 50 m per page height.
+  const run=(wohnen:string,diele:string)=>inferPlanTopology(planLabels(labels),[],[...labels,word(wohnen,.17,.212),word("m²",.201,.212),word(diele,.42,.132),word("m²",.451,.132)],200,[],0,[sourceFill],1,undefined,{metresPerPageHeight:50});
+  const open=run("98,00","31,00");
+  expect(open.coverage).toMatchObject({openSpaceCount:1});
+  expect(open.rooms).toHaveLength(1);
+  const room=open.rooms[0]!;
+  expect(room.name).toBe("Wohnen / Diele");
+  expect(room.geometry).toMatchObject({quality:"enclosed_region",printedArea:{value:129},openSpace:{printedTotal:129,zones:[{name:"Wohnen"},{name:"Diele"}]}});
+  expect(room.geometry.openSpace!.tracedM2).toBeGreaterThan(129*.9);
+  // Printed areas that add up to far less than the space (a missed door into another room) keep the split.
+  const leak=run("40,00","12,00");
+  expect(leak.coverage).toMatchObject({openSpaceCount:0});
+  expect(leak.rooms.map(r=>r.name).sort()).toEqual(["Diele","Wohnen"]);
 });
 
 const reference=process.env.RICHTFEST_REFERENCE_PLAN_PDF;
@@ -253,4 +271,25 @@ test("a plan set's colour legend overrides the suggested colour states, and a co
   // The summary keeps the suggestion next to the planner's choice, so the legend can be reviewed.
   expect(result.coverage.wallColours.map(c=>[c.colour,c.layer,c.suggested,c.state])).toEqual(expect.arrayContaining([
     ["#e6e699","construction","demolished","proposed"],["#949494","existing","retained","not_wall"],["#00cdcd","existing","not_wall","demolished"]]));
+});
+
+test("furniture, drawn fittings and door swings are floor of the room; kept existing walls bound rooms",()=>{
+  // Walls around .2–.5 (inner .21–.49) at 20 m per page height: the room is 5.6 × 5.6 m.
+  const walls=[footprint("n",.2,.2,.3,.01),footprint("s",.2,.49,.3,.01),footprint("w",.2,.2,.01,.3),footprint("e",.49,.2,.01,.3)];
+  // The floor fill leaves out a bed (a hole) and a fitting drawn as a closed outline in a corner.
+  const floor:PlanFillRegion={...fill,rings:[[{x:.26,y:.21},{x:.49,y:.21},{x:.49,y:.49},{x:.21,y:.49},{x:.21,y:.26},{x:.26,y:.26}],rectangle(.3,.3,.06,.1)]};
+  const fitting={layerId:"construction",points:rectangle(.21,.21,.05,.05),closed:true};
+  // An open door leaf with its arc, drawn as one stroke, in the opposite corner.
+  const swing={sourceKey:"door-swing:a",layerId:"construction",layerName:"Konstruktion",hinge:{x:.49,y:.49},start:{x:.49,y:.45},end:{x:.45,y:.49},radius:.04,sweepDegrees:90};
+  const leafAndArc={layerId:"construction",points:[{x:.49,y:.45},...Array.from({length:9},(_,i)=>{const a=-Math.PI/2-i*Math.PI/16;return {x:.49+.04*Math.cos(a),y:.49+.04*Math.sin(a)};}),{x:.45,y:.49}],closed:false};
+  const labels=[word("Schlafen",.38,.24)];
+  const result=inferPlanTopology(planLabels(labels),walls,labels,400,[],0,[floor],1,undefined,{metresPerPageHeight:20,barrierLines:[fitting,leafAndArc],doorSwings:[swing]});
+  const room=result.rooms.find(r=>r.name==="Schlafen")!.geometry;
+  const area=(ring:{x:number;y:number}[])=>Math.abs(ring.reduce((s,p,i)=>{const q=ring[(i+1)%ring.length];return s+p.x*q.y-q.x*p.y;},0))/2;
+  const m2=(area(room.polygon!)-(room.holes??[]).reduce((s,h)=>s+area(h),0))*400;
+  expect(m2).toBeGreaterThan(5.6*5.6*.96);expect(m2).toBeLessThan(5.6*5.6*1.04);
+  // A kept existing wall (grey on the existing/demolition layer) divides the space into two rooms.
+  const kept={...footprint("kept",.34,.21,.01,.28),layerName:"Abbruch/Bestand",fillColor:"#949494"};
+  const two=inferPlanTopology(planLabels([word("Schlafen",.24,.4),word("Bad",.42,.4)]),walls,[word("Schlafen",.24,.4),word("Bad",.42,.4)],400,[kept],0,[{...fill,rings:[rectangle(.21,.21,.28,.28)]}],1,undefined,{metresPerPageHeight:20});
+  expect(two.rooms.map(r=>r.geometry.topology.status)).toEqual(["enclosed","enclosed"]);
 });

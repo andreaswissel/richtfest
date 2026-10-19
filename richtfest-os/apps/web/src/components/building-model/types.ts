@@ -43,6 +43,8 @@ export type BuildingRegion = {
   parts?: BuildingGeometryPart[];
   /** Set when a planner drew or reshaped this outline on the plan. */
   outlineEdit?: { method?: string; areaM2?: number | null; editCount?: number; editedAt?: string } | null;
+  /** Set on a room a planner merged from neighbouring rooms: the member rooms' names. */
+  mergedFrom?: string[] | null;
   groupLabel?: string | null;
   sourceArea?: unknown;
   roomUseProposal?: {
@@ -187,9 +189,13 @@ export type BuildingWallColourState = "proposed" | "retained" | "demolished" | "
 export type BuildingWallColour = { colour: string; layer: "construction" | "existing"; count: number; pages: number[];
   suggested: BuildingWallColourState; state: BuildingWallColourState | null; example?: { page: number; region?: unknown } | null };
 
+export type BuildingPlanScale = { savedDenominator: number | null;
+  pages: Array<{ page: number; denominator: number | null; source: "dimension_chains" | "title_block" | "dimension_chains_and_title_block" | "planner" | null; agreeingPairs: number; quote: string | null }> };
+
 export type BuildingAutomaticPlanProcessing = {
   fileId?: string;
   colourLegend?: { colours: BuildingWallColour[]; savedAt: string | null };
+  planScale?: BuildingPlanScale;
   fileName: string;
   sourceVersionId: string;
   status: "reading_source" | "classifying_pages" | "planning" | "queued" | "extracting" | "complete" | "partial" | "unresolved" | "failed" | string;
@@ -422,6 +428,7 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       holes: planHoles(geometry?.holes),
       parts,
       outlineEdit: outlineEdit(geometry?.outlineEdit),
+      mergedFrom: Array.isArray((geometry?.merge as RecordData | undefined)?.members) ? ((geometry!.merge as RecordData).members as RecordData[]).map((member) => asString(member.name)) : null,
       groupLabel: typeof row.groupLabel === "string" ? row.groupLabel : (typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null),
       sourceArea: row.sourceArea ?? geometry?.sourceArea ?? geometry?.printedArea ?? null,
       roomUseProposal,
@@ -582,6 +589,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
         nonFloorPlanPages: Array.isArray(row.nonFloorPlanPages) ? row.nonFloorPlanPages.filter((page): page is { page: number; pageType?: string | null; confidence?: number | null } => Boolean(page) && typeof page === "object" && typeof page.page === "number") : [],
         unresolvedPages: Array.isArray(row.unresolvedPages) ? row.unresolvedPages.filter((page): page is number => typeof page === "number") : [],
         colourLegend: wallColourLegend(row.colourLegend),
+        planScale: planScale(row.planScale),
       } as BuildingAutomaticPlanProcessing];
     }) : [],
     storeys: Array.isArray(raw.storeys) ? raw.storeys.flatMap((item: unknown) => {
@@ -619,4 +627,19 @@ function wallColourLegend(value: unknown): BuildingAutomaticPlanProcessing["colo
       example: row.example && typeof row.example === "object" ? row.example as BuildingWallColour["example"] : null }];
   }) : [];
   return { colours, savedAt: typeof raw.savedAt === "string" ? raw.savedAt : null };
+}
+
+const planScaleSources = ["dimension_chains", "title_block", "dimension_chains_and_title_block", "planner"] as const;
+
+function planScale(value: unknown): BuildingPlanScale | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as RecordData;
+  const pages = Array.isArray(raw.pages) ? raw.pages.flatMap((item: unknown) => {
+    const row = item && typeof item === "object" ? item as RecordData : null;
+    if (!row || typeof row.page !== "number") return [];
+    return [{ page: row.page, denominator: typeof row.denominator === "number" ? row.denominator : null,
+      source: planScaleSources.includes(row.source as typeof planScaleSources[number]) ? row.source as typeof planScaleSources[number] : null,
+      agreeingPairs: typeof row.agreeingPairs === "number" ? row.agreeingPairs : 0, quote: typeof row.quote === "string" ? row.quote : null }];
+  }) : [];
+  return { pages, savedDenominator: typeof raw.savedDenominator === "number" ? raw.savedDenominator : null };
 }

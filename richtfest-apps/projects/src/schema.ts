@@ -395,6 +395,8 @@ export const buildingColourLegends = pgTable("projects_building_colour_legends",
   modelId: uuid("model_id").notNull().references(() => buildingModels.id, { onDelete: "cascade" }),
   sourceVersionId: uuid("source_version_id").notNull().references(() => fileVersions.id, { onDelete: "cascade" }),
   entries: jsonb("entries").notNull().default([]),
+  // The plan set's scale (1:n on its sheets) as a person set it; null reads it from the plan.
+  scaleDenominator: integer("scale_denominator"),
   updatedBy: uuid("updated_by").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, table => ({ source: uniqueIndex("projects_building_colour_legends_unique").on(table.modelId, table.sourceVersionId) }));

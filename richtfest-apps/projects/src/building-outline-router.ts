@@ -1,11 +1,11 @@
 import { Router, type Request } from "express";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { buildingModels, buildingRooms, buildingStoreys, buildingRevisions, buildingExtractionJobs as jobs, buildingExtractionCandidates as candidates,
   buildingSelectionMasks as masks, buildingOutlineEdits, fileVersions, files } from "./schema";
-import { decodeSelectionMask, magicSelection, outlineAreaM2, outlineProblem, type PageScale } from "./plan-selection";
+import { decodeSelectionMask, magicSelection, mergeOutlines, outlineAreaM2, outlineProblem, roomMergeMethod, type PageScale } from "./plan-selection";
 
 const uuid = z.string().uuid();
 const point = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).strict();
@@ -27,6 +27,10 @@ const outlineInput = z.object({
   // What magic selection proposed before the planner adjusted it: the most useful training signal.
   magic: z.object({ point, polygon: ring, holes: z.array(ring).max(50).default([]) }).strict().optional(),
 }).strict();
+
+const mergeInput = z.object({ baseRevision: z.number().int().nonnegative(), candidateIds: z.array(uuid).min(2).max(8), name: z.string().trim().min(1).max(300).optional() }).strict();
+const splitInput = z.object({ baseRevision: z.number().int().nonnegative() }).strict();
+type MergeMember = { candidateId: string; sourceKey: string; name: string; geometry: any };
 
 const bounds = (polygon: { x: number; y: number }[]) => {
   const xs = polygon.map(p => p.x), ys = polygon.map(p => p.y), x = Math.min(...xs), y = Math.min(...ys);
@@ -145,6 +149,87 @@ export function createBuildingOutlineRouter(getDeps: (req: Request) => AppDeps) 
         return { entityType: target.type === "candidate" ? "candidate" : "room", entityId, outlineEditId: edit.id, areaM2, revision };
       });
       res.status(input.target.type === "new_room" ? 201 : 200).json(ok(result));
+    } catch (e) { fail(res, e, next); }
+  });
+  /** Merge neighbouring unreviewed room candidates of one plan page into the first one. The others
+   * are kept as "merged" with their original geometry, so a split restores them; re-extraction
+   * keeps the merged outline like any planner outline edit. */
+  router.post("/projects/:projectId/building-model/room-merges", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write");
+      const projectId = uuid.parse(req.params.projectId); const input = mergeInput.parse(req.body);
+      const ids = [...new Set(input.candidateIds)];
+      if (ids.length < 2) throw error(422, "invalid_merge", "Choose at least two rooms to merge");
+      const result = await d.db.transaction(async (tx: any) => {
+        const model = await projectModel(tx, d, projectId, true);
+        if (model.revision !== input.baseRevision) throw error(409, "revision_conflict", "The building model changed; reload before saving.");
+        const rows = await tx.select().from(candidates).where(and(inArray(candidates.id, ids), eq(candidates.modelId, model.id), eq(candidates.tenantId, d.tenantId))).for("update");
+        const ordered = ids.map(id => rows.find((row: any) => row.id === id));
+        if (ordered.some(row => !row || row.entityType !== "room")) throw error(404, "not_found", "Room candidate not found");
+        if (ordered.some(row => row.status !== "unreviewed")) throw error(409, "already_reviewed", "Only unreviewed rooms can be merged; reload the building model.");
+        if (new Set(ordered.map(row => row.jobId)).size !== 1) throw error(422, "invalid_merge", "Rooms from different plan pages cannot be merged");
+        if (ordered.some(row => !Array.isArray((row.geometry as any)?.polygon))) throw error(422, "invalid_merge", "Every room needs an outline before it can be merged");
+        const [primary, ...others] = ordered;
+        const [job] = await tx.select().from(jobs).where(and(eq(jobs.id, primary.jobId), eq(jobs.tenantId, d.tenantId)));
+        const mask = await pageMask(tx, d.tenantId, model.id, job.sourceVersionId, job.page);
+        const scale: PageScale = mask?.scale ?? { pageAspectRatio: 1, metresPerPageHeight: null };
+        const merged = mergeOutlines(ordered.map(row => ({ polygon: (row.geometry as any).polygon, holes: (row.geometry as any).holes ?? [] })), scale);
+        if (!merged) throw error(422, "not_adjacent", "These rooms do not share a wall or opening; merge rooms next to each other.");
+        // Members keep their pre-merge state; an already merged room brings its own members along.
+        const snapshot = (row: any): MergeMember[] => (row.geometry as any)?.merge?.members ?? [{ candidateId: row.id, sourceKey: row.sourceKey, name: row.name, geometry: row.geometry }];
+        const members = ordered.flatMap(snapshot);
+        const printed = members.map(m => m.geometry?.printedArea).filter((a: any) => typeof a?.value === "number");
+        const printedArea = printed.length === members.length ? { ...printed[0], value: Math.round(printed.reduce((sum: number, a: any) => sum + a.value, 0) * 100) / 100,
+          quote: printed.map((a: any) => a.quote ?? a.value).join(" + ") } : undefined;
+        const names = [...new Set(members.map(m => m.name))];
+        const name = input.name ?? names.join(" / ").slice(0, 300);
+        const old = primary.geometry as any, editedAt = new Date().toISOString();
+        const { parts: _parts, polygons: _polygons, openSpace: _openSpace, printedArea: _printedArea, ...kept } = old;
+        const geometry = { ...kept, coordinateSpace: "normalized-page", quality: "manual_outline", polygon: merged.polygon, holes: merged.holes, planRegion: bounds(merged.polygon),
+          ...(printedArea ? { printedArea } : {}),
+          outlineEdit: { method: "room_merge", editedBy: d.actorId, editedAt, areaM2: merged.areaM2, editCount: (old.outlineEdit?.editCount ?? 0) + 1 },
+          merge: { method: roomMergeMethod, members, mergedBy: d.actorId, mergedAt: editedAt,
+            limitations: "Merged by a person from neighbouring room outlines; partitions up to 60 cm between them count as floor." } };
+        await tx.update(candidates).set({ name, geometry }).where(eq(candidates.id, primary.id));
+        await tx.update(candidates).set({ status: "merged", reviewedBy: d.actorId, reviewedAt: new Date() }).where(inArray(candidates.id, others.map(row => row.id)));
+        const revision = model.revision + 1;
+        await tx.update(buildingModels).set({ revision, updatedAt: new Date() }).where(eq(buildingModels.id, model.id));
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: model.id, revision, status: "draft", label: "Rooms merged", createdBy: d.actorId });
+        const [edit] = await tx.insert(buildingOutlineEdits).values({ tenantId: d.tenantId, modelId: model.id, targetType: "candidate", targetId: primary.id, action: "merge", method: "manual",
+          sourceVersionId: job.sourceVersionId, page: job.page, jobId: job.id, extractorVersion: job.extractorVersion,
+          before: { members: ordered.map(row => ({ candidateId: row.id, name: row.name, polygon: (row.geometry as any).polygon, holes: (row.geometry as any).holes ?? [] })) },
+          after: { polygon: merged.polygon, holes: merged.holes }, magic: null,
+          metrics: { areaAfterM2: merged.areaM2, memberCount: members.length, vertexCountAfter: merged.polygon.length, ...scale }, modelRevision: revision, createdBy: d.actorId }).returning({ id: buildingOutlineEdits.id });
+        await d.audit(tx, "projects.building.extraction_candidate.merged", "building_extraction_candidate", primary.id,
+          { projectId, modelRevision: revision, mergedCandidateIds: others.map(row => row.id), outlineEditId: edit.id, areaM2: merged.areaM2 });
+        return { entityType: "candidate", entityId: primary.id, name, areaM2: merged.areaM2, revision };
+      });
+      res.json(ok(result));
+    } catch (e) { fail(res, e, next); }
+  });
+
+  /** Undo a merge: every member room comes back with its name and outline from before the merge. */
+  router.post("/projects/:projectId/building-model/room-merges/:candidateId/split", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write");
+      const projectId = uuid.parse(req.params.projectId), candidateId = uuid.parse(req.params.candidateId); const input = splitInput.parse(req.body);
+      const result = await d.db.transaction(async (tx: any) => {
+        const model = await projectModel(tx, d, projectId, true);
+        if (model.revision !== input.baseRevision) throw error(409, "revision_conflict", "The building model changed; reload before saving.");
+        const [primary] = await tx.select().from(candidates).where(and(eq(candidates.id, candidateId), eq(candidates.modelId, model.id), eq(candidates.tenantId, d.tenantId))).for("update");
+        const members: MergeMember[] | undefined = (primary?.geometry as any)?.merge?.members;
+        if (!primary || !members) throw error(404, "not_found", "Merged room not found");
+        if (primary.status !== "unreviewed") throw error(409, "already_reviewed", "This room was already reviewed; edit the room instead.");
+        for (const member of members) await tx.update(candidates).set({ name: member.name, geometry: member.geometry, status: "unreviewed", reviewedBy: null, reviewedAt: null })
+          .where(and(eq(candidates.id, member.candidateId), eq(candidates.jobId, primary.jobId), eq(candidates.tenantId, d.tenantId)));
+        const revision = model.revision + 1;
+        await tx.update(buildingModels).set({ revision, updatedAt: new Date() }).where(eq(buildingModels.id, model.id));
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: model.id, revision, status: "draft", label: "Merged room split", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.extraction_candidate.split", "building_extraction_candidate", primary.id,
+          { projectId, modelRevision: revision, restoredCandidateIds: members.map(m => m.candidateId) });
+        return { entityType: "candidate", entityId: primary.id, restored: members.length, revision };
+      });
+      res.json(ok(result));
     } catch (e) { fail(res, e, next); }
   });
   return router;

@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
@@ -13,7 +13,7 @@ import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { AudioLines, ChevronDown, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
-import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingWallColour, type BuildingWallColourState, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
+import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingWallColour, type BuildingWallColourState, type BuildingPlanScale, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
@@ -542,6 +542,12 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
+  const savePlanScale = useMutation({
+    mutationFn: ({ sourceVersionId, denominator }: { sourceVersionId: string; denominator: number | null }) =>
+      api<RecordData>(`/projects/${projectId}/building-model/plan-scales/${sourceVersionId}`, { baseRevision: model.revision, denominator }, "PUT"),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
+  });
   const reviewCandidate = useMutation({
     mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => api(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
     onSuccess: async () => {
@@ -549,6 +555,22 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
       await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
     },
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
+  });
+  const candidateKey = (candidate: BuildingExtractionCandidate) => candidate.candidateId || candidate.id.replace(/^candidate:/, "");
+  const mergeRooms = useMutation({
+    mutationFn: (candidateIds: string[]) => api<RecordData>(`/projects/${projectId}/building-model/room-merges`, { baseRevision: model.revision, candidateIds }, "POST"),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
+      setSelectedId(undefined); setSelectedCandidateId(`candidate:${data.entityId}`);
+    },
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const splitRoom = useMutation({
+    mutationFn: (candidateId: string) => api<RecordData>(`/projects/${projectId}/building-model/room-merges/${candidateId}/split`, { baseRevision: model.revision }, "POST"),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const pageScale = (magicPageScale(outlineSession) ?? activeExtraction?.result?.pageScale ?? null) as PageScale | null;
   useEffect(() => { setOutlineSession(null); setMagicNotice(undefined); setMeasurePoints([]); }, [page, sourceForEvidence?.source?.versionId]);
@@ -843,7 +865,8 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
               superseded={model.supersededSources} pending={supersedePlanSet.isPending}
               onSupersede={(sourceVersionId, supersededByVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId })}
               onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })}
-              colourPending={saveColourLegend.isPending} onSaveColours={(sourceVersionId, entries) => saveColourLegend.mutate({ sourceVersionId, entries })} t={t} />}
+              colourPending={saveColourLegend.isPending} onSaveColours={(sourceVersionId, entries) => saveColourLegend.mutate({ sourceVersionId, entries })}
+              scalePending={savePlanScale.isPending} onSaveScale={(sourceVersionId, denominator) => savePlanScale.mutate({ sourceVersionId, denominator })} t={t} />}
           </PopoverContent>
         </Popover>
         <Popover open={soundOpen} onOpenChange={setSoundOpen}>
@@ -948,7 +971,9 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
           <div className="building-model-properties-scroll">
             {outlineSession && <OutlineSection session={outlineSession} canCreateRoom={canCreateRoom} pending={saveOutline.isPending} t={t} onUpdate={updateOutline} onBegin={beginOutlineChange} />}
             {!showInspector ? geometry
-              : selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending} geometry={isRoom(selectedCandidate) ? geometry : undefined}
+              : selectedCandidate ? <CandidateInspector candidate={selectedCandidate} regions={regions} t={t} pending={reviewCandidate.isPending || mergeRooms.isPending || splitRoom.isPending} geometry={isRoom(selectedCandidate) ? geometry : undefined}
+                mergeOptions={isRoom(selectedCandidate) ? neighbouringRooms(selectedCandidate, sourceCandidates) : []}
+                onMerge={(other) => mergeRooms.mutate([candidateKey(selectedCandidate), candidateKey(other)])} onSplit={() => splitRoom.mutate(candidateKey(selectedCandidate))}
                 edit={candidateEdit} onEdit={(edit) => setCandidateEdits((current) => ({ ...current, [selectedCandidate.id]: { ...current[selectedCandidate.id], ...edit } }))}
                 onPage={(nextPage) => selectSourcePage(nextPage, selectedCandidate.sourceVersionId || evidence.sourceVersionId || "", selectedCandidate.storeyId || currentSource?.storeyId || "")}
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
@@ -1076,10 +1101,12 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
   </section>;
 }
 
-export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, superseded = [], onSupersede, onRestore, pending = false, onSaveColours, colourPending = false, t }: {
+export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPage, selectedSourceVersionId, onPage, superseded = [], onSupersede, onRestore, pending = false, onSaveColours, colourPending = false, onSaveScale, scalePending = false, t }: {
   processing: BuildingAutomaticPlanProcessing[];
   onSaveColours?: (sourceVersionId: string, entries: WallColourEntry[]) => void;
   colourPending?: boolean;
+  onSaveScale?: (sourceVersionId: string, denominator: number | null) => void;
+  scalePending?: boolean;
   superseded?: BuildingSupersededSource[];
   onSupersede?: (sourceVersionId: string, supersededByVersionId: string) => void;
   onRestore?: (sourceVersionId: string) => void;
@@ -1107,6 +1134,8 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
           return <button type="button" key={pageNumber} className={`is-${disposition.replaceAll("_", "-")}`} aria-pressed={selectedSourceVersionId === item.sourceVersionId && selectedPage === pageNumber} title={label} onClick={() => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId, storeyId: pageSource?.storeyId || null })}><span>{pageNumber}</span><small>{label}</small></button>;
         })}</div>
         {item.coverageTruncated && <Callout tone="warning">{t("buildingModelCoverageTruncated")}</Callout>}
+        {onSaveScale && item.planScale && item.floorPlanPages.length > 0 && <PlanScale key={`${item.planScale.savedDenominator ?? "read"}`} scale={item.planScale} pending={scalePending}
+          onSave={(denominator) => onSaveScale(item.sourceVersionId, denominator)} t={t} />}
         {onSaveColours && item.colourLegend && item.floorPlanPages.length > 0 && <WallColours key={item.colourLegend.savedAt || "suggested"} item={item} pending={colourPending}
           onSave={(entries) => onSaveColours(item.sourceVersionId, entries)} onPage={(pageNumber) => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId,
             storeyId: sources.find((source) => source.source?.versionId === item.sourceVersionId && source.page === pageNumber)?.storeyId || null })} t={t} />}
@@ -1121,6 +1150,36 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
       })}
     </div>}
   </section>;
+}
+
+const planScaleSourceLabels = { dimension_chains: "buildingModelScaleFromDimensions", dimension_chains_and_title_block: "buildingModelScaleFromDimensionsAndTitle",
+  title_block: "buildingModelScaleFromTitle", planner: "buildingModelScaleFromPlanner" } as const;
+
+/** The scale each page was read at; the planner can set the plan set's scale instead. */
+function PlanScale({ scale, pending, onSave, t }: { scale: BuildingPlanScale; pending: boolean; onSave: (denominator: number | null) => void; t: ReturnType<typeof useT> }) {
+  const read = scale.pages.filter((page) => page.denominator);
+  const typical = read[0]?.denominator ?? null;
+  const [value, setValue] = useState(String(scale.savedDenominator ?? typical ?? ""));
+  const inputId = useId();
+  const parsed = /^\d{2,4}$/.test(value.trim()) ? Number(value.trim()) : null;
+  // Pages read at the same scale and from the same evidence share one line.
+  const groups = [...read.reduce((map, page) => { const key = `${page.denominator}:${page.source}`;
+    map.set(key, [...(map.get(key) ?? []), page]); return map; }, new Map<string, typeof read>()).values()];
+  return <div className="building-model-plan-scale">
+    <h3>{t("buildingModelScale")}</h3>
+    {groups.length ? <ul className="text-ui-xs">{groups.map((pages) => { const first = pages[0]!;
+      return <li key={`${first.denominator}:${first.source}`}><strong>1:{first.denominator}</strong> · {t("buildingModelWallColourPages")} {pages.map((page) => page.page).join(", ")}
+        {first.source && <span className="muted"> · {t(planScaleSourceLabels[first.source])}{first.agreeingPairs > 0 ? ` (${t("buildingModelScaleChecks").replace("{count}", String(Math.min(...pages.map((page) => page.agreeingPairs))))})` : ""}</span>}</li>; })}</ul>
+      : <p className="muted text-ui-xs">{t("buildingModelScaleNone")}</p>}
+    <div className="building-model-plan-scale-form">
+      <label className="text-ui-xs" htmlFor={inputId}>1 :</label>
+      <Input id={inputId} className="h-control-sm w-20" inputMode="numeric" aria-label={t("buildingModelScale")} value={value} onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => { if (event.key === "Enter" && parsed) onSave(parsed); }} />
+      <Button size="sm" variant="outline" type="button" disabled={pending || !parsed || parsed === scale.savedDenominator} onClick={() => parsed && onSave(parsed)}>{t("buildingModelSetScale")}</Button>
+      {scale.savedDenominator !== null && <Button size="sm" variant="ghost" type="button" disabled={pending} onClick={() => onSave(null)}>{t("buildingModelReadScaleFromPlan")}</Button>}
+    </div>
+    <p className="muted text-ui-xs">{t("buildingModelScaleHint")}</p>
+  </div>;
 }
 
 type WallColourEntry = { colour: string; layer: BuildingWallColour["layer"]; state: BuildingWallColourState };
@@ -1577,7 +1636,38 @@ export function OutlineSection({ session, canCreateRoom, pending, t, onUpdate, o
   </PropertySection>;
 }
 
-export function CandidateInspector({ candidate, regions, t, pending, onPage, onReview, edit = {}, onEdit, geometry }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onPage: (page: number) => void; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void; edit?: CandidateEdit; onEdit?: (edit: CandidateEdit) => void; geometry?: ReactNode }) {
+/** Unreviewed rooms from the same extraction whose bounds touch or nearly touch this room's: the rooms it can merge with. */
+export function neighbouringRooms(candidate: BuildingExtractionCandidate, candidates: BuildingExtractionCandidate[]) {
+  const a = candidate.box;
+  if (!a || !candidate.polygon?.length) return [];
+  return candidates.filter((other) => other.id !== candidate.id && other.entityType === "room" && other.kind !== "element" && other.jobId === candidate.jobId && other.polygon?.length && other.box
+    && Math.max(other.box.x - a.x - a.width, a.x - other.box.x - other.box.width, other.box.y - a.y - a.height, a.y - other.box.y - other.box.height) <= .012)
+    .sort((x, y) => x.label.localeCompare(y.label, undefined, { numeric: true }));
+}
+
+function MergeRoomsSection({ candidate, options, pending, t, onMerge, onSplit }: { candidate: BuildingExtractionCandidate; options: BuildingExtractionCandidate[]; pending: boolean; t: ReturnType<typeof useT>; onMerge: (other: BuildingExtractionCandidate) => void; onSplit: () => void }) {
+  const [otherId, setOtherId] = useState("");
+  useEffect(() => setOtherId(""), [candidate.id]);
+  const other = options.find((option) => option.id === otherId);
+  if (candidate.mergedFrom?.length) return <PropertySection title={t("buildingModelMergeRooms")}>
+    <p className="building-model-merge-note muted text-ui-sm">{t("buildingModelMergedFrom").replace("{rooms}", candidate.mergedFrom.join(", "))}</p>
+    <Button size="xs" variant="outline" type="button" disabled={pending} onClick={onSplit}>{t("buildingModelSplitRooms")}</Button>
+  </PropertySection>;
+  return <PropertySection title={t("buildingModelMergeRooms")} defaultOpen={false}>
+    {options.length ? <>
+      <dl>
+        <dt>{t("buildingModelMergeWith")}</dt>
+        <dd><NativeSelect aria-label={t("buildingModelMergeWith")} value={otherId} onChange={(event) => setOtherId(event.target.value)} disabled={pending}>
+          <option value="">{t("buildingModelChooseRoom")}</option>
+          {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </NativeSelect></dd>
+      </dl>
+      <Button size="xs" variant="outline" type="button" disabled={pending || !other} onClick={() => other && onMerge(other)}>{t("buildingModelMergeRoomsAction")}</Button>
+    </> : <p className="building-model-merge-note muted text-ui-sm">{t("buildingModelMergeNoNeighbours")}</p>}
+  </PropertySection>;
+}
+
+export function CandidateInspector({ candidate, regions, t, pending, onPage, onReview, edit = {}, onEdit, geometry, mergeOptions = [], onMerge, onSplit }: { candidate: BuildingExtractionCandidate; regions: BuildingRegion[]; t: ReturnType<typeof useT>; pending: boolean; onPage: (page: number) => void; onReview: (decision: "approved" | "rejected", correction?: RecordData) => void; edit?: CandidateEdit; onEdit?: (edit: CandidateEdit) => void; geometry?: ReactNode; mergeOptions?: BuildingExtractionCandidate[]; onMerge?: (other: BuildingExtractionCandidate) => void; onSplit?: () => void }) {
   const name = edit.name ?? candidate.label;
   const targetEntityId = edit.targetEntityId ?? candidate.match?.existingId ?? "";
   const propertyEntries = Object.entries(candidate.properties || {});
@@ -1613,6 +1703,7 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
       </dl>
     </PropertySection>
     {geometry}
+    {candidate.entityType === "room" && onMerge && onSplit && <MergeRoomsSection candidate={candidate} options={mergeOptions} pending={pending} t={t} onMerge={onMerge} onSplit={onSplit} />}
     <PropertySection title={t("buildingModelMatchExisting")} defaultOpen={Boolean(targetEntityId)}>
       <dl>
         <dt>{candidate.entityType === "element" ? t("buildingModelExistingElement") : t("buildingModelExistingObject")}</dt>

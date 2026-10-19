@@ -4,11 +4,12 @@ import { buildingExtractionJobs as jobs, buildingExtractionCandidates as candida
 import { buildingExtractorVersion, extractPlanLabels } from "./plan-extraction";
 export { buildingExtractorVersion };
 
-/** A planner's outline edit outlives re-extraction: the new run refreshes evidence and QC around it. */
+/** A planner's outline edit (or room merge) outlives re-extraction: the new run refreshes evidence and QC around it. */
 const keepOutlineEdit = (geometry: any, previous: any) => {
   if (!previous?.outlineEdit) return geometry;
   const { parts: _parts, polygons: _polygons, ...rest } = geometry;
-  return { ...rest, quality: previous.quality, polygon: previous.polygon, holes: previous.holes, planRegion: previous.planRegion, outlineEdit: previous.outlineEdit };
+  const merged = previous.merge ? { merge: previous.merge, printedArea: previous.printedArea, openSpace: undefined } : {};
+  return { ...rest, quality: previous.quality, polygon: previous.polygon, holes: previous.holes, planRegion: previous.planRegion, outlineEdit: previous.outlineEdit, ...merged };
 };
 import { proposeRoomUses } from "./room-use-classifier";
 import { ensureAutomaticPlanExtractions } from "./automatic-building-model";
@@ -39,11 +40,11 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
     if (!source?.storageKey) throw new Error("Source unavailable");
     const bounded = AbortSignal.any([signal,AbortSignal.timeout(6*60_000)]);
     const stream = await d.fileStorage.read(source.storageKey,bounded); if (!stream) throw new Error("Source unavailable");
-    // The plan set's colour legend, as a person set it; without one the extractor suggests the DIN colours.
-    const [legend] = await d.db.select({entries:buildingColourLegends.entries}).from(buildingColourLegends)
+    // The plan set's colour legend and scale, as a person set them; without one the extractor suggests the DIN colours.
+    const [legend] = await d.db.select({entries:buildingColourLegends.entries,scaleDenominator:buildingColourLegends.scaleDenominator}).from(buildingColourLegends)
       .where(and(eq(buildingColourLegends.modelId,job.modelId),eq(buildingColourLegends.tenantId,job.tenantId),eq(buildingColourLegends.sourceVersionId,job.sourceVersionId))).limit(1);
-    const result = await extractPlanLabels(stream,job.page,bounded,{colourLegend:Array.isArray(legend?.entries)?legend.entries as any:[]});
-    const existing = await d.db.select({sourceKey:candidates.sourceKey,status:candidates.status,geometry:candidates.geometry}).from(candidates)
+    const result = await extractPlanLabels(stream,job.page,bounded,{colourLegend:Array.isArray(legend?.entries)?legend.entries as any:[],scaleDenominator:legend?.scaleDenominator??null});
+    const existing = await d.db.select({sourceKey:candidates.sourceKey,name:candidates.name,status:candidates.status,geometry:candidates.geometry}).from(candidates)
       .where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId)));
     const existingBySource = new Map(existing.map((row:any)=>[row.sourceKey,row]));
     const eligibleLabels = result.labels.filter(label => {
@@ -73,7 +74,9 @@ export async function runBuildingExtraction(d: SourceExtractionDeps, signal: Abo
         const evidence=[{kind:"page",sourceVersionId:job.sourceVersionId,page:job.page,region:candidate.geometry.planRegion,quote:candidate.quote,...("layerId" in candidate?{layerId:candidate.layerId,layerName:candidate.layerName}:{})}];
         await tx.insert(candidates).values({tenantId:job.tenantId,modelId:job.modelId,jobId:job.id,
           sourceKey:candidate.sourceKey,entityType:candidate.entityType,name:candidate.name,geometry,evidence}).onConflictDoNothing();
-        const updated=await tx.update(candidates).set({name:candidate.name,geometry,evidence}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),
+        // A merged room keeps the name it got when a person merged it.
+        const name=previous?.status==="unreviewed"&&(previous.geometry as any)?.merge?previous.name:candidate.name;
+        const updated=await tx.update(candidates).set({name,geometry,evidence}).where(and(eq(candidates.jobId,job.id),eq(candidates.tenantId,job.tenantId),
           eq(candidates.sourceKey,candidate.sourceKey),eq(candidates.status,"unreviewed"))).returning({id:candidates.id});
         if(previous?.status==="unreviewed") refreshed+=updated.length;
       }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { extractPlanLabels, parsePlanBbox, parsePlanTsv, planLabels } from "./plan-extraction";
-import { decodeSelectionMask, magicSelection } from "./plan-selection";
+import { decodeSelectionMask, magicSelection, mergeOutlines } from "./plan-selection";
 import { syntheticBayArea, syntheticPlanPdf, syntheticPlanRooms, type SyntheticPlanOptions } from "./test-fixtures/synthetic-plan";
 
 test("PDF words use source dimensions and stable source keys, never invented room outlines",()=>{
@@ -98,4 +98,14 @@ test.skipIf(!popplerAvailable)("magic selection fills the clicked room from the 
     expect(outline.polygon.every((p,i,ring)=>{const q=ring[(i+1)%ring.length];return p.x===q.x||p.y===q.y;})).toBe(true);
   }
   expect(magicSelection(cells,result.selectionMask.gridSize,{x:.02,y:.02},result.pageScale).status).toBe("not_enclosed");
+});
+
+test("merging rooms bridges the wall between them and nothing beyond the rooms' extent",()=>{
+  // 12 m page, 1 cm cells: a 4×3 m room and a 2.76×2 m room behind a 24 cm wall.
+  const rect=(x0:number,y0:number,x1:number,y1:number)=>({polygon:[{x:x0/12,y:y0/12},{x:x1/12,y:y0/12},{x:x1/12,y:y1/12},{x:x0/12,y:y1/12}]});
+  const scale={pageAspectRatio:1,metresPerPageHeight:12};
+  const merged=mergeOutlines([rect(1,1,5,4),rect(5.24,1,8,3)],scale)!;
+  expect(merged.areaM2!).toBeCloseTo(4*3+.24*2+2.76*2,1);
+  expect(merged.holes).toEqual([]);
+  expect(mergeOutlines([rect(1,1,5,4),rect(6,1,8,3)],scale)).toBeNull();
 });

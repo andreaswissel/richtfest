@@ -11,8 +11,9 @@ import { extractPlanFootprints } from "./plan-footprints";
 import { inferPlanTopology, type WallColourLegend } from "./plan-topology";
 import { outlineWallFootprints } from "./plan-outline-walls";
 import { encodeSelectionMask, selectionMaskEncoding } from "./plan-selection";
+import { planScale, planScaleMethod, type PlanScale } from "./plan-scale";
 
-export const buildingExtractorVersion = "topology-v10";
+export const buildingExtractorVersion = "topology-v11";
 
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number; confidence?: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text" | "confidence">;
@@ -80,16 +81,16 @@ export type PlanExtraction = Awaited<ReturnType<typeof analysePlanFile>>;
 
 /** Stream the source to a private temp file, then parse it off the main thread:
  * PDF geometry and raster topology are CPU-bound and would stall the API. */
-export async function extractPlanLabels(stream: AsyncIterable<Uint8Array>, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend } = {}): Promise<PlanExtraction> {
+export async function extractPlanLabels(stream: AsyncIterable<Uint8Array>, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend; scaleDenominator?: number | null } = {}): Promise<PlanExtraction> {
   const directory = await mkdtemp(join(tmpdir(), "richtfest-plan-"));
   try {
     const path = join(directory,"source.pdf");
     await pipeline(Readable.from(stream),createWriteStream(path),{ signal });
-    return await inPlanWorker({ path, page, colourLegend: options.colourLegend ?? [] }, signal);
+    return await inPlanWorker({ path, page, colourLegend: options.colourLegend ?? [], scaleDenominator: options.scaleDenominator ?? null }, signal);
   } finally { (stream as {destroy?:()=>void}).destroy?.(); await rm(directory,{recursive:true,force:true}); }
 }
 
-function inPlanWorker(input: { path: string; page: number; colourLegend: WallColourLegend }, signal: AbortSignal) {
+function inPlanWorker(input: { path: string; page: number; colourLegend: WallColourLegend; scaleDenominator: number | null }, signal: AbortSignal) {
   return new Promise<PlanExtraction>((resolve, reject) => {
     signal.throwIfAborted();
     const worker = new Worker(new URL("./plan-extraction-thread.ts", import.meta.url));
@@ -104,7 +105,7 @@ function inPlanWorker(input: { path: string; page: number; colourLegend: WallCol
 }
 
 /** Runs inside the plan-extraction worker thread (see plan-extraction-thread.ts). */
-export async function analysePlanFile(path: string, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend } = {}) {
+export async function analysePlanFile(path: string, page: number, signal: AbortSignal, options: { colourLegend?: WallColourLegend; scaleDenominator?: number | null } = {}) {
   const directory = dirname(path);
   const command = (file: string, args: string[]) => new Promise<string>((resolve,reject) => execFile(file,args,
     { signal, timeout: 90_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, OMP_THREAD_LIMIT: "1" } },
@@ -130,11 +131,13 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
     const outline = !layerCandidates.length && penSegments.length ? outlineWallFootprints({ penSegments, doorSwings, aspect: pageAspectRatio, roomLabels: labels.map(label => label.geometry.planRegion) }) : null;
     const footprintCandidates = outline?.footprints.length ? outline.footprints : layerCandidates;
     const barrierLines = outline?.footprints.length ? outline.barrierLines : layerBarrierLines;
-    const scales=[...new Set(words.flatMap(w=>/^1:\d{2,4}$/.test(w.text)?[Number(w.text.slice(2))]:[]))];
-    const scaleObservation=scales.length===1?{denominator:scales[0],quote:`1:${scales[0]}`,status:"unreviewed",limitations:"Title-block scale is not used for physical area validation until a source dimension chain corroborates it."}:null;
-    // The printed scale is unreviewed: it only bounds plausible opening widths and room sizes, never measures them.
     const pageHeightPoints = footprints && "pageHeightPoints" in footprints ? footprints.pageHeightPoints : null;
-    const metresPerPageHeight = scaleObservation && pageHeightPoints ? pageHeightPoints / 72 * .0254 * scaleObservation.denominator : null;
+    // The sheet's scale: the planner's where set for this plan set, else measured from the dimension chains.
+    const scaleObservation: PlanScale | null = options.scaleDenominator && pageHeightPoints
+      ? { metresPerPageHeight: pageHeightPoints / 72 * .0254 * options.scaleDenominator, denominator: options.scaleDenominator, source: "planner", agreeingPairs: 0, pairs: 0,
+        quote: null, status: "confirmed", method: planScaleMethod, limitations: "Scale set by a person for this plan set." }
+      : planScale({ words, aspect: pageAspectRatio, pageHeightPoints });
+    const metresPerPageHeight = scaleObservation?.metresPerPageHeight ?? null;
     const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines,colourLegend:options.colourLegend});
     // The barrier raster goes to its own table (magic selection), never into the job result.
     const selectionMask = { gridSize: topology.selectionMask.gridSize, encoding: selectionMaskEncoding, data: encodeSelectionMask(topology.selectionMask.cells) };

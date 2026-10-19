@@ -370,3 +370,9 @@
 .building-model-wall-colours td, .building-model-wall-colours th { padding-block: 4px; }
 .building-model-wall-colours select { min-width: 150px; }
 .building-model-wall-colour-suggested { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: var(--ui-2xs); }
+.building-model-plan-scale { display: grid; gap: 4px; }
+.building-model-plan-scale h3 { font-size: var(--ui-xs); font-weight: 600; }
+.building-model-plan-scale ul { display: grid; gap: 2px; }
+.building-model-plan-scale-form { display: flex; gap: 6px; align-items: center; }
+
+.building-model-merge-note { margin: 0 0 6px; }
