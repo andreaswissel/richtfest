@@ -2670,7 +2670,8 @@
   "proofRoomFacades": "{count} Außenfassaden",
   "proofAddOpeningTitle": "Fenster, Tür oder kleines Bauteil hinzufügen",
   "proofCatalogueHint": "Für Wände und Fenster ohne Rw; jeder Vorschlag wird von Ihnen bestätigt.",
-  "interiorCeilingConstruction": "Aufbau je Decke",
-  "interiorCeilingChecks": "Nachweise je darunterliegendem Raum",
-  "interiorElementsHint": "Katalogwerte der trennenden und flankierenden Bauteile"
+  "interiorElementsHint": "Katalogwerte der trennenden und flankierenden Bauteile",
+  "interiorCeilingMeta": "{count} Räume darunter · {ready} berechnet",
+  "interiorCeilingMissing": "Fehlt für alle Räume darunter: {gaps}",
+  "interiorNeedsCeilingInputs": "Benötigt die Angaben zur Decke oben"
 }

@@ -29,7 +29,7 @@ The norm's coefficients are not in Richtfest's code or this documentation; the s
 Each table shows **Inputs missing** where a check cannot run, with the list of open inputs below it:
 
 - **Clear room height** per storey, at the top of the section (the same value the exterior noise verification uses).
-- **Ceiling type** and **Floating screed** (mortar, mastic asphalt, dry screed or none), its area mass and dynamic stiffness s', in one row per ceiling. Save stores all four.
+- **Ceiling type** and **Floating screed** (mortar, mastic asphalt, dry screed or none), its area mass and dynamic stiffness s', at the top of each ceiling, above its checks into the rooms below. Save stores all four. What every room below still needs is named once for the ceiling.
 - **Dn,f,w** of a lightweight wall, directly in the elements table.
 - **Entrance doors**: **Add door** below the doors table places a door in a stairwell or corridor wall, leading into the room you choose, with its role, tested Rw and basis (test certificate). Change role or Rw in the table; a door's other values are in the building model.
 - Construction, material, thickness and bulk density of a massive wall or slab: follow the element's link to the building model.

@@ -45,13 +45,16 @@
 .proof-confirm { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 720px) { .proof-row, .proof-opening-row { grid-template-columns: 1fr; } }
 .proof-create { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.interior-ceilings { display: grid; gap: 6px; }
-.interior-ceiling { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(170px, 1fr) minmax(170px, 1fr) 8rem 8rem 4.5rem; align-items: center; gap: 4px 12px; max-width: 1100px; }
-.interior-ceiling-head { align-items: end; font-weight: 600; }
-.interior-ceiling-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-sm); }
+/* One ceiling: name, construction, then its checks into the rooms below. */
+.interior-ceiling-block { display: grid; gap: calc(var(--stack) / 2); padding-top: calc(var(--stack) * .75); }
+.subsection-heading + .interior-ceiling-block { padding-top: 0; }
+.interior-ceiling-block + .interior-ceiling-block { margin-top: calc(var(--stack) / 2); border-top: 1px dashed var(--border); }
+.interior-ceiling-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.interior-ceiling-heading h4 { font-size: var(--ui-sm); font-weight: 600; }
+.interior-ceiling { display: grid; grid-template-columns: minmax(170px, 14rem) minmax(170px, 16rem) 10rem 13rem auto; align-items: end; gap: 4px var(--stack); }
 .interior-ceiling > .callout { grid-column: 1 / -1; }
 .interior-limitations { margin: 0; padding-left: 1rem; list-style: disc; display: grid; gap: 2px; }
-@media (max-width: 720px) { .interior-ceiling { grid-template-columns: 1fr; } .interior-ceiling-head { display: none; } }
+@media (max-width: 720px) { .interior-ceiling { grid-template-columns: 1fr; } }
 .interior-basis { display: block; max-width: 34rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .interior-dnfw { width: 5.5rem; }
 /* Entrance door: where it goes, its role, name, Rw and basis in one row. */
@@ -59,3 +62,9 @@
 .interior-door-row > .callout { grid-column: 1 / -1; }
 .interior-door-role { min-width: 14rem; }
 @media (max-width: 720px) { .interior-door-row { grid-template-columns: 1fr; } }
+.interior-ceiling > button { justify-self: start; }
+/* Every ceiling's checks line up with the next ceiling's. */
+.interior-ceiling-block table { table-layout: fixed; }
+.interior-ceiling-block th:nth-child(1) { width: 18%; }
+.interior-ceiling-block th:nth-child(2) { width: 12%; }
+.interior-ceiling-block th:nth-child(3) { width: 18%; }

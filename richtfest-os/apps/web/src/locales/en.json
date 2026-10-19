@@ -2670,7 +2670,8 @@
   "proofRoomFacades": "{count} exterior facades",
   "proofAddOpeningTitle": "Add window, door or small element",
   "proofCatalogueHint": "For walls and windows without Rw; you confirm each suggestion.",
-  "interiorCeilingConstruction": "Construction per ceiling",
-  "interiorCeilingChecks": "Checks per room below",
-  "interiorElementsHint": "Catalogue values of the separating and flanking elements"
+  "interiorElementsHint": "Catalogue values of the separating and flanking elements",
+  "interiorCeilingMeta": "{count} rooms below · {ready} calculated",
+  "interiorCeilingMissing": "Missing for every room below: {gaps}",
+  "interiorNeedsCeilingInputs": "Needs the ceiling inputs above"
 }
