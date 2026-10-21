@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-21
+
+- **Building models from IFC:** Preview an uploaded IFC revision, review source limitations and select the building storeys to import. Rooms and elements become a saved draft with metre-based plan geometry and links to their IFC identities; existing work stays intact and repeated imports create no duplicates. IFC uploads remain identifiable when given a custom label.
+
 ## 2026-10-19
 
 - **Storeys in the outliner:** The building model outliner now lists every storey of the plan set, top floor first, with its level and room count, or switch it to group by plan page. Expand a storey or page to see its rooms, or open its plan from its row.

@@ -59,6 +59,7 @@ import {
 import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
+import { createIfcBuildingRouter } from "./ifc-building-router";
 import { derivedWritable, effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks, inquiries } from "./schema";
 import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
@@ -1325,5 +1326,6 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
 
   router.use(createBuildingExtractionRouter(getDeps));
   router.use(createBuildingOutlineRouter(getDeps));
+  router.use(createIfcBuildingRouter(getDeps));
   return router;
 }

@@ -791,3 +791,18 @@ test("model adapter exposes ceilings' rooms and the building's requirement level
   expect(model.buildings[0].componentProperties.soundInsulationLevel).toMatchObject({ value: "elevated", reviewStatus: "unreviewed" });
   expect(model.states.existing.find((region) => region.id === "c1")).toMatchObject({ elementKind: "draft_ceiling", covers: ["r1"] });
 });
+
+test("an IFC entity link opens its own source revision and metre-based storey, not a PDF canvas", () => {
+  const source = (version: string, expressId: number) => ({ kind: "ifc", sourceVersionId: version, expressId, globalId: `global-${expressId}`, ifcType: "IFCSPACE" });
+  const html = render({ model: { revision: 2 },
+    buildings: ["v1", "v2"].map(v => ({ id: v, geometry: { ifcImport: { sourceVersionId: v, fileName: `${v}.ifc`, warnings: [] } } })),
+    storeys: ["v1", "v2"].map((v, i) => ({ id: `s${i}`, name: `Floor ${i}`, geometry: { source: source(v, i + 1) } })),
+    rooms: ["v1", "v2"].map((v, i) => ({ id: `r${i}`, storeyId: `s${i}`, name: `Room ${i}`, geometry: { source: source(v, i + 10), coordinateSpace: "ifc-metre", elevationRange: [3, 5.8], footprint: [[[[6.4, 19.5], [8.4, 19.5], [8.4, 23.5], [6.4, 19.5]]]] } })),
+  }, "?view=building-model&entity=room:r1");
+  expect(html).toContain('value="s1" selected=""');
+  expect(html).toContain('aria-label="Room 1 · IFCSPACE #11" aria-pressed="true"');
+  expect(html).toContain('d="M6.4,-19.5 L8.4,-19.5 L8.4,-23.5 L6.4,-19.5Z"');
+  expect(html).toContain("global-11");
+  expect(html).not.toContain("<canvas");
+  expect(html).not.toContain('aria-label="Room 0 · IFCSPACE #10"');
+});

@@ -100,6 +100,14 @@ test("file upload initiates, streams raw bytes, and completes the version", asyn
   expect(calls[2]?.url).toBe(
     "/api/projects/project-1/files/file-1/versions/1/complete",
   );
+  calls.length = 0;
+  data.set("file", new File(["IFC"], "model.IFC"));
+  data.set("label", "Architect model");
+  await uploadFile("/projects/project-1/files", data);
+  expect(JSON.parse(calls[0]?.init?.body as string)).toMatchObject({
+    name: "Architect model",
+    mimeType: "application/x-ifc",
+  });
 });
 
 test("multi-file upload processes files in order and continues after an individual failure", async () => {

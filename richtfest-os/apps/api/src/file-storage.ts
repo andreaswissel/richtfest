@@ -43,11 +43,11 @@ const localStorage = {
   kind: "local" as const,
   initiate: async (
     _key: string,
-    _mimeType: string,
+    mimeType: string,
     localUploadUrl: string,
   ) => ({
     uploadUrl: localUploadUrl,
-    headers: {},
+    headers: { "content-type": mimeType },
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
   }),
   saveStream: async (

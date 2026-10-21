@@ -24,6 +24,7 @@ import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
 import type { BuildingPlanPoint } from "./types";
 import type { InquirySummary } from "../inquiries/types";
+import { IfcBuildingModel } from "./ifc-building-model";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -231,6 +232,26 @@ export function outlineTargetsAt(regions: BuildingRegion[], point: BuildingPlanP
 }
 
 export function BuildingModelMode({ projectId }: { projectId: string }) {
+  const t = useT();
+  const [params] = useSearchParams();
+  const model = useApi(`/projects/${projectId}/building-model`);
+  const files = useApi(`/projects/${projectId}/files`);
+  const ifcFiles = list(files.data, "files").filter(f => /\.ifc$/i.test(f.name || "") || ["application/x-step", "application/ifc", "application/x-ifc"].includes(f.mimeType));
+  const entityId = params.get("entity")?.split(":")[1];
+  const ifcEntity = [...list(model.data?.rooms), ...list(model.data?.elements)].some(e => e.id === entityId && e.geometry?.source?.kind === "ifc");
+  const imported = list(model.data?.buildings).some(b => b.geometry?.ifcImport);
+  const mode = params.get("modelSource") || (ifcEntity || (imported && !list(model.data?.planSources).length) ? "ifc" : "pdf");
+  const modeLink = (value: string) => { const next = new URLSearchParams(params); next.set("modelSource", value); return `?${next}`; };
+  return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+    <div className="px-page py-2"><Segmented value={mode} items={[{ value: "pdf", label: t("ifcBuildingPdf"), to: modeLink("pdf") }, { value: "ifc", label: t("ifcBuildingTitle"), to: modeLink("ifc") }]} /></div>
+    {mode === "ifc" ? <>
+      {(files.error || (model.error && !(model.error instanceof ApiError && model.error.status === 404))) && <Callout tone="error">{(files.error || model.error)?.message}</Callout>}
+      <IfcBuildingModel key={projectId} projectId={projectId} model={model.data} files={ifcFiles} />
+    </> : <PdfBuildingModelMode projectId={projectId} />}
+  </div>;
+}
+
+function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const t = useT();
   const [params, setParams] = useSearchParams();
   const requestedState = params.get("modelState");

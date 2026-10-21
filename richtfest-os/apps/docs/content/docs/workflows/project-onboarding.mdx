@@ -67,6 +67,20 @@ Open **Project details** and choose **Edit project details** to change the proje
 
 ## Build the shared building model
 
+### Import an IFC model
+
+Upload an IFC2X3 or IFC4 file under **Project files**, then open **Building model → IFC model → Import uploaded IFC**. Choose the immutable file revision and **Preview IFC**. Preview reads stored source bytes deterministically and does not write model records or call an AI provider.
+
+Review the whole-file limitations and explicitly select the real building storeys. Nothing is preselected: levels named after site plans can contain building geometry and must not be assumed to be real floors or duplicates. Preview any storey before choosing **Import selected storeys**. Rooms and elements on the selected storeys become durable, unreviewed Building Model records with stable IDs, source-version IDs, IFC EXPRESS IDs and GlobalIds. Objects with ambiguous building/storey assignments are excluded and counted. Objects with unusable geometry remain records and are disclosed rather than given invented outlines.
+
+The IFC view shows metre-based, orthographic mesh projections and mesh elevation ranges. Placements and declared length units are applied, holes and disconnected parts are retained, and composite elements without their own mesh are assembled from their declared parts. Horizontal coordinates are quantized to one micrometre for polygon union. These are **not floor cuts, surveyed positions, editable PDF outlines or approved measurements**. IFC geometry is stored separately from normalized PDF-page geometry; it is not automatically georeferenced or fed into PDF-only derivations. Select an object to inspect its source identity and share its stable link.
+
+Source declarations remain in the Source Model. Import does not infer apartment membership, room use, construction state, fire ratings, escape routes or regulatory compliance. Warnings disclose missing component classes, unusable projections, identical unit assignments and suspicious all-external door declarations. A missing occurrence fire rating does not rule out a rating on an unresolved type. Fire-safety and calculation inputs still require specialist review.
+
+Import adds a separate source-based building without merging or replacing existing work. Repeating the same revision and storey selection is idempotent, including concurrent retries; changing the selection after import is rejected. A new source revision is a separate additive import, not an automatic update or reconciliation. Revision conflicts require reloading. One transaction saves the model entities, draft revision, receipt and audit event; no partial model survives a failed import. Uploaded IFC files are not imported automatically.
+
+### Read PDF plans
+
 Attach a project-evidence PDF, then open **Building model** from the upload confirmation or project navigation. Richtfest immediately creates a durable draft shell and keeps the source PDF visible while saved processing reads the plan, identifies floor sheets, extracts room and construction geometry, and prepares the draft. The restrained scan overlay reflects those persisted stages, survives navigation or reload, stops at a terminal state and does not invent a percentage or detected geometry. TypeSafe is named only while a configured inference call is actually active. Reduced-motion preferences replace the sweep with a static status.
 
 When a project contains several PDFs, Building model opens the strongest identified floor-plan page instead of an arbitrary page-one report cover. This automatic choice is refreshed when saved plan detection improves, including for older links that only recorded the earlier automatic page. The source-PDF selector keeps calculations and other evidence available for deliberate review. Once a person deliberately chooses a source, page, storey or model object, the URL pins that exact evidence context so reloads and shared links do not silently switch it.

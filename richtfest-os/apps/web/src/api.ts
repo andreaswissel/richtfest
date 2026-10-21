@@ -53,7 +53,7 @@ export async function uploadFile<T = RecordData>(
     expiresAt?: string;
   }>(`${path}/initiate`, {
     name: String(form.get("label") || file.name),
-    mimeType: file.type || "application/octet-stream",
+    mimeType: /\.ifc$/i.test(file.name) ? "application/x-ifc" : file.type || "application/octet-stream",
     sizeBytes: file.size,
     sourceType: "upload",
     sourceMetadata: { ...sourceMetadata, label: String(form.get("label") || "") },
