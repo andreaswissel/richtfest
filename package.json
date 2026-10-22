@@ -1,7 +1,7 @@
 {
   "name": "richtfest",
   "private": true,
-  "packageManager": "bun@1.3.8",
+  "packageManager": "bun@1.4.4",
   "workspaces": ["richtfest-shared", "richtfest-os/apps/*", "richtfest-apps/*"],
   "scripts": {
     "dev": "bun run --filter @richtfest/api dev",

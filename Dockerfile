@@ -2,8 +2,9 @@
 # Keep the build inputs explicit so local node_modules, customer references, and
 # generated output never become part of the Docker build context.
 # Docker Hub rate-limits shared builders. The public mirror serves the same
-# upstream Bun 1.3.8 multi-architecture digest; do not use an unpinned mirror tag.
-FROM mirror.gcr.io/oven/bun:1.3.8@sha256:371d30538b69303ced927bb5915697ac7e2fa8cb409ee332c66009de64de5aa3 AS bun
+# upstream multi-architecture digests; do not use unpinned mirror tags.
+FROM mirror.gcr.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS bun
+FROM mirror.gcr.io/library/node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS docs-node
 
 FROM bun AS manifests
 
@@ -56,11 +57,9 @@ RUN bun run --filter @richtfest/web build
 FROM dependencies AS docs
 
 # Next.js' static exporter currently trips Bun's Linux build worker while
-# collecting the generated _not-found page. Use the Node runtime shipped by
-# Debian for this one build step; the service still installs and runs on Bun.
-RUN apt-get update \
-  && apt-get install --no-install-recommends --yes nodejs \
-  && rm -rf /var/lib/apt/lists/*
+# collecting the generated _not-found page. Use a pinned, security-patched Node
+# for this one build step; the service still installs and runs on Bun.
+COPY --from=docs-node /usr/local/bin/node /usr/local/bin/node
 
 COPY CHANGELOG.md ./
 COPY richtfest-os/apps/docs ./richtfest-os/apps/docs
