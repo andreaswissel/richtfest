@@ -2,7 +2,7 @@
 
 ## 2026-10-23
 
-- **Optimization video preview:** Added a short branded video of the landing page's three optimization proposals, with a matching poster and social-preview metadata ready for relaunch. The landing page remains offline and existing image previews stay in place.
+- **Optimization video preview:** App links now offer the short branded optimization video to iMessage and a matching image preview to WhatsApp and other image-based sharing clients. Media is public without sign-in; playback depends on the messaging client. The landing page remains offline.
 
 ## 2026-10-22
 

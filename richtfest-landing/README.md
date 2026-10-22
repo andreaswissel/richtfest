@@ -14,11 +14,11 @@ Preview locally: `python3 -m http.server -d richtfest-landing 8766`, then open h
 
 ## Optimization video preview
 
-`og-video.mp4` is a silent, 1200×630 H.264 export of the actual Three.js optimization walkthrough, at 24 fps and double speed, with a three-second final hold. It uses the landing typography and colors, the live estimate, and a persistent illustrative-example / planner-approval disclaimer. `og-video-poster.jpg` is a matching final-frame poster. The English video is independent of the visitor's language selection.
+`richtfest-os/apps/web/public/optimization-preview-v1.mp4` is a silent, 1200×630 H.264 export of the actual Three.js optimization walkthrough, at 24 fps and double speed, with a three-second final hold. It uses the landing typography and colors, the live estimate, and a persistent illustrative-example / planner-approval disclaimer. `optimization-preview-v1-poster.jpg` beside it is a matching final-frame poster. The English video is independent of the visitor's language selection.
 
-The page declares `og:video` with its MIME type and dimensions. The existing `og:image` and Twitter large-image card remain the fallback: adding `og:video` does **not** guarantee inline playback or autoplay on a sharing platform, and this is not a Twitter Player Card.
+Both app and landing HTML declare `og:video` with its MIME type and dimensions. The app uses the matching poster for `og:image` and its Twitter large-image card; the offline landing page keeps its original image fallback. This is not a Twitter Player Card.
 
-**Not live while the landing page is offline.** At relaunch, `https://richtfest.ai/og-video.mp4` must serve the MP4 publicly over HTTPS with `Content-Type: video/mp4`, without sign-in or an app redirect. If the canonical marketing domain changes, update both video URL tags. Test the actual target platform after publication; a local video playback check is not a social crawler test.
+The shared assets are publicly served at `https://app.richtfest.ai/optimization-preview-v1.mp4` and `https://app.richtfest.ai/optimization-preview-v1-poster.jpg`, without sign-in, independently of the landing page's offline redirects. iMessage supports direct MP4 previews; WhatsApp's documented website preview uses an image thumbnail, so use the poster there and send the MP4 as a video attachment when motion is required. Actual behavior depends on client settings and cached previews. A browser playback or crawler-response check is not a native messaging-app test.
 
 ### Regenerate
 

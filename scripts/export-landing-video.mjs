@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 
-const [cdpUrl, output = 'richtfest-landing/og-video.mp4'] = process.argv.slice(2);
+const [cdpUrl, output = 'richtfest-os/apps/web/public/optimization-preview-v1.mp4'] = process.argv.slice(2);
 if (!cdpUrl) throw new Error('Usage: node scripts/export-landing-video.mjs <browser CDP URL> [output.mp4]');
 const endpoint = new URL(cdpUrl);
 const targets = await fetch(`http://${endpoint.host}/json/list`).then(r => r.json());

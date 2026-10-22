@@ -81,17 +81,20 @@ Facade levels in [Exterior noise](/docs/workflows/exterior-noise#facade-levels) 
 
 ## Social link previews
 
-The web HTML includes Open Graph and large-image Twitter card metadata, so crawlers do not need JavaScript or a session. In production, the API resolves preview URLs against the origin in `BETTER_AUTH_URL` at startup; set it to the public HTTPS origin, not a private Railway hostname. The image is the public, bundled 1200 × 630 JPEG at `/social-preview-v1.jpg`, not a private Bucket upload.
+The web HTML includes Open Graph video and image metadata and a large-image Twitter card, so crawlers do not need JavaScript or a session. In production, the API resolves preview URLs against the origin in `BETTER_AUTH_URL` at startup; set it to the public HTTPS origin, not a private Railway hostname. The public, bundled assets are `/optimization-preview-v1.mp4` and its matching 1200 × 630 JPEG at `/optimization-preview-v1-poster.jpg`, not private Bucket uploads.
 
-App links use the same Richtfest title, description and image. Preview metadata never includes project names, document content or authentication tokens. Docs remain behind sign-in and are not a public preview surface. When replacing the image, version its filename and update the HTML metadata to avoid stale image caches. Messaging services may retain previews of links already posted; existing messages are not automatically refreshed by a deployment.
+App links use the same Richtfest title, description, video and poster for every user agent. Preview metadata never includes project names, document content or authentication tokens. Docs remain behind sign-in and are not a public preview surface. When replacing media, version its filename and update the HTML metadata to avoid stale asset caches. Messaging services may retain previews of links already posted; existing messages are not automatically refreshed by a deployment. Compose a new message with the app link to test; a fresh query string can help diagnose a cached page preview but is not a guaranteed cache reset.
 
-Run `bun test tests/social-preview.test.ts` to build the web bundle and verify unauthenticated crawler responses and image delivery through the production API without a database connection.
+Run `bun test tests/social-preview.test.ts` to build the web bundle and verify unauthenticated crawler responses, poster delivery and MP4 byte-range requests through the production API without a database connection. These checks do not prove native messaging-client rendering.
 
-### Landing-page optimization video
+### Optimization video in messaging apps
 
-The offline landing directory includes `og-video.mp4`, a 22-second silent 1200 × 630 H.264 capture of its illustrative three-step optimization walkthrough, and `og-video-poster.jpg`. Its HTML declares the video URL, MIME type and dimensions while retaining the existing image fallback and Twitter large-image card. Sharing platforms decide whether to play an Open Graph video; the metadata does not guarantee inline playback or autoplay.
+The video is a 22-second silent 1200 × 630 H.264 capture of the landing page's illustrative three-step optimization walkthrough. It and its final-frame poster live in the web app's `public` directory. Both are downloadable without sign-in, and the video supports HTTP byte ranges. They total about 2.6 MB; the JPEG alone is about 50 KB. The HTML declares the direct video URL, MIME type and dimensions, with the same-sized poster as fallback.
 
-These assets do not change app previews or reactivate the marketing page. On relaunch, `https://richtfest.ai/og-video.mp4` must serve the file publicly as `video/mp4`, without authentication or a redirect to the app; update both video URL tags if the canonical domain changes. Verify the target sharing platforms after publication. The capture script and regeneration instructions are in `scripts/export-landing-video.mjs` and `richtfest-landing/README.md`; capture-only layout and timing changes are not shipped to visitors.
+- **iMessage:** [Apple documents direct MP4 previews](https://developer.apple.com/documentation/technotes/tn3156-create-rich-previews-for-messages) through `og:video`, with a 10 MB combined media guideline. Playback still depends on the client's settings and preview availability.
+- **WhatsApp:** [WhatsApp documents image-based link previews](https://developers.facebook.com/documentation/business-messaging/whatsapp/link-previews), including an absolute `og:image` under 600 KB and metadata in the first 300 KB of HTML. The matching poster meets those requirements. Do not promise animation for an ordinary website link; send the MP4 as a video attachment when motion is required.
+
+The marketing page remains offline, with its existing redirects unchanged. Its video metadata references the same public app-domain MP4 for a future relaunch. The capture script and regeneration instructions are in `scripts/export-landing-video.mjs` and `richtfest-landing/README.md`; capture-only layout and timing changes are not shipped to visitors.
 
 ## File storage
 
