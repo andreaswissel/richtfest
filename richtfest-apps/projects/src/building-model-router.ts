@@ -1,4 +1,5 @@
 import { lockProject } from "./project-lock";
+import { assembleFireProtectionSnapshot } from "./fire-protection";
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -60,7 +61,7 @@ import type { AppDeps } from "./deps";
 import { createBuildingExtractionRouter } from "./building-extraction-router";
 import { createBuildingOutlineRouter } from "./building-outline-router";
 import { createIfcBuildingRouter } from "./ifc-building-router";
-import { derivedWritable, effectiveValue, planWallAdjacency, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
+import { derivedWritable, effectiveValue, planWallAdjacency, roomSpaceContext, wallAdjacencyMethod, type PageScale } from "./wall-adjacency";
 import { buildingExtractionJobs, buildingExtractionCandidates, buildingSelectionMasks, inquiries } from "./schema";
 import { planStoreyCeilings, storeyCeilingMethod } from "./storey-ceilings";
 import { planOpeningMethod, planOpenings, type OpeningPage, type TracedOpening } from "./plan-openings";
@@ -509,6 +510,17 @@ export async function readBuildingModelContext(d: AppDeps, projectId: string, op
 
 export const readBuildingModelAgentContext = readBuildingModelContext;
 
+/** Consistent, tenant-scoped saved inputs for deterministic fire execution. */
+export async function readFireProtectionSnapshot(d: AppDeps, projectId: string): Promise<import("@richtfest/shared/fire-plan").FireProtectionSnapshot> {
+  d.requirePermission("projects:read");
+  return d.db.transaction(async (tx: any) => {
+    const scoped = { ...d, db: tx };
+    const row = await modelForProject(scoped, projectId);
+    if (!row) return { available: false, reason: "Building model unavailable for this project." };
+    return assembleFireProtectionSnapshot(await readModel(scoped, row.model));
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
 /**
  * Approved figures a feasibility study starts from: parcel area, single-value
  * GRZ/GFZ and the Geschossfläche of approved Vollgeschosse in existing or
@@ -920,9 +932,13 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           const element = (data.elements as any[]).find(item => item.id === wall.wallId);
           return { id: wall.wallId, storeyId: element?.storeyId, sourceVersionId: wall.sourceVersionId, page: wall.page,
             footprintKeys: Array.isArray(element?.geometry?.sourceFootprintKeys) ? element.geometry.sourceFootprintKeys : [],
+            polygon: element?.geometry?.polygon,
             exterior: wall.sides.includes("exterior") || wall.role === "exterior", roomIds: wall.sides.flatMap(side => Array.isArray(side) ? side.map(room => room.roomId) : []) };
         }),
         rooms: (data.rooms as any[]).map(room => ({ id: room.id, storeyId: room.storeyId, polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon : null,
+          holes: room.geometry?.holes, sourceVersionId: room.geometry?.source?.sourceVersionId, page: room.geometry?.source?.page,
+          boundaryResolved: room.geometry?.quality !== "approximate_partition" && Boolean(room.geometry?.polygon?.length),
+          exterior: roomSpaceContext(room, { spaceType: effectiveValue((data.properties as any[]).find(p => p.entityType === "room" && p.entityId === room.id && p.propertyKey === "spaceType")) }).spaceType === "exterior",
           candidateKey: typeof room.stableKey === "string" && room.stableKey.startsWith("extraction:") ? candidateKeys.get(room.stableKey.slice(11)) ?? null : null })),
         existing: (data.elements as any[]).filter(item => item.kind === "window" || item.kind === "door")
           .map(item => ({ id: item.id, kind: item.kind, wallId: hostOf.get(item.id) ?? null, planKey: typeof item.geometry?.planOpeningKey === "string" ? item.geometry.planOpeningKey : null })),
@@ -960,7 +976,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           const { x, y, width, height } = item.closure;
           const geometry = { quality: "derived_opening", method: planOpeningMethod, semanticKind: item.kind, source: { sourceVersionId: item.sourceVersionId, page: item.page },
             planRegion: item.closure, polygon: [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }],
-            planOpeningKey: item.planKey, doorSwing: item.doorSwing,
+            planOpeningKey: item.planKey, doorSwing: item.doorSwing, roomSides: item.roomSides,
             limitations: "Unreviewed opening: a gap between two wall ends of the plan trace. Window or door, its room and wall are inferred; height, sill and rating are not in the plan." };
           let elementId: string;
           if (item.action === "adopt") {

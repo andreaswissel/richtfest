@@ -13,7 +13,7 @@ import { outlineWallFootprints } from "./plan-outline-walls";
 import { encodeSelectionMask, selectionMaskEncoding } from "./plan-selection";
 import { planScale, planScaleMethod, type PlanScale } from "./plan-scale";
 
-export const buildingExtractorVersion = "topology-v11";
+export const buildingExtractorVersion = "topology-v14";
 
 export type PlanWord = { text: string; x: number; y: number; width: number; height: number; confidence?: number };
 export type PlanLabel = { sourceKey: string; entityType: "room"; name: string; geometry: { quality: "anchor"; coordinateSpace: "normalized-page"; planRegion: Omit<PlanWord, "text" | "confidence">;

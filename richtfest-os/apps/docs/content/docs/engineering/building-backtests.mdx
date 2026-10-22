@@ -1,0 +1,149 @@
+---
+title: Building assessment backtests
+description: Prepare PDF/IFC cases, compare recorded noise and fire assessment results, and retain model provenance without confusing a benchmark with engineering approval.
+---
+
+## What is available
+
+The offline building backtest prepares a private evaluation dossier from local PDF/IFC files and scores **recorded outputs** from the existing project workflow. The separate **fire-plan replay** executes the existing fire engine on a supplied, source-linked calculation snapshot and writes results for that scorer. Neither command uploads files, extracts geometry, calls a model or approves a concept. Both work without Railway or credentials. Actual project runs still use the normal application, configured providers and human review gates.
+
+The Knowledge app owns the scorer in `richtfest-apps/knowledge/src/building-backtest.ts`. There is no new database, operational state store or parallel upload UI. Project sources, runs, model proposals, calculation artifacts and reviews remain in their existing Postgres-backed workflows. Local dossiers are offline evaluation exports, not operational records.
+
+## Prepare the first case
+
+Use a completed residential project with an independently reviewed noise assessment and fire concept. Start with PDF plans, sections, elevations, legends, component schedules and the building description; run an IFC revision as a **separate input condition**, not as an assumption of equivalent coverage. Keep customer material under ignored `reference-project/` or another private directory, never in tracked fixtures.
+
+```sh
+mkdir -p reference-project/backtests
+bun scripts/evaluate-building-backtest.ts \
+  --prepare reference-project/backtests/first-pdf \
+  --case-id first-pdf \
+  --source reference-project/plans.pdf \
+  --source reference-project/sections.pdf
+```
+
+Use `--source reference-project/building.ifc` for the IFC condition. Source basenames must be unique. Preparation streams SHA-256 hashes of the exact bytes and creates a **new**, private directory with `reference.json` and an empty `candidate.json`; it refuses to overwrite any existing directory. It checks filename extensions, not PDF/IFC validity—the normal upload pipeline performs parsing. Seven unreviewed rubric checks are a starting checklist, **not golden answers**. An empty candidate correctly scores zero, not success.
+
+Before running any model:
+
+1. An independent domain reviewer expands the rubric into per-room, per-component and per-requirement checks. Obtain the expected numbers from the reviewed reference or an independent method, never from Richtfest's output. Record source revisions, jurisdiction, code editions, assumptions and applicable calculation methods in the reference descriptions/review notes.
+2. Define units and tolerances in advance. Retain separate checks for numeric values and the sign of every compliance margin; a 0.1 dB numeric tolerance must never turn a negative reserve into compliance. Discrete classifications, counts and safety decisions need exact matches. Geometry tolerances must follow the reference's precision, not a universal percentage.
+3. Set `review` to `{ reviewer, reviewedAt, note }` only after this work is checked. Use `split: "calibration"` for cases used to tune the harness, `"holdout"` for genuinely untouched cases and `"synthetic"` for test data. Renaming a calibration case does not make it a holdout.
+4. Keep reference assessments and `reference.json` outside model-visible uploads, company knowledge, retrieval and conversation history. Only raw project inputs go into the project. If reference answers were already exposed, record the leakage and use that project for calibration only. The scorer does not enforce storage separation or detect leakage.
+
+## Required coverage
+
+| Stage | Checks to define before inference | Failure to surface |
+| --- | --- | --- |
+| Extraction | Every building/storey/unit/room, opening and relevant component; per-page scale; net/gross areas; heights; adjacency; exact PDF page or IFC entity/attribute | Missing rooms, duplicate identities, wrong units, unsupported geometry, unreviewed assumptions |
+| Acoustics | Environmental input applicability and metric; facade La; exterior required/provided insulation and reserve; applicable interior airborne, impact and services checks; tool version and receipts | Missing traffic/rating data, glass/window confusion, missing openings/flanks, wrong margin, unsupported method |
+| Fire | State/code edition, height definition, unit sizes, GK/Sonderbau, required versus provided wall/slab/door ratings, escape-route length/connectivity | Wrong jurisdiction, roof-height classification, straight-line escape path, unsupported second-route claims |
+| Concepts | **Separate** noise and fire concept reviews: scope, requirements, evidence, measures, calculations, assumptions, deviations, open items and draft status | Polished prose hiding incomplete coverage, unsupported compliance or missing calculations |
+| Safety | Missing-input controls, contradictory revisions, absent scales/ratings, unsupported state/IFC cases, no invented citations or approvals | Unsafe completion instead of explicit abstention |
+
+Keep at least one complete check for every required output. An expected blocked/unsupported result is useful in **negative safety controls**, not as a replacement for a missing positive capability. An IFC fire-route capability gap must remain a failing positive check even if a separate safety check rewards honest abstention. Do not exclude failed rooms from the denominator.
+
+Current known limits belong in the first baseline: the agent can execute a partial fire assessment from the saved building model, but does not turn an untouched upload into reviewed calculation inputs. Fire rules cover Berlin/Rheinland-Pfalz, not other states; IFC fire-plan/escape-route checks, second escape routes/fire-brigade access and complete garage component checks are not implemented. See [Fire protection](/docs/workflows/fire-protection). Existing acoustic engines and arithmetic tests do not by themselves establish independent normative validation.
+
+## Execute through the existing workflow
+
+Upload only the pinned inputs through [project onboarding](/docs/workflows/project-onboarding). Review PDF plan extraction or IFC import into the building model. Preserve imported/inferred/reviewed distinctions, source UUIDs and model revisions. Record manual corrections and interventions separately for each candidate; reusing a corrected model in only one run makes the comparison unfair.
+
+Use the existing [exterior noise](/docs/workflows/exterior-noise) and [interior sound](/docs/workflows/interior-sound) workflows for deterministic results and draft Nachweise. Review proposed inputs before treating them as settled. For fire assessment, ask the agent in **Team** to prepare a Brandschutz draft from the saved model. Its `prepare_fire_protection_assessment({})` tool reads the saved revision and executes the same shared fire-plan engine as the offline replay. The requirements reviewer or construction-law specialist needs at least two model steps, and every source behind the saved inputs must be in its current readable batch. Otherwise the tool returns a blocker, not a partial calculation over a silently reduced model. Chat does not create fire drafts; Report and Calculation currently use acoustic templates. A combined one-click upload-to-reviewed-concepts workflow is **not** implemented by this evaluator. Use a fresh source-only project/conversation for calibration because Team can see project-wide context.
+
+The saved fire artifact contains the exact snapshot, calculation output, code editions, engine content hash and canonical-JSON input/output hashes. It is always an incomplete, unapproved draft. Approved property versions take precedence over pending proposals; manual unreviewed entries remain explicitly flagged, conflicting inputs are withheld, and unknown door connections or basement levels are not guessed. Use the run export for requested/reported model identities and tool telemetry. Model retries reuse the recorded tool result; start a new run after changing the building model to evaluate a new snapshot. For source-only comparisons, do not import the reference report or its answers into that model.
+
+Save the exact artifacts and deterministic input/output receipts. Copy observed values into `candidate.json` without consulting the answers; assign stable check IDs and list the root `runIds`. Each observation has:
+
+- `id`, `outcome` (`complete`, `blocked`, `unsupported`, `failed`), scalar `value` or null, `unit` or null, and an explanatory `note`.
+- `evidence`: `{ kind: "page", sourceId, page }` or `{ kind: "ifc", sourceId, expressId, attribute }`, referring to the pinned source manifest. A structurally valid locator is not proof that the source supports the claim.
+- `calculation`: null or `{ tool, version, inputSha256, outputSha256 }`. Numeric acoustic/fire expectations require a reference `tool: { name, version }` and a matching receipt. Use the actual engine version, or the exact code revision for an unversioned deterministic rule module; never invent a tool version.
+- `artifactId`: null or an ID in `artifacts: [{ id, sha256 }]`. Hash the exact saved output bytes. A human review is `{ reviewer, reviewedAt, note, verdict: "pass" | "fail", artifactSha256 }`; it must match that artifact's hash. Concept checks always require this review, never model self-grades or heading/keyword matches.
+
+For numeric checks, set `expectedValue`, `unit`, `tolerance`, `evidenceRequired`, `critical`, `tool` and `humanReviewRequired` in the reference. For a qualitative review, use null `expectedValue`, zero tolerance and `humanReviewRequired: true`. Reviewer names and hashes are recorded assertions, not cryptographic attestations: the operator must independently check artifacts, source evidence and receipts. The evaluator compares manifests; it does not reread original source/artifact files during scoring.
+
+The [printed exterior-noise reference comparison](/docs/architecture/agent-runtime#offline-exterior-noise-reference-comparison) remains useful as a separate arithmetic diagnostic. Do not count it as success at extracting or assessing an unseen building.
+
+## Replay a fire plan without Railway
+
+`scripts/run-fire-plan-backtest.ts` executes classification, wall/slab/door requirements and provided-rating comparisons, per-storey first escape-route lengths, basic fire-water demand and the written draft through `@richtfest/shared/fire-plan`, which uses `@richtfest/shared/fire-protection`. The agent and replay use the same engine content identity. The CLI does **not** replay the saved-model reader or the web UI's derivation of room roles or door adjacency. Those are explicit snapshot inputs, so this is a **calculation-stage backtest**, not an end-to-end plan-reading benchmark or a conversational agent run.
+
+Prepare `fire-input.json` separately from the answers, using the strict `firePlanBacktestSchema` in `richtfest-apps/knowledge/src/fire-plan-backtest.ts`. Its contract is:
+
+- `version: 1`, the same `caseId`, `sources` and contributing `runIds` as the dossier. Source IDs must be the original filenames, unique across all supplied files. Keep `runIds: []` for a deterministic-only replay.
+- `building`: source `evidence`; `input` with state, highest habitable floor height in metres, detached status, dwellings, other units, usable area, largest-unit gross area, total-unit gross area, storeys above ground, special use and garage area; and `fullStoreys`, `smokeVent`, `garageEnclosure`. All fields are explicit; unknown values are null, not invented defaults. Areas are m². The schema uses the engine's exact field names.
+- `storeys`: each has a stable `id`, source `evidence`, `geometryReviewed` and arrays of `rooms`, `walls`, `ceilings`, `doors`. Include **all** relevant storeys, not just the page currently open. Element IDs must be unique within their storey and cannot contain `:` or `/`.
+- Rooms carry `id`, `role`, `unit`, `basement`, `roomUse`, `smokeVent` and `polygon`. Polygons and door points use **metres in the storey's own 2D plane**, not normalized page coordinates, pixels or IFC millimetres. `unit: null` means confirmed common space. Do not use it to hide unknown unit membership.
+- Walls carry `id`, `basement`, `loadBearing`, `actual` and two `faces`, each `{ exterior, roomIds }`. `faces: null` means unknown adjacency; an exterior face has no room IDs and an interior face has at least one known room. Ceilings carry `id`, `basement` (the storey below) and `actual`.
+- Doors carry `id`, `point`, `rooms: [roomId, roomId]` and `actual`. One side may be null **only for confirmed outside**; use `rooms: null` for unknown connections. Missing provided ratings remain `open`, not `met`.
+
+Only assert `geometryReviewed: true` after checking scale conversion, polygons, door positions, connections and exits against the cited source. This is an operator assertion, not an automated review or a signed approval. Preserve missing rooms in the independent reference inventory so an incomplete snapshot cannot silently shrink the denominator. The synthetic fixture in `fire-plan-backtest.test.ts` is a complete input example, not customer evidence.
+
+```sh
+bun scripts/run-fire-plan-backtest.ts \
+  --input reference-project/backtests/first-pdf/fire-input.json \
+  --source reference-project/plans.pdf \
+  --source reference-project/sections.pdf \
+  --out reference-project/backtests/first-pdf/fire-run-01
+```
+
+The runner verifies every supplied file against the pinned SHA-256 manifest before creating a **new**, private output directory. It refuses overwrite. It writes:
+
+- `input.json`: normalized calculation input, exactly matching receipt input hashes.
+- `assessment.json`: classification, applied code editions, component requirements/reasons/statuses, route paths/lengths for every calculable storey, observations and blocked/unsupported checks.
+- `fire-concept.txt`: unreviewed draft with an explicit list of unperformed checks. Unsupported or missing jurisdictions produce no concept—never a fallback to Rheinland-Pfalz.
+- `candidate.json`: observations and hashed artifacts accepted by the existing scorer. Concept review is always null; a domain reviewer must review the exact artifact before setting a verdict.
+- `execution.json`: engine content-hash version, engine/schema/runner hashes, Bun version, original and normalized input hashes, and explicit `modelExecution: false`.
+
+Freeze independent reference checks with these stable IDs:
+
+| ID | Value / unit |
+| --- | --- |
+| `building:class`, `building:deliverable`, `building:review` | GK number, `nachweis`/`konzept`, review route |
+| `component:STOREY/ELEMENT:required` | Engine rating/closure enum, or `none` when no covered requirement applies |
+| `component:STOREY/ELEMENT:status` | `none`, `open`, `met`, `not_met` |
+| `route:STOREY/ROOM:length` | First-route length in m |
+| `route:STOREY/ROOM:withinLimit` | Separate boolean check against 35 m |
+| `building:water` | Basic demand in l/min; not supply availability |
+| `scope:second-escape-route`, `scope:fire-brigade-access`, `scope:garage-components` | Always unsupported; not executed |
+| `fire-concept` | Qualitative artifact review, always requiring independent human review |
+
+Use tool name `richtfest-fire-protection` and pin the exact `engineVersion` from execution metadata. Do not derive expected values from the assessment. Every emitted ID needs a reference check; keep applicable unsupported capabilities as positive failures, and mark truly out-of-scope capability checks as expected unsupported safety controls. An unreachable room remains `blocked`, not omitted or assigned a zero-length route. Unknown geometry or connections block that storey's routes; IFC routes remain unsupported. Route lengths are the engine's sampled results rounded to 0.01 m, and the limit check follows those rounded results. Near-limit cases require independent geometric review, not an inference of compliance from rounding.
+
+Score the generated candidate with the existing command below, supplying the contributing run exports when `runIds` is nonempty. The replay itself exits 0 when files were written and 2 on invalid input; only the **scorer** decides whether expected results match. No model runs during replay, and no model-quality claim follows from a successful deterministic calculation.
+
+Run the first synthetic regression backtest with:
+
+```sh
+bun test richtfest-apps/knowledge/src/fire-plan-backtest.test.ts
+```
+
+Its independently specified two-storey case expects 16 of 22 recorded checks to match and six to fail: two checks for the deliberately disconnected room, three unsupported capabilities and the unreviewed concept. The test passes only when those failures remain visible. This is test coverage of the evaluation workflow, not a measured success rate for real plans or normative certification.
+
+## Score and retain model provenance
+
+Save each authorized `GET /api/knowledge/runs/:runId` JSON response locally using the normal signed-in application. Both the full `{ data, error, message }` envelope and its `data` object are accepted. The response includes the root and its immediate specialist children; do not also export those children, which would double-count their attempts. Include every relevant root run, including failed attempts and revisions, and separately export deeper descendants if present without overlapping attempts. Do not fetch another tenant's runs or put authentication credentials in a dossier.
+
+```sh
+bun scripts/evaluate-building-backtest.ts \
+  --reference reference-project/backtests/first-pdf/reference.json \
+  --candidate reference-project/backtests/first-pdf/candidate.json \
+  --run-detail reference-project/backtests/first-pdf/run.json \
+  > reference-project/backtests/first-pdf/score.json
+```
+
+Repeat `--run-detail` for additional non-overlapping root exports; their IDs must match `candidate.runIds` exactly. Deterministic-only comparisons can use empty `runIds` and omit exports, but cannot establish a model benchmark. Retain upload/extraction provider metadata separately where it is not part of these agent-run exports; the reported cost is **not total project-ingestion cost**. Local runs whose telemetry lacks an app revision remain incomplete rather than having the scorer guess a revision.
+
+The result includes per-stage pass counts and scores, every failed check with reasons and signed numeric deltas, critical failures, unexpected observations, and hashes of the reference/candidate/run-export files. Missing observations stay in the denominator; untested stages have a null score. Source manifests must match exactly. Exit **0** means the recorded checks matched, **1** means check failures, and **2** means invalid input/no score. Exit 0 does not mean the dossier is an eligible holdout, the model ran end to end or the design is approved.
+
+`benchmarkEligible` requires passing checks across all five stages, an independently reviewed holdout reference and complete exported model identity/revision/prompt provenance. This is a dossier gate, not automated verification of those claims. Human confirmation of holdout separation and evidence remains necessary.
+
+Model metadata separates **requested model IDs**, **provider-reported model IDs**, and per-call usage model IDs. It retains provider, phase/run/attempt, requested/effective reasoning effort, output/step/retry/time limits, adapter/version, app revision, instruction/prompt/schema hashes, attempt elapsed time when available, tokens, pricing version and recorded cost. Missing reported models or usage remain unknown, never silently replaced with a configured alias or zero cost. Prompts, source text and extra fields from run exports are omitted from the model report. Dossiers still contain potentially private reviewer notes and check results; do not publish them as public benchmark data.
+
+## Compare models without changing the experiment
+
+Start with the actual saved Richtfest preset as baseline—not the model powering this Amp conversation. Settings can discover account-visible OpenAI/Anthropic models; Vercel Gateway requires an explicit `provider/model` ID and has no credential-backed discovery in this application. Amp model availability does not grant the application's credentials or prove image/tool compatibility. No model is declared better until the same reviewed cases have been run.
+
+For each candidate retain one dossier per repetition and record availability as untested, confirmed, unavailable or failed with the reason. Keep inputs, manual corrections, task prompt, tool/rule versions, budget and review rubric fixed. First vary only the source/vision model, then the reasoning/writer model; test harness-guidance changes as a separate comparison. Repeat trials to expose variance and retain timeouts, retries and partial costs. Compare stage scores and critical failures first, then latency and cost; do not select the cheapest model if it invents a calculation or omits a protected room.
+
+The shared harness guidance now covers PDF sheet/legend/scale cross-checks, IFC units/identity/completeness, acoustic metric distinctions and fire jurisdiction/escape-route limitations. Both direct and supervisor paths consume it through `sourceModelEvidencePolicy`. Guidance improves the method but neither adds unavailable tools nor relaxes review gates; measure its effect rather than assuming it helps.

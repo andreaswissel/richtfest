@@ -34,6 +34,7 @@ export type SupervisorRequest = {
   modelConfig?: AgentModelConfig;
   modelPolicy?: AgentPresetSnapshot;
   calculateAcoustics?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["calculateAcoustics"];
+  prepareFireProtection?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["prepareFireProtection"];
   researchProjectEnvironment?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["researchProjectEnvironment"];
   searchCompanyKnowledge?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["searchCompanyKnowledge"];
   inspectSource?: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["inspectSource"];
@@ -413,6 +414,20 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
         toModelOutput: output => ({ type: "json", value: output }),
       }),
     } : {}),
+    ...(input.phase === "specialist" && !extractExteriorNoise && !(input.context as { visualRequests?: unknown }).visualRequests
+      && (!input.modelPolicy?.workflow || input.modelPolicy.workflow.mode === "team") && role.success && ["requirements_reviewer", "construction_law"].includes(role.data.role)
+      && input.prepareFireProtection && (modelConfig?.maxSteps ?? 1) >= 2 ? {
+      prepare_fire_protection_assessment: createTool({ id: "prepare_fire_protection_assessment",
+        description: "Create a source-linked, unapproved fire-protection draft from saved building-model inputs using deterministic Berlin/Rheinland-Pfalz checks. Takes no numerical inputs. Retains missing inputs, unsupported checks, code edition and hashed calculation receipt. Never approves a concept.",
+        inputSchema: z.object({}).strict(),
+        execute: async (_data, context) => {
+          context.abortSignal?.throwIfAborted();
+          const result = await input.prepareFireProtection!(context.abortSignal);
+          context.abortSignal?.throwIfAborted();
+          return result;
+        },
+      }),
+    } : {}),
     ...(input.phase === "specialist" && input.researchProjectEnvironment && (modelConfig?.maxSteps ?? 1) >= 2 ? {
       research_project_environment: createTool({ id: "research_project_environment",
         description: "Read saved project road, rail, flight and industrial environmental research, creating a bounded official-source receipt only when absent. No refresh or arbitrary location/URL. Returns provenance and explicit coverage limitations; no engineering noise inputs or proof of absence. Reuse the receipt.",
@@ -438,6 +453,10 @@ Visual inspection: when inspect_project_source is registered, inspect relevant o
       },
     }) } : {}),
   };
+  if (tools.prepare_fire_protection_assessment) toolManifest.push({ name: "prepare_fire_protection_assessment", version: 1,
+    description: tools.prepare_fire_protection_assessment.description,
+    inputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(z.object({}).strict())),
+  });
   if (tools.research_project_environment) toolManifest.push({ name: "research_project_environment", version: 1,
     description: tools.research_project_environment.description,
     inputSchema: standardSchemaToJSONSchema(toStandardSchema<unknown>(z.object({}).strict())),

@@ -28,6 +28,7 @@ import { prepareIndependentReview } from "./independent-review";
 import { acousticCalculationSchema, acousticCalculationResultSchema, acousticInputProvenance, exteriorNoiseExtractionSchema, renderAcousticCalculationReceipts, acousticDatasetSchema, type AcousticCalculationReceipt } from "@richtfest/shared";
 import { assembleExteriorNoiseInputs, exteriorNoiseIdentityDirectory, reconcileExteriorNoiseInputs, validateExteriorNoiseExtraction } from "./acoustic-extraction";
 import { createAcousticInputReview } from "./acoustic-input-review";
+import { createFireProtectionAssessment, type FireProtectionToolResult } from "./fire-protection-assessment";
 import { recordStep, savedStep, stepHash } from "./run-steps";
 import { companyKnowledgeSearchSchema, sourceVisualRequestSchema, type CompanyKnowledgeReceipt, type SourceVisual, type SourceVisualRequest } from "@richtfest/shared";
 import { sourceImageQuerySchema, SOURCE_IMAGE_MODEL, SOURCE_IMAGE_QUERY_VERSION, type SourceImageReceipt } from "@richtfest/shared";
@@ -84,6 +85,7 @@ export type Assignment = {
   sourceIdentityContext?: { inputHash: string; batch: number; identities: ReturnType<typeof exteriorNoiseIdentityDirectory> };
   output?: z.infer<typeof specialistOutput>;
   calculationReceipts?: AcousticCalculationReceipt[];
+  fireProtection?: FireProtectionToolResult;
   calculationEvidenceHash?: string;
   companyKnowledge?: CompanyKnowledgeReceipt[];
   visualReads?: { request: SourceVisualRequest; status: SourceVisual["status"]; receiptId: string }[];
@@ -447,8 +449,13 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       const consolidation = phase === "review" && ["editorial-consolidation", "patch-editorial-v1"].includes((context as { inputMode?: string }).inputMode ?? "");
       const evidenceIsolatedWorkflow = policy.workflow?.mode === "calculation" || policy.workflow?.mode === "report";
       const messagingScope = evidenceIsolatedWorkflow ? { familyRootRunId: id } : undefined;
+      const fireRole = (context as { role?: keyof typeof policy.specialists }).role;
+      const fireToolsAvailable = phase === "specialist" && !visualOnly && !(context as { extractExteriorNoise?: boolean }).extractExteriorNoise
+        && (!policy.workflow || policy.workflow.mode === "team") && !!d.fireProtectionSnapshot
+        && (fireRole === "requirements_reviewer" || fireRole === "construction_law") && (policy.specialists[fireRole]?.maxSteps ?? 1) >= 2;
       const providerContext = {
         ...(context as object),
+        fireProtection: { toolAvailable: fireToolsAvailable, inputSource: "saved_building_model", draftOnly: true },
         buildingModel: visualOnly || appendixWriter || editorialPacket || consolidation ? undefined : await buildingContextForRun(d, run),
         buildingModelPolicy: "Read-only project context. Use current approved properties and stable object links; imported or proposed claims are not reviewed facts. No building-model mutation or approval is available in Team/Report. This context does not authorize engineering calculations.",
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
@@ -731,6 +738,37 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             signal?.throwIfAborted();
             return receipt!;
           } : undefined;
+      const prepareFireProtection: Parameters<NonNullable<AppDeps["executeSupervisor"]>>[0]["prepareFireProtection"] = fireToolsAvailable
+        ? async signal => {
+          signal?.throwIfAborted();
+          await assertActive();
+          const allowed = (context as { sourceVersionIds?: string[] }).sourceVersionIds ?? [];
+          const inputHash = stepHash({ sourceVersionIds: allowed });
+          const stepKey = `fire-protection:${callKey}`;
+          let result: FireProtectionToolResult | undefined;
+          const saved = await commit(d, run, token, async (tx, current) => {
+            signal?.throwIfAborted();
+            if (!(current.assignments as Assignment[]).some(a => a.runId === runId && a.role === fireRole))
+              throw conflict("Fire assessment specialist unavailable");
+            d.requirePermission("knowledge:write");
+            d.requirePermission("projects:read");
+            const previous = await savedStep(d, runId, "tool", stepKey, inputHash, tx);
+            await sources(d, run.projectId, allowed);
+            result = previous?.output as FireProtectionToolResult | undefined ?? await createFireProtectionAssessment({ ...d,
+              audit: (inner, action, type, entityId, metadata) => d.auditRun(inner, action, type, entityId, runId, run.correlationId, metadata),
+            }, run.projectId, tx, runId, allowed);
+            signal?.throwIfAborted();
+            if (!previous) await recordStep(d, tx, { ...run, id: runId, generation: state.generation }, {
+              kind: "tool", stepKey, inputHash, input: { name: "prepare_fire_protection_assessment", input: {} }, output: result, status: "completed",
+            });
+            await tx.update(supervisorRuns).set({ assignments: (current.assignments as Assignment[]).map(a =>
+              a.runId === runId ? { ...a, fireProtection: result } : a) }).where(eq(supervisorRuns.runId, id));
+            if (!previous) await log(d, tx, { ...run, id: runId }, "tool_executed", "prepare_fire_protection_assessment", `${result.status}; human review required`);
+          });
+          if (!saved) throw conflict("Supervisor no longer active");
+          signal?.throwIfAborted();
+          return result!;
+        } : undefined;
       let outputValidationFeedback = sameGeneration && checkpoint.failureCategory === "validation"
         ? sanitizeProviderDiagnostics(checkpoint.diagnostics) : undefined;
       for (let attempt = (sameGeneration ? checkpoint.attempt : 0) + 1; attempt <= 5; attempt++) {
@@ -768,6 +806,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
             context: { ...providerContext, outputValidationFeedback },
             modelPolicy: state.modelPolicy,
             calculateAcoustics,
+            prepareFireProtection,
             searchCompanyKnowledge: searchKnowledge,
             researchProjectEnvironment,
             inspectSource,
@@ -1793,7 +1832,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
               (r) => r.taskId === a.taskId,
             );
             return revision
-              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined }
+              ? { ...a, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, fireProtection: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined }
               : a;
           });
           for (const a of assignments.filter((a) => !a.output)) {
@@ -2089,7 +2128,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         await commit(d, run, token, async (tx, current) => {
           const revisedAssignments = assignments.map((assignment) => {
             const revision = output.revisions.find((item) => item.taskId === assignment.taskId);
-            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined } : assignment;
+            return revision ? { ...assignment, goal: revision.goal, output: undefined, sourceProgress: undefined, calculationReceipts: undefined, fireProtection: undefined, companyKnowledge: undefined, visualReads: undefined, visualFollowup: undefined } : assignment;
           });
           for (const assignment of revisedAssignments.filter((item) => !item.output)) {
             await tx.update(agentRuns).set({

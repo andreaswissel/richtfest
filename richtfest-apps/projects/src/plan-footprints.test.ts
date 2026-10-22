@@ -39,3 +39,11 @@ test("a stroked quarter-circle arc is recorded as door-swing evidence with its h
   expect(result.doorSwings[0].radius).toBeCloseTo(.05,3);
   expect(result.candidates).toHaveLength(0);
 });
+test("repeated collinear dash strokes are not construction barriers; solid and irregular lines remain",()=>{
+  const paths=[...Array.from({length:8},(_,i)=>[0,50,20+i*7,1,50,25+i*7]),
+    [0,70,20,1,70,100], [0,90,20,1,90,25], [0,90,27,1,90,32], [0,90,40,1,90,45]];
+  const result=constructionFootprints({fnArray:[4,...paths.map(()=>6),5],argsArray:[["OC",{type:"OCG",id:"c"}],...paths.map(p=>[8,[p]]),[]]},codes,new Map([["c","Konstruktion"]]),viewport);
+  expect(result.barrierLines).toHaveLength(4);
+  expect(result.barrierLines.some(line=>line.points.every(p=>p.x===.25))).toBe(false);
+  expect(result.barrierLines.some(line=>line.points.every(p=>p.x===.35))).toBe(true);
+});

@@ -7,6 +7,31 @@ const fill:PlanFillRegion={sourceKey:"source-fill",layerId:"fill",layerName:"Fü
 const word=(text:string,x:number,y:number)=>({text,x,y,width:.03,height:.01});
 const footprint=(key:string,x:number,y:number,w:number,h:number):PlanFootprint=>({sourceKey:key,entityType:"element",name:key,layerId:"construction",layerName:"Konstruktion",quote:"Source polygon",geometry:{quality:"footprint",coordinateSpace:"normalized-page",polygon:rectangle(x,y,w,h),planRegion:{x,y,width:w,height:h},limitations:"Source footprint"}});
 
+test("unhatched labelled rooms require construction enclosure, not a nearby floor fill", () => {
+  const walls = [footprint("top", .5, .4, .22, .01), footprint("left", .5, .4, .01, .22),
+    footprint("bottom", .5, .61, .22, .01), footprint("right", .71, .4, .01, .22)];
+  const labels = planLabels([word("Flur", .57, .5)]);
+  const run = (ws: PlanFootprint[]) => inferPlanTopology(labels, ws, [], 200, [], 0, [{ ...fill, rings: [rectangle(.1,.1,.2,.2)] }]);
+  expect(run(walls).rooms[0].geometry).toMatchObject({ quality: "enclosed_region", boundaryEvidence: "enclosed_construction_outside_floor_fill" });
+  expect(run(walls).rooms[0].geometry.polygon).toBeDefined();
+  expect(run(walls.slice(0, 3)).rooms[0].geometry).toMatchObject({ quality: "anchor", topology: { status: "outside_source_fill" } });
+});
+
+test("outline-only doorways need two continuing jambs; a leaf and arc alone are not a door", () => {
+  const line = (a: { x: number; y: number }, b: { x: number; y: number }) => ({ layerId: "construction", points: [a, b], closed: false });
+  const leaf = line({ x: .3, y: .3 }, { x: .3, y: .4 });
+  const before = line({ x: .2, y: .3 }, { x: .3, y: .3 });
+  const after = line({ x: .4, y: .3 }, { x: .5, y: .3 });
+  const run = (lines: typeof leaf[]) => inferPlanTopology([], [], [], 400, [], 0, [], 1, undefined, { barrierLines: lines,
+    doorSwings: [{ sourceKey: "swing", layerId: null, layerName: null, hinge: { x: .3, y: .3 }, start: { x: .4, y: .3 }, end: { x: .3, y: .4 }, radius: .1, sweepDegrees: 90 }] });
+  expect(run([leaf, before]).coverage.openingCount).toBe(0);
+  const valid = run([leaf, before, after]).coverage.openingEvidence;
+  expect(valid).toHaveLength(1);
+  expect(valid[0].closure.width).toBeGreaterThan(0);
+  expect(valid[0].closure.height).toBeGreaterThan(0);
+  expect(valid[0].sideProbes).toHaveLength(2);
+});
+
 test("source-filled shared space yields explicit partitions, not walls or measured rooms",()=>{
   const sourceFill={...fill,rings:[rectangle(.1,.1,.4,.15)]};
   const labels=planLabels([word("Bad",.2,.15),word("Schlafen",.4,.15),word("Balkon",.95,.3)]);
@@ -96,6 +121,8 @@ test("a living room open to its hall is one room with both labels as zones, only
   const leak=run("40,00","12,00");
   expect(leak.coverage).toMatchObject({openSpaceCount:0});
   expect(leak.rooms.map(r=>r.name).sort()).toEqual(["Diele","Wohnen"]);
+  expect(leak.rooms.every(r => r.geometry.quality === "anchor" && r.geometry.topology.status === "shared_area_conflict")).toBe(true);
+  expect(leak.rooms[0].geometry.sharedAreaQc).toMatchObject({ printedTotal: 52, status: "conflict" });
 });
 
 const reference=process.env.RICHTFEST_REFERENCE_PLAN_PDF;
@@ -138,6 +165,39 @@ test("a wall end that butts into another wall is not an opening jamb",()=>{
   const result=inferPlanTopology([],[footprint("upper",.3,.1,.01,.2),footprint("corridor-top",.1,.3,.5,.01),
     footprint("corridor-bottom",.1,.36,.5,.01),footprint("lower",.3,.37,.01,.2)],[],400);
   expect(result.coverage.openingCount).toBe(0);
+});
+test("a nearby swing must reach the opening's far jamb before it can identify that doorway",()=>{
+  const walls=[footprint("left",.3,.4,.1,.01),footprint("right",.45,.4,.1,.01)];
+  const nearby={sourceKey:"nearby-door",layerId:null,layerName:null,hinge:{x:.395,y:.391},start:{x:.395,y:.431},end:{x:.435,y:.391},radius:.04,sweepDegrees:90};
+  const actual={sourceKey:"actual-door",layerId:null,layerName:null,hinge:{x:.4,y:.4},start:{x:.4,y:.45},end:{x:.45,y:.4},radius:.05,sweepDegrees:90};
+  const run=(doorSwings:typeof actual[])=>inferPlanTopology([],walls,[],800,[],0,[],1,undefined,{doorSwings,metresPerPageHeight:20}).coverage.openingEvidence.find(o=>o.kind==="jamb_pair")!;
+  expect(run([nearby]).doorSwingKey).toBeNull();
+  expect(run([nearby,actual]).doorSwingKey).toBe("actual-door");
+});
+test("one jamb and a swing do not invent a far wall face",()=>{
+  const wall=footprint("wall-end",.3,.3,.01,.1);
+  const swing={sourceKey:"half-double-door",layerId:null,layerName:null,hinge:{x:.31,y:.4},start:{x:.31,y:.44},end:{x:.35,y:.4},radius:.04,sweepDegrees:90};
+  const result=inferPlanTopology([], [wall],[],800,[],0,[],1,undefined,{doorSwings:[swing],metresPerPageHeight:20});
+  expect(result.coverage.openingEvidence.filter(o=>o.kind==="door_swing_jamb")).toHaveLength(0);
+});
+test("an opening within one connected room is retained as evidence, not a self-connection",()=>{
+  const walls=[footprint("left-stub",.12,.2,.03,.005),footprint("right-stub",.2,.2,.03,.005)];
+  const result=inferPlanTopology(planLabels([word("Wohnen",.14,.14)]),walls,[],400,[],0,[{...fill,rings:[rectangle(.1,.1,.2,.2)]}],1,undefined,{metresPerPageHeight:20});
+  expect(result.coverage.openingEvidence).toHaveLength(1);
+  expect(result.rooms[0].geometry.polygon).toBeDefined();
+  expect(result.rooms[0].geometry.topology.openings).toHaveLength(0);
+});
+test("an open door leaf near the opposite corridor wall must not split connected hall zones",()=>{
+  const walls=[footprint("upper",.18,.1,.005,.06),footprint("lower",.18,.2,.005,.1)];
+  const words=[word("WC",.12,.16),word("6.40",.12,.175),word("m²",.151,.175),word("Flur",.19,.24),word("2.00",.19,.255),word("m²",.221,.255),word("Diele",.19,.12),word("1.60",.19,.135),word("m²",.221,.135)];
+  const swing={sourceKey:"corridor-door",layerId:"construction",layerName:"Konstruktion",hinge:{x:.185,y:.2},start:{x:.185,y:.16},end:{x:.225,y:.2},radius:.04,sweepDegrees:90};
+  const result=inferPlanTopology(planLabels(words),walls,words,400,[],3,[{...fill,rings:[rectangle(.1,.1,.13,.2)]}],1,undefined,
+    {metresPerPageHeight:20,doorSwings:[swing],barrierLines:[{layerId:"construction",closed:false,points:[swing.hinge,swing.end]}]});
+  expect(result.rooms.map(r=>r.name).sort()).toEqual(["Flur / Diele","WC"]);
+  const hall=result.rooms.find(r=>r.name==="Flur / Diele")!;
+  expect(hall.geometry.quality).toBe("enclosed_region");
+  expect(hall.geometry.planRegion.height).toBeGreaterThan(.19);
+  expect(hall.geometry.topology.openings.some(o=>o.connectsTo===result.rooms.find(r=>r.name==="WC")!.sourceKey)).toBe(true);
 });
 test("diagonally touching columns inside a room no longer break boundary tracing",()=>{
   const columns=[footprint("a",.15,.15,.01,.01),footprint("b",.16,.16,.01,.01)];

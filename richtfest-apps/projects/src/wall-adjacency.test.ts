@@ -61,6 +61,16 @@ test("thickness comes from the printed scale, in metres on both page axes", () =
   expect(new Map(planWallAdjacency({ rooms, elements: walls, properties: entered, scales }).map(item => [item.wallId, item])).get("we1-corridor")!.writeThickness).toBe(false);
 });
 
+test("an unlabelled space behind a thin wall or reveal is not outdoors", () => {
+  const facade = walls.find(w => w.id === "facade")!;
+  const reveal = wall("far-wall", rect(.1, .0921, .298, .0922));
+  const run = (obstacle: typeof reveal & { constructionState?: string }) => planWallAdjacency({ rooms, elements: [facade, obstacle], properties: [] })[0];
+  expect(run(reveal).role).toBeNull();
+  expect(sideRooms(run(reveal))).toEqual([null, "we1-wohnen"]);
+  expect(run({ ...reveal, constructionState: "demolished" }).role).toBe("exterior");
+  expect(run({ ...reveal, geometry: { ...reveal.geometry, source: { ...source, page: 3 } } }).role).toBe("exterior");
+});
+
 test("people's entries win over geometry and labels", () => {
   const props = [
     { entityType: "room", entityId: "flur", propertyKey: "spaceType", current: { value: "stairwell", reviewStatus: "unreviewed", provenance: "manual" }, reviewed: null },

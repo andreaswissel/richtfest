@@ -306,6 +306,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   const apartmentOwner = new Int32Array(size).fill(-1);
   let furnitureGapCount = 0;
   const adopted = new Uint8Array(size);
+  const recovered = new Uint8Array(size);
   // Magic selection separates source construction (hard) from "outside the floor fill" (soft).
   let structural: Uint8Array | null = null, filled: Uint8Array | null = null;
   // Openings (doors, windows, passages) are gaps between facing wall ends. They
@@ -319,6 +320,12 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     for (let y = Math.max(0, Math.floor(r.y * n)); y <= Math.min(n - 1, Math.ceil((r.y + r.height) * n) - 1); y++)
       for (let x = Math.max(0, Math.floor(r.x * n)); x <= Math.min(n - 1, Math.ceil((r.x + r.width) * n) - 1); x++) { wall[y * n + x] = 1; closure[y * n + x] = 1; }
   }
+  // Infer stroke-only doorways from source barriers, before floor fills and furniture
+  // processing can make both swing radii appear blocked. These closures must also
+  // constrain furniture-gap adoption, otherwise it can join rooms through a door.
+  const beforeDoorways = wall.slice();
+  openings.push(...strokeDoorways(options.doorSwings?.filter(swing => !openings.some(o => o.doorSwingKey === swing.sourceKey)) ?? [], wall, n, horizontalCost, options.metresPerPageHeight ?? null, drawLine));
+  for (let p = 0; p < size; p++) if (wall[p] && !beforeDoorways[p]) closure[p] = 1;
   let floorInterior: Uint8Array | null = null;
   if (supportedFills.length) {
     const interior = new Uint8Array(size);
@@ -394,6 +401,29 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
           if (seam) { wall[p] = 1; closure[p] = 1; } else { interior[p] = 1; adopted[p] = 1; room[p] = id; } }
       }
     }
+    // A floor hatch is not the building envelope. Recover labelled spaces
+    // bounded by construction alone; touching a hatch or the page edge is not
+    // sufficient enclosure evidence. Do not grow these regions across walls.
+    const outsideLabels = new Set(labels.map(label => {
+      const r = label.geometry.planRegion;
+      return Math.floor((r.y + r.height / 2) * n) * n + Math.floor((r.x + r.width / 2) * n);
+    }));
+    const seen = new Uint8Array(size);
+    for (const start of outsideLabels) {
+      if (start < 0 || start >= size || wall[start] || interior[start] || seen[start]) continue;
+      const cells = [start]; seen[start] = 1;
+      let edge = false, touchesFill = false;
+      for (let head = 0; head < cells.length; head++) {
+        const p = cells[head], x = p % n, y = Math.floor(p / n);
+        if (!x || !y || x === n - 1 || y === n - 1) edge = true;
+        for (const q of [x > 0 ? p - 1 : -1, x < n - 1 ? p + 1 : -1, p - n, p + n]) {
+          if (q < 0 || q >= size || wall[q]) continue;
+          if (interior[q]) { touchesFill = true; continue; }
+          if (!seen[q]) { seen[q] = 1; cells.push(q); }
+        }
+      }
+      if (!edge && !touchesFill) for (const p of cells) { interior[p] = 1; recovered[p] = 1; }
+    }
     structural = wall.slice(); filled = interior;
     for (let p = 0; p < size; p++) if (!interior[p]) wall[p] = 1;
   }
@@ -420,16 +450,12 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   // is n×n over a possibly non-square page, so x and y cells differ in size.
   const thicknesses=[...wallSources].filter(source=>source.index!==null&&source.state==="proposed").map(({footprint})=>{const r=footprint.geometry.planRegion;return (r.width*horizontalCost<r.height?r.width:r.height)*n;}).sort((a,b)=>a-b);
   closeRadius=closeRadius || (thicknesses.length>=3&&(unitFills.length>0||labels.length<=2)?Math.min(4,Math.max(1,Math.round(thicknesses[Math.floor(thicknesses.length/2)]))):0);
-  // Doors drawn only as a swing are closed along the swing's radii.
-  const beforeDoorways = wall.slice();
-  openings.push(...strokeDoorways(options.doorSwings?.filter(swing => !openings.some(o => o.doorSwingKey === swing.sourceKey)) ?? [], wall, n, horizontalCost, options.metresPerPageHeight ?? null, drawLine));
-  for (let p = 0; p < size; p++) if (wall[p] && !beforeDoorways[p]) closure[p] = 1;
   // A door's swing is floor of the room it opens into: the open leaf and the arc drawn in one
   // stroke would otherwise wall off the swept sector. Only drawn lines are cleared, never filled
   // construction, a closed doorway or a line outside the floor fill (a wall drawn as outlines).
   const keepInSwing = new Uint8Array(size);
   for (let p = 0; p < size; p++) if (!strokeOnly[p] || closure[p] || floorInterior && !floorInterior[p]) keepInSwing[p] = 1;
-  const doorSwingCellsCleared = clearDoorSwings(wall, keepInSwing, options.doorSwings ?? [], n, horizontalCost);
+  const doorSwingCellsCleared = clearDoorSwings(wall, keepInSwing, options.doorSwings ?? [], n, horizontalCost, openings);
   // Optional morphological closing joins short gaps only, with the approximation recorded.
   // Sliding-window separable max/min keeps processing linear in page pixel count.
   const beforeClosing = wall.slice();
@@ -555,13 +581,22 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const x = p % n;
     if ((x < n - 1 && partition[p + 1] >= 0 && partition[p + 1] !== partition[p]) || (p + n < size && partition[p + n] >= 0 && partition[p + n] !== partition[p])) selectionCells[p] |= 4;
   }
-  const counts = { enclosed: 0, exterior: 0, conflicting: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0,shape_outlier:0,trace_failed:0 };
+  const sharedAreaQc = regions.map(region => {
+    if (!cellM2 || region.exterior || region.seeds.length < 2) return null;
+    const areas = region.seeds.map(i => observations.get(labels[i].sourceKey)?.value);
+    if (!areas.every(area => area !== undefined && area > 0)) return null;
+    const printedTotal = areas.reduce<number>((sum, area) => sum + area!, 0), tracedM2 = region.count * cellM2;
+    return { tracedM2, printedTotal, status: Math.abs(tracedM2 - printedTotal) > Math.max(.5 * areas.length, printedTotal * .2) ? "conflict" : "unreviewed" };
+  });
+  const counts = { enclosed: 0, exterior: 0, conflicting: 0, shared_area_conflict: 0, obstructed: 0, outside_source_fill:0, oversized_unresolved:0,area_ratio_outlier:0,shape_outlier:0,trace_failed:0 };
   const metresPerPageHeight = options.metresPerPageHeight && Number.isFinite(options.metresPerPageHeight) && options.metresPerPageHeight > 0 ? options.metresPerPageHeight : null;
   // Each opening records which seeded partition (room) lies on either side.
   const sideOwner = (point: Point) => {
     const x = Math.floor(point.x * n), y = Math.floor(point.y * n);
     if (x < 0 || y < 0 || x >= n || y >= n) return "exterior" as const;
     const p = y * n + x, c = component[p];
+    // An inferred seam assigns pixels, not a source-backed side of a door.
+    if (c >= 0 && regions[c].seeds.length > 1 && !openSpaces.has(c)) return "unassigned" as const;
     return partition[p] >= 0 ? partition[p] : c >= 0 && regions[c].exterior ? "exterior" as const : "unassigned" as const;
   };
   const openingSides = openings.map(opening => opening.sideProbes.map(probe => sideOwner(probe)));
@@ -574,7 +609,9 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const groupLabels=[...new Set(containingFills.flatMap(f=>unitForFill.get(f.sourceKey)??[]))];
     const id = seedRegions[i], region = id >= 0 ? regions[id] : null;
     const openSpace = id >= 0 ? openSpaces.get(id) : undefined;
-    const status = supportedFills.length&&!containingFills.length?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior" : region.seeds.length !== 1 && !openSpace ? "conflicting" : "enclosed";
+    const recoveredFromWalls = Boolean(recovered[seedY*n+seedX]);
+    const status = supportedFills.length&&!containingFills.length&&!recoveredFromWalls?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior"
+      : sharedAreaQc[id]?.status === "conflict" ? "shared_area_conflict" : region.seeds.length !== 1 && !openSpace ? "conflicting" : "enclosed";
     // A bounding box alone must never masquerade as the traced room boundary.
     const contour = status === "enclosed" ? traceRegion(component, n, id, region!) : status === "conflicting" ? traceRegion(partition,n,i,region!) : null;
     const traceFailed = (status === "enclosed" || status === "conflicting") && !contour;
@@ -593,7 +630,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const polygon=oversized?undefined:candidatePolygon;
     const roomApartmentOwner=unitId>=0?unitFills[unitId].sourceKey:null;
     const roomOpenings=openings.flatMap((opening,o)=>{const sides=openingSides[o],side=sides.indexOf(i);if(side<0)return [];
-      const other=sides[1-side];return [{openingKey:opening.sourceKey,kind:opening.kind,connectsTo:typeof other==="number"?`topology-v5:${labels[other].sourceKey}`:other,status:"unreviewed" as const}];});
+      const other=sides[1-side];if(other===i)return [];
+      return [{openingKey:opening.sourceKey,kind:opening.kind,connectsTo:typeof other==="number"?`topology-v5:${labels[other].sourceKey}`:other,status:"unreviewed" as const}];});
     // The "topology-v5:" key prefix is the stable candidate identity across extractor
     // upgrades: a refresh updates the same unreviewed candidate instead of duplicating it.
     const openSpaceGeometry = openSpace ? { openSpace: { method: "open_space_v1" as const, status: "unreviewed" as const, printedTotal: openSpace.printedTotal, tracedM2: openSpace.tracedM2,
@@ -606,6 +644,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v5:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost, partitionWeight:"sqrt_printed_area", barrierScenario:"primary", ignoredAlternativeBarrierCount:supplementary.length, apartmentOwner:roomApartmentOwner, gapClosing:closeRadius||roomOpenings.length?"inferred_segmentation_only":null, openings:roomOpenings,
         ...(contour?.detachedPartCount?{detachedPartCount:contour.detachedPartCount}:{}) },
       sourceFillEvidence:containingFills.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName})),
+      sharedAreaQc: id >= 0 ? sharedAreaQc[id] : null,
+      ...(recoveredFromWalls ? { boundaryEvidence: "enclosed_construction_outside_floor_fill" } : {}),
       ...(containingFills.length===1&&groupLabels.length===1?{groupLabel:groupLabels[0],groupSourceKey:containingFills[0].sourceKey,
         groupAssociationMethod:fallbackUnitFills.has(containingFills[0].sourceKey)?"bbox_summary_plus_exact_area_closure":"contained_unit_marker",
         groupObservation:units.filter(u=>u.text===groupLabels[0]&&insideFill({x:u.x+u.width/2,y:u.y+u.height/2},containingFills[0])).map(u=>({quote:u.text,planRegion:{x:u.x,y:u.y,width:u.width,height:u.height},provenance:"inferred"}))}:{}),
@@ -689,7 +729,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     wallColours:[...colourSummary.values()].sort((a,b)=>b.count-a.count),retainedWallCount:walls.filter(w=>w.geometry.constructionState==="retained").length,demolishedWallCount:walls.filter(w=>w.geometry.constructionState==="demolished").length,splitFillCount:splitSources.size,highEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="high").length,mediumEvidenceWallCount:walls.filter(w=>w.geometry.classification.evidenceTier==="medium").length,
     fragmentAssemblyCount:fragmentAssemblies.length, unsupportedFootprintCount:fragmentIndexes.length, sourceFootprintCount: footprints.length, supplementaryBarrierCount: 0, alternativeBarrierCount:supplementary.length, barrierScenario:"primary", apartmentDomainCount:unitFills.length, printedAreaCount: observations.size,
     areaRatioSampleCount:ratios.length,areaRatioMedian, resolution: n, closeRadius, openingCount:openings.length, furnitureGapCount, doorSwingCellsCleared, pocketsMerged, linesAbsorbed, openSpaceCount: openSpaces.size, straightSeamCount:chordSeamCount, barrierLineCount:options.barrierLines?.length??0, doorSwingCount:options.doorSwings?.length??0, doorSwingSupportedOpeningCount:openings.filter(o=>o.doorSwingKey).length,
-    openingEvidence:openings.slice(0,500).map(({sideProbes:_probes,...opening},o)=>({...opening,sides:openingSides[o].map(side=>typeof side==="number"?`topology-v5:${labels[side].sourceKey}`:side)})),
+    openingEvidence:openings.slice(0,500).map((opening,o)=>({...opening,sides:openingSides[o].map(side=>typeof side==="number"?`topology-v5:${labels[side].sourceKey}`:side)})),
     metresPerPageHeight, scaleUse:metresPerPageHeight?"plan_scale_room_areas_and_bounds":null,
     shapeQcAuditedCount:rooms.filter(room=>room.geometry.shapeQc).length, shapeOutlierCount:counts.shape_outlier,
     alternativeBarrierEvidence:supplementary.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName,polygon:f.geometry.polygon,state:"unresolved_alternative"})),
@@ -788,7 +828,7 @@ export function absorbDrawnLines(input: { component: Int32Array; regions: Array<
 }
 
 /** Clears barrier cells inside each door swing's swept sector, except cells marked in `keep`. */
-export function clearDoorSwings(wall: Uint8Array, keep: Uint8Array, swings: PlanDoorSwing[], n: number, aspect: number) {
+export function clearDoorSwings(wall: Uint8Array, keep: Uint8Array, swings: PlanDoorSwing[], n: number, aspect: number, openings: PlanOpening[] = []) {
   let cleared = 0;
   for (const swing of swings) {
     if (!(swing.sweepDegrees > 0 && swing.sweepDegrees < 180)) continue;
@@ -796,6 +836,13 @@ export function clearDoorSwings(wall: Uint8Array, keep: Uint8Array, swings: Plan
     const a = vector(swing.start), b = vector(swing.end), turn = Math.sign(a.x * b.y - a.y * b.x);
     if (!turn) continue;
     const radius = swing.radius * 1.05, aLength = Math.hypot(a.x, a.y), bLength = Math.hypot(b.x, b.y), margin = 2.5 / n;
+    const opening = openings.find(o => o.doorSwingKey === swing.sourceKey && o.sourceKeys.length > 0);
+    const distance = (p: Point) => Math.hypot((p.x - opening!.midpoint.x) * aspect, p.y - opening!.midpoint.y);
+    // A doorway matched to filled construction identifies the open leaf. Remove
+    // that stroke before gap-closing bridges its tip to the opposite hall wall.
+    // Outline-only cases cannot distinguish an overlapping wall stroke reliably:
+    // their radius edges stay. `keep` always protects filled walls and closures.
+    const leafIsStart = opening ? distance(swing.start) > distance(swing.end) : null;
     const x0 = Math.max(0, Math.floor((swing.hinge.x - radius / aspect) * n)), x1 = Math.min(n - 1, Math.ceil((swing.hinge.x + radius / aspect) * n));
     const y0 = Math.max(0, Math.floor((swing.hinge.y - radius) * n)), y1 = Math.min(n - 1, Math.ceil((swing.hinge.y + radius) * n));
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
@@ -803,8 +850,8 @@ export function clearDoorSwings(wall: Uint8Array, keep: Uint8Array, swings: Plan
       if (!wall[p] || keep[p]) continue;
       const v = vector({ x: (x + .5) / n, y: (y + .5) / n });
       if (Math.hypot(v.x, v.y) > radius) continue;
-      // Cells on either straight edge stay: the open leaf often lies along a wall.
-      if ((a.x * v.y - a.y * v.x) * turn / aLength < margin || (v.x * b.y - v.y * b.x) * turn / bLength < margin) continue;
+      if ((a.x * v.y - a.y * v.x) * turn / aLength < (leafIsStart === true ? -margin : margin)
+        || (v.x * b.y - v.y * b.x) * turn / bLength < (leafIsStart === false ? -margin : margin)) continue;
       wall[p] = 0; cleared++;
     }
   }
@@ -909,7 +956,11 @@ export function detectOpenings(footprints: PlanFootprint[], doorSwings: PlanDoor
     const hinge = { x: swing.hinge.x * aspect, y: swing.hinge.y }, along = jamb.vertical ? hinge.x : hinge.y, across = jamb.vertical ? hinge.y : hinge.x;
     const thickness = jamb.to - jamb.from, tolerance = Math.max(thickness, .002), width = Math.abs(spanEnd - jamb.at);
     return Math.abs(along - jamb.at) <= tolerance && across >= jamb.from - tolerance && across <= jamb.to + tolerance
-      && swing.radius >= width * .75 && swing.radius <= width * 1.25;
+      && swing.radius >= width * .75 && swing.radius <= width * 1.25
+      && [swing.start, swing.end].some(point => {
+        const end = { x: point.x * aspect, y: point.y }, along = jamb.vertical ? end.x : end.y, across = jamb.vertical ? end.y : end.x;
+        return Math.abs(along - spanEnd) <= tolerance && across >= jamb.from - tolerance && across <= jamb.to + tolerance;
+      });
   });
   const make = (kind: PlanOpening["kind"], jamb: Jamb, end: number, from: number, to: number, others: Jamb[], swing: PlanDoorSwing | undefined): PlanOpening => {
     const low = Math.min(jamb.at, end), high = Math.max(jamb.at, end), width = high - low, thickness = to - from, middle = (from + to) / 2;
@@ -942,12 +993,15 @@ export function detectOpenings(footprints: PlanFootprint[], doorSwings: PlanDoor
       if (Math.abs(along - jamb.at) > tolerance || across < jamb.from - tolerance || across > jamb.to + tolerance) continue;
       const ends = [swing.start, swing.end].map(p => ({ x: p.x * aspect, y: p.y }));
       if (!ends.some(end => Math.abs((jamb.vertical ? end.y : end.x) - across) < swing.radius * .2 && Math.sign((jamb.vertical ? end.x : end.y) - jamb.at) === jamb.facing)) continue;
-      let end = jamb.at + jamb.facing * swing.radius;
+      let end: number | null = null;
       for (let step = .8; step <= 1.3; step += .5 / n / swing.radius) {
         const probe = jamb.at + jamb.facing * swing.radius * step, middle = (jamb.from + jamb.to) / 2;
         const x = Math.floor((jamb.vertical ? probe : middle) / aspect * n), y = Math.floor((jamb.vertical ? middle : probe) * n);
         if (x >= 0 && y >= 0 && x < n && y < n && wall[y * n + x]) { end = probe; break; }
       }
+      // A half-leaf of a double door ends in free space, not at another wall.
+      // Leave it to swing-based closure instead of inventing a wall face.
+      if (end === null) continue;
       const rect = jamb.vertical ? { x: Math.min(jamb.at, end), y: jamb.from, width: Math.abs(end - jamb.at), height: thickness } : { x: jamb.from, y: Math.min(jamb.at, end), width: thickness, height: Math.abs(end - jamb.at) };
       if (!free({ ...rect, ...(jamb.vertical ? { width: rect.width * .9, x: rect.x + (jamb.facing > 0 ? 0 : rect.width * .1) } : { height: rect.height * .9, y: rect.y + (jamb.facing > 0 ? 0 : rect.height * .1) }) })) continue;
       used.add(jamb);
@@ -1068,9 +1122,8 @@ function straightSeamPartition(component: Int32Array, id: number, region: { minX
 /**
  * Doors whose walls are drawn as outlines have no filled jambs. The swing arc
  * spans hinge → leaf end and hinge → closed end; the closed end lies across the
- * doorway, where the grid is free, while the leaf is drawn. Both radii are
- * closed in the segmentation grid (the leaf only protrudes into the room the
- * door swings into), and the doorway side records which rooms it joins.
+ * doorway, where the grid is free, while the leaf is drawn. Only the identified
+ * doorway radius is closed; the open leaf must not divide the room it swings into.
  */
 function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, aspect: number, metresPerPageHeight: number | null, drawLine: (target: Uint8Array, a: Point, b: Point) => void): PlanOpening[] {
   const blocked = (p: Point) => { const x = Math.floor(p.x * n), y = Math.floor(p.y * n); return x < 0 || y < 0 || x >= n || y >= n || wall[y * n + x] === 1; };
@@ -1085,11 +1138,21 @@ function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, as
     let anchored = false;
     for (let dy = -2; dy <= 2 && !anchored; dy++) for (let dx = -2; dx <= 2 && !anchored; dx++) anchored = blocked({ x: hinge.x + dx / n, y: hinge.y + dy / n });
     if (!anchored) continue;
-    // Closing both radii is safe: the leaf radius only protrudes into one room.
-    const extend = (p: Point) => { const d = Math.hypot((p.x - hinge.x) * aspect, p.y - hinge.y) || 1; return along(hinge, p, 1 + 2 / n / d); };
-    drawLine(wall, hinge, extend(swing.start)); drawLine(wall, hinge, extend(swing.end));
     if (hs === he) continue;
     const [doorway, leaf] = hs < he ? [swing.start, swing.end] : [swing.end, swing.start];
+    // An arc and its leaf are also common furniture symbols. A doorway needs
+    // wall continuation behind BOTH jambs, not just the leaf at its hinge.
+    const nearWall = (p: Point) => [-3, -2, -1, 0, 1, 2, 3].some(dx => [-3, -2, -1, 0, 1, 2, 3].some(dy => {
+      const q = { x: p.x + dx / n, y: p.y + dy / n };
+      return q.x >= 0 && q.x < 1 && q.y >= 0 && q.y < 1 && blocked(q);
+    }));
+    const distance = (a: Point, b: Point) => Math.hypot((a.x - b.x) * aspect, a.y - b.y);
+    const companion = swings.find(other => other !== swing && [other.start, other.end].some(end => distance(end, doorway) < 2 / n)
+      && Math.abs(distance(hinge, other.hinge) - swing.radius - other.radius) < 2 / n);
+    const farEnd = companion ? 1 + companion.radius / swing.radius : 1;
+    if ([-1, 1].some(side => [.15, .3, .5].filter(step => nearWall(along(hinge, doorway, side < 0 ? -step : farEnd + step))).length < 2)) continue;
+    const extend = (p: Point) => { const d = Math.hypot((p.x - hinge.x) * aspect, p.y - hinge.y) || 1; return along(hinge, p, 1 + 2 / n / d); };
+    drawLine(wall, hinge, extend(doorway));
     const midpoint = along(hinge, doorway, .5), dx = (doorway.x - hinge.x) * aspect, dy = doorway.y - hinge.y, length = Math.hypot(dx, dy);
     // Unit normal in page-height units, pointing to the side the door swings into.
     let nx = -dy / length, ny = dx / length;
@@ -1097,7 +1160,12 @@ function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, as
     const offset = (d: number) => ({ x: midpoint.x + nx * d / aspect, y: midpoint.y + ny * d });
     let far = offset(-swing.radius * .4);
     for (let d = 2 / n; d <= swing.radius; d += .5 / n) if (!blocked(offset(-d))) { far = offset(-d); break; }
-    const box0 = box([hinge, doorway]);
+    const bounds = box([hinge, doorway]);
+    // A stroke has no area, but the saved evidence region must. The narrow
+    // raster-width strip is explicitly segmentation geometry, not wall depth.
+    const box0 = { x: Math.max(0, bounds.x - 1 / n), y: Math.max(0, bounds.y - 1 / n),
+      width: Math.min(1, bounds.x + bounds.width + 1 / n) - Math.max(0, bounds.x - 1 / n),
+      height: Math.min(1, bounds.y + bounds.height + 1 / n) - Math.max(0, bounds.y - 1 / n) };
     const wallAxis = Math.abs(dx) < length * .05 ? "vertical" as const : Math.abs(dy) < length * .05 ? "horizontal" as const : "oblique" as const;
     openings.push({ sourceKey: `opening:${hash([swing.sourceKey])}`, kind: "door_swing_doorway", wallAxis, sourceKeys: [], doorSwingKey: swing.sourceKey,
       width: length, jambLength: 0, widthToJamb: 0, physicalWidthM: widthM, midpoint, closure: box0, sideProbes: [offset(swing.radius * .4), far],

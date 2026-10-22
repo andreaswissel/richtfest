@@ -69,3 +69,9 @@ test("interior sound suggestions take element inputs, never acoustic results", (
   expect(() => validateTool("propose_interior_sound_inputs", { doors: [{ ...door, role: "fire_door" }] })).toThrow();
   expect(validateTool("prepare_interior_sound_nachweis", {})).toEqual({});
 });
+
+test("fire assessment reads saved inputs, never model-provided results or approval", () => {
+  expect(validateTool("prepare_fire_protection_assessment", {})).toEqual({});
+  for (const input of [{ projectId }, { buildingClass: 4 }, { routeLength: 10 }, { approved: true }])
+    expect(() => validateTool("prepare_fire_protection_assessment", input)).toThrow();
+});

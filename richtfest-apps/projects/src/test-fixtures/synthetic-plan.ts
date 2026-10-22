@@ -52,6 +52,8 @@ export type SyntheticPlanOptions = {
   mergedWalls?: boolean;
   /** Wohnen↔Küche door whose far side is the face of a perpendicular wall: only one jamb, marked by its swing arc. */
   cornerDoor?: boolean;
+  /** Two opposing 75 cm leaves meet in a 1.5 m opening, with no jamb in the middle. */
+  doubleLeafDoor?: boolean;
   /** Semicircular bay in the bedroom's south wall, drawn with Bézier curves. */
   curvedBay?: boolean;
   /** Drawing scale denominator (default 1:100) and page size in points (default A3 landscape). */
@@ -69,6 +71,12 @@ export const syntheticBayArea = Math.PI * 1.5 ** 2 / 2;
 export function syntheticPlan(options: SyntheticPlanOptions = {}) {
   const walls = syntheticPlanWalls.slice(), doors = syntheticPlanDoors.slice();
   const rooms = syntheticPlanRooms.map(room => ({ ...room }));
+  if (options.doubleLeafDoor) {
+    walls[walls.findIndex(w => w[0][0] === 3.44 && w[0][1] === 6.9)] = rect([3.44, 7.5, 3.56, 10]);
+    doors.splice(0, 1,
+      { hinge: [3.5, 6], closed: [3.5, 6.75], open: [2.75, 6] },
+      { hinge: [3.5, 7.5], closed: [3.5, 6.75], open: [2.75, 7.5] });
+  }
   if (options.cornerDoor) {
     walls[walls.findIndex(w => w[0][0] === 7.94 && w[0][1] === 0)] = rect([7.94, 0, 8.06, 3]);
     doors.push({ hinge: [8, 3], closed: [8, 3.94], open: [7.06, 3] });

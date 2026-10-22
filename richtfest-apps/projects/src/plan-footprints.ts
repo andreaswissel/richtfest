@@ -51,6 +51,35 @@ const ringArea=(ring:Point[])=>Math.abs(ring.reduce((sum,p,j)=>{const q=ring[(j+
 const polygonFromPath=(path:ArrayLike<number>,transform:Matrix)=>{const r=ringsFromPath(path,transform);return r&&r.rings.length===1&&!r.curved?r.rings[0]:null;};
 
 export type PlanBarrierLine={layerId:string;points:Point[];closed:boolean};
+/** CAD exports may flatten a dashed guide into individual solid strokes. A run
+ * of at least four equal, equally spaced collinear segments is still a guide,
+ * not a wall that raster gap-closing should turn into a room boundary. */
+function segmentedDashes(lines: PlanBarrierLine[]) {
+  const groups = new Map<string, { index: number; from: number; to: number }[]>();
+  lines.forEach((line, index) => {
+    if (line.closed || line.points.length !== 2) return;
+    const [a,b] = line.points, vertical = Math.abs(a.x-b.x)<1e-7, horizontal = Math.abs(a.y-b.y)<1e-7;
+    if (vertical === horizontal) return;
+    const key = `${line.layerId}:${vertical ? "v" : "h"}:${Math.round((vertical ? a.x : a.y)*1e6)}`;
+    const from = Math.min(vertical ? a.y : a.x, vertical ? b.y : b.x), to = Math.max(vertical ? a.y : a.x, vertical ? b.y : b.x);
+    const group = groups.get(key) ?? []; group.push({index,from,to}); groups.set(key,group);
+  });
+  const dashed = new Set<number>();
+  for (const group of groups.values()) {
+    group.sort((a,b)=>a.from-b.from);
+    for (let i=0;i+3<group.length;i++) {
+      const length=group[i].to-group[i].from, gap=group[i+1].from-group[i].to;
+      if (gap<length*.1 || gap>length*1.5) continue;
+      let end=i+1;
+      while (end<group.length && Math.abs((group[end].to-group[end].from)/length-1)<.2
+        && Math.abs((group[end].from-group[end-1].to)/gap-1)<.2) end++;
+      if (end-i<4) continue;
+      for (let j=i;j<end;j++) dashed.add(group[j].index);
+      i=end-1;
+    }
+  }
+  return dashed;
+}
 /** A door swing drawn as a polyline: every vertex on one circle around a hinge, sweeping about 90°. */
 export function doorSwingFromPolyline(points:Point[]) {
   if(points.length<5)return null;
@@ -247,7 +276,10 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     if(!doorSwings.some(d=>d.sourceKey===`door-swing:${key}`))doorSwings.push({sourceKey:`door-swing:${key}`,layerId,layerName:layerId?layers.get(layerId)??null:null,strokeColor:segments[chain.members[0]].colour,
       hinge,start:norm(swing.start),end:norm(swing.end),radius:swing.radius/viewport.height,sweepDegrees:swing.sweepDegrees});
   }
-  const barriers=barrierLines.filter((line):line is PlanBarrierLine=>line!==null);
+  const solidLines=barrierLines.filter((line):line is PlanBarrierLine=>line!==null);
+  const dashedSegments=segmentedDashes(solidLines);
+  const barriers=solidLines.filter((_,index)=>!dashedSegments.has(index));
+  stats.omittedDashedLines+=dashedSegments.size;
   stats.barrierLineCount=barriers.length;
   return {candidates,fillRegions,doorSwings,barrierLines:barriers,penSegments,...stats,limitations};
 }

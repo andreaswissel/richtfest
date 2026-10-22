@@ -137,6 +137,8 @@ export type AppDeps = {
   interiorSoundProof?: (projectId: string) => Promise<import("@richtfest/shared").InteriorSoundProof>;
   /** Writes the agent's cited interior sound suggestions as unreviewed building-model values (Projects). */
   proposeInteriorSoundInputs?: (projectId: string, input: unknown, execution: { runId: string; agentId: string }, tx: any) => Promise<unknown>;
+  /** Projects supplies a consistent tenant-scoped snapshot, never model-provided calculation inputs. */
+  fireProtectionSnapshot?: (projectId: string) => Promise<import("@richtfest/shared/fire-plan").FireProtectionSnapshot>;
   executeDecision?: (input: {
     // Pre-submit recommendations have no run; authorization is checked by the app.
     runId?: string;
@@ -162,6 +164,7 @@ export type AppDeps = {
     context: unknown;
     modelPolicy?: AgentPresetSnapshot;
     calculateAcoustics?: (input: AcousticCalculationInput, signal?: AbortSignal) => Promise<AcousticCalculationReceipt>;
+    prepareFireProtection?: (signal?: AbortSignal) => Promise<import("./fire-protection-assessment").FireProtectionToolResult>;
     researchProjectEnvironment?: (signal?: AbortSignal) => Promise<import("@richtfest/shared").EnvironmentSurvey>;
     searchCompanyKnowledge?: (input: CompanyKnowledgeSearch, signal?: AbortSignal) => Promise<CompanyKnowledgeReceipt>;
     inspectSource?: (input: SourceVisualRequest, signal?: AbortSignal) => Promise<SourceVisual & { receiptId?: string; imageHash?: string }>;

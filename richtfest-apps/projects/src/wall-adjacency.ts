@@ -9,7 +9,7 @@ export type AdjacencyRoom = { id: string; polygon: Point[]; holes?: Point[][] };
 export type WallSide = Array<{ roomId: string; hits: number }> | "exterior" | null;
 export type PageScale = { pageAspectRatio: number; metresPerPageHeight: number | null; denominator?: number | null };
 
-export const wallAdjacencyMethod = "plan_side_probe_v2";
+export const wallAdjacencyMethod = "plan_side_probe_v3";
 const probeFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
 
 const inside = (point: Point, ring: Point[]) => {
@@ -62,16 +62,27 @@ export function wallThicknessCm(wall: Point[], scale: PageScale) {
  * A face without rooms is exterior only when rays cast outward from it reach
  * the page edge without crossing any room, accepted or still a candidate.
  */
-export function wallSides(wall: Point[], rooms: AdjacencyRoom[], obstacles: AdjacencyRoom[] = rooms): [WallSide, WallSide] | null {
+export function wallSides(wall: Point[], rooms: AdjacencyRoom[], obstacles: AdjacencyRoom[] = rooms, otherWalls: Point[][] = []): [WallSide, WallSide] | null {
   const frame = wallFrame(wall);
   if (!frame) return null;
   const { minAlong, maxAlong, thickness, centre, at } = frame;
   const clearance = thickness / 2 + Math.max(thickness, 0.004);
   const outside = (s: number, direction: 1 | -1) => {
-    for (let t = clearance; t < 2; t += 0.002) {
-      const point = at(s, centre + direction * t);
-      if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return true;
-      if (obstacles.some(room => inRoom(point, room))) return false;
+    // Test edges analytically from the wall face: fixed-step rays can jump
+    // over thin walls/reveals and call an unlabelled interior space outside.
+    const origin = at(s, centre + direction * (thickness / 2 + 1e-7));
+    const ray = { x: frame.v.x * direction, y: frame.v.y * direction };
+    const cross = (a: Point, b: Point) => a.x * b.y - a.y * b.x;
+    for (const polygon of [...otherWalls, ...obstacles.map(room => room.polygon)]) {
+      if (inside(origin, polygon)) return false;
+      for (let i = 0; i < polygon.length; i++) {
+        const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+        const edge = { x: b.x - a.x, y: b.y - a.y }, delta = { x: a.x - origin.x, y: a.y - origin.y };
+        const denominator = cross(ray, edge);
+        if (Math.abs(denominator) < 1e-12) continue;
+        const distance = cross(delta, edge) / denominator, fraction = cross(delta, ray) / denominator;
+        if (distance >= 0 && fraction >= 0 && fraction <= 1) return false;
+      }
     }
     return true;
   };
@@ -161,13 +172,17 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
   }
   const outside: SpaceContext = { apartmentUnit: null, spaceType: "exterior" };
   const walls: PlannedWall[] = [];
-  for (const element of input.elements) {
+  const activeWalls = input.elements.filter(element => element.constructionState !== "demolished"
+    && (element.kind === "draft_wall" || effectiveValue(prop("element", element.id, "componentType")) === "wall"));
+  for (const element of activeWalls) {
     const g = geometry(element), key = sourceKey(g);
     const isWall = element.kind === "draft_wall" || effectiveValue(prop("element", element.id, "componentType")) === "wall";
     // A demolished wall separates nothing in the planned building.
     if (!isWall || element.constructionState === "demolished" || !key || !Array.isArray(g.polygon)) continue;
     const rooms = roomsBySource.get(key) ?? [];
-    const sides = wallSides(g.polygon, rooms, [...rooms, ...(candidatesBySource.get(key) ?? [])]);
+    const otherWalls = activeWalls.filter(other => other.id !== element.id && sourceKey(geometry(other)) === key)
+      .flatMap(other => { const polygon = geometry(other).polygon; return polygon?.length ? [polygon] : []; });
+    const sides = wallSides(g.polygon, rooms, [...rooms, ...(candidatesBySource.get(key) ?? [])], otherWalls);
     if (!sides) continue;
     const contexts = (side: WallSide) => side === "exterior" ? [outside] : side ? side.map(item => rooms.find(room => room.id === item.roomId)!.context) : [null];
     const roles = contexts(sides[0]).flatMap(a => contexts(sides[1]).map(b => deriveWallRole(a, b)));

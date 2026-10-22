@@ -83,6 +83,17 @@ test.skipIf(!popplerAvailable)("synthetic plan with stroked walls, segmented doo
   }
   for(const room of ["Wohnen","Bad","Schlafen"])expect(connects("Flur",room)).toMatchObject({kind:"door_swing_doorway"});
 });
+test.skipIf(!popplerAvailable)("double-leaf doors separate rooms without self-connections or losing their floor area",async()=>{
+  const {rooms,connects}=await extract({strokedWalls:true,doubleLeafDoor:true});
+  for(const expected of syntheticPlanRooms){
+    const room=rooms.get(expected.label)!;
+    expect(room.area!/expected.area).toBeGreaterThan(.9);
+    expect(room.area!/expected.area).toBeLessThan(1.01);
+    expect(room.geometry.topology.openings.some(o=>o.connectsTo===room.sourceKey)).toBe(false);
+  }
+  expect(connects("Flur","Wohnen")).toBeDefined();
+  expect(connects("Wohnen","Flur")).toBeDefined();
+});
 test.skipIf(!popplerAvailable)("magic selection fills the clicked room from the stored barriers, and nothing outside the building",async()=>{
   const {result,rooms}=await extract({strokedWalls:true});
   const cells=decodeSelectionMask(result.selectionMask.data,result.selectionMask.gridSize);

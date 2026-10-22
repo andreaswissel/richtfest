@@ -17,6 +17,8 @@ import { agentPresetSnapshotSchema } from "../richtfest-shared/src/agent-policy"
 import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
 import { exteriorNoiseFixture } from "./fixtures/exterior-noise";
 import { exteriorNoisePackets } from "./fixtures/exterior-noise-packets";
+import type { FireProtectionSnapshot } from "../richtfest-shared/src/fire-plan";
+import { stepHash } from "../richtfest-apps/knowledge/src/run-steps";
 
 const integration = process.env.DATABASE_URL ? test : test.skip;
 // Same vendor snapshot as supervisor.integration.test.ts, including a domain role.
@@ -127,13 +129,14 @@ integration("explicit chat bypasses supervision; omission keeps legacy supervise
   } finally { await f.close(); }
 });
 
-for (const attempt of ["delegate_source_review", "create_draft", "artifact"] as const)
+for (const attempt of ["delegate_source_review", "create_draft", "prepare_fire_protection_assessment", "artifact"] as const)
 integration(`chat fences malformed provider ${attempt} without child or artifact writes`, async () => {
   const f = await fixture();
   f.d.executeProvider = async () => ({ status: "completed", output: {
     summary: "Forbidden output", rationale: "", citations: [],
     tools: attempt === "artifact" ? [] : [{ name: attempt, input: attempt === "create_draft"
       ? { title: "Forbidden draft", content: "Must not persist" }
+      : attempt === "prepare_fire_protection_assessment" ? {}
       : { goal: "Forbidden delegation", sourceVersionIds: [f.sourceVersionId] } }],
     ...(attempt === "artifact" ? { artifact: { title: "Forbidden artifact", content: "Must not persist", type: "draft" } } : {}),
   } });
@@ -147,6 +150,112 @@ integration(`chat fences malformed provider ${attempt} without child or artifact
     expect(await f.rows(artifacts)).toHaveLength(0);
     expect(await f.rows(artifactRevisions)).toHaveLength(0);
     expect(await f.rows(supervisorRuns)).toHaveLength(0);
+  } finally { await f.close(); }
+});
+
+function fireSnapshot(sourceId: string): Extract<FireProtectionSnapshot, { available: true }> {
+  const evidence = [{ kind: "page" as const, sourceId, page: 2 }];
+  return { available: true, modelId: crypto.randomUUID(), revision: 7, sourceVersionIds: [sourceId], properties: [], blockers: [],
+    plan: { building: { evidence, input: { state: "RP", height: 10, detached: false, dwellings: 3, otherUnits: 0,
+      usableArea: 600, largestUnitArea: 401, unitsGrossArea: 600, storeysAboveGround: 4, specialUse: "none", garageArea: 0 },
+      fullStoreys: 4, smokeVent: "top_opening", garageEnclosure: null },
+      storeys: [{ id: "EG", evidence, geometryReviewed: true,
+        rooms: [{ id: "living", role: "habitable", unit: "A", basement: false, roomUse: "living", smokeVent: null,
+          polygon: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 8 }, { x: 0, y: 8 }] }],
+        walls: [], ceilings: [], doors: [{ id: "exit", point: { x: 0, y: 0 }, rooms: ["living", null], actual: null }] }],
+    } };
+}
+
+for (const scenario of ["draft", "scope", "missing", "permission", "foreign-source"] as const)
+integration(`fire assessment direct tool preserves saved input and authorization: ${scenario}`, async () => {
+  const f = await fixture();
+  const snapshot = fireSnapshot(f.sourceVersionId);
+  f.d.supervisorEnabled = false;
+  if (scenario === "scope" || scenario === "foreign-source") snapshot.sourceVersionIds.push(crypto.randomUUID());
+  f.d.fireProtectionSnapshot = async () => scenario === "missing" ? { available: false, reason: "Building model unavailable" } : snapshot;
+  if (scenario === "permission") f.d.requirePermission = permission => { if (permission === "projects:read") throw Object.assign(new Error("Forbidden"), { status: 403 }); };
+  let result: any;
+  f.d.executeProvider = async input => {
+    if (input.toolResults?.length) result = (input.toolResults[0] as any).result;
+    return { status: "completed", output: { summary: "Unreviewed fire draft or explicit blocker", rationale: "Saved model only", citations: [],
+      tools: input.toolResults?.length ? [] : [{ name: "prepare_fire_protection_assessment", input: {} }] } };
+  };
+  try {
+    expect((await f.post("/runs", f.input, { "x-other-tenant": "true" })).status).not.toBe(201);
+    const created = await f.post("/runs", { ...f.input, sourceVersionIds: scenario === "foreign-source" ? [] : [f.sourceVersionId] });
+    if (scenario === "permission") {
+      expect(created.status).toBe(403);
+      expect(await f.rows(artifacts)).toHaveLength(0);
+      return;
+    }
+    expect(created.status).toBe(201);
+    const run = await f.stopped(created.body.data.id);
+    if (scenario !== "draft") {
+      expect(await f.rows(artifacts)).toHaveLength(0);
+      if (scenario === "scope" || scenario === "missing") expect(result).toMatchObject({ status: "blocked", complete: false });
+      else expect(run.status).toBe("failed");
+      return;
+    }
+    expect(run.status).toBe("needs_review");
+    expect(result).toMatchObject({ status: "draft_created", complete: false, modelRevision: 7, classification: { buildingClass: 4 } });
+    expect(result.observations.find((o: any) => o.id === "route:EG/living:length").value).toBe(10);
+    expect(result.observations.find((o: any) => o.id === "scope:second-escape-route").outcome).toBe("unsupported");
+    const [artifact] = await f.rows(artifacts), [revision] = await f.rows(artifactRevisions);
+    expect(artifact!.id).toBe(result.artifactId);
+    expect(revision!.sourceVersionIds).toEqual([f.sourceVersionId]);
+    expect(revision!.id).toBe(result.revisionId);
+    expect(artifact!.status).toBe("draft");
+    const receipt = JSON.parse(revision!.content.split("```json\n")[1]!.split("\n```")[0]!);
+    expect(receipt.input).toEqual(snapshot);
+    expect(receipt.inputHash).toBe(stepHash(receipt.input));
+    expect(receipt.outputHash).toBe(stepHash(receipt.output));
+    expect(receipt.engineVersion).toBe(result.engineVersion);
+    expect(result.engineVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+  } finally { await f.close(); }
+});
+
+integration("fire assessment team tool reuses its draft after interruption and carries the receipt to synthesis", async () => {
+  const f = await fixture();
+  const snapshot = fireSnapshot(f.sourceVersionId);
+  let interrupted = false, result: any, reviewed = false;
+  f.d.fireProtectionSnapshot = async () => snapshot;
+  f.d.executeSupervisor = async request => {
+    if (request.phase === "plan") return { status: "completed", output: { tasks: [
+      { role: "requirements_reviewer", goal: "Prepare fire draft from saved model", sourceVersionIds: [f.sourceVersionId] },
+    ] } };
+    if (request.phase === "specialist") {
+      expect(request.prepareFireProtection).toBeFunction();
+      await expect(request.prepareFireProtection!(AbortSignal.abort())).rejects.toThrow();
+      const [first, duplicate] = await Promise.all([request.prepareFireProtection!(), request.prepareFireProtection!()]);
+      expect(first).toEqual(duplicate);
+      if (result) expect(first).toEqual(result);
+      result = first;
+      if (!interrupted) { interrupted = true; throw Object.assign(new Error("Interrupted after fire draft"), { code: "timeout", providerFailure: true, retryable: false }); }
+      return { status: "completed", output: { summary: "Fire draft is incomplete", rationale: "See deterministic receipt", citations: [f.sourceVersionId] } };
+    }
+    expect(request.prepareFireProtection).toBeUndefined();
+    if (request.phase === "review") {
+      expect((request.context as any).assignments[0].fireProtection).toEqual(result);
+      reviewed = true;
+    }
+    return { status: "completed", output: { summary: "Partial fire draft ready for human review", rationale: "Not approved", citations: [f.sourceVersionId],
+      decision: "accept", revisions: [], ...(request.phase === "independent_review" ? { findings: [] } : {}) } };
+  };
+  try {
+    const created = await f.post("/runs", { ...f.input, workflow: { mode: "team" }, sourceVersionIds: [f.sourceVersionId] });
+    expect(created.status).toBe(201);
+    const id = created.body.data.id;
+    await stepSupervisor(f.d, id);
+    await stepSupervisor(f.d, id);
+    expect((await f.stopped(id)).status).toBe("failed");
+    expect(await f.rows(artifacts)).toHaveLength(1);
+    expect((await f.post(`/runs/${id}/retry`)).status).toBe(201);
+    for (let i = 0; i < 5; i++) await stepSupervisor(f.d, id);
+    expect((await f.stopped(id)).status).toBe("needs_review");
+    expect(reviewed).toBe(true);
+    expect(await f.rows(artifacts)).toHaveLength(1);
+    expect(await f.rows(artifactRevisions)).toHaveLength(1);
+    expect((await f.rows(agentRunSteps)).filter(step => (step.input as any)?.name === "prepare_fire_protection_assessment")).toHaveLength(1);
   } finally { await f.close(); }
 });
 

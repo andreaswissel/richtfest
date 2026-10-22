@@ -39,6 +39,7 @@ import { workflowProposalsRouter } from "./workflow-proposals";
 import { buildingContextForRun } from "./building-model-context";
 import { createExteriorNoiseNachweis } from "./exterior-noise-nachweis";
 import { createInteriorSoundNachweis } from "./interior-sound-nachweis";
+import { createFireProtectionAssessment } from "./fire-protection-assessment";
 import {
   classifyRunFailure,
   formatChildCancellationReason,
@@ -130,6 +131,7 @@ export const toolInputs = {
   suggest_catalogue_values: z.object({}).strict(),
   propose_interior_sound_inputs: interiorSoundSuggestionInput,
   prepare_interior_sound_nachweis: z.object({}).strict(),
+  prepare_fire_protection_assessment: z.object({}).strict(),
   send_thread_message: agentMessageInputSchema,
   search_company_knowledge: companyKnowledgeSearchSchema,
   delegate_source_review: z
@@ -350,6 +352,7 @@ export async function executeRun(d: AppDeps, run: any) {
       buildingModel: await buildingContextForRun(d, run),
       exteriorNoise: await exteriorNoiseContextForRun(d, run.projectId),
       interiorSound: await interiorSoundContextForRun(d, run.projectId),
+      fireProtection: { toolAvailable: !!d.fireProtectionSnapshot, inputSource: "saved_building_model", draftOnly: true },
       history: boundedHistory,
       messaging: await agentMessagingContext(d, run),
       companyKnowledgeCategories: await companyKnowledgeCategories(d),
@@ -365,7 +368,7 @@ export async function executeRun(d: AppDeps, run: any) {
       projectId: run.projectId,
       sourceVersionIds: run.sourceVersionIds,
       capabilities:
-        "Immutable bounded source text when supported and reviewable drafts only. No validated engineering calculation tool.",
+        "Immutable bounded source text and reviewable drafts. Only explicitly configured deterministic tools can supply scoped engineering results; no approval tool.",
     };
     const modelPolicy = run.modelPolicy
       ? agentPresetSnapshotSchema.parse(run.modelPolicy)
@@ -381,7 +384,7 @@ export async function executeRun(d: AppDeps, run: any) {
     const limits = run.modelPolicy?.executionLimits ? modelPolicy?.executionLimits : undefined;
     const outputSchema = directOutputSchema(limits).refine(output =>
       modelPolicy?.workflow?.mode !== "chat" || (!output.artifact
-        && !output.tools.some(tool => ["delegate_source_review", "create_draft"].includes(tool.name))),
+        && !output.tools.some(tool => ["delegate_source_review", "create_draft", "prepare_fire_protection_assessment"].includes(tool.name))),
     "Chat cannot delegate or create report artifacts. Ask the user to choose Team or Report.");
     let partialOutput = "";
     let lastCheckpoint = 0;
@@ -472,7 +475,7 @@ export async function executeRun(d: AppDeps, run: any) {
         await sources(d, run.projectId, input.sourceVersionIds);
       }
       d.requirePermission(
-        tool.name === "create_draft" || tool.name === "ask_missing_input" || tool.name === "prepare_exterior_noise_nachweis" || tool.name === "prepare_interior_sound_nachweis"
+        tool.name === "create_draft" || tool.name === "ask_missing_input" || tool.name === "prepare_exterior_noise_nachweis" || tool.name === "prepare_interior_sound_nachweis" || tool.name === "prepare_fire_protection_assessment"
           ? "knowledge:write"
           : "knowledge:read",
       );
@@ -496,6 +499,10 @@ export async function executeRun(d: AppDeps, run: any) {
         const saved = await savedStep(d, run.id, "tool", stepKey, undefined, tx);
         if (saved && tool.name !== "resolve_project_source" && tool.name !== "search_company_knowledge") {
           if (saved.inputHash !== inputHash) throw conflict("Saved action inputs changed. Start a new run instead of repeating a completed action.");
+          if (tool.name === "prepare_fire_protection_assessment") {
+            d.requirePermission("projects:read");
+            if (saved.output.status === "draft_created") await sources(d, run.projectId, saved.output.sourceVersionIds);
+          }
           results.push({ tool: tool.name, result: saved.output });
           if (tool.name === "validated_calculation") calculationUnavailable = true;
           if (tool.name === "delegate_source_review") {
@@ -529,6 +536,10 @@ export async function executeRun(d: AppDeps, run: any) {
         else if (tool.name === "propose_interior_sound_inputs") {
           if (!d.proposeInteriorSoundInputs) throw conflict("Interior sound suggestions are unavailable");
           result = await d.proposeInteriorSoundInputs(run.projectId, input, { runId: run.id, agentId: run.agentId ?? "richtfest-agent" }, tx);
+        }
+        else if (tool.name === "prepare_fire_protection_assessment") {
+          result = await createFireProtectionAssessment(runDeps, run.projectId, tx, run.id,
+            run.sourceVersionIds.length ? run.sourceVersionIds : undefined);
         }
         else if (tool.name === "prepare_interior_sound_nachweis") {
           const created = await createInteriorSoundNachweis(runDeps, run.projectId, tx, run.id);

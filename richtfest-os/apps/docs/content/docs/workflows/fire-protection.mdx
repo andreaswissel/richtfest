@@ -59,6 +59,14 @@ Escape route lengths follow § 34 Abs. 2: the shortest walking line from the far
 
 Until the Brandschutzatlas structure is available, the draft follows the chapters of the office's Bendenweg concept (1 Allgemeine Angaben to 7 Anlagen). It fills what the model knows: class, Sonderbau, garage, fire water, escape route lengths, Treppenraum, Flur, wall, slab and door requirements, and smoke venting per Treppenraum. Everything else is left as a bracketed placeholder, for example the Vorgespräch, fire brigade areas and building services. A chapter closes with "Alle Anforderungen werden eingehalten." only when every component it covers is met. Every draft is unreviewed; edit and check it before issuing.
 
+## Ask the Richtfest Agent for a draft
+
+After preparing the saved building model, choose **Team** and ask for a Brandschutz draft. The requirements reviewer or construction-law specialist can call `prepare_fire_protection_assessment` with no numeric arguments. It reads the saved model revision, runs the deterministic checks and saves a **Brandschutz · Teilstand · Entwurf** artifact with source links, open items and the complete calculation receipt. It does not approve the model or certify compliance. Chat stays conversational and cannot create this draft. Report and Calculation currently use acoustic templates, not a Brandschutz workflow.
+
+The agent path deliberately requires explicit saved room escape roles and unit/common-space membership rather than reproducing the plan view's inferred defaults. Approved properties take precedence over pending suggestions; unreviewed manual entries are flagged. Unresolved conflicts are not calculation inputs. Routes require one registered PDF plan per storey, confirmed numeric scale, reviewed alignment and approved door/wall connections. Missing connections, unknown basement levels and polygons with holes block route calculations instead of being guessed. Several active buildings must be assessed separately; they are not combined into one classification.
+
+The tool requires project-read and knowledge-write access. Team specialists need at least two model steps and all of the snapshot's sources in the current readable batch. Retries reuse the saved result and artifact; after changing the building model, start a new run. The artifact retains model revision, code editions, engine version and input/output hashes; run exports retain the requested and reported AI model identities. See [Building assessment backtests](/docs/engineering/building-backtests) for comparison against withheld references. An upload alone is not yet an automated, reviewed assessment.
+
 ## Not yet supported
 
 - States other than Rheinland-Pfalz and Berlin.

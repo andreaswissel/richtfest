@@ -365,6 +365,81 @@ test("Mastra specialists execute all acoustic tools before returning structured 
   expect(prepared.tools.map((tool: any) => tool.name)).toEqual([...new Set(calls.map(call => call.name))]);
 });
 
+test("fire protection tool executes empty input for eligible specialists and records its manifest", async () => {
+  const receipt = { status: "blocked" as const, complete: false as const, reason: "Saved fire inputs have no source evidence." };
+  const output = { summary: receipt.reason, rationale: "Draft preparation is blocked, not approved.", citations: [] };
+  for (const role of ["requirements_reviewer", "construction_law"]) {
+    let round = 0, calls = 0;
+    let settings: any, prepared: any;
+    const model = new MastraLanguageModelV2Mock({ doStream: async options => {
+      const execute = round++ === 0;
+      if (execute) expect(options.tools?.map(tool => tool.name)).toEqual(["prepare_fire_protection_assessment"]);
+      else {
+        expect(options.tools ?? []).toHaveLength(0);
+        const received = options.prompt.filter(message => message.role === "tool").flatMap(message => message.content)
+          .flatMap(part => part.type === "tool-result" && part.output.type === "json" ? [part.output.value] : []);
+        expect(received).toEqual([receipt]);
+      }
+      return { stream: new ReadableStream({ start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] });
+        if (execute) controller.enqueue({ type: "tool-call", toolCallId: "fire-1", toolName: "prepare_fire_protection_assessment", input: "{}" });
+        else {
+          controller.enqueue({ type: "text-start", id: "result" });
+          controller.enqueue({ type: "text-delta", id: "result", delta: JSON.stringify(output) });
+          controller.enqueue({ type: "text-end", id: "result" });
+        }
+        controller.enqueue({ type: "finish", finishReason: execute ? "tool-calls" : "stop", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } });
+        controller.close();
+      } }) };
+    } });
+    expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role },
+      modelConfig: { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 },
+      prepareFireProtection: async () => { calls++; return receipt; },
+      onRequest: async value => { settings = value; }, onPrepared: async value => { prepared = value; return undefined; },
+    }, "test-key", { model })).toEqual(output);
+    expect([round, calls]).toEqual([2, 1]);
+    expect(prepared.tools).toHaveLength(1);
+    expect(prepared.tools[0]).toMatchObject({ name: "prepare_fire_protection_assessment", version: 1,
+      inputSchema: { type: "object", properties: {}, additionalProperties: false } });
+    expect(prepared.tools[0].description).toContain("unapproved");
+    expect(settings).toMatchObject({ maxSteps: 2, maxOutputTokens: 2048,
+      toolSchemaHash: metadataHash(JSON.stringify(prepared.tools)) });
+    expect(settings.toolSchemaHash).toMatch(/^[0-9a-f]{64}$/);
+  }
+});
+
+test("fire protection tool is absent outside eligible specialist execution", async () => {
+  const modelConfig = { modelId: "test-model", maxOutputTokens: 2048, maxSteps: 2 };
+  const cases = [
+    { context: { role: "source_reviewer" } },
+    { phase: "review" as const },
+    { modelConfig: { ...modelConfig, maxSteps: 1 } },
+    { context: { role: "requirements_reviewer", visualRequests: [{ versionId: crypto.randomUUID(), page: 1 }] } },
+    { context: { role: "requirements_reviewer", extractExteriorNoise: true } },
+    { modelPolicy: { ...responsePolicy, workflow: { mode: "chat" as const } } },
+    { modelPolicy: { ...responsePolicy, workflow: { mode: "report" as const, reportTemplate: "sound-insulation-review" as const } } },
+    { modelPolicy: { ...responsePolicy, workflow: { mode: "calculation" as const } } },
+    { prepareFireProtection: undefined },
+  ];
+  for (const overrides of cases) {
+    const output = { summary: "No fire preparation available", rationale: "Execution scope", citations: [],
+      ...(overrides.phase === "review" ? { decision: "accept", revisions: [], document: { title: "Review", content: "No approval." } } : {}),
+      ...(overrides.context && "extractExteriorNoise" in overrides.context
+        ? { exteriorNoiseExtraction: { inventory: [], rooms: [], facts: [], blockers: [] } } : {}),
+    };
+    let prepared: any, settings: any;
+    expect(await callMastraSupervisor({ ...base, phase: "specialist", context: { role: "requirements_reviewer" }, modelConfig,
+      prepareFireProtection: async () => { throw new Error("Fire preparation must not execute"); },
+      ...overrides,
+      onRequest: async value => { settings = value; }, onPrepared: async value => { prepared = value; return undefined; },
+    }, "test-key", { model: createMockModel({ version: "v2", objectGenerationMode: "json", mockText: output,
+      spyStream: options => { expect(options.tools ?? []).toHaveLength(0); },
+    }) })).toEqual(output);
+    expect(prepared.tools ?? []).toHaveLength(0);
+    expect(settings.toolSchemaHash).toBeUndefined();
+  }
+});
+
 test("visual-only room candidates stay unresolved without repairing source quotations", async () => {
   const versionId = crypto.randomUUID();
   const sources = [{ versionId, text: "[Page 2]\nApartment A\nBedroom\nApartment ?\nBedroom" }];

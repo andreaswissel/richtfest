@@ -1,16 +1,16 @@
 type Point = { x: number; y: number };
 type Box = { x: number; y: number; width: number; height: number };
 
-export const planOpeningMethod = "plan_opening_gap_v1";
+export const planOpeningMethod = "plan_opening_gap_v2";
 
 /** An opening the plan trace found: a gap between two facing wall ends, optionally with a door swing. Page-normalised coordinates. */
 export type TracedOpening = {
   sourceKey: string; kind: string; wallAxis: "horizontal" | "vertical" | "oblique"; sourceKeys: string[]; doorSwingKey: string | null;
-  physicalWidthM: number | null; jambLength: number; midpoint: Point; closure: Box; sides: string[];
+  physicalWidthM: number | null; jambLength: number; midpoint: Point; closure: Box; sides: string[]; sideProbes?: Point[];
 };
 export type OpeningPage = { sourceVersionId: string; page: number; storeyId: string; pageAspectRatio: number; openings: TracedOpening[] };
-export type OpeningWall = { id: string; storeyId: string; sourceVersionId: string; page: number; footprintKeys: string[]; exterior: boolean; roomIds: string[] };
-export type OpeningRoom = { id: string; storeyId: string; polygon: Point[] | null; candidateKey: string | null };
+export type OpeningWall = { id: string; storeyId: string; sourceVersionId: string; page: number; footprintKeys: string[]; exterior: boolean; roomIds: string[]; polygon?: Point[] };
+export type OpeningRoom = { id: string; storeyId: string; polygon: Point[] | null; holes?: Point[][]; candidateKey: string | null; sourceVersionId?: string; page?: number; boundaryResolved?: boolean; exterior?: boolean };
 /**
  * Openings already in the model. `planKey` is the plan opening an element was
  * derived from or adopted; without one, the opening was entered (in a
@@ -19,7 +19,8 @@ export type OpeningRoom = { id: string; storeyId: string; polygon: Point[] | nul
 export type ExistingOpening = { id: string; kind: string; wallId: string | null; planKey: string | null };
 
 type Placement = { kind: "window" | "door"; storeyId: string; wallId: string; roomId: string; widthM: number | null;
-  sourceVersionId: string; page: number; sourceOpeningKey: string; closure: Box; doorSwing: boolean; planKey: string };
+  sourceVersionId: string; page: number; sourceOpeningKey: string; closure: Box; doorSwing: boolean; planKey: string;
+  roomSides: Array<string | null> };
 /** A new element for a plan opening, or an entered opening that takes the plan opening's place. */
 export type PlannedOpening = Placement & ({ action: "create" } | { action: "adopt"; elementId: string });
 export type OpeningOutcome = "window" | "door" | "adopted" | "existing" | "ambiguous" | "passage" | "no_wall" | "no_room";
@@ -54,7 +55,8 @@ export function planOpenings(input: { pages: OpeningPage[]; walls: OpeningWall[]
   const outcomes: Array<{ planKey: string; storeyId: string; outcome: OpeningOutcome }> = [];
   for (const page of input.pages) {
     const walls = input.walls.filter(wall => wall.sourceVersionId === page.sourceVersionId && wall.page === page.page);
-    const rooms = input.rooms.filter(room => room.storeyId === page.storeyId);
+    const rooms = input.rooms.filter(room => room.storeyId === page.storeyId && room.boundaryResolved !== false
+      && (!room.sourceVersionId || room.sourceVersionId === page.sourceVersionId && room.page === page.page));
     for (const opening of page.openings) {
       const planKey = planOpeningKey(page, opening);
       const outcome = (value: OpeningOutcome) => outcomes.push({ planKey, storeyId: page.storeyId, outcome: value });
@@ -62,26 +64,53 @@ export function planOpenings(input: { pages: OpeningPage[]; walls: OpeningWall[]
       const door = Boolean(opening.doorSwingKey) || opening.kind.startsWith("door_swing");
       // The rooms on either side: by the trace's room keys, else the rooms containing a point beyond either jamb face.
       const keyed = opening.sides.map(side => rooms.find(room => room.candidateKey && room.candidateKey === side)?.id ?? null);
-      const probed = keyed.every(Boolean) ? [] : [-1, 1].flatMap(sign => {
+      const roomSides = [-1, 1].map((sign, side) => {
+        if (keyed[side]) return keyed[side]!;
+        // New traces retain the actual normal, including oblique walls. Old
+        // oblique traces cannot safely be probed as horizontal walls.
+        if (opening.wallAxis === "oblique" && !opening.sideProbes?.[side]) return null;
         for (const factor of [1, 2, 4]) {
           const offset = sign * factor * Math.max(opening.jambLength, 0.004);
-          const probe = opening.wallAxis === "vertical" ? { x: opening.midpoint.x + offset / page.pageAspectRatio, y: opening.midpoint.y }
-            : { x: opening.midpoint.x, y: opening.midpoint.y + offset };
-          const room = rooms.find(item => item.polygon && item.polygon.length >= 3 && inside(probe, item.polygon));
-          if (room) return [room.id];
+          const probe = opening.sideProbes?.[side] ?? (opening.wallAxis === "vertical" ? { x: opening.midpoint.x + offset / page.pageAspectRatio, y: opening.midpoint.y }
+            : { x: opening.midpoint.x, y: opening.midpoint.y + offset });
+          const found = rooms.filter(item => item.polygon && inside(probe, item.polygon) && !item.holes?.some(hole => inside(probe, hole)));
+          if (found.length > 1) return null;
+          if (found.length === 1) return found[0]!.id;
+          if (opening.sideProbes?.[side]) break;
         }
-        return [];
+        return null;
       });
-      const roomIds = [...new Set([...keyed.filter((id): id is string => Boolean(id)), ...probed])];
-      const hosts = walls.filter(wall => wall.footprintKeys.some(key => opening.sourceKeys.includes(key)));
+      const roomIds = [...new Set(roomSides.filter((id): id is string => Boolean(id)))];
+      if (roomSides[0] && roomSides[0] === roomSides[1]) { outcome("ambiguous"); continue; }
+      // A split source footprint may yield many walls. Match the actual jamb
+      // endpoint, never an arbitrary wall carrying the same footprint key.
+      const touchesJamb = (wall: OpeningWall) => {
+        if (!wall.polygon?.length || opening.wallAxis === "oblique") return false;
+        const vertical = opening.wallAxis === "vertical", aspect = page.pageAspectRatio;
+        const along = wall.polygon.map(p => vertical ? p.y : p.x * aspect);
+        const across = wall.polygon.map(p => vertical ? p.x * aspect : p.y);
+        const lo = Math.min(...along), hi = Math.max(...along), near = Math.min(...across), far = Math.max(...across);
+        const r = opening.closure, start = vertical ? r.y : r.x * aspect, end = start + (vertical ? r.height : r.width * aspect);
+        const centre = vertical ? opening.midpoint.x * aspect : opening.midpoint.y;
+        const tolerance = .003;
+        return hi - lo > far - near && centre >= near - tolerance && centre <= far + tolerance
+          && (Math.abs(hi - start) <= tolerance || Math.abs(lo - end) <= tolerance);
+      };
+      const hosts = walls.filter(wall => wall.storeyId === page.storeyId && (opening.sourceKeys.length
+        ? wall.footprintKeys.some(key => opening.sourceKeys.includes(key)) && (!wall.polygon?.length || touchesJamb(wall))
+        : touchesJamb(wall)));
       if (!hosts.length) { outcome("no_wall"); continue; }
       // A door leads into the room on its inner side; between two rooms, into the first.
-      const roomId = roomIds[0];
+      const interiorRooms = roomIds.filter(id => !rooms.find(room => room.id === id)?.exterior);
+      const roomId = interiorRooms[0];
       if (!roomId) { outcome("no_room"); continue; }
-      if (!door && (!hosts.some(wall => wall.exterior) || roomIds.length > 1)) { outcome("passage"); continue; }
-      // Prefer an exterior jamb wall that bounds the room, then any wall bounding it, then the first.
-      const host = hosts.find(wall => wall.exterior && wall.roomIds.includes(roomId)) ?? hosts.find(wall => wall.roomIds.includes(roomId)) ?? hosts[0]!;
-      candidates.push({ kind: door ? "door" : "window", storeyId: page.storeyId, wallId: host.id, roomId, planKey,
+      if (!door && (!hosts.some(wall => wall.exterior) || interiorRooms.length > 1)) { outcome("passage"); continue; }
+      // Equivalent jambs are interchangeable hosts; conflicting exterior roles
+      // are not. Never fall back to a wall that does not bound this room.
+      const bounding = hosts.filter(wall => wall.roomIds.includes(roomId));
+      if (!bounding.length || bounding.some(wall => wall.exterior !== bounding[0]!.exterior)) { outcome("ambiguous"); continue; }
+      const host = bounding.sort((a, b) => a.id.localeCompare(b.id))[0]!;
+      candidates.push({ kind: door ? "door" : "window", storeyId: page.storeyId, wallId: host.id, roomId, roomSides, planKey,
         widthM: opening.physicalWidthM !== null ? Math.round(opening.physicalWidthM * 100) / 100 : null,
         sourceVersionId: page.sourceVersionId, page: page.page, sourceOpeningKey: opening.sourceKey, closure: opening.closure, doorSwing: door });
     }

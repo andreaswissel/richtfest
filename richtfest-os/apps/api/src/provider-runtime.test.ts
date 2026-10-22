@@ -40,6 +40,11 @@ test("Chat provider receives reviewed building state and returns a proposal for 
   expect(request.instructions).toContain("propose_building_model_change");
   expect(request.instructions).toContain("propose_exterior_noise_inputs");
   expect(request.instructions).toContain("propose_interior_sound_inputs");
+  expect(request.instructions).toContain("Check scale separately per sheet");
+  expect(request.instructions).toContain("prepare_fire_protection_assessment({})");
+  expect(request.instructions).toContain("IFC escape routes, second escape routes, fire-brigade access and garage component checks remain unsupported");
+  expect(request.instructions).toContain("Report engineering numbers only from supplied deterministic results");
+  expect(request.instructions).not.toContain("Calculations have no validated tool and must be unavailable");
   const parsed = outputInput.parse(result);
   expect(validateTool(parsed.tools[0]!.name, parsed.tools[0]!.input)).toEqual(proposal);
 });

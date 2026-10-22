@@ -14,7 +14,7 @@ export { fileStorage } from "./file-storage";
 import { readSourceEvidence, readSourceModel } from "@richtfest/projects/source-model";
 import { readSourceDocumentModel } from "@richtfest/projects/source-document";
 import { researchProjectEnvironment } from "@richtfest/projects/environment";
-import { readBuildingModelAgentContext, proposeBuildingModelChange } from "@richtfest/projects/building-model";
+import { readBuildingModelAgentContext, proposeBuildingModelChange, readFireProtectionSnapshot } from "@richtfest/projects/building-model";
 import { querySourceImage } from "@richtfest/projects/source-image-query";
 import { extractSourceVisual } from "@richtfest/projects/source-text";
 import { readPdfRepresentations } from "@richtfest/projects/source-representations";
@@ -228,6 +228,7 @@ export const knowledgeDeps = (
     suggestExteriorNoiseCatalogue: (projectId, tx) => suggestCatalogueValues({ ...projectsDeps(db, req), db: tx }, projectId, tx),
     interiorSoundProof: projectId => readInteriorSoundProof(projectsDeps(db, req), projectId),
     proposeInteriorSoundInputs: (projectId, input, execution, tx) => proposeInteriorSoundInputs({ ...projectsDeps(db, req), db: tx }, projectId, input, execution, tx),
+    fireProtectionSnapshot: projectId => readFireProtectionSnapshot(projectsDeps(db, req), projectId),
     validateSourceVersion: async (projectId, versionId) => Boolean((await db.execute(
       sql`select v.id from projects_file_versions v join projects_files f on f.id=v.file_id and f.tenant_id=v.tenant_id
         where f.tenant_id=${actor.tenantId} and f.project_id=${projectId} and v.id=${versionId}::uuid
