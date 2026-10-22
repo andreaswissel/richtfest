@@ -94,5 +94,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD bun -e 'fetch(`http://127.0.0.1:${process.env.PORT || 3000}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))'
 
 # Railway injects DATABASE_URL and the other runtime variables. Migrations are
-# applied against that database before the API starts serving traffic.
-CMD ["sh", "-c", "cd /app/richtfest-os/apps/api && bun run db:migrate && exec bun src/index.ts"]
+# applied and the approved upload origin is ensured before the API serves traffic.
+CMD ["sh", "-c", "cd /app/richtfest-os/apps/api && bun src/scripts/ensure-upload-cors.ts && bun run db:migrate && exec bun src/index.ts"]
