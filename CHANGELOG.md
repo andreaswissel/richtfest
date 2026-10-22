@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-22
+
+- **Fire protection in the building model (Rheinland-Pfalz and Berlin):** Enter the federal state, the height of the highest habitable floor, units, Sonderbau and garage under **Fire protection**, and Richtfest shows the Gebäudeklasse and whether a plan-based Nachweis or a full Brandschutzkonzept with Prüfsachverständigen review is needed. **Show Brandschutzplan** colours the plan like the office draws it: required wall ratings from the rooms on both sides, notwendiger Treppenraum and Flur in green, door closures (D, RS, T30 …) and every room's escape route as a line with its length against 35 m. Each wall and door shows its requirement with the LBauO paragraph; enter the provided rating to mark it met. **Copy written part (draft)** writes the Brandschutzkonzept text in the office's chapter structure: each requirement quoted from the LBauO, then how the building meets it, with placeholders for what the model cannot know and unmet components as Abweichungen. Berlin uses the BauO Bln, including its 400 m² unit limit for GK 4 and review by a Prüfingenieur/in für Brandschutz.
+
 ## 2026-10-21
 
 - **Building models from IFC:** Preview an uploaded IFC revision, review source limitations and select the building storeys to import. Rooms and elements become a saved draft with metre-based plan geometry and links to their IFC identities; existing work stays intact and repeated imports create no duplicates. IFC uploads remain identifiable when given a custom label.

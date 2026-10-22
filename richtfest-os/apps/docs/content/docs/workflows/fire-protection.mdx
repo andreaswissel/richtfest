@@ -1,0 +1,70 @@
+---
+title: Fire protection
+description: How the building model classifies a building under the Landesbauordnung, draws the Brandschutzplan and drafts the written part of a Brandschutzkonzept.
+---
+
+A fire protection assessment starts from two variables: the federal state (its Landesbauordnung, LBO) and the building class (Gebäudeklasse, GK). Everything a concept needs for a residential building is in the LBO and the VVTB; DIN 4102 and DIN EN 13501 only come in for the classification of individual components. Richtfest prepares the Nachweis or Brandschutzkonzept in the building model, on the same walls, rooms and doors that sound insulation uses. The fire protection specialist reviews and signs it.
+
+Two states are captured so far: **Rheinland-Pfalz** (LBauO RLP as amended on 19 Nov 2025, GarStellVO RLP of 8 Dec 2022) and **Berlin** (BauO Bln as amended on 9 Jul 2026). Other states show "State not covered" instead of falling back to the Musterbauordnung, because each state adopts it differently. For example, RLP has no 400 m² unit limit for GK 4, while Berlin has one.
+
+## Classify the building
+
+Open **Fire protection** in the building model toolbar and enter:
+
+- **Federal state** of the building.
+- **Height of highest habitable floor**: from the ground surface (on average) to the finished floor of the highest storey in which an Aufenthaltsraum is *possible* (§ 2 Abs. 2 LBauO, § 2 Abs. 3 BauO Bln), as dimensioned in the section. An attic counts when a window could easily be added.
+- **Dwellings / other units**: dwellings default to the apartments in the model.
+- Berlin only: the **largest unit** and **all units together**, as Brutto-Grundfläche. Between 7 and 13 m, a building is GK 4 only if every unit has at most 400 m²; otherwise it is GK 5. GK 1 and 2 need at most two units with 400 m² in total.
+- **Sonderbau** (§ 50 LBauO, § 2 Abs. 4 BauO Bln), **garage usable area and type** (GarStellVO: up to 100 m² small, up to 1,000 m² medium, above that large), and how the **Treppenraum is vented**. When buildings on one site vent differently (Bendenweg: 6a with windows, 6b with an opening at the top), set the venting on each Treppenraum room as well.
+
+Richtfest then shows the building class, whether it is a Hochhaus or Sonderbau, and what has to be delivered:
+
+| Case | Deliverable | Review |
+| --- | --- | --- |
+| GK 1–3, no Sonderbau | Brandschutznachweis: colour-coded plans | None |
+| GK 4, GK 5 or Sonderbau | Brandschutzkonzept: plans plus written part | RLP: Prüfsachverständige/r für Brandschutz (four-eyes principle). Berlin: Prüfingenieur/in für Brandschutz |
+
+In Berlin, the fire protection is also checked for a Mittel- or Großgarage (§ 66 Abs. 3 BauO Bln). Berlin has no Garagenverordnung, so the garage size classes follow the Muster-Garagenverordnung and the draft leaves the garage requirements as a placeholder.
+
+The 7 m threshold between GK 3 and GK 4 is the reach of the fire brigade's ladder; it is the biggest jump in requirements. A Mittel- or Großgarage adds the garage chapter to the written part but does not require a concept by itself. Missing inputs are listed instead of guessed.
+
+## Brandschutzplan
+
+**Show Brandschutzplan** (layers button) colours the plan the way the office draws it (ARCenergie legend):
+
+| Mark | Meaning |
+| --- | --- |
+| Magenta, hatched | fb+A+M: Bauart einer Brandwand |
+| Red | fb: feuerbeständig (90 min) |
+| Orange, hatched | hf+M: hochfeuerhemmend, also under mechanical load (Treppenraum walls in GK 4) |
+| Orange | hf: hochfeuerhemmend (60 min) |
+| Yellow | fh: feuerhemmend (30 min) |
+| Brown | nb: nichtbrennbar, without fire resistance (non-load-bearing facade of a Treppenraum) |
+| Dark green | Notwendiger Treppenraum: the safest area |
+| Light green | Notwendiger Flur |
+| Door tag | D, DS, V-DS, RS, T30-DS/RS, T90-DS/RS |
+| Green line and tag | Escape route of a room with its length; red above 35 m |
+
+Each wall's requirement follows from the rooms on both sides: Trennwände between units or towards other common areas (§ 29), walls of notwendige Flure (§ 35) and of the notwendiger Treppenraum (§ 34). The strictest requirement wins, except that walls of a notwendiger Flur or Treppenraum follow their own rule instead of § 29. In GK 4, a dwelling's wall to the notwendiger Flur is therefore feuerhemmend and a wall between dwellings hochfeuerhemmend, as in the office's plans. A Treppenraum's own facade wall is marked nichtbrennbar (§ 34 Abs. 6 Satz 2) unless it is load-bearing. A stairwell is a notwendiger Treppenraum and a common corridor a notwendiger Flur from GK 3; set **Escape role** on a room to override this. Doors take the closure their own rule requires, for example RS from the Treppenraum into a notwendiger Flur (§ 34 Abs. 9).
+
+Berlin differs in a few rules: Trennwände take the fire resistance of the storey's load-bearing walls (at least feuerhemmend) and are not required in GK 1 and 2 Wohngebäude; Treppenraum walls in GK 3 are feuerhemmend; basement walls between Aufenthaltsräume and other rooms are Trennwände; a smoke opening at the top of a Treppenraum does not make its doors T30-RS; and doors from a notwendiger Flur to basement storage are T30-DS. Paragraph numbers follow the BauO Bln (Treppenräume § 35, Flure § 36). Slabs (§ 31) appear in the written part, not on the plan.
+
+Select a wall, slab or door to see its requirement with the cited paragraphs. Enter whether it is load-bearing, the **provided fire resistance** (or closure) and its basis, for example "Stahlbeton 20 cm, DIN 4102-4". The status then reads met, not met or open. Not-met components are outlined in red on the plan.
+
+Escape route lengths follow § 34 Abs. 2: the shortest walking line from the farthest point of each Aufenthaltsraum (and basement room) to a Treppenraum door or outside. The line goes around walls through doors, and furniture is ignored. It is drawn on the plan like the office's Brandschutzpläne, with its length at the farthest point. They need the plan scale and reviewed doors, and stay indicative until both are confirmed.
+
+## Written part
+
+**Copy written part (draft)** produces the text of the Brandschutzkonzept in German. For each requirement, it quotes the LBO text verbatim and then states how the building meets it. Each statement is built from the components' provided ratings, so material information such as "load-bearing walls are reinforced concrete" still comes from the user. Unmet or open requirements are collected as deviations (Abweichungen) for the specialist. The fire water demand (DVGW W 405, AGBF 2018-4: 48 m³/h for buildings with up to three Vollgeschosse, otherwise 96 m³/h, for 2 hours) is a summary, not a quote, and must be confirmed against the source.
+
+Until the Brandschutzatlas structure is available, the draft follows the chapters of the office's Bendenweg concept (1 Allgemeine Angaben to 7 Anlagen). It fills what the model knows: class, Sonderbau, garage, fire water, escape route lengths, Treppenraum, Flur, wall, slab and door requirements, and smoke venting per Treppenraum. Everything else is left as a bracketed placeholder, for example the Vorgespräch, fire brigade areas and building services. A chapter closes with "Alle Anforderungen werden eingehalten." only when every component it covers is met. Every draft is unreviewed; edit and check it before issuing.
+
+## Not yet supported
+
+- States other than Rheinland-Pfalz and Berlin.
+- The Brandschutzplan and escape routes on [IFC-imported](/docs/workflows/project-onboarding#import-an-ifc-model) rooms and elements; they are drawn on PDF plan pages.
+- Compensation proposals for deviations. Deviations are detected only.
+- Second escape route and fire brigade access (Anleiterstellen, Rettungswegfenster) on the plan.
+- GarStellVO component rules beyond the garage classification.
+- PDF export of the Brandschutzplan.
+- AHO fee calculation from the plan areas.

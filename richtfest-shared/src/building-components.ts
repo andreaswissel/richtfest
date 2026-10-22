@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fireClosureSchema, fireRatingSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema, stairwellSmokeVentSchema } from "./fire-protection";
 
 /**
  * Shared component attributes on building-model entities. Every discipline
@@ -48,6 +49,8 @@ export const federalStateSchema = z.enum(["BW", "BY", "BE", "BB", "HB", "HH", "H
 export const bebauungsplanSchema = z.enum(["applies", "none"]);
 /** Whether a storey is a Vollgeschoss under the Landesbauordnung. */
 export const fullStoreySchema = z.enum(["full", "not_full"]);
+/** Fire protection inputs on the building, in the order the specialist settles them. */
+export const fireBuildingKeys = ["fireHeight", "fireDwellings", "fireOtherUnits", "fireDetached", "fireUsableArea", "fireLargestUnitArea", "fireUnitsGrossArea", "fireSpecialUse", "garageArea", "garageEnclosure", "stairwellSmokeVent"] as const;
 /** Regulatory basis keys, in the order the specialist checks them. */
 export const regulatoryBasisKeys = ["federalState", "bebauungsplan", "bebauungsplanNoise", "stateBuildingCodeEdition", "vvtbEdition", "din4109Edition"] as const;
 export type SoundInsulationLevel = z.infer<typeof soundInsulationLevelSchema>;
@@ -123,6 +126,11 @@ export const buildingComponentProperties = {
     windowOpening: { value: windowOpeningSchema, unit: null },
     frameShare: { value: z.number().min(0).max(100), unit: "%" },
     glazingBars: { value: z.boolean(), unit: null },
+    // Fire protection: whether a wall carries load (§ 27 LBauO), the rating its build-up provides and why, and a door's closure.
+    loadBearing: { value: z.boolean(), unit: null },
+    fireResistance: { value: fireRatingSchema, unit: null },
+    fireResistanceBasis: { value: z.string().trim().min(1).max(500), unit: null },
+    fireClosure: { value: fireClosureSchema, unit: null },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },
@@ -148,6 +156,19 @@ export const buildingComponentProperties = {
     // Exterior noise verification: whether the standard method applies and whether flanking is negligible.
     exteriorNoiseApplicability: { value: z.enum(["standard_exterior_noise", "special_assessment_required"]), unit: null },
     exteriorNoiseFlanking: { value: z.enum(["negligible", "required"]), unit: null },
+    // Fire protection: inputs of the building class (height of the highest floor where Aufenthaltsräume are possible, on average above ground), Sonderbau, garage and Treppenraum venting.
+    fireHeight: { value: z.number().min(0).max(500), unit: "m" },
+    fireDetached: { value: z.boolean(), unit: null },
+    fireDwellings: { value: z.number().int().min(0).max(10000), unit: null },
+    fireOtherUnits: { value: z.number().int().min(0).max(10000), unit: null },
+    fireUsableArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
+    // Berlin (§ 2 Abs. 3 BauO Bln) measures units by Brutto-Grundfläche: the largest unit for GK 4, all units together for GK 1–2.
+    fireLargestUnitArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
+    fireUnitsGrossArea: { value: z.number().positive().max(10_000_000), unit: "m²" },
+    fireSpecialUse: { value: fireSpecialUseSchema, unit: null },
+    garageArea: { value: z.number().min(0).max(1_000_000), unit: "m²" },
+    garageEnclosure: { value: garageEnclosureSchema, unit: null },
+    stairwellSmokeVent: { value: stairwellSmokeVentSchema, unit: null },
   },
   /** 0 is the ground floor; upper storeys count up, basements down. */
   storey: {
@@ -165,6 +186,10 @@ export const buildingComponentProperties = {
     exteriorNoiseRoom: { value: z.enum(["sleeping", "living", "office", "hospital_bedroom", "not_protected"]), unit: null },
     /** A person confirmed that every exterior surface and opening of the room is entered. */
     exteriorSurfacesComplete: { value: z.boolean(), unit: null },
+    /** Escape role entered by a person; otherwise derived from space type, use and building class. */
+    fireRoomRole: { value: fireRoomRoleSchema, unit: null },
+    /** A notwendiger Treppenraum vented differently from the building default (one building with windows, another with an opening at the top). */
+    stairwellSmokeVent: { value: stairwellSmokeVentSchema, unit: null },
   },
 } satisfies Record<string, Record<string, PropertySpec>>;
 /** Element kinds created by plan derivation imply a component type until one is entered. */

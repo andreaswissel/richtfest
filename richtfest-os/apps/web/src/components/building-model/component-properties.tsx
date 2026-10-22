@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { bebauungsplanSchema, ceilingRoleSchema, doorLeafTypeSchema, doorRoleSchema, installationKindSchema, installationProofSchema, liningSidesSchema, liningTypeSchema, screedInsulationSchema, screedTypeSchema, stairCaseSchema, timberCeilingUndersideSchema, timberWallLiningSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
+import { bebauungsplanSchema, ceilingRoleSchema, doorLeafTypeSchema, doorRoleSchema, installationKindSchema, installationProofSchema, liningSidesSchema, liningTypeSchema, screedInsulationSchema, screedTypeSchema, stairCaseSchema, timberCeilingUndersideSchema, timberWallLiningSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fireClosureSchema, fireRatingSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema, stairwellSmokeVentSchema, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
 import { X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -11,7 +11,7 @@ import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
 
 type T = ReturnType<typeof useT>;
 // Statements rather than values: shown in full.
-const longText = new Set(["bebauungsplanNoise", "bebauungsplanGrz", "bebauungsplanHeight"]);
+const longText = new Set(["bebauungsplanNoise", "bebauungsplanGrz", "bebauungsplanHeight", "fireResistanceBasis"]);
 type Key = Parameters<T>[0];
 export type ComponentPropertySave = { key: string; value: string | number | boolean | null; unit: string | null };
 
@@ -28,15 +28,20 @@ const enumOptions: Record<string, readonly string[]> = {
   timberCeilingUnderside: timberCeilingUndersideSchema.options, screedInsulation: screedInsulationSchema.options, stairCase: stairCaseSchema.options,
   installationKind: installationKindSchema.options, installationProof: installationProofSchema.options, serviceReceivingUse: ["living", "work"],
   referenceBuildUpConfirmed: ["true", "false"], installationConditionsConfirmed: ["true", "false"],
+  fireDetached: ["true", "false"], loadBearing: ["true", "false"], fireSpecialUse: fireSpecialUseSchema.options, garageEnclosure: garageEnclosureSchema.options,
+  stairwellSmokeVent: stairwellSmokeVentSchema.options, fireRoomRole: fireRoomRoleSchema.options, fireResistance: fireRatingSchema.options, fireClosure: fireClosureSchema.options,
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
-const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars", "referenceBuildUpConfirmed", "installationConditionsConfirmed"]);
+const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars", "referenceBuildUpConfirmed", "installationConditionsConfirmed", "fireDetached", "loadBearing"]);
 // Unitless numbers, such as how many of a small element sit in a wall.
-const countKeys = new Set(["elementCount", "rebateSeals"]);
+const countKeys = new Set(["elementCount", "rebateSeals", "fireDwellings", "fireOtherUnits"]);
+// Numbers where zero is a meaningful entry rather than a typo.
+const zeroAllowed = new Set(["countableFloorArea", "soundReductionIndex", "fireDwellings", "fireOtherUnits", "garageArea"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
   soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB",
   glassSoundReduction: "dB", frameShare: "%", openingWidth: "m", openingHeight: "m", liningMass: "kg/m²", liningStiffness: "MN/m³", liningCavity: "cm", impactSoundReduction: "dB",
-  serviceSoundLevel: "dB", doorLeafSoundReduction: "dB", rebateSealSoundReduction: "dB", floorSealSoundReduction: "dB" };
+  serviceSoundLevel: "dB", doorLeafSoundReduction: "dB", rebateSealSoundReduction: "dB", floorSealSoundReduction: "dB",
+  fireHeight: "m", fireUsableArea: "m²", fireLargestUnitArea: "m²", fireUnitsGrossArea: "m²", garageArea: "m²" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];
 // Windows and doors are rated as a whole: area and Rw instead of a build-up.
@@ -111,7 +116,7 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
     const trimmed = raw.trim();
     if (trimmed === committed.current) return;
     const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit || countKeys.has(propertyKey) ? Number(trimmed.replace(",", ".")) : trimmed;
-    if (typeof value === "number" && !(Number.isFinite(value) && (propertyKey === "countableFloorArea" || propertyKey === "soundReductionIndex" ? value >= 0 : value > 0))) { setDraft(text); return; }
+    if (typeof value === "number" && !(Number.isFinite(value) && (zeroAllowed.has(propertyKey) ? value >= 0 : value > 0))) { setDraft(text); return; }
     committed.current = trimmed;
     onSave({ key: propertyKey, value, unit: value === null ? null : unit });
   };

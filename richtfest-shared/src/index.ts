@@ -25,6 +25,7 @@ export * from "./components";
 export * from "./company-knowledge";
 export * from "./building-model";
 export * from "./building-components";
+export * from "./fire-protection";
 export * from "./environment";
 export * from "./project-documents";
 export * from "./noise-sources";

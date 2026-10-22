@@ -12,13 +12,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { WorkbenchTool } from "../ui/workbench-tool";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { AudioLines, ChevronDown, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
+import { AudioLines, ChevronDown, Flame, Layers, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingWallColour, type BuildingWallColourState, type BuildingPlanScale, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
-import { wallRoleSchema } from "@richtfest/shared";
+import { maxEscapeDistance, wallRoleSchema } from "@richtfest/shared";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
 import { ZoningCheck } from "./zoning-check";
+import { assessFireProtection, FireComponentSection, FireLegend, fireMarks, FireProtectionPanel, fireSummary, pageEscapeRoutes, type FireAnnotation } from "./fire-protection";
 import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, ExteriorNoiseBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
 import { soundInsulationChecks } from "@richtfest/shared";
 import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, pointInRing, pointToMetres, rectangleAround, type MagicOutline, type OutlineDraft, type PageScale } from "./outline-geometry";
@@ -489,6 +490,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   });
   const [colorWallRoles, setColorWallRoles] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
+  const [fireOverlay, setFireOverlay] = useState(false);
+  const [fireOpen, setFireOpen] = useState(false);
   const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen);
   const inquiries = useApi(`/projects/${projectId}/inquiries`, soundOpen);
   const createInquiry = useMutation({
@@ -537,6 +540,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     return [region.id, role && role.reviewStatus !== "rejected" ? role.value : role?.reviewedValue ?? null] as const;
   })), [model]);
   const roomNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "room").map((region) => [region.id, region.label])), [model]);
+  const fireAssessment = useMemo(() => assessFireProtection(model), [model]);
   const elementNames = useMemo(() => new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element").map((region) => [region.id, region.label])), [model]);
   const startExtraction = useMutation({
     mutationFn: () => {
@@ -595,6 +599,21 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
   const pageScale = (magicPageScale(outlineSession) ?? activeExtraction?.result?.pageScale ?? null) as PageScale | null;
+  // Escape routes are measured on the shown plan page at its printed scale.
+  const fireRoutes = useMemo(() => {
+    if (!fireOverlay && !fireOpen) return [];
+    const levels = new Map(model.storeys.map((storey) => { const state = storey.componentProperties?.level;
+      return [storey.id, state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null] as const; }));
+    return pageEscapeRoutes(fireAssessment, pageRegions, Object.values(model.states).flat(), pageScale, (storeyId) => storeyId ? levels.get(storeyId) ?? null : null);
+    // pageRegions is derived from these on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fireOverlay, fireOpen, fireAssessment, model, state, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, pageScale]);
+  const fireOverlayData = useMemo(() => fireOverlay ? {
+    marks: fireMarks(fireAssessment),
+    annotations: pageScale ? fireRoutes.map((route): FireAnnotation => ({ id: route.roomId, point: metresToPoint(route.from, pageScale), path: route.path.map((point) => metresToPoint(point, pageScale)), over: route.length > maxEscapeDistance,
+      text: `${route.length.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m` })) : [],
+    label: (annotation: FireAnnotation) => `${roomNames.get(annotation.id) ?? annotation.id}: ${annotation.text}`,
+  } : null, [fireOverlay, fireAssessment, fireRoutes, pageScale, roomNames]);
   useEffect(() => { setOutlineSession(null); setMagicNotice(undefined); setMeasurePoints([]); }, [page, sourceForEvidence?.source?.versionId]);
   const updateOutline = (update: (session: OutlineSession) => OutlineSession) => setOutlineSession((current) => current ? update(current) : current);
   const beginOutlineChange = () => updateOutline((session) => ({ ...session, history: [...session.history.slice(-49), session.draft], future: [] }));
@@ -970,7 +989,23 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               onCreate={(counterpart, body) => createInquiry.mutate({ counterpart, body })} />
           </PopoverContent>
         </Popover>
-        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles} onClick={() => setColorWallRoles((value) => !value)}><Palette className="size-icon-sm" aria-hidden="true" /></Button>
+        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles && !fireOverlay} onClick={() => { setFireOverlay(false); setColorWallRoles((value) => !value); }}><Palette className="size-icon-sm" aria-hidden="true" /></Button>
+        <Popover open={fireOpen} onOpenChange={setFireOpen}>
+          <PopoverTrigger asChild>
+            <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingFireProtection")}: ${fireSummary(fireAssessment, t)}`} title={t("buildingFireProtection")}>
+              <Flame className="size-icon-sm" aria-hidden="true" />
+              <span>{t("buildingFireProtection")} · {fireSummary(fireAssessment, t)}</span>
+              <ChevronDown className="size-icon-sm" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
+            <h2 className="building-model-panel-title">{t("buildingFireProtection")}</h2>
+            <FireProtectionPanel model={model} assessment={fireAssessment} routes={fireRoutes} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} roomNames={roomNames} elementNames={elementNames} t={t}
+              pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+              onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+          </PopoverContent>
+        </Popover>
+        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingFirePlan")} title={t("buildingFirePlan")} aria-pressed={fireOverlay} onClick={() => setFireOverlay((value) => !value)}><Layers className="size-icon-sm" aria-hidden="true" /></Button>
         <Badge title={model.reviewStatus === "needs-review" ? t("buildingModelReviewInWorkspace") : model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}>{statusLabel(model.reviewStatus, t)}</Badge>
         <div className="building-model-toolbar-end">
           <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelUndo")} title={`${t("buildingModelUndo")} (⌘Z)`} disabled={!outlineSession?.history.length} onClick={undoOutline}><Undo2 className="size-icon-sm" aria-hidden="true" /></Button>
@@ -1000,12 +1035,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           <div className={`building-model-automatic-canvas is-tool-${activeTool}`}>
             <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
               <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => { const candidate = sourceCandidates.find((item) => item.id === id); if (candidate) selectCandidate(candidate); else selectRegion(id); }} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView"), magicSurface: planTool === "measure" ? t("buildingModelMeasureHint") : t("buildingModelMagicHint"), point: t("buildingModelOutlinePoint"), addPoint: t("buildingModelOutlineAddPoint") }}
-                hideViewControls colorWallRoles={colorWallRoles} tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
+                hideViewControls colorWallRoles={colorWallRoles} fire={fireOverlayData} tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
                 onPlanPick={(point) => { if (planTool === "measure") setMeasurePoints((current) => current.length >= 2 ? [point] : [...current, point]); else if (!magicSelect.isPending) magicSelect.mutate(point); }}
                 outline={outlineSession ? { draft: outlineSession.draft, snap: snapToWalls, onBegin: beginOutlineChange, onChange: (draft) => updateOutline((session) => ({ ...session, draft })) } : null} />
             </Suspense>
             {currentAutomaticActive && <div className="building-model-scan-sweep" aria-hidden="true" />}
-            {colorWallRoles && <div className="building-model-role-legend" aria-label={t("buildingSoundWallRoleLegend")}>
+            {fireOverlayData && <FireLegend marks={fireOverlayData.marks} t={t} />}
+            {colorWallRoles && !fireOverlayData && <div className="building-model-role-legend" aria-label={t("buildingSoundWallRoleLegend")}>
               {[...wallRoleOptions, "none"].flatMap((role) => { const count = pageRegions.filter((region) => region.entityType === "element" && regionComponentType(region) === "wall" && wallRoleOf(region) === role).length;
                 return count ? [<span key={role}><i className={`building-model-role-swatch is-${role}`} aria-hidden="true" />{role === "none" ? t("buildingSoundWallsWithoutRole") : t(`buildingComponentWallRole${role.replace(/(^|_)([a-z])/g, (_, __, letter: string) => letter.toUpperCase())}` as keyof typeof import("../../locales/en.json"))} · {count}</span>] : []; })}
             </div>}
@@ -1040,6 +1076,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
                     sameRoleCount: [...wallRoles].filter(([id, role]) => id !== selected.id && role != null && role === wallRoles.get(selected.id)).length }} /> : undefined}
+                fire={(selected.entityType === "room" || fireAssessment.components.has(selected.id)) ? <FireComponentSection region={selected} assessment={fireAssessment} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                  onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} /> : undefined}
                 wallType={wallRoles.get(selected.id) != null ? <WallTypeReview walls={modelWalls.filter((wall) => wallRoles.get(wall.id) === wallRoles.get(selected.id))} t={t} pending={reviewWallType.isPending} onApprove={(items) => reviewWallType.mutate(items)} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
@@ -1818,7 +1856,7 @@ export function CandidateInspector({ candidate, regions, t, pending, onPage, onR
   </>;
 }
 
-function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry, components, wallType }: { components?: ReactNode; wallType?: ReactNode; region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
+function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, proposals, t, onPage, onSave, onMeasurementSave, pending, geometry, components, wallType, fire }: { components?: ReactNode; wallType?: ReactNode; fire?: ReactNode; region: BuildingRegion; sourcePage: number; sourceVersionId?: string; sourceRegion?: BuildingRegion["box"]; proposals: RecordData[]; t: ReturnType<typeof useT>; onPage: (page: number) => void; onSave: (body: RecordData) => void; onMeasurementSave: (measurement: NonNullable<BuildingRegion["measurements"]>[number], value: number) => void; pending: boolean; geometry?: ReactNode }) {
   const [label, setLabel] = useState(region.label);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -1843,6 +1881,7 @@ function ObjectInspector({ region, sourcePage, sourceVersionId, sourceRegion, pr
         </dl>
       </PropertySection>
       {components && <PropertySection title={region.entityType === "room" ? t("buildingComponentSpace") : t("buildingComponentComponent")}>{components}</PropertySection>}
+      {fire && <PropertySection title={t("buildingFireProtection")}>{fire}</PropertySection>}
       {wallType && <PropertySection title={t("buildingComponentTypeReview")} defaultOpen={false}>{wallType}</PropertySection>}
       {geometry}
       <PropertySection title={t("buildingModelMeasurements")} defaultOpen={Boolean(region.measurements?.length)}>

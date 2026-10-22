@@ -377,3 +377,33 @@
 
 .building-model-merge-note { margin: 0 0 6px; }
 .building-model-outliner-grouping { margin: 0 8px 4px; }
+
+/* Brandschutzplan: walls by required rating, escape areas in green, door closures as tags. ARCenergie's drawing colours (data colours, not accents). */
+[data-fire-wall="fb_nb_m"] { --fire: #e100e1; }
+[data-fire-wall="hf_m"], [data-fire-wall="hf"] { --fire: #ff8000; }
+[data-fire-wall="fb"] { --fire: #f00000; }
+[data-fire-wall="fh"] { --fire: #f2e600; }
+[data-fire-wall="nb"] { --fire: #8a4b14; }
+.building-model-region-layer.color-fire .building-model-region.element { opacity: .35; }
+.building-model-region-layer.color-fire .building-model-region.element[data-fire-wall] { opacity: 1; border: 0; background: var(--fire); }
+.building-model-region-layer.color-fire .building-model-region.element:is([data-fire-wall="hf_m"], [data-fire-wall="fb_nb_m"]) { background: repeating-linear-gradient(45deg, var(--fire) 0 2px, color-mix(in oklch, var(--fire) 25%, transparent) 2px 4px); }
+.building-model-region-layer.color-fire .building-model-region.element[data-fire-status="not_met"] { outline: 2px dashed oklch(.45 .2 25); outline-offset: 1px; }
+.building-model-region-layer.color-fire .building-model-region.element[data-fire-door] { opacity: 1; border: 1px solid oklch(.45 .2 25); background: color-mix(in oklch, var(--background) 85%, transparent); }
+.building-model-region-layer.color-fire .building-model-region.element[data-fire-door] .building-model-region-label { display: block; font-size: 7px; line-height: 1; font-weight: 600; color: oklch(.25 0 0); background: var(--background); padding: 1px 2px; border: 1px solid oklch(.45 .2 25); white-space: nowrap; }
+.building-model-region-layer.color-fire .building-model-region[data-fire-room] { opacity: 1; border-color: transparent; background: transparent; }
+.building-model-region-layer.color-fire .building-model-region[data-fire-room="necessary_corridor"] .building-model-region-outline path { fill: rgb(0 200 0 / .4); stroke: rgb(0 150 0); }
+.building-model-region-layer.color-fire .building-model-region[data-fire-room="necessary_stairwell"] .building-model-region-outline path { fill: rgb(0 140 0 / .7); stroke: rgb(0 110 0); }
+.building-model-fire-paths { position: absolute; inset: 0; z-index: 4; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.building-model-fire-paths polyline { fill: none; stroke: rgb(0 200 0); stroke-width: 2px; stroke-linejoin: round; }
+.building-model-fire-paths polyline.is-over { stroke: oklch(.55 .22 25); }
+.building-model-fire-route { position: absolute; z-index: 5; transform: translate(-50%, -50%); padding: 1px 4px; border: 1.5px solid rgb(0 170 0); background: var(--background); color: oklch(.25 0 0); font-size: 9px; font-weight: 600; line-height: 1.2; white-space: nowrap; pointer-events: auto; }
+.building-model-fire-route.is-over { border-color: oklch(.55 .22 25); color: oklch(.45 .2 25); }
+.building-model-fire-legend .building-model-fire-swatch { width: 14px; height: 6px; border-radius: 1px; background: var(--fire); }
+.building-model-fire-legend .building-model-fire-swatch:is([data-fire-wall="hf_m"], [data-fire-wall="fb_nb_m"]) { background: repeating-linear-gradient(90deg, var(--fire) 0 2px, transparent 2px 4px); }
+.building-model-fire-legend .building-model-fire-swatch[data-fire-room="necessary_corridor"] { height: 10px; background: rgb(0 200 0 / .4); }
+.building-model-fire-legend .building-model-fire-swatch[data-fire-room="necessary_stairwell"] { height: 10px; background: rgb(0 140 0 / .7); }
+.building-model-fire-door-tag, .building-model-fire-route-tag { font-style: normal; font-size: 8px; font-weight: 600; padding: 0 2px; border: 1px solid oklch(.45 .2 25); line-height: 1.3; }
+.building-model-fire-route-tag { border-color: rgb(0 170 0); }
+.building-model-fire-subtitle { margin-top: 6px; font-size: var(--ui-xs); font-weight: 600; }
+.building-model-fire-components { display: grid; gap: 2px; font-size: var(--ui-xs); }
+.building-model-fire-components > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; justify-content: space-between; }
