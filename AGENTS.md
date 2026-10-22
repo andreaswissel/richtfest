@@ -120,6 +120,7 @@ Every deploy must:
 - New dashboards, tabs, reports, and subviews inherit their parent console-area access. Do not add a dedicated console feature or Role Access permission for an individual view unless the user explicitly requests a separate access boundary.
 
 - Treat Richtfest as dense but readable construction planning software. Prefer compact, scannable, information-rich layouts over spacious marketing-style pages, decorative cards, or explanatory copy.
+- Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
 - Users pick a UI density on their profile: Dense (default, Richtfest's compact sizing) or Normal (stock shadcn Nova sizing). Size text, controls and icons with the density tokens in `richtfest-os/apps/web/src/index.css` (`text-ui`, `text-ui-sm`, `text-ui-xs`, `text-ui-2xs`, `text-ui-lg`, `h-control`, `h-control-sm`, `size-icon`, `size-icon-sm`, `py-cell`), never raw `text-xs`, `text-[11px]`, `h-7` or `size-3.5`, so both modes stay in sync.
 - Build screens from `Page`, `PageHeader` and `Section` (`richtfest-os/apps/web/src/components/layout.tsx`) with the `p-page` / `gap-section` / `gap-stack` spacing tokens, and use `Input` from `components/ui/input.tsx` instead of hand-styled `<input>` elements.
 - Follow the design principles in Richtfest Docs (`engineering/design-principles.mdx`): lay screens out in task order with the decision last, one accent (primary) element per view, labeled and grouped controls, calm callouts instead of colored text, verb + object button labels.
