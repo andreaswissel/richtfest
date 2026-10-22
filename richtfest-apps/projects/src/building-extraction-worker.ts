@@ -8,7 +8,7 @@ export { buildingExtractorVersion };
 const keepOutlineEdit = (geometry: any, previous: any) => {
   if (!previous?.outlineEdit) return geometry;
   const { parts: _parts, polygons: _polygons, ...rest } = geometry;
-  const merged = previous.merge ? { merge: previous.merge, printedArea: previous.printedArea, openSpace: undefined } : {};
+  const merged = previous.merge ? { merge: previous.merge, printedArea: previous.printedArea, printedGrossArea: undefined, openSpace: undefined } : {};
   return { ...rest, quality: previous.quality, polygon: previous.polygon, holes: previous.holes, planRegion: previous.planRegion, outlineEdit: previous.outlineEdit, ...merged };
 };
 import { proposeRoomUses } from "./room-use-classifier";

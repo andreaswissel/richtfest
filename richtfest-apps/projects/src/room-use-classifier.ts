@@ -28,7 +28,7 @@ const normalize = (value: string) => value.normalize("NFKC").trim().replace(/\s+
 
 /** Candidate observations need their own explicit reviews before canonical persistence. */
 export function reviewedCandidateGeometry(geometry: Record<string, unknown>) {
-  const { printedArea: _unreviewedArea, areaRatioQc: _unreviewedAreaQc,
+  const { printedArea: _unreviewedArea, printedGrossArea: _unreviewedGrossArea, areaRatioQc: _unreviewedAreaQc,
     roomUseProposal: _unreviewedRoomUse, ...reviewedGeometry } = geometry;
   return reviewedGeometry;
 }

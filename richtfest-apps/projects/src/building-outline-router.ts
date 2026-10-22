@@ -184,7 +184,7 @@ export function createBuildingOutlineRouter(getDeps: (req: Request) => AppDeps) 
         const names = [...new Set(members.map(m => m.name))];
         const name = input.name ?? names.join(" / ").slice(0, 300);
         const old = primary.geometry as any, editedAt = new Date().toISOString();
-        const { parts: _parts, polygons: _polygons, openSpace: _openSpace, printedArea: _printedArea, ...kept } = old;
+        const { parts: _parts, polygons: _polygons, openSpace: _openSpace, printedArea: _printedArea, printedGrossArea: _printedGrossArea, ...kept } = old;
         const geometry = { ...kept, coordinateSpace: "normalized-page", quality: "manual_outline", polygon: merged.polygon, holes: merged.holes, planRegion: bounds(merged.polygon),
           ...(printedArea ? { printedArea } : {}),
           outlineEdit: { method: "room_merge", editedBy: d.actorId, editedAt, areaM2: merged.areaM2, editCount: (old.outlineEdit?.editCount ?? 0) + 1 },

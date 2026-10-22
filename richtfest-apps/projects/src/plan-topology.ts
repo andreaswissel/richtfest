@@ -104,7 +104,7 @@ export function fillState(colour: string | undefined, existingLayer: boolean): "
 
 export type WallColourState = "proposed" | "retained" | "demolished" | "not_wall";
 export type WallColourLayer = "construction" | "existing";
-/** A person's reading of a plan set's fill colours; it replaces the suggestion for that colour and layer. */
+/** A person's reading of a plan set's fill and stroke colours; replaces the suggestion for that colour and layer. */
 export type WallColourLegend = Array<{ colour: string; layer: WallColourLayer; state: WallColourState }>;
 
 /** The suggested state of a colour without a legend entry: the DIN 1356-1 colours, else planned
@@ -115,18 +115,21 @@ export function suggestedColourState(colour: string | undefined, layer: WallColo
 }
 
 /** Printed areas remain observations: proximity is not a verified measurement or room use. */
-export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) {
+export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[], kind: "room" | "gross" = "room") {
   const ambiguous = new Set<string>();
   const observations = new Map<string, { value: number; unit: "m²"; quote: string; planRegion: ReturnType<typeof box>; provenance: "inferred"; status: "unreviewed" }>();
   for (const word of words) {
     if (!/^\d{1,4}[.,]\d{1,2}(?:\s*m[²2])?$/.test(word.text)) continue;
-    const units = words.filter(w => /^m[²2]$/.test(w.text) && Math.abs(w.y - word.y) < word.height * .6 && w.x >= word.x + word.width && w.x - word.x - word.width < word.height * 2);
+    const units = words.filter(w => /^m[²2]\)?$/.test(w.text) && Math.abs(w.y - word.y) < word.height * .6 && w.x >= word.x + word.width && w.x - word.x - word.width < word.height * 2);
     if (!/m[²2]$/.test(word.text) && units.length !== 1) continue;
-    if(words.some(w=>/^(?:Wfl\.?|GF:?|\(GF:?|zzgl\.?)$/i.test(w.text)&&Math.abs(w.y-word.y)<word.height*.7&&w.x<word.x&&word.x-w.x-w.width<word.height*4))continue;
+    const prefixes = words.filter(w=>/^(?:Wfl\.?|GF:?|\(GF:?|zzgl\.?)$/i.test(w.text)&&Math.abs(w.y-word.y)<word.height*.7&&w.x<word.x&&word.x-w.x-w.width<word.height*4);
+    const grossPrefix = prefixes.length === 1 && /^\(?GF:?$/i.test(prefixes[0].text) ? prefixes[0] : null;
+    if (kind === "gross" ? !grossPrefix : prefixes.length > 0) continue;
+    const anchorX = grossPrefix?.x ?? word.x;
     const ranked = labels.map(label => {
       const r = label.geometry.planRegion;
-      const height=Math.max(word.height,r.height),aligned=Math.abs(r.x-word.x)<height*1.5&&word.y>=r.y+r.height*.5&&word.y-r.y<height*3;
-      return { label, distance: aligned?Math.hypot((r.x - word.x), (r.y - word.y)) / height:Infinity };
+      const height=Math.max(word.height,r.height),aligned=Math.abs(r.x-anchorX)<height*1.5&&word.y>=r.y+r.height*.5&&word.y-r.y<height*(kind === "gross" ? 4 : 3);
+      return { label, distance: aligned?Math.hypot((r.x - anchorX), (r.y - word.y)) / height:Infinity };
     }).filter(r => r.distance < 4).sort((a, b) => a.distance - b.distance);
     if (!ranked.length || (ranked[1] && ranked[1].distance - ranked[0].distance < 1)) continue;
     const key = ranked[0].label.sourceKey;
@@ -134,7 +137,7 @@ export function printedAreaObservations(labels: PlanLabel[], words: PlanWord[]) 
     if (observations.has(key)) { observations.delete(key); ambiguous.add(key); continue; }
     if (ambiguous.has(key)) continue;
     const last = units[0] ?? word;
-    observations.set(key, { value: Number.parseFloat(word.text.replace(",", ".")), unit: "m²", quote: word.text + (units[0] ? ` ${units[0].text}` : ""), planRegion: { x: word.x, y: word.y, width: last.x + last.width - word.x, height: Math.max(word.height, last.height) }, provenance: "inferred", status: "unreviewed" });
+    observations.set(key, { value: Number.parseFloat(word.text.replace(",", ".")), unit: "m²", quote: (grossPrefix ? `${grossPrefix.text} ` : "") + word.text + (units[0] ? ` ${units[0].text}` : ""), planRegion: { x: anchorX, y: word.y, width: last.x + last.width - anchorX, height: Math.max(word.height, last.height) }, provenance: "inferred", status: "unreviewed" });
   }
   return observations;
 }
@@ -272,13 +275,29 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       if (x >= 0 && y >= 0 && x < n && y < n) target[y * n + x] = 1;
     }
   };
-  for (const line of options.barrierLines ?? []) for (let i = 0; i + 1 < line.points.length + (line.closed ? 1 : 0); i++)
+  // Filled walls and their separately drawn outlines must obey the same plan legend.
+  // Keep unknown pens; a removed colour must not re-enter through strokes or door swings.
+  const activePen = (colour?: string | null) => {
+    const state = legendEntry(colour ?? undefined, "construction")?.state ?? suggestedColourState(colour ?? undefined, "construction");
+    return state !== "demolished" && state !== "not_wall";
+  };
+  const barrierLines = (options.barrierLines ?? []).filter(line => {
+    if (line.strokeColor) {
+      const colour = line.strokeColor, key = `construction:${colour}`, summary = colourSummary.get(key);
+      const suggested = suggestedColourState(colour, "construction"), state = legendEntry(colour, "construction")?.state ?? suggested;
+      if (summary) summary.count++; else colourSummary.set(key, { colour, layer: "construction", count: 1, suggested, state, example: box(line.points) });
+    }
+    return activePen(line.strokeColor);
+  });
+  const doorSwings = (options.doorSwings ?? []).filter(swing => activePen(swing.strokeColor));
+  for (const line of barrierLines) for (let i = 0; i + 1 < line.points.length + (line.closed ? 1 : 0); i++)
     drawLine(wall, line.points[i], line.points[(i + 1) % line.points.length]);
   // Drawn lines only (no filled construction): furniture, fittings, open door leaves and partitions drawn as strokes.
   const strokeOnly = new Uint8Array(size);
   for (let p = 0; p < size; p++) if (wall[p] && !constructionWall[p]) strokeOnly[p] = 1;
   const supportedFills = fillRegions.filter(f => f.fillRule === "evenodd");
   const observations = printedAreaObservations(labels, words);
+  const grossObservations = printedAreaObservations(labels, words, "gross");
   const units = words.flatMap(word => {
     if (/^WE\s*\d{1,4}$/i.test(word.text)) return [{...word,text:word.text.replace(/\s+/g," ")}];
     if (!/^WE$/i.test(word.text)) return [];
@@ -313,7 +332,8 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   // are closed in the segmentation grid only, so rooms do not leak into each
   // other; exact source polygons stay untouched and no door is claimed. They are
   // closed before the floor fill's gaps are read, so a doorway never joins two rooms.
-  const openings = detectOpenings(footprints, options.doorSwings ?? [], constructionWall, n, horizontalCost, options.metresPerPageHeight ?? null);
+  const activeFootprints = sources.filter(source => source.state === "retained" || source.index !== null && source.state === "proposed").map(source => source.footprint);
+  const openings = detectOpenings(activeFootprints, doorSwings, constructionWall, n, horizontalCost, options.metresPerPageHeight ?? null);
   const closure = new Uint8Array(size);
   for (const opening of openings) {
     const r = opening.closure;
@@ -324,7 +344,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   // processing can make both swing radii appear blocked. These closures must also
   // constrain furniture-gap adoption, otherwise it can join rooms through a door.
   const beforeDoorways = wall.slice();
-  openings.push(...strokeDoorways(options.doorSwings?.filter(swing => !openings.some(o => o.doorSwingKey === swing.sourceKey)) ?? [], wall, n, horizontalCost, options.metresPerPageHeight ?? null, drawLine));
+  openings.push(...strokeDoorways(doorSwings.filter(swing => !openings.some(o => o.doorSwingKey === swing.sourceKey)), wall, n, horizontalCost, options.metresPerPageHeight ?? null, drawLine));
   for (let p = 0; p < size; p++) if (wall[p] && !beforeDoorways[p]) closure[p] = 1;
   let floorInterior: Uint8Array | null = null;
   if (supportedFills.length) {
@@ -383,8 +403,13 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
             seen[q] = 1; stack.push(q);
           }
         }
-        // A gap against a closed doorway or window lies in the wall's thickness, not in a room.
-        if (edge || inOpening || !touchesFill || cells.length > maxCells) continue;
+        if (edge || !touchesFill || cells.length > maxCells) continue;
+        // A furniture notch can touch a doorway without being part of the opening.
+        // Keep actual opening-side cavities and gaps shared by rooms unresolved;
+        // a one-room notch may fill up to, but never across, the closure cells.
+        const openingSide = inOpening && openings.some(opening => opening.sideProbes.some(probe =>
+          cells.includes(Math.floor(probe.y * n) * n + Math.floor(probe.x * n))));
+        if (inOpening && (touched.size !== 1 || openingSide)) continue;
         furnitureGapCount++;
         if (touched.size <= 1) { for (const p of cells) { interior[p] = 1; adopted[p] = 1; } continue; }
         // A gap between several rooms (wall-face slivers running past a doorway) is shared out to the
@@ -455,7 +480,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   // construction, a closed doorway or a line outside the floor fill (a wall drawn as outlines).
   const keepInSwing = new Uint8Array(size);
   for (let p = 0; p < size; p++) if (!strokeOnly[p] || closure[p] || floorInterior && !floorInterior[p]) keepInSwing[p] = 1;
-  const doorSwingCellsCleared = clearDoorSwings(wall, keepInSwing, options.doorSwings ?? [], n, horizontalCost, openings);
+  const doorSwingCellsCleared = clearDoorSwings(wall, keepInSwing, doorSwings, n, horizontalCost, openings);
   // Optional morphological closing joins short gaps only, with the approximation recorded.
   // Sliding-window separable max/min keeps processing linear in page pixel count.
   const beforeClosing = wall.slice();
@@ -600,6 +625,10 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     return partition[p] >= 0 ? partition[p] : c >= 0 && regions[c].exterior ? "exterior" as const : "unassigned" as const;
   };
   const openingSides = openings.map(opening => opening.sideProbes.map(probe => sideOwner(probe)));
+  const boundaryRings = [...activeFootprints.flatMap(footprintRings), ...openings.filter(opening => opening.sourceKeys.length > 0).map(opening => {
+    const r = opening.closure;
+    return [{ x: r.x, y: r.y }, { x: r.x + r.width, y: r.y }, { x: r.x + r.width, y: r.y + r.height }, { x: r.x, y: r.y + r.height }];
+  })];
   const preliminaryRooms = labels.flatMap((label, i) => {
     if (openSpaceMember.has(i)) return [];
     const lr=label.geometry.planRegion;
@@ -610,12 +639,16 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const id = seedRegions[i], region = id >= 0 ? regions[id] : null;
     const openSpace = id >= 0 ? openSpaces.get(id) : undefined;
     const recoveredFromWalls = Boolean(recovered[seedY*n+seedX]);
-    const status = supportedFills.length&&!containingFills.length&&!recoveredFromWalls?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior"
+    // A label may lie on a furniture exclusion already adopted into the floor.
+    // Use that same segmentation decision without inventing source-fill containment.
+    const adoptedFromFill = Boolean(adopted[seedY*n+seedX]);
+    const status = supportedFills.length&&!containingFills.length&&!recoveredFromWalls&&!adoptedFromFill?"outside_source_fill":!region ? "obstructed" : region.exterior ? "exterior"
       : sharedAreaQc[id]?.status === "conflict" ? "shared_area_conflict" : region.seeds.length !== 1 && !openSpace ? "conflicting" : "enclosed";
     // A bounding box alone must never masquerade as the traced room boundary.
     const contour = status === "enclosed" ? traceRegion(component, n, id, region!) : status === "conflicting" ? traceRegion(partition,n,i,region!) : null;
     const traceFailed = (status === "enclosed" || status === "conflicting") && !contour;
-    const candidatePolygon=contour?.polygon;
+    const aligned = status === "enclosed" && contour && !contour.holes.length ? alignRectangularRoom(contour.polygon, boundaryRings, 1 / n) : null;
+    const candidatePolygon=aligned ?? contour?.polygon;
     const candidateBounds=candidatePolygon?box(candidatePolygon):null;
     // Whole-apartment/sheet regions are not room proposals merely because a
     // single source label survived. The threshold is page-relative, not a
@@ -642,14 +675,17 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     return [{ ...label, name: openSpace ? openSpace.members.map(j => labels[j].name).join(" / ") : label.name, sourceKey:`topology-v5:${label.sourceKey}`, geometry: { ...label.geometry,
       ...(polygon ? { quality: status==="conflicting"?"approximate_partition" as const:"enclosed_region" as const, polygon, holes:contour?.holes, planRegion: box(polygon), labelRegion: label.geometry.planRegion } : {}),
       topology: { status:finalStatus, componentId:id>=0?id:null, method:oversized?"oversized_region_guard":status==="conflicting"?"wall_constrained_geodesic_partition":"enclosed_component", competingSourceKeys: region?.seeds.filter(j => j !== i).map(j => `topology-v5:${labels[j].sourceKey}`) ?? [], resolution: n, closeRadius,pageAspectRatio:horizontalCost, partitionWeight:"sqrt_printed_area", barrierScenario:"primary", ignoredAlternativeBarrierCount:supplementary.length, apartmentOwner:roomApartmentOwner, gapClosing:closeRadius||roomOpenings.length?"inferred_segmentation_only":null, openings:roomOpenings,
+        ...(aligned ? { boundaryRefinement: "source_faces_within_one_grid_cell" as const } : {}),
         ...(contour?.detachedPartCount?{detachedPartCount:contour.detachedPartCount}:{}) },
       sourceFillEvidence:containingFills.map(f=>({sourceKey:f.sourceKey,layerId:f.layerId,layerName:f.layerName})),
       sharedAreaQc: id >= 0 ? sharedAreaQc[id] : null,
       ...(recoveredFromWalls ? { boundaryEvidence: "enclosed_construction_outside_floor_fill" } : {}),
+      ...(adoptedFromFill && !containingFills.length ? { boundaryEvidence: "adopted_floor_fill_gap" } : {}),
       ...(containingFills.length===1&&groupLabels.length===1?{groupLabel:groupLabels[0],groupSourceKey:containingFills[0].sourceKey,
         groupAssociationMethod:fallbackUnitFills.has(containingFills[0].sourceKey)?"bbox_summary_plus_exact_area_closure":"contained_unit_marker",
         groupObservation:units.filter(u=>u.text===groupLabels[0]&&insideFill({x:u.x+u.width/2,y:u.y+u.height/2},containingFills[0])).map(u=>({quote:u.text,planRegion:{x:u.x,y:u.y,width:u.width,height:u.height},provenance:"inferred"}))}:{}),
       ...(printed ? { printedArea: printed } : {}), ...openSpaceGeometry,
+      ...(!openSpace && grossObservations.has(label.sourceKey) ? { printedGrossArea: grossObservations.get(label.sourceKey)! } : {}),
       limitations: traceFailed ? "Source label only: the free-space region could not be traced into a single boundary. Room boundary remains unresolved." : polygon ? `Approximate raster region seeded by source text, constrained by primary construction fills and apartment ownership. ${status==="conflicting"?"Shared free space is divided by area-guided geodesic distance: partition seams are inferred, not source walls. ":""}Not a verified room boundary, physical area or opening; reviewer must confirm. Source holes are preserved.` : oversized ? "Source label only: the inferred region exceeded the conservative page-relative room-size guard and may represent multiple rooms or a whole apartment/sheet area. Room boundary remains unresolved." : `Source label only: ${status} free-space region. Room boundary is unresolved. Printed areas, if present, are unreviewed proximity associations.` } }];
   });
   const shapeQcThresholds={minimumBboxFillRatio:.25,minimumCompactness:.1,maximumConvexityRatio:2.5};
@@ -677,14 +713,15 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
   }) as ShapeCheckedRoom[];
   const effectiveRoomArea=(geometry:{polygon?:Point[];holes?:Point[][]})=>geometry.polygon
     ?Math.max(0,polygonArea(geometry.polygon)-(geometry.holes??[]).reduce((sum,hole)=>sum+polygonArea(hole),0)):0;
-  const ratios=shapeCheckedRooms.flatMap(room=>{const value=room.geometry.printedArea?.value;
+  const ratios=shapeCheckedRooms.flatMap(room=>{const value=(room.geometry.printedGrossArea ?? room.geometry.printedArea)?.value;
     return room.geometry.polygon&&value!==undefined&&value>0?[effectiveRoomArea(room.geometry)/value]:[];}).sort((a,b)=>a-b);
   const areaRatioMedian=ratios.length?ratios.length%2?ratios[(ratios.length-1)/2]:(ratios[ratios.length/2-1]+ratios[ratios.length/2])/2:null;
   const rooms=shapeCheckedRooms.map(room=>{
-    const printedArea=room.geometry.printedArea?.value;
+    const printedArea=(room.geometry.printedGrossArea ?? room.geometry.printedArea)?.value;
     if(!room.geometry.polygon||!printedArea||!areaRatioMedian||ratios.length<5)return room;
     const normalizedPolygonArea=effectiveRoomArea(room.geometry),ratio=normalizedPolygonArea/printedArea,relativeToMedian=ratio/areaRatioMedian;
     const areaRatioQc={status:"unreviewed" as const,method:"page_local_polygon_to_printed_area_ratio" as const,
+      areaBasis: room.geometry.printedGrossArea ? "explicit_gross_area" as const : "unspecified_printed_area" as const,
       normalizedPolygonArea,printedArea,ratio,pageMedianRatio:areaRatioMedian,relativeToMedian,sampleCount:ratios.length,
       limitations:"Page-local relative consistency check only. It does not establish scale, physical area or correctness of the printed-area association."};
     if(relativeToMedian>=.5&&relativeToMedian<=2)return {...room,geometry:{...room.geometry,areaRatioQc}};
@@ -711,10 +748,11 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const total=allAreas?.every(a=>a!==undefined&&a>0)?allAreas.reduce<number>((s,a)=>s+a!,0):null;
     const target=capacityEnabled&&printed&&total&&region&&region.seeds.length>1?region.count/(n*n)*printed/total:null;
     const relative=target?effectiveRoomArea(g)/target:null;
-    const estimatedArea=normalizedPageAreaM2&&printed?effectiveRoomArea(g)*normalizedPageAreaM2:null;
-    const physicalConflict=estimatedArea!==null&&printed!==undefined&&Math.abs(estimatedArea-printed)>Math.max(.5,printed*.1);
+    const physicalPrinted = g.printedGrossArea?.value ?? printed;
+    const estimatedArea=normalizedPageAreaM2&&physicalPrinted?effectiveRoomArea(g)*normalizedPageAreaM2:null;
+    const physicalConflict=estimatedArea!==null&&physicalPrinted!==undefined&&Math.abs(estimatedArea-physicalPrinted)>Math.max(.5,physicalPrinted*.1);
     const inconsistent=(relative!==null&&(relative<.6||relative>1.4))||physicalConflict;
-    Object.assign(g,{printedScaleQc:estimatedArea!==null?{estimatedArea,printedArea:printed,toleranceM2:Math.max(.5,printed!*.1),status:physicalConflict?"conflict":"unreviewed",limitations:"Uses the source printed scale as unreviewed evidence, not a verified physical measurement."}:null});
+    Object.assign(g,{printedScaleQc:estimatedArea!==null?{estimatedArea,printedArea:physicalPrinted,toleranceM2:Math.max(.5,physicalPrinted!*.1),status:physicalConflict?"conflict":"unreviewed",limitations:"Uses the source printed scale as unreviewed evidence, not a verified physical measurement."}:null});
     Object.assign(g,{capacityQc:{relativeToPrintedTarget:relative,tolerance:.4,status:inconsistent?"conflict":"unreviewed"}});
     if(containsOther||inconsistent){
       const prior=g.topology.status as keyof typeof counts;if(prior in counts)counts[prior]=Math.max(0,counts[prior]-1);
@@ -1152,7 +1190,9 @@ function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, as
     const farEnd = companion ? 1 + companion.radius / swing.radius : 1;
     if ([-1, 1].some(side => [.15, .3, .5].filter(step => nearWall(along(hinge, doorway, side < 0 ? -step : farEnd + step))).length < 2)) continue;
     const extend = (p: Point) => { const d = Math.hypot((p.x - hinge.x) * aspect, p.y - hinge.y) || 1; return along(hinge, p, 1 + 2 / n / d); };
-    drawLine(wall, hinge, extend(doorway));
+    // The source hinge may sit just off its jamb. Close that same two-cell
+    // tolerance at BOTH ends; leaving it at the hinge leaks the two rooms.
+    drawLine(wall, along(hinge, doorway, -2 / n / swing.radius), extend(doorway));
     const midpoint = along(hinge, doorway, .5), dx = (doorway.x - hinge.x) * aspect, dy = doorway.y - hinge.y, length = Math.hypot(dx, dy);
     // Unit normal in page-height units, pointing to the side the door swings into.
     let nx = -dy / length, ny = dx / length;
@@ -1172,6 +1212,40 @@ function strokeDoorways(swings: PlanDoorSwing[], wall: Uint8Array, n: number, as
       method: "door_swing_geometry", segmentationOnly: true, sourcePolygonsExact: true, status: "unreviewed" });
   }
   return openings;
+}
+
+/** Raster barriers occupy a whole cell, shrinking small rooms. Refine only a
+ * rectangle whose entire perimeter is supported by nearby source wall faces or
+ * filled-jamb closures. No printed areas, inferred seams, strokes or holes guide it. */
+function alignRectangularRoom(polygon: Point[], rings: Point[][], tolerance: number): Point[] | null {
+  if (polygon.length !== 4 || polygon.some((a, i) => { const b = polygon[(i + 1) % 4]; return a.x !== b.x && a.y !== b.y; })) return null;
+  const r = box(polygon), bounds = [r.x, r.y, r.x + r.width, r.y + r.height];
+  const sides = bounds.map((at, side) => {
+    const vertical = side % 2 === 0, from = bounds[vertical ? 1 : 0], to = bounds[vertical ? 3 : 2];
+    const groups = new Map<number, Array<[number, number]>>();
+    for (const ring of rings) for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length], coordinate = vertical ? a.x : a.y;
+      if (Math.abs(coordinate - (vertical ? b.x : b.y)) > 1e-8) continue;
+      const outward = (coordinate - at) * (side < 2 ? -1 : 1);
+      if (outward < -1e-8 || outward > tolerance + 1e-8) continue;
+      const key = Math.round(coordinate * 1e8) / 1e8, intervals = groups.get(key) ?? [];
+      intervals.push([Math.min(vertical ? a.y : a.x, vertical ? b.y : b.x), Math.max(vertical ? a.y : a.x, vertical ? b.y : b.x)]);
+      groups.set(key, intervals);
+    }
+    const covers = (intervals: Array<[number, number]>, low: number, high: number) => {
+      let end = low;
+      for (const [a, b] of intervals) { if (a > end + 1e-7) break; end = Math.max(end, b); }
+      return end >= high - 1e-7;
+    };
+    return [...groups].sort(([a], [b]) => Math.abs(a - at) - Math.abs(b - at)).map(([coordinate, intervals]) => ({
+      coordinate, intervals: intervals.sort(([a], [b]) => a - b), covers,
+    })).find(edge => covers(edge.intervals, from, to));
+  });
+  if (sides.some(side => !side)) return null;
+  const [left, top, right, bottom] = sides.map(side => side!.coordinate);
+  // The enlarged corners must also be supported, not just the original raster span.
+  if (sides.some((side, i) => !side!.covers(side!.intervals, i % 2 ? left : top, i % 2 ? right : bottom))) return null;
+  return [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
 }
 
 /** Trace a grid region into rings. Pinch vertices (cells touching only at a

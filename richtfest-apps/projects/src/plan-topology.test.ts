@@ -17,19 +17,89 @@ test("unhatched labelled rooms require construction enclosure, not a nearby floo
   expect(run(walls.slice(0, 3)).rooms[0].geometry).toMatchObject({ quality: "anchor", topology: { status: "outside_source_fill" } });
 });
 
+test("rectangular rooms follow fully supported source faces, not raster-cell padding or printed targets", () => {
+  const walls = [footprint("top", .201, .203, .3, .012), footprint("bottom", .201, .487, .3, .012),
+    footprint("left", .201, .203, .013, .296), footprint("right", .489, .203, .012, .296)];
+  const run = (sources: PlanFootprint[]) => inferPlanTopology(planLabels([word("Bad", .32, .32)]), sources, [], 200, [], 0,
+    [{ ...fill, rings: [rectangle(.214, .215, .275, .272)] }], 1.6, undefined, { metresPerPageHeight: 10 }).rooms[0].geometry;
+  const room = run(walls);
+  expect(room.planRegion.x).toBeCloseTo(.214, 7);
+  expect(room.planRegion.y).toBeCloseTo(.215, 7);
+  expect(room.planRegion.width).toBeCloseTo(.275, 7);
+  expect(room.planRegion.height).toBeCloseTo(.272, 7);
+  // A floor hatch is not a source wall: no refinement when a perimeter side lacks support.
+  expect(run(walls.slice(0, 3)).planRegion.width).not.toBeCloseTo(.275, 7);
+});
+
+test("opening jambs use the same reviewed construction state as room barriers", () => {
+  const pair = [footprint("left", .2, .3, .1, .01), footprint("right", .35, .3, .1, .01)].map(f => ({ ...f, fillColor: "#339977" }));
+  const run = (state: "proposed" | "retained" | "demolished" | "not_wall", existing = false) => inferPlanTopology([], existing ? [] : pair, [], 400, existing ? pair : [], 0, [], 1, undefined, {
+    colourLegend: [{ colour: "#339977", layer: existing ? "existing" : "construction", state }],
+  }).coverage.openingEvidence;
+  expect(run("proposed")).toHaveLength(1);
+  expect(run("retained", true)).toHaveLength(1);
+  expect(run("demolished")).toHaveLength(0);
+  expect(run("not_wall")).toHaveLength(0);
+});
+
+test("a furniture notch beside a doorway belongs to its room without joining the room across the door", () => {
+  const walls = [footprint("n", .2, .1, .3, .01), footprint("s", .2, .49, .3, .01),
+    footprint("w", .2, .1, .01, .4), footprint("e", .49, .1, .01, .4),
+    footprint("jamb-left", .21, .2, .01, .01), footprint("jamb-right", .27, .2, .22, .01)];
+  const floors = [{ ...fill, rings: [rectangle(.21, .11, .28, .09),
+    [{ x: .24, y: .21 }, { x: .49, y: .21 }, { x: .49, y: .49 }, { x: .21, y: .49 }, { x: .21, y: .35 }, { x: .24, y: .35 }]] }];
+  const result = inferPlanTopology(planLabels([word("Bad", .4, .4), word("Flur", .4, .15)]), walls, [], 400, [], 0, floors, 1, undefined, { metresPerPageHeight: 20 });
+  const room = result.rooms.find(r => r.name === "Bad")!.geometry;
+  const area = room.polygon!.reduce((sum, p, i, ring) => { const q = ring[(i + 1) % ring.length]; return sum + p.x * q.y - q.x * p.y; }, 0) / 2 * 400;
+  expect(area).toBeGreaterThan(30.5);
+  expect(area).toBeLessThan(31.5);
+  expect(result.rooms.every(r => r.geometry.topology.status === "enclosed")).toBe(true);
+  expect(room.planRegion.y).toBeGreaterThanOrEqual(.21);
+  expect(result.rooms.find(r => r.name === "Flur")!.geometry.planRegion.y).toBeLessThan(.2);
+});
+
 test("outline-only doorways need two continuing jambs; a leaf and arc alone are not a door", () => {
   const line = (a: { x: number; y: number }, b: { x: number; y: number }) => ({ layerId: "construction", points: [a, b], closed: false });
   const leaf = line({ x: .3, y: .3 }, { x: .3, y: .4 });
   const before = line({ x: .2, y: .3 }, { x: .3, y: .3 });
   const after = line({ x: .4, y: .3 }, { x: .5, y: .3 });
-  const run = (lines: typeof leaf[]) => inferPlanTopology([], [], [], 400, [], 0, [], 1, undefined, { barrierLines: lines,
-    doorSwings: [{ sourceKey: "swing", layerId: null, layerName: null, hinge: { x: .3, y: .3 }, start: { x: .4, y: .3 }, end: { x: .3, y: .4 }, radius: .1, sweepDegrees: 90 }] });
+  const run = (lines: typeof leaf[], removed = false) => inferPlanTopology([], [], [], 400, [], 0, [], 1, undefined, { barrierLines: lines,
+    colourLegend: removed ? [{ colour: "#339977", layer: "construction", state: "demolished" }] : [],
+    doorSwings: [{ sourceKey: "swing", layerId: null, layerName: null, strokeColor: "#339977", hinge: { x: .3, y: .3 }, start: { x: .4, y: .3 }, end: { x: .3, y: .4 }, radius: .1, sweepDegrees: 90 }] });
   expect(run([leaf, before]).coverage.openingCount).toBe(0);
   const valid = run([leaf, before, after]).coverage.openingEvidence;
   expect(valid).toHaveLength(1);
   expect(valid[0].closure.width).toBeGreaterThan(0);
   expect(valid[0].closure.height).toBeGreaterThan(0);
   expect(valid[0].sideProbes).toHaveLength(2);
+  expect(run([leaf, before, after], true).coverage.openingCount).toBe(0);
+});
+
+test("an outline doorway closes a small hinge-to-jamb offset without merging rooms", () => {
+  const walls = [footprint("n", .1, .1, .5, .01), footprint("s", .1, .49, .5, .01),
+    footprint("w", .1, .1, .01, .4), footprint("e", .59, .1, .01, .4)];
+  const line = (x1: number, y1: number, x2: number, y2: number) => ({ layerId: "construction", points: [{ x: x1, y: y1 }, { x: x2, y: y2 }], closed: false });
+  const result = inferPlanTopology(planLabels([word("Bad", .2, .2), word("Schlafen", .2, .4), word("Balkon", .8, .8)]), walls, [], 400, [], 0, [], 1, undefined, {
+    metresPerPageHeight: 10,
+    barrierLines: [line(.11, .3, .295, .3), line(.4, .3, .59, .3), line(.3, .3, .3, .4)],
+    doorSwings: [{ sourceKey: "offset", layerId: "construction", layerName: "Konstruktion", hinge: { x: .3, y: .3 }, start: { x: .4, y: .3 }, end: { x: .3, y: .4 }, radius: .1, sweepDegrees: 90 }],
+  });
+  expect(result.rooms.map(r => r.geometry.topology.status)).toEqual(["enclosed", "enclosed", "exterior"]);
+  expect(result.rooms[0].geometry.topology.openings.some(o => o.connectsTo === result.rooms[1].sourceKey)).toBe(true);
+});
+
+test("explicit GF is separate evidence and checks footprint area without replacing credited area", () => {
+  const words = [word("Balkon", .2, .2), word("2.00", .2, .212), word("m²", .233, .212),
+    word("(GF:", .2, .224), word("8.00", .233, .224), word("m²)", .266, .224)];
+  const labels = planLabels(words);
+  const result = inferPlanTopology(labels, [], words, 400, [], 0, [{ ...fill, rings: [rectangle(.19, .19, .2, .1)] }], 1, 400);
+  const room = result.rooms[0].geometry;
+  expect(room.printedArea?.value).toBe(2);
+  expect(room.printedGrossArea?.value).toBe(8);
+  expect(room.printedGrossArea?.quote).toBe("(GF: 8.00 m²)");
+  expect(room.polygon).toBeDefined();
+  // Without explicit GF, no assumed multiplier or area-convention exemption is applied.
+  expect(inferPlanTopology(labels, [], words.slice(0, 3), 400, [], 0, [{ ...fill, rings: [rectangle(.19, .19, .2, .1)] }], 1, 400).rooms[0].geometry.polygon).toBeUndefined();
 });
 
 test("source-filled shared space yields explicit partitions, not walls or measured rooms",()=>{
@@ -333,6 +403,23 @@ test("a plan set's colour legend overrides the suggested colour states, and a co
     ["#e6e699","construction","demolished","proposed"],["#949494","existing","retained","not_wall"],["#00cdcd","existing","not_wall","demolished"]]));
 });
 
+test("the colour legend removes demolished stroke boundaries without removing retained or unknown pens",()=>{
+  const line={layerId:"construction",strokeColor:"#339977",points:[{x:.25,y:.1},{x:.25,y:.4}],closed:false};
+  const run=(state?: "demolished"|"not_wall"|"retained")=>inferPlanTopology(planLabels([word("Keller",.35,.25)]),[],[],200,[],0,[{...fill,rings:[rectangle(.1,.1,.4,.3)]}],1,undefined,{
+    metresPerPageHeight:10,barrierLines:[line],colourLegend:state?[{colour:line.strokeColor,layer:"construction",state}]:[],
+  });
+  // The off-centre partition cuts away part of the room; a legend decision restores that area, not a fitted target.
+  const width=(result:ReturnType<typeof run>)=>result.rooms[0].geometry.planRegion.width;
+  expect(width(run())).toBeGreaterThan(.2);
+  expect(width(run())).toBeLessThan(.28);
+  expect(width(run("retained"))).toBeLessThan(.28);
+  for(const state of ["demolished","not_wall"] as const) {
+    const result=run(state);
+    expect(width(result)).toBeGreaterThan(.38);
+    expect(result.coverage.wallColours).toContainEqual(expect.objectContaining({colour:line.strokeColor,state,suggested:"proposed"}));
+  }
+});
+
 test("furniture, drawn fittings and door swings are floor of the room; kept existing walls bound rooms",()=>{
   // Walls around .2–.5 (inner .21–.49) at 20 m per page height: the room is 5.6 × 5.6 m.
   const walls=[footprint("n",.2,.2,.3,.01),footprint("s",.2,.49,.3,.01),footprint("w",.2,.2,.01,.3),footprint("e",.49,.2,.01,.3)];
@@ -348,6 +435,20 @@ test("furniture, drawn fittings and door swings are floor of the room; kept exis
   const area=(ring:{x:number;y:number}[])=>Math.abs(ring.reduce((s,p,i)=>{const q=ring[(i+1)%ring.length];return s+p.x*q.y-q.x*p.y;},0))/2;
   const m2=(area(room.polygon!)-(room.holes??[]).reduce((s,h)=>s+area(h),0))*400;
   expect(m2).toBeGreaterThan(5.6*5.6*.96);expect(m2).toBeLessThan(5.6*5.6*1.04);
+  // Moving the same label onto the bed must not reject an already-adopted floor gap.
+  // No apartment marker is required, and no source-fill containment is invented.
+  const bedLabels = [word("Schlafen", .315, .34)];
+  const onBed = inferPlanTopology(planLabels(bedLabels), walls, bedLabels, 400, [], 0, [floor], 1, undefined,
+    { metresPerPageHeight: 20, barrierLines: [fitting, leafAndArc], doorSwings: [swing] }).rooms[0].geometry;
+  expect(onBed.polygon).toEqual(room.polygon);
+  expect(onBed.holes).toEqual(room.holes);
+  expect(onBed.topology.status).toBe("enclosed");
+  expect(onBed.sourceFillEvidence).toEqual([]);
+  expect(onBed.boundaryEvidence).toBe("adopted_floor_fill_gap");
+  // Without scale the gap is not adopted: being inside the outer hatch ring alone is insufficient.
+  const unadopted = inferPlanTopology(planLabels(bedLabels), walls, bedLabels, 400, [], 0, [floor]).rooms[0].geometry;
+  expect(unadopted.polygon).toBeUndefined();
+  expect(unadopted.topology.status).toBe("outside_source_fill");
   // A kept existing wall (grey on the existing/demolition layer) divides the space into two rooms.
   const kept={...footprint("kept",.34,.21,.01,.28),layerName:"Abbruch/Bestand",fillColor:"#949494"};
   const two=inferPlanTopology(planLabels([word("Schlafen",.24,.4),word("Bad",.42,.4)]),walls,[word("Schlafen",.24,.4),word("Bad",.42,.4)],400,[kept],0,[{...fill,rings:[rectangle(.21,.21,.28,.28)]}],1,undefined,{metresPerPageHeight:20});

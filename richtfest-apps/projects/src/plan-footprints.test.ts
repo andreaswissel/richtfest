@@ -39,6 +39,12 @@ test("a stroked quarter-circle arc is recorded as door-swing evidence with its h
   expect(result.doorSwings[0].radius).toBeCloseTo(.05,3);
   expect(result.candidates).toHaveLength(0);
 });
+test("construction strokes retain their own pen colour across graphics save and restore",()=>{
+  const penCodes={...codes,setStrokeRGBColor:10,setStrokeGray:11};
+  const ops={fnArray:[4,10,1,10,6,2,6,11,6],argsArray:[["OC",{type:"OCG",id:"c"}],["#339977"],[],["#ff0000"],[8,[[0,20,20,1,20,100]]],[],[8,[[0,40,20,1,40,100]]],[.5],[8,[[0,60,20,1,60,100]]]]};
+  const result=constructionFootprints(ops,penCodes,new Map([["c","Konstruktion"]]),viewport);
+  expect(result.barrierLines).toMatchObject([{strokeColor:"#ff0000"},{strokeColor:"#339977"},{strokeColor:"#808080"}]);
+});
 test("repeated collinear dash strokes are not construction barriers; solid and irregular lines remain",()=>{
   const paths=[...Array.from({length:8},(_,i)=>[0,50,20+i*7,1,50,25+i*7]),
     [0,70,20,1,70,100], [0,90,20,1,90,25], [0,90,27,1,90,32], [0,90,40,1,90,45]];

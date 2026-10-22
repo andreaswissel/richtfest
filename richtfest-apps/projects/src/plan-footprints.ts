@@ -50,7 +50,7 @@ function ringsFromPath(path:ArrayLike<number>,transform:Matrix,maxPoints=5000) {
 const ringArea=(ring:Point[])=>Math.abs(ring.reduce((sum,p,j)=>{const q=ring[(j+1)%ring.length];return sum+p.x*q.y-q.x*p.y;},0))/2;
 const polygonFromPath=(path:ArrayLike<number>,transform:Matrix)=>{const r=ringsFromPath(path,transform);return r&&r.rings.length===1&&!r.curved?r.rings[0]:null;};
 
-export type PlanBarrierLine={layerId:string;points:Point[];closed:boolean};
+export type PlanBarrierLine={layerId:string;points:Point[];closed:boolean;strokeColor?:string};
 /** CAD exports may flatten a dashed guide into individual solid strokes. A run
  * of at least four equal, equally spaced collinear segments is still a guide,
  * not a wall that raster gap-closing should turn into a room boundary. */
@@ -172,6 +172,7 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
     else if(op===codes.clip||op===codes.eoClip)pendingClip=true;
     // The fill colour tells construction states apart where one layer holds several (grey existing, yellow demolished).
     else if(op===codes.setStrokeRGBColor)strokeColor=typeof a[0]==="string"?a[0].toLowerCase():null;
+    else if(op===codes.setStrokeGray)strokeColor=typeof a[0]==="number"?`#${Math.round(a[0]*255).toString(16).padStart(2,"0").repeat(3)}`:null;
     else if(op===codes.setStrokeCMYKColor||op===codes.setStrokeColorN||op===codes.setStrokeColor)strokeColor=null;
     else if(op===codes.setFillRGBColor)fillColor=typeof a[0]==="string"?a[0].toLowerCase():null;
     else if(op===codes.setFillGray)fillColor=typeof a[0]==="number"?`#${Math.round(a[0]*255).toString(16).padStart(2,"0").repeat(3)}`:null;
@@ -237,7 +238,7 @@ export function constructionFootprints(ops:{fnArray:number[];argsArray:any[]},co
           barrierPoints+=ring.length;
           if(pendingSegments.has(r))segments[pendingSegments.get(r)!].barrier=barrierLines.length;
           const closed=[codes.closeStroke,codes.closeFillStroke,codes.closeEOFillStroke].includes(a[0])||walked!.closed[r];
-          barrierLines.push({layerId,points:ring.map(p=>({x:p.x/viewport.width,y:p.y/viewport.height})),closed});
+          barrierLines.push({layerId,points:ring.map(p=>({x:p.x/viewport.width,y:p.y/viewport.height})),closed,...(strokeColor?{strokeColor}:{})});
         }
       }
       if(!layerId||!layerPattern.test(layerName)||excludePattern?.test(layerName)||!fillOps.includes(a[0]))continue;
