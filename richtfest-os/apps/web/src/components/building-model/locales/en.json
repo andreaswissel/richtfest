@@ -1,0 +1,23 @@
+{
+  "buildingVolumeDisclaimer": "Preview only. Amber heights need confirmation; missing heights use 2.60 m. No topology or compliance is implied.",
+  "buildingVolumeNoGeometry": "3D needs room outlines and a metric plan scale. Label anchors are not room geometry. Complete outlines in 2D first.",
+  "buildingVolumeUnavailable": "3D is unavailable in this browser. Dimensions can still be edited here.",
+  "buildingVolumeAllRooms": "All rooms",
+  "buildingVolumeConfirm": "Confirm heights",
+  "buildingVolumeOmitted": "{count} rooms without renderable geometry.",
+  "buildingVolumeRoom": "Room override",
+  "buildingVolumeStorey": "Storey default",
+  "buildingVolumeHeight": "Clear room height (m)",
+  "buildingVolumeAssumed": "Assumed · unreviewed",
+  "buildingVolumeReviewedAssumption": "Reviewed · assumed",
+  "buildingVolumeSourceUnreviewed": "Entered / source · unreviewed",
+  "buildingVolumeInherited": "Inherited from storey",
+  "buildingVolumeFallback": "Preview default · not saved",
+  "buildingVolumeOverride": "Room override",
+  "buildingVolumePrevious": "Previously reviewed: {value} m. The new draft does not replace that review.",
+  "buildingVolumeSave": "Save assumed height",
+  "buildingVolumeUseStorey": "Use storey height",
+  "buildingVolumeReview": "Confirm saved height",
+  "buildingVolumeReject": "Reject saved height",
+  "buildingVolumeSelectRoom": "Select a room to edit its height."
+}

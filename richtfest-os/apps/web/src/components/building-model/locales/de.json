@@ -1,0 +1,23 @@
+{
+  "buildingVolumeDisclaimer": "Nur Vorschau. Ockerfarbene Höhen bestätigen; fehlende Höhen werden mit 2,60 m angesetzt. Keine Aussage zu Topologie oder Nachweisen.",
+  "buildingVolumeNoGeometry": "3D benötigt Raumumrisse und einen metrischen Planmaßstab. Textanker sind keine Raumgeometrie. Umrisse zuerst in 2D vervollständigen.",
+  "buildingVolumeUnavailable": "3D ist in diesem Browser nicht verfügbar. Maße können hier weiterhin bearbeitet werden.",
+  "buildingVolumeAllRooms": "Alle Räume",
+  "buildingVolumeConfirm": "Höhen bestätigen",
+  "buildingVolumeOmitted": "{count} Räume ohne darstellbare Geometrie.",
+  "buildingVolumeRoom": "Raumabweichung",
+  "buildingVolumeStorey": "Geschossvorgabe",
+  "buildingVolumeHeight": "Lichte Raumhöhe (m)",
+  "buildingVolumeAssumed": "Angenommen · ungeprüft",
+  "buildingVolumeReviewedAssumption": "Geprüft · angenommen",
+  "buildingVolumeSourceUnreviewed": "Eingabe / Quelle · ungeprüft",
+  "buildingVolumeInherited": "Vom Geschoss übernommen",
+  "buildingVolumeFallback": "Vorschauwert · nicht gespeichert",
+  "buildingVolumeOverride": "Raumabweichung",
+  "buildingVolumePrevious": "Zuvor geprüft: {value} m. Der neue Entwurf ersetzt diese Prüfung nicht.",
+  "buildingVolumeSave": "Angenommene Höhe speichern",
+  "buildingVolumeUseStorey": "Geschosshöhe verwenden",
+  "buildingVolumeReview": "Gespeicherte Höhe bestätigen",
+  "buildingVolumeReject": "Gespeicherte Höhe verwerfen",
+  "buildingVolumeSelectRoom": "Raum auswählen, um seine Höhe zu bearbeiten."
+}

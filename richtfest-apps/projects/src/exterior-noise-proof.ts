@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, installationKindSchema, stairCaseSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance,
+  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, installationKindSchema, stairCaseSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance, resolveRoomHeight,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
   type ProofFacade, type ProofGap, type ProofRoof, type ProofRoom, type SitePlanPage, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
@@ -89,7 +89,7 @@ export type ProofAssemblyInput = {
   source: { versionId: string; page: number } | null;
   applicability: ProofValue<string> | null; flanking: ProofValue<string> | null; clearHeight: ProofValue<number> | null;
   rooms: Array<{ id: string; name: string; roomUse: string | null; polygon: Point2[] | null; holes: Point2[][]; adjacentWallIds: Set<string> | null;
-    kind: ProofValue<string> | null; surfacesComplete: ProofValue<boolean> | null }>;
+    kind: ProofValue<string> | null; surfacesComplete: ProofValue<boolean> | null; clearHeight?: ProofValue<number> | null }>;
   walls: Array<{ id: string; name: string; ring: Point2[]; construction: unknown; rw: ProofValue<number> | null; rwBasis: ProofValue<string> | null }>;
   levels: Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>;
   openings: Array<{ id: string; name: string; componentType: "window" | "door" | "small_element"; roomId: string; wallId: string | null;
@@ -129,7 +129,8 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
     const floorAreaM2 = room.polygon && room.polygon.length >= 3
       ? round2(Math.max(0, polygonArea(room.polygon) - room.holes.reduce((sum, hole) => sum + polygonArea(hole), 0))) : null;
     const lengths = room.polygon ? facadeLengths(room.polygon, input.walls, room.adjacentWallIds) : new Map<string, number>();
-    const height = input.clearHeight?.value ?? null;
+    const resolvedHeight = resolveRoomHeight(room.clearHeight, input.clearHeight);
+    const height = resolvedHeight.calculationValue;
     const facades: ProofFacade[] = input.walls.filter(wall => (lengths.get(wall.id) ?? 0) >= 0.1).map(wall => {
       const lengthM = round2(lengths.get(wall.id)!);
       const areaM2 = height === null ? null : round2(lengthM * height);
@@ -174,7 +175,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       inventory.push({ roomId: label, provenance: fromPlan(`Raum „${room.name}“, aus dem Plan in das Richtfest-Gebäudemodell übernommen.`) });
     }
     rooms.push({ id: room.id, storeyId: input.storeyId, name: room.name, label, roomUse: room.roomUse, kind: room.kind, proposedKind: proposeExteriorNoiseRoom(room.name, room.roomUse),
-      floorAreaM2, surfacesComplete: room.surfacesComplete, facades, roofs, gaps: [...gaps], result: null });
+      clearHeight: resolvedHeight.property, floorAreaM2, surfacesComplete: room.surfacesComplete, facades, roofs, gaps: [...gaps], result: null });
     if (!protectedRoom || gaps.size) continue;
     const facadeLabel = (facade: ProofFacade) => `${facade.compass ? `${facade.compass} · ` : ""}${facade.wallName}`;
     packets.push({
@@ -186,7 +187,7 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
       envelopeComplete: true,
       facades: facades.map(facade => ({
         id: facadeLabel(facade), areaM2: facade.areaM2!,
-        provenance: fromPlan(`Fassadenlänge ${facade.lengthM} m von Raum „${room.name}“ entlang ${facade.wallName}, im Planmaßstab gemessen; × lichte Raumhöhe ${height} m (${reviewed(input.clearHeight)}).`),
+        provenance: fromPlan(`Fassadenlänge ${facade.lengthM} m von Raum „${room.name}“ entlang ${facade.wallName}, im Planmaßstab gemessen; × lichte Raumhöhe ${height} m (${reviewed(resolvedHeight.property)}).`),
         // La to 0.1 dB, as stated in the report; the facade levels keep the unrounded values.
         noise: { metric: "La" as const, levelDb: Math.round((period === "sleeping" ? facade.la!.sleepingDb : facade.la!.dayDb) * 10) / 10,
           basis: `La ${period === "sleeping" ? "für Schlafräume" : "Tag"} dieser Fassade aus den Richtfest-Fassadenpegeln (${facade.la!.basis === "turned_away" ? "abgewandte Fassade" : "berechnet"}).`,
@@ -240,9 +241,16 @@ export async function currentValues(d: AppDeps, modelId: string, entityIds: stri
     .where(and(eq(buildingPropertyVersions.tenantId, d.tenantId), inArray(buildingPropertyVersions.propertyId, (properties as any[]).map(row => row.id))))
     .orderBy(desc(buildingPropertyVersions.version));
   const byProperty = new Map((properties as any[]).map(row => [row.id, row]));
+  const seenHeights = new Set<string>();
   for (const version of versions as any[]) {
     const property = byProperty.get(version.propertyId);
     const key = `${property.entityId}:${property.key}`;
+    // Height clearing/rejection returns to inheritance, matching the canonical editor; do not resurrect an old override.
+    if (property.key === "clearRoomHeight") {
+      if (seenHeights.has(key)) continue;
+      seenHeights.add(key);
+      if (version.reviewStatus === "superseded") continue;
+    }
     // The latest version that is not rejected; a rejected latest falls back to the one before.
     if (values.has(key) || version.reviewStatus === "rejected" || version.value === null) continue;
     values.set(key, { value: version.value, reviewStatus: version.reviewStatus, provenance: version.provenance, propertyId: property.id, version: version.version,
@@ -316,6 +324,7 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       storeyId: storey.id, labelPrefix: plans.length > 1 ? `${storey.name} · ` : "",
       applicability: value(buildingId, "exteriorNoiseApplicability"), flanking: value(buildingId, "exteriorNoiseFlanking"), clearHeight: value(storey.id, "clearRoomHeight"),
       rooms: storeyRooms.map(room => ({ id: room.id, name: room.name, roomUse: room.roomUse,
+        clearHeight: value<number>(room.id, "clearRoomHeight"),
         polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
         adjacentWallIds: adjacentOf.get(room.id) ?? null,
         holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],

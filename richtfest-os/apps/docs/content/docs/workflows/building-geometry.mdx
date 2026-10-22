@@ -1,0 +1,50 @@
+---
+title: Building geometry
+description: One canonical room model in the plan and the provisional 3D view.
+---
+
+In a project's **Building model**, switch from **2D** to **3D** to see room volumes
+for the selected plan page and construction state. These use the same canonical
+room IDs, outlines, holes and metric plan scale as the 2D overlays. There is no
+separate visualization model to synchronize. Edit outlines in 2D; edit heights
+in the 3D dimension panel. The model is persisted in Postgres.
+
+## Complete and confirm heights
+
+1. Select a room in the volume view or its linked row. **Confirm heights** filters
+   the list to rooms whose effective height has not been reviewed.
+2. Choose **Storey default** to set the clear height inherited by rooms in that
+   storey, or **Room override** for a different height in one room.
+3. **Save assumed height** appends an inferred, unreviewed property version.
+   Review the saved value separately with **Confirm saved height**, or reject it.
+   **Use storey height** clears an override and restores inheritance.
+
+Without either value, the preview uses **2.60 m**. Merely opening 3D does not save
+that default or approve anything. Amber volumes have unreviewed heights; neutral
+volumes have reviewed heights, not necessarily reviewed outlines or topology.
+Source evidence, inferred provenance, prior reviewed values and later edits stay
+separate. Confirming an assumed height does not turn it into a source measurement.
+
+## Calculation boundary
+
+Exterior-noise facade areas use the canonical room override before the storey
+height. New inferred heights do not enter calculations until explicitly reviewed;
+the unsaved 2.60 m preview never enters calculations. Existing source/manual draft
+inputs retain their existing draft-calculation behavior.
+
+Interior sound currently supports one uniform height per storey. Unequal room
+heights, or an unconfirmed inferred height, leave height-dependent checks
+incomplete instead of silently substituting the storey default. This first
+workflow does not implement unequal-height junction calculations.
+
+## Scope of the preview
+
+The view shows room volumes on one plan, not a complete BIM authoring system.
+Missing metric scale or room outlines prevent rendering; label anchors and
+unaccepted extraction candidates are not extruded. Edit or complete the canonical
+outlines in 2D first. Storeys are not stacked or registered against each other.
+
+Walls, opening cut-outs, slabs, roofs, IFC mesh editing and direct vertex dragging
+in 3D are not part of this first workflow. It neither invents topology nor assigns
+fire resistance, acoustic ratings, classifications or escape-route connections.
+Those remain separate source-backed, explicitly reviewed inputs.

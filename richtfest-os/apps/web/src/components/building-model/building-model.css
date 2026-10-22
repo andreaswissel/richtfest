@@ -407,3 +407,19 @@
 .building-model-fire-subtitle { margin-top: 6px; font-size: var(--ui-xs); font-weight: 600; }
 .building-model-fire-components { display: grid; gap: 2px; font-size: var(--ui-xs); }
 .building-model-fire-components > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; justify-content: space-between; }
+
+.building-model[data-model-view="3d"] :is(.building-model-panel-toggle, [data-plan-control], .building-model-toolbar-end, .building-model-statusbar-hints) { display: none; }
+.building-room-volumes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); flex: 1; min-height: 0; overflow: hidden; }
+.building-room-volume-canvas { position: relative; min-width: 0; min-height: 320px; overflow: hidden; }
+.building-room-volume-canvas > canvas { display: block; }
+.building-room-volume-empty { position: absolute; inset: 16px; z-index: 1; pointer-events: none; }
+.building-room-volume-editor { display: flex; flex-direction: column; gap: calc(var(--stack) / 2); padding: var(--stack); overflow: auto; border-left: 1px solid var(--border); background: var(--background); }
+.building-room-volume-editor > form { gap: calc(var(--stack) / 2); }
+.building-room-volume-list { display: grid; max-height: 140px; overflow: auto; flex-shrink: 0; }
+.building-room-volume-list > a { display: flex; flex-direction: column; padding: calc(var(--cell) / 2) 6px; border-bottom: 1px solid var(--border); font-size: var(--ui-sm); }
+.building-room-volume-list > a > span + span { color: var(--muted-foreground); font-size: var(--ui-xs); }
+.building-room-volume-list > a:is(:hover, [aria-current="true"]) { background: var(--muted); }
+@media (max-width: 760px) {
+  .building-room-volumes { grid-template-columns: 1fr; overflow: auto; }
+  .building-room-volume-editor { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
+}

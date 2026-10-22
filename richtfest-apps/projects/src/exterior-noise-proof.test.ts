@@ -37,6 +37,17 @@ describe("facade geometry", () => {
 });
 
 describe("exterior noise proof assembly", () => {
+  test("room height overrides affect facade areas only after an assumed height is confirmed", () => {
+    const withHeight = (reviewStatus: string) => input({ rooms: [{ ...input().rooms[0]!, clearHeight: { ...value(3.2, reviewStatus), provenance: "inferred" } }] });
+    const draft = assembleExteriorNoiseProof(withHeight("unreviewed"));
+    expect(draft.rooms[0]!.gaps).toContain("clear_height");
+    expect(draft.batch!.rooms).toHaveLength(0);
+    const approved = assembleExteriorNoiseProof(withHeight("approved"));
+    expect(approved.batch!.rooms[0]!.facades.map(facade => facade.areaM2)).toEqual([16, 12.8]);
+    expect(assembleExteriorNoiseProof(withHeight("rejected")).batch!.rooms[0]!.facades.map(facade => facade.areaM2)).toEqual([12.5, 10]);
+    expect(assembleExteriorNoiseProof(input({ clearHeight: { ...value(2.6), provenance: "inferred" } })).batch!.rooms).toHaveLength(0);
+  });
+
   test("a complete sleeping room uses the sleeping La and splits each facade into wall and openings", () => {
     const { rooms, batch } = assembleExteriorNoiseProof(input());
     expect(rooms[0]!.gaps).toEqual([]);

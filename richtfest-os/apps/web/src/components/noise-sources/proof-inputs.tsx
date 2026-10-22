@@ -300,7 +300,7 @@ function FacadeEditor({ projectId, proof, room, facade, canWrite, t }: { project
   return <div className="proof-facade">
     <p className="proof-part-title"><strong>{facadeLabel(facade)}</strong>{" "}
       <span className="muted text-ui-xs">
-        {facade.areaM2 === null ? t("proofFacadeLength").replace("{length}", m(facade.lengthM)) : t("proofFacadeArea").replace("{length}", m(facade.lengthM)).replace("{height}", String(proof.storeys.find(storey => storey.id === room.storeyId)?.clearHeight?.value ?? "")).replace("{area}", m(facade.areaM2))}
+        {facade.areaM2 === null ? t("proofFacadeLength").replace("{length}", m(facade.lengthM)) : t("proofFacadeArea").replace("{length}", m(facade.lengthM)).replace("{height}", String(room.clearHeight?.value ?? proof.storeys.find(storey => storey.id === room.storeyId)?.clearHeight?.value ?? "")).replace("{area}", m(facade.areaM2))}
         {" · "}{la === null || la === undefined ? t("proofGapFacadeLevel") : `La ${db(la)} dB`}
         {" · "}{facade.construction === "unknown" ? t("proofConstructionUnknown") : t(facade.construction === "massive" ? "proofConstructionMassive" : "proofConstructionLightweight")}
       </span>

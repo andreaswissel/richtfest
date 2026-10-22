@@ -88,6 +88,8 @@ export type ProofRoom = {
   id: string; name: string; label: string; roomUse: string | null;
   /** The storey whose plan page the room was traced on. */
   storeyId: string;
+  /** Resolved canonical room override or storey height, including its independent review state. */
+  clearHeight?: ProofValue<number> | null;
   kind: ProofValue<string> | null; proposedKind: ExteriorNoiseRoomKind | null;
   floorAreaM2: number | null; surfacesComplete: ProofValue<boolean> | null;
   facades: ProofFacade[]; roofs: ProofRoof[]; gaps: ProofGap[]; result: ProofRoomResult | null;
@@ -131,6 +133,7 @@ export function exteriorNoiseAgentContext(proof: ExteriorNoiseProof, projectId: 
     applicability: shown(proof.applicability), flanking: shown(proof.flanking),
     rooms: proof.rooms.slice(0, maxRooms).map(room => ({
       roomId: room.id, storeyId: room.storeyId, label: room.label, roomUse: room.roomUse, kind: shown(room.kind), proposedKind: room.kind ? null : room.proposedKind,
+      clearRoomHeightM: shown(room.clearHeight ?? null),
       floorAreaM2: room.floorAreaM2, surfacesComplete: shown(room.surfacesComplete), gaps: room.gaps,
       result: room.result && { status: room.result.status, requiredDb: room.result.targetDb, providedDb: room.result.valueDb, marginDb: room.result.marginDb },
       facades: room.facades.map(facade => ({

@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
-  alignPlanOutline, interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles, type SitePlanPage,
+  alignPlanOutline, interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles, resolveRoomHeight, type SitePlanPage,
   type AirborneInput, type AirborneResult, type DoorConstruction, type DoorResult, type FlankElement, type ImpactInput, type ImpactResult, type InteriorDoorCheck, type InteriorDoorRole, type FlankingEdge,
   type InteriorCeilingCheck, type InteriorCeilingRole, type InteriorElement, type InteriorElementReason, type InteriorImpactCheck, type InteriorLining, type InteriorServiceCheck, type InteriorStairCheck,
   type InteriorGap, type InteriorLimitation, type InteriorSoundProof, type InteriorWallCheck, type InteriorWallRole, type MassiveWallInput, type MassiveWallRw,
@@ -102,7 +102,7 @@ export type InteriorAssemblyInput = {
   clearHeight: number | null;
   /** Rooms with their unit, space type and use (exterior-noise room kind), which decide whose rooms are protected from whom. */
   rooms: Array<{ id: string; name: string; polygon: Point2[] | null; holes: Point2[][]; adjacentWallIds: Set<string>; ceilingIds: string[];
-    spaceType?: string | null; apartmentUnit?: string | null; use?: string | null }>;
+    spaceType?: string | null; apartmentUnit?: string | null; use?: string | null; clearHeight?: number | null }>;
   walls: Array<{ id: string; name: string; ring: Point2[]; role: string | null; exterior?: boolean }>;
   ceilings: Array<{ id: string; name: string; role: ProofValue<string> | null; coversRoomIds: string[]; screed: Screed }>;
   /** The slab under this storey (the ceiling of the storey below), when the model has it, and its floating screed. */
@@ -167,7 +167,10 @@ const JOIN_M = 0.3;
 export function assembleInteriorSound(input: InteriorAssemblyInput): { walls: InteriorWallCheck[]; ceilings: InteriorCeilingCheck[]; doors: InteriorDoorCheck[];
   impacts: InteriorImpactCheck[]; stairs: InteriorStairCheck[]; services: InteriorServiceCheck[];
   floorAssumed: boolean; wallsAboveAssumed: boolean; oneSidedLining: boolean; usedElementIds: Set<string> } {
-  const h = input.clearHeight;
+  // This deterministic assembly supports uniform heights only. Never ignore a room override or
+  // substitute a storey value for a room height still awaiting confirmation.
+  const heights = input.rooms.map(room => room.clearHeight === undefined ? input.clearHeight : room.clearHeight);
+  const h = heights.length && heights.every(height => height !== null && height === heights[0]) ? heights[0]! : null;
   // Every element a check reads, so the inputs list and suggestions cover exactly these.
   const usedElementIds = new Set<string>();
   const wallById = new Map(input.walls.map(wall => [wall.id, wall]));
@@ -594,6 +597,7 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
     const assembled = assembleInteriorSound({
       storeyId: storey.id, clearHeight: typeof clearHeight?.value === "number" ? clearHeight.value : null,
       rooms: rooms.map(room => ({ id: room.id, name: room.name, polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
+        clearHeight: resolveRoomHeight(value<number>(room.id, "clearRoomHeight"), clearHeight).calculationValue,
         holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],
         adjacentWallIds: adjacent.get(room.id) ?? new Set(), ceilingIds: storeyCeilings.filter(row => covers.get(row.id)!.includes(room.id)).map(row => row.id),
         spaceType: text(room.id, "spaceType"), apartmentUnit: text(room.id, "apartmentUnit"), use: text(room.id, "exteriorNoiseRoom") })),

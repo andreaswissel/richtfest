@@ -183,6 +183,8 @@ export const buildingComponentProperties = {
     clearRoomHeight: { value: z.number().min(1.5).max(20), unit: "m" },
   },
   room: {
+    /** Overrides the storey height; null returns to inheritance. Never a compliance classification. */
+    clearRoomHeight: { value: z.number().min(1.5).max(20), unit: "m" },
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
     spaceType: { value: spaceTypeSchema, unit: null },
     exteriorNoiseRoom: { value: z.enum(["sleeping", "living", "office", "hospital_bedroom", "not_protected"]), unit: null },
@@ -202,6 +204,18 @@ export function elementComponentType(kind: string | null | undefined, declared: 
 
 export type ElementComponentKey = keyof typeof buildingComponentProperties.element;
 export type RoomComponentKey = keyof typeof buildingComponentProperties.room;
+
+/** One height selection for room geometry and calculations. The fallback is display-only, never a saved fact. */
+export function resolveRoomHeight<T extends { value: unknown; reviewStatus: string; provenance: string }>(room?: T | null, storey?: T | null) {
+  const usable = (state?: T | null) => state && !["rejected", "superseded"].includes(state.reviewStatus)
+    && typeof state.value === "number" && Number.isFinite(state.value) && state.value >= 1.5 && state.value <= 20;
+  const scope = usable(room) ? "room" : usable(storey) ? "storey" : "default";
+  const property = scope === "room" ? room! : scope === "storey" ? storey! : null;
+  const value = property ? property.value as number : 2.6;
+  // Inferred dimensions entered by the geometry workflow remain unavailable to engineering until reviewed.
+  const calculationValue = property && (property.provenance !== "inferred" || property.reviewStatus === "approved") ? value : null;
+  return { value, scope, property, calculationValue };
+}
 
 const specFor = (entityType: string, key: string): PropertySpec | undefined =>
   (buildingComponentProperties as Record<string, Record<string, PropertySpec>>)[entityType]?.[key];

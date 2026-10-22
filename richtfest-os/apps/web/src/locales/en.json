@@ -3018,5 +3018,7 @@
   "buildingFireMet": "Met",
   "buildingFireNotMet": "Not met",
   "buildingFireStatusOpen": "Open",
-  "buildingFireNoMarks": "No rated components on this page yet."
+  "buildingFireNoMarks": "No rated components on this page yet.",
+  "buildingVolumeTitle": "Room volumes · selected plan",
+  "buildingVolumeDimensions": "Geometry and confirmation"
 }

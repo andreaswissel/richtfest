@@ -3018,5 +3018,7 @@
   "buildingFireMet": "Erfüllt",
   "buildingFireNotMet": "Nicht erfüllt",
   "buildingFireStatusOpen": "Offen",
-  "buildingFireNoMarks": "Noch keine Bauteile mit Anforderung auf dieser Seite."
+  "buildingFireNoMarks": "Noch keine Bauteile mit Anforderung auf dieser Seite.",
+  "buildingVolumeTitle": "Raumvolumen · ausgewählter Plan",
+  "buildingVolumeDimensions": "Geometrie und Bestätigung"
 }

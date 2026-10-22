@@ -27,6 +27,7 @@ import { metresToPoint, outlineAreaM2, outlineSelfIntersects, planDistanceM, poi
 import type { BuildingPlanPoint } from "./types";
 import type { InquirySummary } from "../inquiries/types";
 import { IfcBuildingModel } from "./ifc-building-model";
+import { RoomVolumes } from "./room-volumes";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -528,6 +529,14 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
+  const saveGeometryHeight = useMutation({
+    mutationFn: ({ entityType, entityId, value }: { entityType: "room" | "storey"; entityId: string; value: number | null }) => modelApi(`/projects/${projectId}/building-model/properties`, {
+      baseRevision: model.revision, entityType, entityId, propertyKey: "clearRoomHeight", value, unit: "m", claimKind: "assumption", provenance: "inferred", evidence: [],
+    }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
   const storeyNames = useMemo(() => new Map(model.storeys.map((storey) => {
     const state = storey.componentProperties?.level;
     const level = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null;
@@ -834,6 +843,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     return { zoom, pan: { x: current.pan.x * zoom / current.zoom, y: current.pan.y * zoom / current.zoom } };
   });
   workbenchKeys.current = (event) => {
+    if (params.get("modelView") === "3d") return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (event.defaultPrevented || target?.closest("[role=dialog], [data-slot=popover-content]")) return;
     const typing = Boolean(target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)));
@@ -891,7 +901,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onEditVertex={editVertex} canEdit={canEditOutline} onEdit={() => chooseTool("edit")} t={t} />;
 
   return (
-    <div className="building-model is-workbench">
+    <div className="building-model is-workbench" data-model-view={params.get("modelView") === "3d" ? "3d" : "2d"}>
       <div className="building-model-toolbar" role="toolbar" aria-label={t("buildingModelControls")}>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelOutliner")} title={t("buildingModelOutliner")} aria-pressed={panels.outliner} onClick={() => setPanels((current) => ({ ...current, outliner: !current.outliner }))}><PanelLeft className="size-icon-sm" aria-hidden="true" /></Button>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelProperties")} title={t("buildingModelProperties")} aria-pressed={panels.properties} onClick={() => setPanels((current) => ({ ...current, properties: !current.properties }))}><PanelRight className="size-icon-sm" aria-hidden="true" /></Button>
@@ -905,6 +915,10 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
         </div>
         <Segmented value={state} onChange={(value) => setModelState(value as BuildingModelState)}
           items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))} />
+        <div><Segmented value={params.get("modelView") === "3d" ? "3d" : "2d"} onChange={value => {
+          if (value === "3d") setSelectedCandidateId(undefined);
+          const next = new URLSearchParams(params); next.set("modelView", value); setParams(next, { replace: true });
+        }} items={[{ value: "2d", label: "2D" }, { value: "3d", label: "3D", disabled: Boolean(outlineSession) }]} /></div>
         <div className="building-model-pages" aria-label={t("buildingModelPages")}>
           {pageNumbers.map((pageNumber) => {
             const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
@@ -990,7 +1004,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               onCreate={(counterpart, body) => createInquiry.mutate({ counterpart, body })} />
           </PopoverContent>
         </Popover>
-        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles && !fireOverlay} onClick={() => { setFireOverlay(false); setColorWallRoles((value) => !value); }}><Palette className="size-icon-sm" aria-hidden="true" /></Button>
+        <Button data-plan-control variant="ghost" size="icon-sm" type="button" aria-label={t("buildingSoundColorWalls")} title={t("buildingSoundColorWalls")} aria-pressed={colorWallRoles && !fireOverlay} onClick={() => { setFireOverlay(false); setColorWallRoles((value) => !value); }}><Palette className="size-icon-sm" aria-hidden="true" /></Button>
         <Popover open={fireOpen} onOpenChange={setFireOpen}>
           <PopoverTrigger asChild>
             <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingFireProtection")}: ${fireSummary(fireAssessment, t)}`} title={t("buildingFireProtection")}>
@@ -1006,14 +1020,20 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
           </PopoverContent>
         </Popover>
-        <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingFirePlan")} title={t("buildingFirePlan")} aria-pressed={fireOverlay} onClick={() => setFireOverlay((value) => !value)}><Layers className="size-icon-sm" aria-hidden="true" /></Button>
+        <Button data-plan-control variant="ghost" size="icon-sm" type="button" aria-label={t("buildingFirePlan")} title={t("buildingFirePlan")} aria-pressed={fireOverlay} onClick={() => setFireOverlay((value) => !value)}><Layers className="size-icon-sm" aria-hidden="true" /></Button>
         <Badge title={model.reviewStatus === "needs-review" ? t("buildingModelReviewInWorkspace") : model.updatedAt ? `${t("buildingModelUpdated")} · ${new Date(model.updatedAt).toLocaleString()}` : t("buildingModelNoReview")}>{statusLabel(model.reviewStatus, t)}</Badge>
         <div className="building-model-toolbar-end">
           <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelUndo")} title={`${t("buildingModelUndo")} (⌘Z)`} disabled={!outlineSession?.history.length} onClick={undoOutline}><Undo2 className="size-icon-sm" aria-hidden="true" /></Button>
           <Button variant="ghost" size="icon-sm" type="button" aria-label={t("buildingModelRedo")} title={`${t("buildingModelRedo")} (⇧⌘Z)`} disabled={!outlineSession?.future.length} onClick={redoOutline}><Redo2 className="size-icon-sm" aria-hidden="true" /></Button>
         </div>
       </div>
-      <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
+      {params.get("modelView") === "3d" ? <>
+        {conflict && <Callout tone="warning">{conflict}</Callout>}
+        <RoomVolumes projectId={projectId} regions={pageRegions} storeys={model.storeys} storeyId={currentSource?.storeyId} scale={pageScale}
+          selectedId={selected?.id} onSelect={selectRegion} pending={saveGeometryHeight.isPending || reviewComponentProperty.isPending}
+          onSave={(entityType, entityId, value) => saveGeometryHeight.mutate({ entityType, entityId, value })}
+          onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+      </> : <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
         <Outliner t={t} sections={outlinerSections} grouping={outlinerGrouping} onGrouping={setOutlinerGrouping} groups={outlinerGroups} categories={outlinerCategories} otherPages={unlistedRegions}
           layers={sourceLayers} layerVisible={(layer) => layers[layer.id] ?? layer.visible !== false} onLayer={(id, visible) => setLayers((current) => ({ ...current, [id]: visible }))}
           selectedId={selectedCandidate?.id || selected?.id} isVisible={regionVisible} onVisible={setVisible} areaOf={areaOf}
@@ -1083,7 +1103,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
         </aside>
-      </div>
+      </div>}
       <footer className="building-model-statusbar">
         <div className="building-model-statusbar-summary">{summary.map((part, index) => index === 0 ? <strong key={index}>{part}</strong> : <span key={index}>{part}</span>)}</div>
         <div className="building-model-statusbar-hints" aria-hidden="true">{hints.map(([key, label]) => <span key={key}><kbd>{key}</kbd>{label}</span>)}</div>

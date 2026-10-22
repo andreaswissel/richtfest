@@ -1,9 +1,10 @@
 import en from "./locales/en.json";
 import de from "./locales/de.json";
 import type feasibility from "./components/feasibility/locales/en.json";
+import type buildingModel from "./components/building-model/locales/en.json";
 import { usePreferences } from "./store";
 
-type Key = keyof typeof en | keyof typeof feasibility;
+type Key = keyof typeof en | keyof typeof feasibility | keyof typeof buildingModel;
 type Messages = Record<string, string>;
 const messages: Record<"en" | "de", Messages> = { en: { ...en }, de: { ...de } };
 

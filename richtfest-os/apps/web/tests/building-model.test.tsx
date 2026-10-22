@@ -8,8 +8,22 @@ import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-eviden
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 import { metresToPoint, planDistanceM, pointToMetres } from "../src/components/building-model/outline-geometry";
+import { roomVolumeGeometry } from "../src/components/building-model/room-volumes";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
+
+test("3D consumes canonical plan outlines and holes at the page scale, never label boxes or candidates", () => {
+  const polygon = [{ x: .1, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .6 }, { x: .1, y: .6 }];
+  const room = { id: "room", kind: "room" as const, entityType: "room" as const, label: "Room", page: 1, polygon,
+    holes: [[{ x: .2, y: .3 }, { x: .25, y: .3 }, { x: .25, y: .35 }]] };
+  const scale = { pageAspectRatio: 2, metresPerPageHeight: 10 };
+  const result = roomVolumeGeometry([room, { ...room, id: "label", geometryQuality: "anchor" }, { ...room, id: "candidate", isCandidate: true }], [], scale);
+  expect(result).toHaveLength(1);
+  expect(result[0]!.mesh.polygons).toEqual([[[[2, 2], [8, 2], [8, 6], [2, 6]], [[4, 3], [5, 3], [5, 3.5]]]]);
+  expect(result[0]!.mesh.height).toBe(2.6);
+  expect(result[0]!.height.calculationValue).toBeNull();
+  expect(roomVolumeGeometry([room], [], null)).toEqual([]);
+});
 
 test("PDF evidence stays on the authenticated app origin for inline rendering", () => {
   expect(inlinePdfSource(`/api/projects/${projectId}/files/file/versions/1/download`)).toBe(`/api/projects/${projectId}/files/file/versions/1/download?inline=1`);

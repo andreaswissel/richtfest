@@ -31,6 +31,18 @@ const input = (patch: Partial<InteriorAssemblyInput> = {}): InteriorAssemblyInpu
 });
 
 describe("interior sound assembly", () => {
+  test("unequal or unconfirmed room heights leave height-dependent checks incomplete instead of using the storey height", () => {
+    for (const height of [3.2, null]) {
+      const rooms = input().rooms.map((room, index) => ({ ...room, clearHeight: index === 0 ? height : 2.5 }));
+      const result = assembleInteriorSound(input({ rooms }));
+      expect(result.walls[0]!.areaM2).toBeNull();
+      expect(result.walls[0]!.gaps).toContainEqual({ code: "clear_height" });
+      expect(result.walls[0]!.result).toBeNull();
+    }
+    const rooms = input().rooms.map(room => ({ ...room, clearHeight: 3.2 }));
+    expect(assembleInteriorSound(input({ rooms })).walls[0]!.areaM2).toBe(16);
+  });
+
   test("a separating wall pairs the rooms on its two sides and finds the flanking walls at both ends, the ceiling and the floor", () => {
     calls.airborne = [];
     const { walls, floorAssumed } = assembleInteriorSound(input());

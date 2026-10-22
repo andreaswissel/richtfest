@@ -2,6 +2,7 @@
 
 ## 2026-10-22
 
+- **Building model in 3D:** View canonical rooms as volumes, set storey heights and room overrides, and explicitly confirm assumed heights before calculations. Missing heights use an unsaved preview default; unequal room heights remain incomplete in interior sound checks.
 - **Runtime security update:** Updated the application runtime and documentation builder to patched Bun and Node versions, fixing the Brotli decompression vulnerability CVE-2026-111497.
 - **Room and door detection:** Better matching of door swings, jambs and double-leaf openings prevents some false boundaries and connections. Enclosed spaces outside floor hatching can now be recovered. Opening proposals retain both room sides; exterior checks account for other walls and thin reveals. Conflicting shared-space areas remain unresolved rather than being fitted into plausible rooms. Agent guidance calls for visual boundary, connectivity and area checks before calculations; extracted rooms still require review.
 - **Brandschutz with the Richtfest Agent:** Team can prepare a source-linked fire-protection draft from the saved building model, retaining calculations, model revision and open checks. Missing inputs and unsupported checks stay visible; no automatic approval is granted.

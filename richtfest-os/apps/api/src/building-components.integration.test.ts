@@ -11,6 +11,39 @@ import { createDatabase } from "./db/client";
 const url = process.env.BUILDING_EXTRACTION_TEST_DATABASE_URL;
 const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname);
 const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
+(local ? test : test.skip)("room height overrides can be cleared without losing their reviewed version", async () => {
+  const namespace = `building_height_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(isolated.href);
+  const tenant = crypto.randomUUID(), project = crypto.randomUUID(), actor = crypto.randomUUID(), model = crypto.randomUUID(), building = crypto.randomUUID(), storey = crypto.randomUUID(), room = crypto.randomUUID();
+  const app = express(); app.use(express.json());
+  app.use(createBuildingModelRouter(() => ({ db, tenantId: tenant, actorId: actor, requirePermission() {}, audit: async () => {} }) as any));
+  app.use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ message: e.message }));
+  const server = app.listen(0); const base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
+  const read = async () => (await (await fetch(base)).json()).data;
+  const post = async (path: string, body: object) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: (await read()).model.revision, ...body }) });
+  try {
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
+      if (!/^projects_[a-z_]+$/.test(table)) throw new Error("Unexpected test table");
+      await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
+    }
+    await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Height test',$3)", [project, tenant, actor]);
+    await pool.query("insert into projects_building_models (id,tenant_id,project_id,created_by) values ($1,$2,$3,$4)", [model, tenant, project, actor]);
+    await pool.query("insert into projects_building_buildings (id,tenant_id,model_id,stable_key,name,created_by) values ($1,$2,$3,'building','Building',$4)", [building, tenant, model, actor]);
+    await pool.query("insert into projects_building_storeys (id,tenant_id,model_id,building_id,stable_key,name,created_by) values ($1,$2,$3,$4,'storey','Storey',$5)", [storey, tenant, model, building, actor]);
+    await pool.query("insert into projects_building_rooms (id,tenant_id,model_id,storey_id,stable_key,name,created_by) values ($1,$2,$3,$4,'room','Room',$5)", [room, tenant, model, storey, actor]);
+    const height = { entityType: "room", entityId: room, propertyKey: "clearRoomHeight", unit: "m", provenance: "inferred", claimKind: "assumption" };
+    expect((await post("/properties", { ...height, value: 3.2 })).status).toBe(201);
+    const property = (await read()).properties[0];
+    expect((await post("/properties/review", { decision: "approved", items: [{ propertyId: property.id, version: property.current.version, reviewRevision: property.current.reviewRevision }] })).status).toBe(200);
+    expect((await post("/properties", { ...height, value: null })).status).toBe(201);
+    const cleared = (await read()).properties[0];
+    expect(cleared.current).toMatchObject({ version: 2, value: null, reviewStatus: "unreviewed" });
+    expect(cleared.reviewed).toMatchObject({ version: 1, value: 3.2, reviewStatus: "approved" });
+  } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
+}, 30000);
+
 (local && poppler ? test : test.skip)("wall adjacency derives roles from accepted plan geometry without overriding people", async () => {
   const namespace = `building_components_test_${crypto.randomUUID().replaceAll("-", "")}`;
   const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
