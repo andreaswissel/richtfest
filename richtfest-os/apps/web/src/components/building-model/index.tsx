@@ -15,7 +15,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { AudioLines, ChevronDown, Flame, Layers, Palette, ChevronRight, Copy, Eye, EyeOff, FileText, Hand, Link2, LoaderCircle, Maximize, Minus, MousePointer2, PanelLeft, PanelRight, Plus, Redo2, Ruler, ScanLine, Search, Spline, Undo2, WandSparkles } from "lucide-react";
 import { adaptBuildingModel, candidateRole, type BuildingAutomaticPlanProcessing, type BuildingWallColour, type BuildingWallColourState, type BuildingPlanScale, type BuildingExtractionCandidate, type BuildingExtractionJob, type BuildingModelState, type BuildingPlanSource, type BuildingSupersededSource, type BuildingRegion, type BuildingComponentPropertyState, type PdfEvidenceLayer } from "./types";
 import type { PdfViewerTransform } from "./pdf-evidence-renderer";
-import { maxEscapeDistance, wallRoleSchema } from "@richtfest/shared";
+import { wallRoleSchema } from "@richtfest/shared";
+import { maxEscapeDistance } from "@richtfest/shared/fire-protection";
 const wallRoleOptions: string[] = wallRoleSchema.options;
 import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
 import { ZoningCheck } from "./zoning-check";

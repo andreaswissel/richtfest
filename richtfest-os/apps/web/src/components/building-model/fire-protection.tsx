@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useState } from "react";
-import { classifyFireBuilding, closureSatisfies, ceilingRequirement, deriveFireRoomRole, escapeRouteLengths, fireBuildingKeys, fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireRequirement,
+import { fireBuildingKeys } from "@richtfest/shared";
+import { classifyFireBuilding, closureSatisfies, ceilingRequirement, deriveFireRoomRole, escapeRouteLengths, fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireRequirement,
   fireWallRequirement, fireWaterDemand, maxEscapeDistance, ratingSatisfies, type EscapeRoute, type FireBuildingClass, type FireClassification, type FireClosure, type FireComponentRequirement, type FireRating,
-  type FireRoomRole, type FireSpace, type StairwellSmokeVent } from "@richtfest/shared";
+  type FireRoomRole, type FireSpace, type StairwellSmokeVent } from "@richtfest/shared/fire-protection";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/primitives";
@@ -300,4 +301,3 @@ export function FireLegend({ marks, t }: { marks: Map<string, FireMark>; t: T })
     {!marks.size && <span className="muted">{t("buildingFireNoMarks")}</span>}
   </div>;
 }
-

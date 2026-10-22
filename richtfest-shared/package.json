@@ -14,6 +14,7 @@
     "./site-proposals": "./src/site-proposals.ts",
     "./planning-regime": "./src/planning-regime.ts",
     "./planning-review": "./src/planning-review.ts",
+    "./fire-protection": "./src/fire-protection.ts",
     "./building-codes": "./src/building-codes.ts"
   },
   "scripts": {

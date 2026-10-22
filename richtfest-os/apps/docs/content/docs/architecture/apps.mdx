@@ -25,6 +25,8 @@ App schemas live with their packages and are listed in the API's Drizzle configu
 
 The API adapts host contracts and mounts routers. One React application supplies all screens, registered through the route manifest. Boundary tests enforce this separation.
 
+Fire-protection calculations and law quotations are imported through `@richtfest/shared/fire-protection` by the lazy-loaded project workspace, not through the shared root entrypoint. Lightweight fire-property schemas remain available from `@richtfest/shared` so validation does not pull the calculation engine into the startup bundle. The existing router loads the workspace before swapping screens; no extra loading boundary is added.
+
 ## Persistence and evidence
 
 Postgres stores operational state, access, records, metadata, tasks and audit history. Original file contents require durable storage as well; storing only metadata does not preserve a source document.

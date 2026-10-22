@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fireClosureSchema, fireRatingSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema, stairwellSmokeVentSchema } from "./fire-protection";
+import { fireClosureSchema, fireRatingSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema, stairwellSmokeVentSchema } from "./fire-protection-schema";
 
 /**
  * Shared component attributes on building-model entities. Every discipline
