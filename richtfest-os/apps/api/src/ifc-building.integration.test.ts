@@ -25,7 +25,7 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
   const call = (path: string, body: unknown) => fetch(`${base}/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const count = async (table: string) => Number((await pool.query(`select count(*) n from ${table}`)).rows[0].n);
   try {
-    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_building_models", "projects_building_buildings", "projects_building_storeys", "projects_building_rooms", "projects_building_elements", "projects_building_revisions"])
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_building_models", "projects_building_buildings", "projects_building_storeys", "projects_building_rooms", "projects_building_elements", "projects_building_revisions", "projects_building_properties", "projects_building_property_versions", "projects_building_conflicts"])
       await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
     await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'IFC test',$3)", [project, tenant, actor]);
     await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'model.ifc','upload',$4)", [file, tenant, project, actor]);
@@ -71,6 +71,25 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect((await call("import", { ...input, sourceVersionId: second, baseRevision: 1 })).status).toBe(201);
     expect(await count("projects_building_buildings")).toBe(2);
     expect((await pool.query("select name from projects_building_rooms where id=$1", [room.id])).rows[0].name).toBe("Reviewed name");
+
+    // IFC corrections stay versioned and unreviewed until a separate, revision-checked decision.
+    const element = (await pool.query("select * from projects_building_elements limit 1")).rows[0];
+    const correction = { baseRevision: 2, entityType: "element", entityId: element.id, propertyKey: "isExternal", value: false, provenance: "manual",
+      evidence: [{ kind: "ifc", sourceVersionId: version, expressId: 60, attribute: "Pset_DoorCommon.IsExternal" }] };
+    expect((await call("../properties", { ...correction, value: "false" })).status).toBe(422);
+    expect((await call("../properties", { ...correction, evidence: [{ ...correction.evidence[0], sourceVersionId: crypto.randomUUID() }] })).status).toBe(422);
+    allow = false; expect((await call("../properties", correction)).status).toBe(403); allow = true;
+    const saved = await call("../properties", correction); expect(saved.status).toBe(201);
+    const property = (await saved.json()).data;
+    expect(property.version).toMatchObject({ value: false, reviewStatus: "unreviewed", evidence: correction.evidence });
+    const reviewPath = `../properties/${property.property.id}/versions/1/review`;
+    expect((await call(reviewPath, { baseRevision: 2, reviewRevision: 0, decision: "approved", note: "Checked source" })).status).toBe(409);
+    expect((await call(reviewPath, { baseRevision: 3, reviewRevision: 0, decision: "approved", note: "Checked source" })).status).toBe(200);
+    expect((await call("../properties", { ...correction, baseRevision: 4, value: true })).status).toBe(201);
+    const versions = (await pool.query("select value,review_status,review_note from projects_building_property_versions where property_id=$1 order by version", [property.property.id])).rows;
+    expect(versions).toEqual([{ value: false, review_status: "approved", review_note: "Checked source" }, { value: true, review_status: "unreviewed", review_note: null }]);
+    expect(await count("projects_building_conflicts")).toBe(1);
+    expect((await pool.query("select geometry from projects_building_elements where id=$1", [element.id])).rows[0].geometry).toEqual(element.geometry);
   } finally {
     server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end();
   }

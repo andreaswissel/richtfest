@@ -806,3 +806,24 @@ test("an IFC entity link opens its own source revision and metre-based storey, n
   expect(html).not.toContain("<canvas");
   expect(html).not.toContain('aria-label="Room 0 · IFCSPACE #10"');
 });
+
+test("IFC review keeps confirmed values separate from proposals and warning notes scoped to their import", () => {
+  const source = (version: string, expressId: number) => ({ kind: "ifc", sourceVersionId: version, expressId, ifcType: "IFCSPACE" });
+  const html = render({ model: { revision: 5 },
+    buildings: ["v1", "v2"].map(v => ({ id: v, geometry: { source: source(v, 10), ifcImport: { sourceVersionId: v, warnings: [{ code: "identicalUnits", count: 234 }] } } })),
+    storeys: [{ id: "s2", name: "Floor", geometry: { source: source("v2", 20) } }],
+    rooms: [{ id: "r2", storeyId: "s2", name: "Room", geometry: { source: source("v2", 30) } }],
+    properties: [
+      { entityType: "room", entityId: "r2", propertyKey: "apartmentUnit", current: { version: 2, value: "Proposed B", reviewStatus: "unreviewed", evidence: [{ kind: "page", sourceVersionId: "evidence", page: 4, quote: "Apartment B" }] }, reviewed: { value: "Confirmed A" } },
+      { entityType: "building", entityId: "v1", propertyKey: "ifcReview.identicalUnits", current: { value: "Other import reviewed", reviewStatus: "approved" } },
+    ],
+  }, "?view=building-model&entity=room:r2");
+  expect(html).toContain("Last confirmed value</dt><dd");
+  expect(html).toContain("Confirmed A</dd>");
+  expect(html).toContain("Proposed B ");
+  expect(html).toContain("Apartment B");
+  expect(html).toContain("1 source warnings without a reviewed note");
+  expect(html).not.toContain("Other import reviewed");
+  expect(html).toContain("Review decision and reason");
+  expect(html).toContain("Save proposal for review");
+});

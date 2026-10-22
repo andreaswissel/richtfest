@@ -247,7 +247,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
     <div className="px-page py-2"><Segmented value={mode} items={[{ value: "pdf", label: t("ifcBuildingPdf"), to: modeLink("pdf") }, { value: "ifc", label: t("ifcBuildingTitle"), to: modeLink("ifc") }]} /></div>
     {mode === "ifc" ? <>
       {(files.error || (model.error && !(model.error instanceof ApiError && model.error.status === 404))) && <Callout tone="error">{(files.error || model.error)?.message}</Callout>}
-      <IfcBuildingModel key={projectId} projectId={projectId} model={model.data} files={ifcFiles} />
+      <IfcBuildingModel key={projectId} projectId={projectId} model={model.data} files={ifcFiles} evidenceFiles={list(files.data, "files")} />
     </> : <PdfBuildingModelMode projectId={projectId} />}
   </div>;
 }

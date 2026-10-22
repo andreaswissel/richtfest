@@ -65,6 +65,8 @@ type PropertySpec = { value: z.ZodTypeAny; unit: string | null };
 export const buildingComponentProperties = {
   element: {
     componentType: { value: componentTypeSchema, unit: null },
+    // Explicitly reviewed classification, not the IFC export's possibly unreliable declaration.
+    isExternal: { value: z.boolean(), unit: null },
     construction: { value: componentConstructionSchema, unit: null },
     material: { value: z.string().trim().min(1).max(200), unit: null },
     thickness: { value: z.number().positive().max(500), unit: "cm" },

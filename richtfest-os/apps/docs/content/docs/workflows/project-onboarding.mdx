@@ -79,6 +79,14 @@ Source declarations remain in the Source Model. Import does not infer apartment 
 
 Import adds a separate source-based building without merging or replacing existing work. Repeating the same revision and storey selection is idempotent, including concurrent retries; changing the selection after import is rejected. A new source revision is a separate additive import, not an automatic update or reconciliation. Revision conflicts require reloading. One transaction saves the model entities, draft revision, receipt and audit event; no partial model survives a failed import. Uploaded IFC files are not imported automatically.
 
+### Review an imported IFC model
+
+Below the saved IFC plan, **Review imported model** keeps manual model values separate from the export's declarations. Select a room to propose its apartment assignment or space type, or an element to propose its component type (and wall role or door classification where applicable). Nothing is confirmed from the IFC name or its suspicious source defaults. The last confirmed value stays visible separately from a newer unreviewed or rejected proposal.
+
+Every proposal needs a ready project-file revision and a precise reference: a PDF page with a supporting quotation, or an IFC EXPRESS ID with an attribute/property path. **Save proposal for review** creates an unreviewed property version. Inspect that version's evidence, enter a decision reason, then explicitly approve or reject it. Existing project-write permissions, optimistic revision checks and audit events apply. A differing proposal does not overwrite the last approved value; the existing conflict mechanism records the disagreement. Failed saves remain visible and are not silently retried against a newer model revision.
+
+The same panel records findings and remaining questions for each whole-file source warning. These notes belong to that imported source, not to later revisions. A reviewed note means the note was checked—not that missing windows, slabs, stairs or fire ratings have been supplied. All source warnings remain visible, and this workflow neither changes imported geometry nor declares the model ready for calculation. Use notes to record outstanding evidence requests; no external request is sent automatically.
+
 ### Read PDF plans
 
 Attach a project-evidence PDF, then open **Building model** from the upload confirmation or project navigation. Richtfest immediately creates a durable draft shell and keeps the source PDF visible while saved processing reads the plan, identifies floor sheets, extracts room and construction geometry, and prepares the draft. The restrained scan overlay reflects those persisted stages, survives navigation or reload, stops at a terminal state and does not invent a percentage or detected geometry. TypeSafe is named only while a configured inference call is actually active. Reduced-motion preferences replace the sweep with a static status.

@@ -11,10 +11,11 @@ import { NativeSelect } from "../ui/native-select";
 import { Checkbox } from "../ui/checkbox";
 import { Badge, Callout, Field } from "../ui/primitives";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { IfcReview } from "./ifc-review";
 
 type DisplayEntity = IfcBuildingEntity & { id?: string; storeyId?: string; sourceVersionId?: string };
 
-export function IfcBuildingModel({ projectId, model, files }: { projectId: string; model?: RecordData; files: RecordData[] }) {
+export function IfcBuildingModel({ projectId, model, files, evidenceFiles = files }: { projectId: string; model?: RecordData; files: RecordData[]; evidenceFiles?: RecordData[] }) {
   const t = useT();
   const [params] = useSearchParams();
   const [fileId, setFileId] = useState("");
@@ -112,5 +113,8 @@ export function IfcBuildingModel({ projectId, model, files }: { projectId: strin
         {selectedObject.id && <Link to={`/projects/${projectId}?view=building-model&modelSource=ifc&entity=${selectedObject.entityType}:${selectedObject.id}`}>{t("ifcBuildingObjectLink")}</Link>}
       </div>}
     </Section>}
+    {!preview.data && model && imports.some(b => b.geometry.ifcImport.sourceVersionId === activeVersion) && <IfcReview
+      key={`${activeVersion}:${selectedObject?.id || ""}`} projectId={projectId} model={model} files={evidenceFiles}
+      building={imports.find(b => b.geometry.ifcImport.sourceVersionId === activeVersion)!} object={selectedObject} warnings={warnings} />}
   </div>;
 }
