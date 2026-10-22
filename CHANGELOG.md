@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-23
+
+- **Optimization video preview:** Added a short branded video of the landing page's three optimization proposals, with a matching poster and social-preview metadata ready for relaunch. The landing page remains offline and existing image previews stay in place.
+
 ## 2026-10-22
 
 - **File uploads on the app domain:** Corrected the storage origin rule for `app.richtfest.ai` so IFC and other attachments can upload directly without the browser blocking them. Existing origins and private file access stay unchanged.

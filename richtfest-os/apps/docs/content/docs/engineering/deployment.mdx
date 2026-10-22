@@ -87,6 +87,12 @@ App links use the same Richtfest title, description and image. Preview metadata 
 
 Run `bun test tests/social-preview.test.ts` to build the web bundle and verify unauthenticated crawler responses and image delivery through the production API without a database connection.
 
+### Landing-page optimization video
+
+The offline landing directory includes `og-video.mp4`, a 22-second silent 1200 × 630 H.264 capture of its illustrative three-step optimization walkthrough, and `og-video-poster.jpg`. Its HTML declares the video URL, MIME type and dimensions while retaining the existing image fallback and Twitter large-image card. Sharing platforms decide whether to play an Open Graph video; the metadata does not guarantee inline playback or autoplay.
+
+These assets do not change app previews or reactivate the marketing page. On relaunch, `https://richtfest.ai/og-video.mp4` must serve the file publicly as `video/mp4`, without authentication or a redirect to the app; update both video URL tags if the canonical domain changes. Verify the target sharing platforms after publication. The capture script and regeneration instructions are in `scripts/export-landing-video.mjs` and `richtfest-landing/README.md`; capture-only layout and timing changes are not shipped to visitors.
+
 ## File storage
 
 Use a private Railway Bucket for original uploaded files and revisions. Stream or upload directly to the bucket; the prototype does not impose an arbitrary application-level file-size cap. Platform and transport failures must still be handled explicitly. A local storage adapter is for development, and a service's temporary filesystem is not a production file store. Files the server produces itself (environmental surveys, filed email and attachments, public-data snapshots, generated PDFs) are streamed into the bucket by the API: one PUT for small files, otherwise 8 MiB multipart parts, with the SHA-256 kept as object metadata.
