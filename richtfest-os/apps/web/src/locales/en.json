@@ -3026,5 +3026,7 @@
   "buildingFireStatusOpen": "Open",
   "buildingFireNoMarks": "No rated components on this page yet.",
   "buildingVolumeTitle": "Room volumes · selected plan",
-  "buildingVolumeDimensions": "Geometry and confirmation"
+  "buildingVolumeDimensions": "Geometry and confirmation",
+  "plannerPlanChoose": "Choose a plan to view",
+  "plannerPlanNext": "Next step"
 }

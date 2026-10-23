@@ -3026,5 +3026,7 @@
   "buildingFireStatusOpen": "Offen",
   "buildingFireNoMarks": "Noch keine Bauteile mit Anforderung auf dieser Seite.",
   "buildingVolumeTitle": "Raumvolumen · ausgewählter Plan",
-  "buildingVolumeDimensions": "Geometrie und Bestätigung"
+  "buildingVolumeDimensions": "Geometrie und Bestätigung",
+  "plannerPlanChoose": "Plan zur Ansicht auswählen",
+  "plannerPlanNext": "Nächster Schritt"
 }

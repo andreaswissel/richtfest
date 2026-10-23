@@ -228,5 +228,22 @@
   "buildingCalculationSound": "Innen-Schallschutz: {count} Wandberechnungen ohne Eingabelücken.",
   "buildingCalculationConcept": "Vorläufiges Konzept anzeigen",
   "buildingCalculationGeometry": "Raumflächen und Verbindungen anzeigen",
-  "buildingCalculationDownload": "Berechnungsbeleg herunterladen"
+  "buildingCalculationDownload": "Berechnungsbeleg herunterladen",
+  "plannerPlanChooseHint": "Dieses Projekt enthält mehrere PDFs. Wählen Sie die Zeichnung, die Sie prüfen möchten; die 3D-Ansicht kombiniert sie nicht mit anderen Dokumenten. Die Auswahl gilt für die Ansicht, nicht als Freigabe für Berechnungen.",
+  "plannerPlanDocuments": "Verfügbare Dokumente",
+  "plannerPlanDetected": "{count} Grundrissseiten erkannt · ungeprüft",
+  "plannerPlanUnknown": "Planumfang noch nicht ermittelt",
+  "plannerPlanSuperseded": "Ersetzter Planstand · nur noch zur Quellenprüfung",
+  "plannerPlanShow": "Plan anzeigen",
+  "plannerPlanShown": "Angezeigter Plan",
+  "plannerPlanChange": "Plan wechseln",
+  "plannerPlanPreparation": "Planaufbereitung prüfen",
+  "plannerPlanPreparationHint": "Die Aufbereitung läuft noch oder benötigt Aufmerksamkeit. Prüfen Sie ihren Status, bevor Sie die erkannte Geometrie bewerten.",
+  "plannerPlanStatus": "Aufbereitungsstatus anzeigen",
+  "plannerPlanScale": "Planmaßstab prüfen",
+  "plannerPlanScaleHint": "Für diese Seite fehlt ein nutzbarer Maßstab. Prüfen Sie die Maßstabsangabe oder wählen Sie eine maßstäbliche Grundrissseite, bevor Sie Maße verwenden.",
+  "plannerPlanReview": "Grundriss prüfen",
+  "plannerPlanReviewHint": "Räume, Wände und Öffnungen mit dem Originalplan abgleichen.",
+  "plannerPlanViewOnly": "Ansichtsauswahl · keine fachliche Freigabe",
+  "plannerPlanScope": "3D zeigt nur das ausgewählte Dokument. Automatische Extraktion und projektweite Bewertungen bleiben unverändert; die Ansichtsauswahl gibt keine Quelle frei und ersetzt keine Quelle."
 }

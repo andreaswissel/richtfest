@@ -228,5 +228,22 @@
   "buildingCalculationSound": "Interior sound: {count} wall calculations without input gaps.",
   "buildingCalculationConcept": "Show provisional concept",
   "buildingCalculationGeometry": "Show room areas and connections",
-  "buildingCalculationDownload": "Download calculation receipt"
+  "buildingCalculationDownload": "Download calculation receipt",
+  "plannerPlanChooseHint": "This project has several PDFs. Choose the drawing you want to inspect; the 3D view will not combine it with other documents. This is a view selection, not approval for calculations.",
+  "plannerPlanDocuments": "Available documents",
+  "plannerPlanDetected": "{count} floor-plan pages detected · unreviewed",
+  "plannerPlanUnknown": "Plan coverage not yet established",
+  "plannerPlanSuperseded": "Replaced plan set · available for source inspection only",
+  "plannerPlanShow": "View plan",
+  "plannerPlanShown": "Displayed plan",
+  "plannerPlanChange": "Change plan",
+  "plannerPlanPreparation": "Check plan preparation",
+  "plannerPlanPreparationHint": "Preparation is running or needs attention. Check its status before reviewing the extracted geometry.",
+  "plannerPlanStatus": "View preparation status",
+  "plannerPlanScale": "Check plan scale",
+  "plannerPlanScaleHint": "This page has no usable metric scale. Check the printed scale or choose a scaled floor-plan page before using dimensions.",
+  "plannerPlanReview": "Review floor plan",
+  "plannerPlanReviewHint": "Compare rooms, walls and openings with the original drawing.",
+  "plannerPlanViewOnly": "View selection · not an engineering approval",
+  "plannerPlanScope": "Only the selected document is shown in 3D. Automatic extraction and project-wide assessments are unchanged; selecting a view does not approve or replace any source."
 }

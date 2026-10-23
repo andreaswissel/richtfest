@@ -277,6 +277,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const t = useT();
   const [params, setParams] = useSearchParams();
   const fireView = params.get("view") === "fire-protection";
+  const plannerView = params.get("perspective") === "planner";
   const requestedState = params.get("modelState");
   const state: BuildingModelState = states.some((item) => item.value === requestedState) ? requestedState as BuildingModelState : "existing";
   const setModelState = (nextState: BuildingModelState) => {
@@ -734,6 +735,43 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
     onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />;
 
+  // A display choice is not an authoritative project source or an engineering approval.
+  // Entity links still open their evidence directly; an absent/stale selection must not
+  // silently choose a different document for a planner.
+  const hasPlanChoice = sourceSelectionPinned && (Boolean(deepLinkedRegion)
+    || sourceDocuments.some(source => source.source?.versionId === sourceVersionId));
+  if (plannerView && !fireView && modelQuery.isSuccess && sourceDocuments.length > 1 && !hasPlanChoice) {
+    workbenchKeys.current = () => undefined;
+    return <Page>
+      <PageHeader title={t("plannerPlanChoose")} />
+      <Callout>{t("plannerPlanChooseHint")}</Callout>
+      <Section title={t("plannerPlanDocuments")}>
+        <ul className="divide-y divide-border">
+          {sourceDocuments.map(source => {
+            const versionId = source.source!.versionId;
+            const nextSource = preferredPlanSource(model.planSources.filter(item => item.source?.versionId === versionId), automaticPlanProcessing)!;
+            const next = new URLSearchParams(params);
+            for (const key of ["entity", "candidate", "object", "floorFocus", "roomFocus"]) next.delete(key);
+            next.set("sourceVersion", versionId);
+            next.set("sourceSelection", "manual");
+            next.set("page", String(nextSource.page));
+            if (nextSource.storeyId) next.set("storey", nextSource.storeyId); else next.delete("storey");
+            const processing = automaticPlanProcessing.find(item => item.sourceVersionId === versionId);
+            const superseded = model.supersededSources.some(item => item.sourceVersionId === versionId);
+            return <li key={versionId} className="flex min-w-0 flex-wrap items-center justify-between gap-stack py-cell">
+              <div className="min-w-0 flex-1 basis-48">
+                <p className="break-words text-ui">{source.source!.fileName}</p>
+                <p className="text-ui-xs text-muted-foreground">{superseded ? t("plannerPlanSuperseded") : processing
+                  ? t("plannerPlanDetected").replace("{count}", String(processing.floorPlanPages.length)) : t("plannerPlanUnknown")}</p>
+              </div>
+              <Button asChild variant="outline"><Link to={`?${next}`} aria-label={`${t("plannerPlanShow")}: ${source.source!.fileName}`}>{t("plannerPlanShow")}</Link></Button>
+            </li>;
+          })}
+        </ul>
+      </Section>
+    </Page>;
+  }
+
   if (fireView) {
     const planParams = new URLSearchParams(params);
     planParams.set("view", "building-model");
@@ -988,20 +1026,50 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const contextStatus = currentAutomaticActive ? automaticPhaseLabel(currentAutomaticProcessing, t) : contextExtractionStatus(activeExtraction?.status, t);
   const geometry = <GeometrySection draft={geometryDraft} scale={pageScale} printed={geometryPrinted} editing={Boolean(outlineSession)} snap={snapToWalls} onSnap={setSnapToWalls}
     onEditVertex={editVertex} canEdit={canEditOutline} onEdit={() => chooseTool("edit")} t={t} />;
+  const choosePlanParams = new URLSearchParams(params);
+  for (const key of ["sourceSelection", "entity", "candidate"]) choosePlanParams.delete(key);
+  const reviewPlanParams = new URLSearchParams(params);
+  reviewPlanParams.set("modelView", "2d");
+  const preparationNeedsAttention = currentAutomaticActive || extractionActive || activeExtraction?.status === "failed" || currentAutomaticProcessing?.status === "failed";
 
   return (
     <div className="building-model is-workbench" data-model-view={params.get("modelView") === "3d" ? "3d" : "2d"}>
+      {plannerView && modelQuery.isSuccess && <section className="grid shrink-0 gap-stack border-b border-border px-page py-cell" aria-label={t("plannerPlanNext")}>
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-stack">
+          <p className="min-w-0 break-words text-ui-sm"><span className="text-muted-foreground">{t("plannerPlanShown")}: </span>{evidence.fileName}</p>
+          {sourceDocuments.length > 1 && <Button asChild variant="ghost" size="sm"><Link to={`?${choosePlanParams}`}>{t("plannerPlanChange")}</Link></Button>}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-stack">
+          <div className="min-w-0 flex-1 basis-64">
+            <h2 className="text-ui font-medium">{t("plannerPlanNext")}: {t(preparationNeedsAttention ? "plannerPlanPreparation" : !pageScale ? "plannerPlanScale" : "plannerPlanReview")}</h2>
+            <p className="text-ui-xs text-muted-foreground">{t(preparationNeedsAttention ? "plannerPlanPreparationHint" : !pageScale ? "plannerPlanScaleHint" : "plannerPlanReviewHint")}</p>
+          </div>
+          {preparationNeedsAttention
+            ? <Button variant="outline" size="sm" onClick={() => setPlanContextOpen(true)}>{t("plannerPlanStatus")}</Button>
+            : !pageScale ? <Popover>
+              <PopoverTrigger asChild><Button variant="outline" size="sm">{t("plannerPlanScale")}</Button></PopoverTrigger>
+              <PopoverContent align="end" className="building-model-context-popover">
+                <PlanScale scale={currentAutomaticProcessing?.planScale ?? { pages: [], savedDenominator: null }} pending={savePlanScale.isPending || !evidence.sourceVersionId}
+                  onSave={denominator => evidence.sourceVersionId && savePlanScale.mutate({ sourceVersionId: evidence.sourceVersionId, denominator })} t={t} />
+              </PopoverContent>
+            </Popover> : <Button asChild variant="outline" size="sm"><Link to={`?${reviewPlanParams}`}>{t("plannerPlanReview")}</Link></Button>}
+        </div>
+        <details className="text-ui-2xs text-muted-foreground">
+          <summary className="cursor-pointer">{t("plannerPlanViewOnly")}</summary>
+          <p>{t("plannerPlanScope")}</p>
+        </details>
+      </section>}
       <div className="building-model-toolbar" role="toolbar" aria-label={t("buildingModelControls")}>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelOutliner")} title={t("buildingModelOutliner")} aria-pressed={panels.outliner} onClick={() => setPanels((current) => ({ ...current, outliner: !current.outliner }))}><PanelLeft className="size-icon-sm" aria-hidden="true" /></Button>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelProperties")} title={t("buildingModelProperties")} aria-pressed={panels.properties} onClick={() => setPanels((current) => ({ ...current, properties: !current.properties }))}><PanelRight className="size-icon-sm" aria-hidden="true" /></Button>
-        <div className="building-model-toolbar-source">
+        {!plannerView && <div className="building-model-toolbar-source">
           <FileText className="size-icon-sm" aria-hidden="true" />
           {sourceDocuments.length > 1 ? <NativeSelect className="building-model-source-select" aria-label={t("buildingModelSourceDocument")} value={evidence.sourceVersionId || ""} onChange={(event) => {
             const versionSources = model.planSources.filter((source) => source.source?.versionId === event.target.value);
             const nextSource = preferredPlanSource(versionSources, automaticPlanProcessing) || versionSources[0];
             if (nextSource) selectSourcePage(nextSource.page, nextSource.source?.versionId || "", nextSource.storeyId || "");
           }}>{sourceDocuments.map((source) => <option key={source.source!.versionId} value={source.source!.versionId}>{source.source!.fileName}</option>)}</NativeSelect> : <strong title={evidence.fileName}>{evidence.fileName || t("buildingModelNoSource")}</strong>}
-        </div>
+        </div>}
         <Segmented value={state} onChange={(value) => setModelState(value as BuildingModelState)}
           items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))} />
         <div><Segmented value={params.get("modelView") === "3d" ? "3d" : "2d"} onChange={value => {

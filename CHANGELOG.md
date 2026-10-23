@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **Guided planner plan review:** Planners explicitly choose which PDF to view when several documents are available, see the selected source, and get a direct next action for preparation, scale or floor-plan review. Nerd controls remain available; viewing a plan does not approve it or change assessment inputs.
 - **One plan set per 3D view:** The source-PDF selector now controls the entire building stack. Floors extracted from other documents no longer appear as extra levels; source records remain available for separate inspection.
 - **3D view options:** Hide empty floors without deleting model records, and control the ground plane and source-aligned aerial imagery. Schematic ground remains visible when floor elevations are incomplete.
 - **Brandschutz project tab:** Open fire-protection inputs, classification, review controls and draft text directly from every project perspective, with source heights alongside and a link to the fire-coloured plan. The tab shares the existing building model and approvals.

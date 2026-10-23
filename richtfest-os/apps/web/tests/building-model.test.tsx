@@ -25,6 +25,47 @@ const en = { ...commonEn, ...buildingEn };
 const de = { ...commonDe, ...buildingDe };
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 
+test("planner chooses a source explicitly without changing Nerd mode or blocking evidence links", () => {
+  const model = {
+    planSources: [
+      { id: "a", page: 2, storeyId: "a-ground", source: { versionId: "a-version", fileName: "Approval.pdf" } },
+      { id: "b", page: 7, storeyId: "b-upper", source: { versionId: "b-version", fileName: "Earlier.pdf" } },
+    ],
+    rooms: [{ id: "room", name: "Office", storeyId: "b-upper", geometry: { source: { sourceVersionId: "b-version", page: 7 } } }],
+    supersededSources: [{ sourceVersionId: "b-version" }],
+  };
+  const search = "?view=building-model&perspective=planner";
+  for (const suffix of ["", "&sourceVersion=deleted&sourceSelection=manual"]) {
+    const html = render(model, search + suffix);
+    expect(html).toContain(en.plannerPlanChoose);
+    expect(html).toContain(en.plannerPlanSuperseded);
+    expect(html).not.toContain('data-model-view=');
+    const choices = [...html.matchAll(/<a(?=[^>]*aria-label="View plan:)[^>]*href="([^"]+)"/g)].map(match => new URL(match[1]!.replaceAll("&amp;", "&"), "https://app.example").searchParams);
+    expect(choices.map(choice => [choice.get("sourceVersion"), choice.get("page"), choice.get("storey"), choice.get("sourceSelection")]))
+      .toEqual([["a-version", "2", "a-ground", "manual"], ["b-version", "7", "b-upper", "manual"]]);
+  }
+  const chosen = render(model, search + "&sourceVersion=b-version&storey=b-upper&page=7&sourceSelection=manual");
+  expect(chosen).not.toContain(en.plannerPlanChoose);
+  expect(chosen).toContain(en.plannerPlanShown);
+  expect(chosen).toContain(en.plannerPlanScope);
+  expect(render(model, search + "&entity=room:room")).not.toContain(en.plannerPlanChoose);
+  expect(render(model, "?view=building-model&perspective=nerd")).not.toContain(en.plannerPlanChoose);
+  expect(render({ ...model, planSources: [model.planSources[0]] }, search)).not.toContain(en.plannerPlanChoose);
+});
+
+test("planner's next action distinguishes preparation, missing scale and source review", () => {
+  const model = { planSources: [{ id: "source", page: 1, storeyId: "ground", source: { versionId: "version", fileName: "Plans.pdf" } }] };
+  const search = "?view=building-model&perspective=planner&sourceSelection=manual&sourceVersion=version&storey=ground&page=1&modelView=3d";
+  for (const status of ["running", "failed", "complete"]) {
+    const html = render({ ...model, extractions: [{ id: "job", sourceVersionId: "version", storeyId: "ground", page: 1, status,
+      result: { pageScale: { pageAspectRatio: 1, metresPerPageHeight: 20 } } }] }, search);
+    expect(html).toContain(status === "complete" ? en.plannerPlanReviewHint : en.plannerPlanPreparationHint);
+    expect(html).not.toContain(en.plannerPlanScaleHint);
+    if (status === "complete") expect(html).toMatch(/href="[^"]*modelView=2d[^"]*"[^>]*>Review floor plan/);
+  }
+  expect(render(model, search)).toContain(en.plannerPlanScaleHint);
+});
+
 test("floor navigation uses semantic names, preserves custom names and never treats page numbers or conflicting titles as levels", () => {
   const storeys = ["ground", "unknown", "conflict", "entered", "custom"].map((id, index) => ({ id, name: id === "custom" ? "Workshop mezzanine" : `Plan page ${index + 8} (draft)`, levelIndex: id === "entered" ? -2 : null }));
   const planSources = storeys.map((storey, index) => ({ id: storey.id, storeyId: storey.id, page: index + 8,

@@ -11,6 +11,24 @@ model to synchronize. Edit outlines in 2D; edit heights in the 3D dimension pane
 
 ## Select PDF pages and review coverage
 
+In the **Planner** perspective, opening a PDF building model with several source
+documents first asks which plan to view. Each choice shows its detected floor-plan
+coverage (not approval); replaced plan sets remain labelled for source inspection.
+An explicit selection or an object evidence link opens directly. **Change plan**
+returns to the choice. A single source needs no extra selection step.
+
+Above the model, **Next step** directs the planner to preparation status while work
+is running or failed, to the existing scale editor when the selected page has no
+metric scale, or to **Review floor plan** in 2D. Compare rooms, walls and openings
+with the source drawing before using them in an assessment. This is guidance, not
+a persisted review checklist or a claim that the assessment is complete.
+
+The choice is retained in the view URL, not as an authoritative project-wide plan
+assignment. It does not stop automatic extraction, change project-wide assessment
+inputs, replace another plan set or approve engineering data. **Nerd** retains the
+direct source dropdown and technical controls; the dedicated fire-protection page
+retains its own project-wide inputs and source-page selector.
+
 The source selector chooses a document revision; page numbers refer to that PDF,
 not to building floors. Documents with more than twelve pages use a compact page
 selector. Non-plan, unresolved and not-yet-registered pages remain viewable without
