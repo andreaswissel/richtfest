@@ -2955,6 +2955,8 @@
   "buildingComponentFireClosureT90RS": "T 90-RS – feuerbeständig, rauchdicht und selbstschließend",
   "buildingFireProtection": "Brandschutz",
   "buildingFirePlan": "Brandschutzplan anzeigen",
+  "buildingFirePlanPage": "Planseite für Rettungswege",
+  "buildingFireModelRequired": "Bereiten Sie das Gebäudemodell vor, um den Brandschutz zu bewerten.",
   "buildingFirePlanLegend": "Legende Brandschutzplan",
   "buildingFireClass": "GK {class}",
   "buildingFireClassOpen": "Gebäudeklasse offen",

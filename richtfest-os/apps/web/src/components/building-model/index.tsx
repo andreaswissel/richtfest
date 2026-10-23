@@ -4,6 +4,8 @@ import { useMutation } from "@tanstack/react-query";
 import { api, ApiError, list, type RecordData } from "../../api";
 import { queryClient, useApi } from "../../query";
 import { useT } from "../../i18n";
+import { Page, PageHeader, Section } from "../layout";
+import { LoadState } from "../../screens/foundation";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
@@ -261,6 +263,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
   const imported = list(model.data?.buildings).some(b => b.geometry?.ifcImport);
   const mode = params.get("modelSource") || (ifcEntity || (imported && !list(model.data?.planSources).length) ? "ifc" : "pdf");
   const modeLink = (value: string) => { const next = new URLSearchParams(params); next.set("modelSource", value); return `?${next}`; };
+  if (params.get("view") === "fire-protection") return <PdfBuildingModelMode projectId={projectId} />;
   return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
     <div className="px-page py-2"><Segmented value={mode} items={[{ value: "pdf", label: t("ifcBuildingPdf"), to: modeLink("pdf") }, { value: "ifc", label: t("ifcBuildingTitle"), to: modeLink("ifc") }]} /></div>
     {mode === "ifc" ? <>
@@ -273,6 +276,7 @@ export function BuildingModelMode({ projectId }: { projectId: string }) {
 function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const t = useT();
   const [params, setParams] = useSearchParams();
+  const fireView = params.get("view") === "fire-protection";
   const requestedState = params.get("modelState");
   const state: BuildingModelState = states.some((item) => item.value === requestedState) ? requestedState as BuildingModelState : "existing";
   const setModelState = (nextState: BuildingModelState) => {
@@ -540,9 +544,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   });
   const [colorWallRoles, setColorWallRoles] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
-  const [fireOverlay, setFireOverlay] = useState(false);
+  const [fireOverlay, setFireOverlay] = useState(params.get("overlay") === "fire");
   const [fireOpen, setFireOpen] = useState(false);
-  const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen || fireOpen);
+  const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen || fireOpen || fireView);
   const inquiries = useApi(`/projects/${projectId}/inquiries`, soundOpen);
   const createInquiry = useMutation({
     mutationFn: (input: { counterpart: string; body: string }) => api(`/projects/${projectId}/inquiries`, { kind: "component_data", title: t("buildingRequestTitle"), counterpart: input.counterpart,
@@ -658,13 +662,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const pageScale = (magicPageScale(outlineSession) ?? activeExtraction?.result?.pageScale ?? null) as PageScale | null;
   // Escape routes are measured on the shown plan page at its printed scale.
   const fireRoutes = useMemo(() => {
-    if (!fireOverlay && !fireOpen) return [];
+    if (!fireOverlay && !fireOpen && !fireView) return [];
     const levels = new Map(model.storeys.map((storey) => { const state = storey.componentProperties?.level;
       return [storey.id, state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null] as const; }));
     return pageEscapeRoutes(fireAssessment, pageRegions, Object.values(model.states).flat(), pageScale, (storeyId) => storeyId ? levels.get(storeyId) ?? null : null);
     // pageRegions is derived from these on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fireOverlay, fireOpen, fireAssessment, model, state, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, pageScale]);
+  }, [fireOverlay, fireOpen, fireView, fireAssessment, model, state, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId, pageScale]);
   const fireOverlayData = useMemo(() => fireOverlay ? {
     marks: fireMarks(fireAssessment),
     annotations: pageScale ? fireRoutes.map((route): FireAnnotation => ({ id: route.roomId, point: metresToPoint(route.from, pageScale), path: route.path.map((point) => metresToPoint(point, pageScale)), over: route.length > maxEscapeDistance,
@@ -725,6 +729,40 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   if (sourceStoreyId) referenceParams.set("storey", sourceStoreyId);
   const referenceHref = `/projects/${projectId}?${referenceParams.toString()}`;
 
+  const firePanel = <FireProtectionPanel model={model} assessment={fireAssessment} routes={fireRoutes} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} roomNames={roomNames} elementNames={elementNames} t={t}
+    addressState={(componentSources.data as { addressState?: import("@richtfest/shared").BuildingAddressStateSuggestion | null } | undefined)?.addressState}
+    pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+    onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />;
+
+  if (fireView) {
+    const planParams = new URLSearchParams(params);
+    planParams.set("view", "building-model");
+    planParams.set("overlay", "fire");
+    planParams.set("modelSource", "pdf");
+    planParams.delete("modelView");
+    const planLink = `?${planParams}`;
+    const modelMissing = modelError instanceof ApiError && modelError.status === 404;
+    return <Page className="fire-protection-page">
+      <PageHeader title={t("buildingFireProtection")} actions={<Button asChild variant="outline"><Link to={planLink}>{t("buildingFirePlan")}</Link></Button>} />
+      {!modelMissing && <LoadState query={modelQuery} />}
+      {conflict && <Callout tone="warning">{conflict}</Callout>}
+      {(modelQuery.isSuccess || modelMissing) && (model.buildings.length ? <div className="grid min-w-0 gap-section lg:grid-cols-2">
+        <Section title={t("buildingFireResult")} meta={<Badge>{fireSummary(fireAssessment, t)}</Badge>}>
+          {currentSource && <Field label={t("buildingFirePlanPage")}><NativeSelect value={currentSource.id} onChange={(event) => {
+            const source = model.planSources.find((item) => item.id === event.target.value);
+            if (source) selectSourcePage(source.page, source.source?.versionId || "", source.storeyId || "");
+          }}>{model.planSources.map(source => <option key={source.id} value={source.id}>{source.source?.fileName} · {t("buildingModelPage")} {source.page}{source.storeyId ? ` · ${storeyNames.get(source.storeyId) ?? source.storeyId}` : ""}</option>)}</NativeSelect></Field>}
+          {firePanel}
+        </Section>
+        <PlanHeights projectId={projectId} model={model} onPage={(nextPage, versionId) => {
+          planParams.set("page", String(nextPage)); planParams.set("sourceVersion", versionId); planParams.set("sourceSelection", "manual");
+          for (const key of ["entity", "candidate", "storey"]) planParams.delete(key);
+          setParams(planParams);
+        }} />
+      </div> : <Empty>{t("buildingFireModelRequired")} <Link className="underline underline-offset-2" to={planLink}>{t("buildingModel")}</Link></Empty>)}
+    </Page>;
+  }
+
   if (needsBootstrap) {
     return <BuildingModelBootstrap
       projectId={projectId}
@@ -778,14 +816,14 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
       setPage(region.page);
     }
   };
-  const selectSourcePage = (nextPage: number, nextVersion = "", nextStorey = "") => {
+  function selectSourcePage(nextPage: number, nextVersion = "", nextStorey = "") {
     setSelectedId(undefined);
     setSelectedCandidateId(undefined);
     setSourceSelectionPinned(true);
     setSourceVersionId(nextVersion);
     setSourceStoreyId(nextStorey);
     setPage(nextPage);
-  };
+  }
 
   const selectCandidate = (candidate: BuildingExtractionCandidate) => {
     setSelectedId(undefined);
@@ -1077,10 +1115,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
             <h2 className="building-model-panel-title">{t("buildingFireProtection")}</h2>
             <PlanHeights projectId={projectId} model={model} onPage={(nextPage, sourceVersionId) => { selectSourcePage(nextPage, sourceVersionId); setFireOpen(false); }} />
-            <FireProtectionPanel model={model} assessment={fireAssessment} routes={fireRoutes} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} roomNames={roomNames} elementNames={elementNames} t={t}
-              addressState={(componentSources.data as { addressState?: import("@richtfest/shared").BuildingAddressStateSuggestion | null } | undefined)?.addressState}
-              pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
-              onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
+            {firePanel}
           </PopoverContent>
         </Popover>
         <Button data-plan-control variant="ghost" size="icon-sm" type="button" aria-label={t("buildingFirePlan")} title={t("buildingFirePlan")} aria-pressed={fireOverlay} onClick={() => setFireOverlay((value) => !value)}><Layers className="size-icon-sm" aria-hidden="true" /></Button>

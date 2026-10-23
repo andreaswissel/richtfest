@@ -191,6 +191,55 @@ describe("registered OpenUI boundary", () => {
   });
 });
 describe("workspace records and navigation", () => {
+  test("fire protection has a direct project tab in every perspective and shares the saved building inputs", () => {
+    for (const perspective of ["nerd", "planner", "coordinator"]) {
+      const html = render(
+        <Routes>
+          <Route path="/projects/:id" element={<ProjectWorkspace />} />
+        </Routes>,
+        `/projects/${projectId}?view=fire-protection&perspective=${perspective}`,
+        {
+          [`/projects/${projectId}`]: { id: projectId, name: "Fire review" },
+          [`/projects/${projectId}/building-model`]: {
+            revision: 3,
+            buildings: [{ id: "building", name: "House" }],
+            properties: [
+              {
+                id: "height",
+                entityType: "building",
+                entityId: "building",
+                propertyKey: "fireHeight",
+                current: { value: 8.75 },
+              },
+            ],
+          },
+        },
+      );
+      expect(html).toContain(
+        `aria-current="page" href="/projects/${projectId}?view=fire-protection&amp;perspective=${perspective}"`,
+      );
+      expect(html).toContain("Fire protection</a>");
+      expect(html).toContain('value="8.75"');
+      expect(html).toContain("Show Brandschutzplan</a>");
+      expect(html).toContain("overlay=fire");
+      expect(html).not.toContain('role="toolbar"');
+    }
+    const empty = render(
+      <Routes>
+        <Route path="/projects/:id" element={<ProjectWorkspace />} />
+      </Routes>,
+      `/projects/${projectId}?view=fire-protection`,
+      {
+        [`/projects/${projectId}`]: { id: projectId, name: "Empty project" },
+        [`/projects/${projectId}/building-model`]: { buildings: [] },
+      },
+    );
+    expect(empty).toContain(
+      "Prepare the building model to assess fire protection.",
+    );
+    expect(empty).not.toContain('value="8.75"');
+  });
+
   test("main conversation shows specialist progress without separate specialist output or controls", () => {
     const html = render(
       <Routes>

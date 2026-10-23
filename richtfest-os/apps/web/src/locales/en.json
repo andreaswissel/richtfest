@@ -2955,6 +2955,8 @@
   "buildingComponentFireClosureT90RS": "T 90-RS",
   "buildingFireProtection": "Fire protection",
   "buildingFirePlan": "Show Brandschutzplan",
+  "buildingFirePlanPage": "Plan page for escape routes",
+  "buildingFireModelRequired": "Prepare the building model to assess fire protection.",
   "buildingFirePlanLegend": "Brandschutzplan legend",
   "buildingFireClass": "GK {class}",
   "buildingFireClassOpen": "Building class open",

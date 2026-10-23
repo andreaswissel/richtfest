@@ -151,6 +151,7 @@ export function ProjectWorkspace() {
         view !== "location" &&
         view !== "analytics" &&
         view !== "building-model" &&
+        view !== "fire-protection" &&
         view !== "inquiries" &&
         view !== "noise" &&
         view !== "feasibility",
@@ -291,6 +292,7 @@ export function ProjectWorkspace() {
     "workspace",
     "location",
     "building-model",
+    "fire-protection",
     "details",
     "sources",
     "inquiries",
@@ -308,6 +310,7 @@ export function ProjectWorkspace() {
             "workspace",
             "location",
             "building-model",
+            "fire-protection",
             "sources",
             ...(perspective === "planner" ? ["inquiries"] : ["details"]),
             view,
@@ -333,13 +336,15 @@ export function ProjectWorkspace() {
                 ? t("locationEditor")
                 : key === "building-model"
                   ? t("buildingModel")
-                  : key === "details"
-                    ? t("projectDetails")
-                    : key === "noise"
-                      ? t("noiseNav")
-                      : key === "feasibility"
-                        ? t("feasibilityNav")
-                        : t(key as "sources" | "inquiries")}
+                  : key === "fire-protection"
+                    ? t("buildingFireProtection")
+                    : key === "details"
+                      ? t("projectDetails")
+                      : key === "noise"
+                        ? t("noiseNav")
+                        : key === "feasibility"
+                          ? t("feasibilityNav")
+                          : t(key as "sources" | "inquiries")}
         </Link>
       ))}
       {perspective !== "nerd" && (
@@ -405,9 +410,8 @@ export function ProjectWorkspace() {
         {view === "location" && project.isSuccess && (
           <LocationMode projectId={id!} address={details} />
         )}
-        {view === "building-model" && project.isSuccess && (
-          <BuildingModelMode projectId={id!} />
-        )}
+        {(view === "building-model" || view === "fire-protection") &&
+          project.isSuccess && <BuildingModelMode projectId={id!} />}
         {view === "analytics" && project.isSuccess && (
           <ProjectAnalytics key={id} projectId={id!} />
         )}

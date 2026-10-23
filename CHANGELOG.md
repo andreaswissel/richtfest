@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **Brandschutz project tab:** Open fire-protection inputs, classification, review controls and draft text directly from every project perspective, with source heights alongside and a link to the fire-coloured plan. The tab shares the existing building model and approvals.
 - **Readable building properties:** Long German labels in the fire-protection panel now wrap without overlapping inputs or source-help buttons, in both display densities.
 - **Reliable assessment retries:** Specialist results retain their configured output limits through review handoff. Retrying interrupted plan reads reuses matching visual receipts without rereading pages or weakening source-citation checks.
 - **Assessment replay across floors:** Prepare source-pinned, building-scoped dossiers from multi-page PDF plans and replay existing sound and fire checks, with separate draft concepts, method receipts and visible missing or unsupported checks. Terrace-facing walls and traced openings reach acoustic previews without double-counting parallel layers; excluded geometry and incomplete envelopes remain visible. Agent guidance separates buildings, shared basements and site walls before calculations.

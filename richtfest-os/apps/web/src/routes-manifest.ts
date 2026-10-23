@@ -43,6 +43,7 @@ export const performanceRoutes = [
   "/projects/:id?view=overview&perspective=planner",
   "/projects/:id?view=location",
   "/projects/:id?view=building-model",
+  "/projects/:id?view=fire-protection",
   "/projects/:id?view=analytics",
   "/projects/:id?view=inquiries",
   "/projects/:id?view=noise",
