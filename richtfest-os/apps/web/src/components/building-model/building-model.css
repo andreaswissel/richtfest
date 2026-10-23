@@ -337,7 +337,8 @@
 .building-model-component-status:empty { display: none; }
 .building-model-component-derive { display: grid; justify-items: start; gap: 4px; }
 .building-model-properties dl.building-model-component-rows, .building-model-sound-popover dl.building-model-component-rows { align-items: start; }
-.building-model-component-rows > dt { min-height: var(--control-sm); display: flex; align-items: center; }
+.building-model-component-rows > dt { min-width: 0; min-height: var(--control-sm); display: flex; align-items: center; overflow-wrap: anywhere; hyphens: auto; }
+.building-model-component-rows > dt > span { min-width: 0; }
 .building-model-component-rows > dd:not(:has([data-slot])) { min-height: var(--control-sm); display: flex; align-items: center; }
 .building-model-type-review { display: grid; gap: 4px; }
 .building-model-type-review-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
