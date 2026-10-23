@@ -1,7 +1,7 @@
 import { lockProject } from "./project-lock";
 import { assembleFireProtectionSnapshot } from "./fire-protection";
 import { Router, type Request } from "express";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   buildingConstructionStateSchema,
@@ -13,6 +13,8 @@ import {
   buildingPropertyProvenanceSchema,
   buildingPropertyValueSchema,
   buildingReviewStatusSchema,
+  buildingConnectionTypes,
+  isActiveBuildingRelationship,
   ok,
   buildingComponentProperties,
   componentDataRequest,
@@ -31,6 +33,7 @@ import {
   type BuildingComponentRecord,
   type SitePlan,
 } from "@richtfest/shared";
+import { PLAN_HEIGHT_VERSION, planHeightObservationSchema, fireHeightMetres } from "@richtfest/shared/plan-heights";
 import {
   buildingAlternatives,
   buildingBuildings,
@@ -315,6 +318,10 @@ const readModel = async (d: AppDeps, model: any) => {
         attempts: job.attempts, reason: job.result?.reason ?? null }));
     return { fileId: source.fileId, fileName: source.fileName, sourceVersionId: source.sourceVersionId, status,
       currentPhase, inference: activeInference ?? { provider: "typesafe", active: false, configured: null },
+      heightExtraction: source.classificationMetadata?.heightExtraction ? (() => {
+        const { token: _token, requestedBy: _requestedBy, ...receipt } = source.classificationMetadata.heightExtraction;
+        return receipt;
+      })() : null,
       sourceStatus: source.sourceStatus, classificationStatus: source.classificationStatus,
       renderableSource: { mimeType: source.mimeType, downloadUrl: `/api/projects/${model.projectId}/files/${source.fileId}/versions/${source.version}/download` },
       pageCount: metadata?.pageCount ?? source.sourceResult?.pages ?? null,
@@ -433,6 +440,7 @@ const soundInsulationContext = async (d: AppDeps, projectId: string, data: any) 
 const ceilingContext = (data: any) => {
   const ceilings = new Map<string, { ceilingId: string; roomIds: string[]; upperStoreyId: string | null }>();
   for (const relationship of data.relationships as any[]) {
+    if (!isActiveBuildingRelationship(relationship)) continue;
     if (!["covers", "under_storey"].includes(relationship.relationshipType) || relationship.metadata?.method !== storeyCeilingMethod) continue;
     const ceiling = ceilings.get(relationship.fromEntityId) ?? { ceilingId: relationship.fromEntityId, roomIds: [] as string[], upperStoreyId: null as string | null };
     if (relationship.relationshipType === "covers") ceiling.roomIds.push(relationship.toEntityId); else ceiling.upperStoreyId = relationship.toEntityId;
@@ -443,6 +451,7 @@ const ceilingContext = (data: any) => {
 
 /** Derived wall faces for agents: the rooms each wall separates, or that a face is outside. */
 const wallAdjacencyContext = (data: any, objectId?: string) => (data.relationships as any[])
+  .filter(isActiveBuildingRelationship)
   .filter(relationship => ["separates", "faces_exterior"].includes(relationship.relationshipType) && (!objectId || relationship.fromEntityId === objectId || relationship.toEntityId === objectId))
   .map(relationship => ({ wallId: relationship.fromEntityId, roomId: relationship.relationshipType === "separates" ? relationship.toEntityId : null, exterior: relationship.relationshipType === "faces_exterior",
     side: relationship.metadata?.side ?? null, method: relationship.metadata?.method ?? null, reviewStatus: relationship.reviewStatus }));
@@ -617,7 +626,7 @@ export async function readSitePlan(d: AppDeps, projectId: string): Promise<SiteP
   const [elements, storeys, exterior, placementRows, maskRows] = await Promise.all([
     d.db.select({ id: buildingElements.id, kind: buildingElements.kind, name: buildingElements.name, storeyId: buildingElements.storeyId, geometry: buildingElements.geometry }).from(buildingElements).where(scoped(buildingElements)),
     d.db.select({ id: buildingStoreys.id, name: buildingStoreys.name, levelIndex: buildingStoreys.levelIndex }).from(buildingStoreys).where(scoped(buildingStoreys)),
-    d.db.select({ id: buildingRelationships.fromEntityId }).from(buildingRelationships).where(and(scoped(buildingRelationships), eq(buildingRelationships.relationshipType, "faces_exterior"))),
+    d.db.select({ id: buildingRelationships.fromEntityId }).from(buildingRelationships).where(and(scoped(buildingRelationships), eq(buildingRelationships.relationshipType, "faces_exterior"), notInArray(buildingRelationships.reviewStatus, ["rejected", "superseded"]))),
     d.db.select().from(buildingPlacements).where(scoped(buildingPlacements)).limit(1),
     d.db.select({ mask: buildingSelectionMasks, job: buildingExtractionJobs }).from(buildingSelectionMasks).innerJoin(buildingExtractionJobs, eq(buildingExtractionJobs.id, buildingSelectionMasks.jobId))
       .where(scoped(buildingSelectionMasks)).orderBy(desc(buildingSelectionMasks.updatedAt)),
@@ -666,6 +675,23 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const row = await modelForProject(d, projectId);
       if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       return res.json(ok(await readModel(d, row.model)));
+    } catch (e) { return next(e); }
+  });
+
+  // Explicit read-only scenario: never accepts candidates or changes the normal proof's review gates.
+  router.post("/projects/:projectId/building-model/calculation-preview", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read");
+      const projectId = uuid.parse(id(req.params.projectId));
+      const row = await modelForProject(d, projectId);
+      if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const { calculateCandidates, candidateCalculationRequest } = await import("./candidate-calculations");
+      const scope = candidateCalculationRequest.parse(req.body);
+      const data = await readModel(d, row.model);
+      const preview = calculateCandidates(data, scope, d);
+      const current = await modelForProject(d, projectId);
+      if (current?.model.revision !== row.model.revision) return send(res, 409, { data: null, error: { code: "revision_conflict" }, message: "Model changed during calculation; run the preview again." });
+      return res.json(ok(preview));
     } catch (e) { return next(e); }
   });
 
@@ -788,6 +814,76 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     } catch (e) { return next(e); }
   });
 
+  router.post("/projects/:projectId/building-model/height-extractions", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write"); d.requirePermission("agent:run");
+      const projectId = uuid.parse(id(req.params.projectId));
+      const { sourceVersionId } = z.object({ sourceVersionId: uuid }).strict().parse(req.body);
+      const row = await modelForProject(d, projectId);
+      if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (!(await evidenceVersionsForProject(d.db, d, projectId, [{ kind: "page", sourceVersionId, page: 1 }])))
+        return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "A ready project plan revision is required" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const [source] = await tx.select().from(sourceModels).where(and(eq(sourceModels.versionId, sourceVersionId), eq(sourceModels.tenantId, d.tenantId),
+          sql`exists (select 1 from ${buildingPlanSources} p where p.model_id=${row.model.id} and p.source_version_id=${sourceVersionId})`,
+          sql`not exists (select 1 from ${buildingSupersededSources} s where s.model_id=${row.model.id} and s.source_version_id=${sourceVersionId})`)).for("update");
+        if (!source || source.metadata?.automaticBuildingModel?.modelId !== row.model.id) return { invalidSource: true };
+        // Completed/unknown provider outcomes are immutable. Only pre-dispatch setup failures may be retried explicitly.
+        const previous = source.metadata.heightExtraction;
+        const retryable = previous?.status === "partial" && previous.pages?.length > 0
+          && previous.pages.every((page: any) => ["unconfigured", "forbidden", "unavailable"].includes(page.status));
+        if (previous && !retryable) return { status: previous.status, reused: true };
+        await tx.update(sourceModels).set({ metadata: { ...source.metadata, heightExtraction: {
+          version: PLAN_HEIGHT_VERSION, status: "queued", pages: [], requestedBy: d.actorId,
+        } }, updatedAt: new Date() }).where(and(eq(sourceModels.versionId, sourceVersionId), eq(sourceModels.tenantId, d.tenantId)));
+        await d.audit(tx, "projects.building.heights.queued", "file_version", sourceVersionId, { projectId, extractorVersion: PLAN_HEIGHT_VERSION });
+        return { status: "queued", reused: false };
+      });
+      if (result.invalidSource) return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "An active registered PDF plan set is required" });
+      return send(res, 202, ok(result));
+    } catch (e) { return next(e); }
+  });
+
+  router.post("/projects/:projectId/building-model/height-observations", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId));
+      const input = z.object({ baseRevision: z.number().int().nonnegative(), buildingId: uuid, sourceVersionId: uuid,
+        page: z.number().int().positive(), observationIndex: z.number().int().min(0).max(11) }).strict().parse(req.body);
+      const row = await modelForProject(d, projectId);
+      if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      if (!(await evidenceVersionsForProject(d.db, d, projectId, [{ kind: "page", sourceVersionId: input.sourceVersionId, page: input.page }])))
+        return send(res, 422, { data: null, error: { code: "invalid_source_revision" }, message: "A ready project plan revision is required" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, row.model.id, input.baseRevision);
+        if (revision === undefined) return { conflict: row.model.revision };
+        if (!(await entityExists(tx, d, row.model.id, "building", input.buildingId))) return { missing: true };
+        const [source] = await tx.select().from(sourceModels).where(and(eq(sourceModels.versionId, input.sourceVersionId), eq(sourceModels.tenantId, d.tenantId),
+          sql`not exists (select 1 from ${buildingSupersededSources} s where s.model_id=${row.model.id} and s.source_version_id=${input.sourceVersionId})`)).for("update");
+        if (source?.metadata?.automaticBuildingModel?.modelId !== row.model.id) return { invalidSource: true };
+        const page = source.metadata?.heightExtraction?.pages?.find((item: any) => item.page === input.page && item.status === "completed");
+        const parsed = planHeightObservationSchema.safeParse(page?.observations?.[input.observationIndex]);
+        const metres = parsed.success ? fireHeightMetres(parsed.data) : null;
+        if (!parsed.success || metres === null) return { invalid: true };
+        const [existing] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, row.model.id),
+          eq(buildingProperties.entityId, input.buildingId), eq(buildingProperties.entityType, "building"), eq(buildingProperties.propertyKey, "fireHeight")));
+        if (existing) return { reviewConflict: true };
+        const observation = parsed.data;
+        const { property, version } = await appendPropertyVersion(tx, d, row.model.id, { entityType: "building", entityId: input.buildingId,
+          propertyKey: "fireHeight", value: metres, unit: "m", provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: input.sourceVersionId,
+            page: input.page, quote: observation.quote }] });
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: row.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.height.proposed", "building_property", property.id, { projectId, sourceVersionId: input.sourceVersionId,
+          page: input.page, observationIndex: input.observationIndex, observation, inference: page.metadata, modelRevision: revision });
+        return { property, version, revision };
+      });
+      if (result.conflict !== undefined) return revisionConflict(res, result.conflict);
+      if (result.reviewConflict) return send(res, 409, { data: null, error: { code: "height_exists" }, message: "An existing height must be reviewed or corrected separately; it was not replaced" });
+      if (result.missing || result.invalidSource || result.invalid) return send(res, 422, { data: null, error: { code: "invalid_height_observation" }, message: "A saved observation identifying the highest habitable floor, mean terrain, units and floor basis is required" });
+      return send(res, 201, ok(result));
+    } catch (e) { return next(e); }
+  });
+
   router.post("/projects/:projectId/building-model/properties", async (req, res, next) => {
     try {
       const d = getDeps(req); d.requirePermission("projects:write"); const projectId = uuid.parse(id(req.params.projectId)); const input = propertyInput.parse(req.body); const modelRow = await modelForProject(d, projectId); if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
@@ -875,6 +971,36 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     } catch (e) { return next(e); }
   });
 
+  router.post("/projects/:projectId/building-model/relationships/:relationshipId/review", async (req, res, next) => {
+    try {
+      const d = getDeps(req); d.requirePermission("projects:write");
+      const projectId = uuid.parse(id(req.params.projectId)), relationshipId = uuid.parse(id(req.params.relationshipId));
+      const input = revisionInput.extend({ decision: z.enum(["approved", "rejected"]), note: z.string().trim().max(2000).optional() }).strict().parse(req.body);
+      const modelRow = await modelForProject(d, projectId);
+      if (!modelRow) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
+      const result = await modelTransaction(d.db, async (tx: any) => {
+        const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision);
+        if (revision === undefined) return { conflict: modelRow.model.revision };
+        const [relationship] = await tx.select().from(buildingRelationships).where(and(eq(buildingRelationships.id, relationshipId),
+          eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
+          inArray(buildingRelationships.relationshipType, [...buildingConnectionTypes]), notInArray(buildingRelationships.reviewStatus, ["superseded"]))).limit(1);
+        if (!relationship || !(await entityExists(tx, d, modelRow.model.id, relationship.fromEntityType, relationship.fromEntityId))
+          || !(await entityExists(tx, d, modelRow.model.id, relationship.toEntityType, relationship.toEntityId))) return { missing: true };
+        const [updated] = await tx.update(buildingRelationships).set({ reviewStatus: input.decision,
+          metadata: { ...relationship.metadata, review: { by: d.actorId, at: new Date().toISOString(), note: input.note ?? null, modelRevision: revision } } })
+          .where(and(eq(buildingRelationships.id, relationshipId), eq(buildingRelationships.tenantId, d.tenantId))).returning();
+        // Reviewing a connection approves neither the whole model nor a fire/acoustic classification.
+        await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: modelRow.model.id, revision, status: "draft", createdBy: d.actorId });
+        await d.audit(tx, "projects.building.relationship.reviewed", "building_relationship", relationshipId,
+          { projectId, modelRevision: revision, previousStatus: relationship.reviewStatus, decision: input.decision, note: input.note ?? null });
+        return { relationship: updated, revision };
+      });
+      if (result.conflict !== undefined) return revisionConflict(res, result.conflict);
+      if (result.missing) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Reviewable connection not found" });
+      return res.json(ok(result));
+    } catch (e) { return next(e); }
+  });
+
   // Deterministic: re-running replaces earlier derived adjacency and never overrides a person's entry or review.
   router.post("/projects/:projectId/building-model/wall-adjacency", async (req, res, next) => {
     try {
@@ -926,7 +1052,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         .filter(candidateId => uuid.safeParse(candidateId).success);
       const candidateKeys = new Map(roomCandidateIds.length ? (await d.db.select({ id: buildingExtractionCandidates.id, sourceKey: buildingExtractionCandidates.sourceKey }).from(buildingExtractionCandidates)
         .where(and(eq(buildingExtractionCandidates.tenantId, d.tenantId), inArray(buildingExtractionCandidates.id, roomCandidateIds))) as any[]).map(row => [row.id, row.sourceKey]) : []);
-      const hostOf = new Map((data.relationships as any[]).filter(item => item.relationshipType === "opening_in").map(item => [item.fromEntityId, item.toEntityId]));
+      const hostOf = new Map((data.relationships as any[]).filter(isActiveBuildingRelationship).filter(item => item.relationshipType === "opening_in").map(item => [item.fromEntityId, item.toEntityId]));
       const openingPlan = planOpenings({
         pages: [...openingPages.values()],
         walls: walls.map(wall => {
@@ -946,6 +1072,10 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       });
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, modelRow.model.id, input.baseRevision); if (revision === undefined) return { conflict: modelRow.model.revision };
+        const connectionKey = (link: any) => JSON.stringify([link.fromEntityType, link.fromEntityId, link.toEntityType, link.toEntityId, link.relationshipType, link.metadata?.side ?? null]);
+        const preserved = new Set((data.relationships as any[]).filter(link => link.reviewStatus !== "unreviewed"
+          || !(String(link.metadata?.method).startsWith("plan_side_probe_") || link.metadata?.method === storeyCeilingMethod)).map(connectionKey));
+        const newConnections = (links: any[]) => links.filter(link => !preserved.has(connectionKey(link)));
         await tx.delete(buildingRelationships).where(and(eq(buildingRelationships.modelId, modelRow.model.id), eq(buildingRelationships.tenantId, d.tenantId),
           inArray(buildingRelationships.relationshipType, ["separates", "faces_exterior"]), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' like 'plan_side_probe_%'`));
         const relationships = walls.flatMap(wall => wall.sides.flatMap((side, sideIndex) => {
@@ -955,7 +1085,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           return (side ?? []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
             toEntityType: "room", toEntityId: room.roomId, relationshipType: "separates", metadata: { ...metadata, probeHits: room.hits }, createdBy: d.actorId }));
         }));
-        if (relationships.length) await tx.insert(buildingRelationships).values(relationships);
+        const newWallConnections = newConnections(relationships);
+        if (newWallConnections.length) await tx.insert(buildingRelationships).values(newWallConnections);
         let roleProposals = 0, thicknessProposals = 0;
         for (const wall of walls) {
           const region = wall.planRegion && wall.planRegion.width > 0 && wall.planRegion.height > 0 ? { region: wall.planRegion } : {};
@@ -1036,7 +1167,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           if (ceiling.upperStoreyId) ceilingRelationships.push({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: ceilingId,
             toEntityType: "storey", toEntityId: ceiling.upperStoreyId, relationshipType: "under_storey", metadata, createdBy: d.actorId });
         }
-        if (ceilingRelationships.length) await tx.insert(buildingRelationships).values(ceilingRelationships);
+        const newCeilingConnections = newConnections(ceilingRelationships);
+        if (newCeilingConnections.length) await tx.insert(buildingRelationships).values(newCeilingConnections);
         const summary = { storeyLevels: levels.filter(level => level.level !== null).length, levelProposals, ceilings: ceilings.length, ceilingsCreated: createdCeilings.length, walls: walls.length, bothSides: walls.filter(wall => wall.sides[0] && wall.sides[1]).length,
           exterior: walls.filter(wall => wall.sides.includes("exterior")).length, unresolvedSides: walls.filter(wall => !wall.sides[0] || !wall.sides[1]).length,
           roles: walls.filter(wall => wall.role).length, roleProposals, thicknesses: walls.filter(wall => wall.thicknessCm !== null).length, thicknessProposals,

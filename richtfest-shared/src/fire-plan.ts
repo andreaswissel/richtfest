@@ -65,7 +65,7 @@ export function validateFirePlan(value: FirePlan, ctx: z.RefinementCtx) {
 }
 
 /** Shared by saved-model execution and offline replay; no model-supplied answers. */
-export function assessFirePlan(raw: unknown) {
+export function assessFirePlan(raw: unknown, mode: "reviewed" | "candidate_preview" = "reviewed") {
   const input = firePlanSchema.superRefine(validateFirePlan).parse(raw);
   const { building } = input;
   const classification = classifyFireBuilding(building.input);
@@ -126,7 +126,7 @@ export function assessFirePlan(raw: unknown) {
     }
     // IFC routes remain unsupported, even if an operator supplies a 2D polygon.
     const routeOutcome = baseOutcome !== "complete" ? baseOutcome : storey.evidence.some(item => item.kind === "ifc") ? "unsupported"
-      : !storey.evidence.length || !storey.geometryReviewed || storey.rooms.some(room => room.role === null || room.polygon === null || room.basement === null)
+      : !storey.evidence.length || mode !== "candidate_preview" && !storey.geometryReviewed || storey.rooms.some(room => room.role === null || room.polygon === null || room.basement === null)
         || storey.doors.some(door => door.rooms === null || door.point === null) ? "blocked" : "complete";
     const calculated = routeOutcome === "complete" ? escapeRouteLengths(
       storey.rooms.map(room => ({ ...room, basement: room.basement!, polygon: room.polygon! })),
@@ -135,7 +135,7 @@ export function assessFirePlan(raw: unknown) {
       const route = calculated.find(route => route.roomId === room.id);
       const outcome = routeOutcome !== "complete" ? routeOutcome : route ? "complete" : "blocked";
       add(`route:${prefix}${room.id}:length`, route?.length ?? null, "m", storey.evidence, outcome,
-        route ? "Engine's sampled first-route length, rounded to 0.01 m; not a second-route or accessibility check."
+        route ? `${mode === "candidate_preview" ? "UNREVIEWED candidate geometry. " : ""}Engine's sampled first-route length, rounded to 0.01 m; not a second-route or accessibility check.`
           : "No verified calculable route: check scale, geometry, roles, door connections, exits and supported source format.");
       add(`route:${prefix}${room.id}:withinLimit`, route ? route.length <= maxEscapeDistance : null, null, storey.evidence, outcome,
         "Engine's 35 m comparison uses its rounded length; borderline routes require independent geometric review.");
@@ -149,9 +149,11 @@ export function assessFirePlan(raw: unknown) {
     add(`scope:${id}`, null, null, building.evidence, "unsupported", "Not executed by this engine; retain applicable positive checks as failures.");
   const gaps = observations.filter(item => item.outcome !== "complete").map(item => ({ id: item.id, outcome: item.outcome, note: item.note }));
   const concept = state ? "UNREVIEWED DRAFT — calculation-stage replay, not a complete Brandschutzkonzept.\n\n"
+    + (mode === "candidate_preview" ? "CANDIDATE PREVIEW — geometry, connections and inferred inputs may be unreviewed. Results are conditional, not approval or demonstrated compliance.\n\n" : "")
     + "Unperformed or blocked checks:\n" + gaps.map(gap => `- ${gap.id}: ${gap.outcome}`).join("\n") + "\n\n"
     + fireConceptDraft({ classification, height: building.input.height, dwellings: building.input.dwellings,
       garageEnclosure: building.garageEnclosure, components, routes: routes.map(route => ({ room: `${route.storeyId}/${route.roomId}`, length: route.length })),
       stairwells: input.storeys.flatMap(s => s.rooms.filter(r => r.role === "necessary_stairwell").map(r => ({ name: `${s.id}/${r.id}`, smokeVent: r.smokeVent ?? building.smokeVent }))), water }) + "\n" : null;
-  return { classification, codeEditions: state ? fireCodeEditions[state] : null, components, routes, gaps, observations, concept };
+  return { ...(mode === "candidate_preview" ? { mode, reviewStatus: "unreviewed" as const } : {}),
+    classification, codeEditions: state ? fireCodeEditions[state] : null, components, routes, gaps, observations, concept };
 }

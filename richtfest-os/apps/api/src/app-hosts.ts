@@ -113,7 +113,7 @@ const base = (db: Database, req: Request) => {
       Boolean(
         (
           await db.execute(
-            sql`select user_id from os_memberships where user_id = ${userId} and tenant_id = ${actor.tenantId} limit 1`,
+            sql`select user_id from os_memberships where user_id = ${userId} and tenant_id = ${actor.tenantId} and status = 'active' limit 1`,
           )
         ).rows?.length,
       ),
@@ -130,6 +130,7 @@ const base = (db: Database, req: Request) => {
 export const crmDeps = (db: Database, req: Request) => base(db, req) as CrmDeps;
 export const projectsDeps = (db: Database, req: Request): ProjectsDeps => ({
   ...base(db, req),
+  responsibilityCandidates: async () => (await db.execute(sql`select u.id, u.name from os_users u join os_memberships m on m.user_id=u.id where m.tenant_id=${actorFrom(req).tenantId} and m.status='active' order by u.name`)).rows as Array<{ id: string; name: string }>,
   deleteLinkedProjectData: async (tx, projectId, sourceIds) => {
     const keys = await deleteProjectKnowledge(tx, actorFrom(req).tenantId, projectId, sourceIds);
     await deleteProjectFeasibility(tx, actorFrom(req).tenantId, projectId);

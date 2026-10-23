@@ -20,8 +20,14 @@ import { AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type Point2 } from "@rich
 
 export type ViewportState = {
   context: LocationContext;
-  /** Optional proposal geometry owned by the feasibility workspace, in local X/Z metres. */
-  assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number }>;
+  /** Proposal/canonical geometry in local X/Z metres; optional groups support floor isolation. */
+  assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number; group?: string; opacity?: number }>;
+  /** Fade other assessment groups without replacing their geometry; null restores the overview. */
+  assessmentFocus?: string | null;
+  /** Active canonical connections to the selected object; never inferred from mesh proximity. */
+  assessmentRelated?: string[];
+  /** A schematic, translucent level-zero surface. Null hides unknown ground; omitted keeps the site ground. */
+  groundReference?: { bounds: [Point2, Point2] } | null;
   objects: SceneObject[];
   projectExtent?: LocationScene["projectExtent"];
   models: Record<string, IfcGeometry>;
@@ -205,6 +211,7 @@ export function createViewport(
   let initialFrame = true;
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   let flight = 0;
+  let fade = 0;
   /** Glides target and camera along the orbit (radius, tilt and heading eased separately) instead of jumping. */
   const fly = (target: THREE.Vector3, position: THREE.Vector3, ms = 450) => {
     cancelAnimationFrame(flight);
@@ -229,14 +236,14 @@ export function createViewport(
   };
   const viewDirection = () => camera.position.clone().sub(controls.target).normalize();
   /** Fits a box into view along `direction` (default: the current heading and tilt). */
-  const frame = (box?: THREE.Box3, direction = viewDirection(), ms = 450) => {
+  const frame = (box?: THREE.Box3, direction = viewDirection(), ms = 450, padding = 1.15) => {
     const target = box ? box.getCenter(new THREE.Vector3()) : homeTarget;
     const radius = box ? box.getSize(new THREE.Vector3()).length() / 2 : 58;
     const halfFov = Math.atan(
       Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) *
         Math.min(1, camera.aspect),
     );
-    const distance = Math.max(12, (radius / Math.sin(halfFov)) * 1.15);
+    const distance = Math.max(12, (radius / Math.sin(halfFov)) * padding);
     fly(target, target.clone().addScaledVector(direction, distance), ms);
   };
   controls.addEventListener("change", render);
@@ -572,15 +579,28 @@ export function createViewport(
       // The outline belongs to meshes that are about to be replaced.
       if (outlinedBuilding?.parent === groups.assessment) outlinedBuilding = undefined;
       for (const item of next.assessment ?? []) {
-        const group = new THREE.Group(); group.userData.id = item.id;
+        const group = new THREE.Group(); group.userData.id = item.id; group.userData.floor = item.group;
         for (const polygon of item.polygons) {
           if (!polygon[0]?.length) continue;
           const shape = new THREE.Shape(polygon[0].map(([x,z]) => new THREE.Vector2(x,-z)));
           shape.holes = polygon.slice(1).map(ring => new THREE.Path(ring.map(([x,z]) => new THREE.Vector2(x,-z))));
           const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(.04,item.height), bevelEnabled: false });
           geometry.rotateX(-Math.PI / 2);
-          const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color:item.color, transparent:true, opacity:item.height > .1 ? .8 : .35 }));
+          const opacity = item.opacity ?? (item.height > .1 ? .8 : .35);
+          const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color:item.color, transparent:true, opacity,
+            depthWrite: item.opacity === undefined || opacity >= .5 }));
           mesh.position.y = item.base; edges(mesh,item.color); group.add(mesh);
+          mesh.traverse(node => {
+            if (node instanceof THREE.Mesh || node instanceof THREE.LineSegments) {
+              const material = node.material as THREE.Material;
+              material.userData.opacity = material.opacity;
+              material.userData.depthWrite = material.depthWrite;
+              if (next.assessmentFocus && group.userData.floor !== next.assessmentFocus) {
+                material.opacity *= .045;
+                material.depthWrite = false;
+              }
+            }
+          });
         }
         groups.assessment.add(group);
       }
@@ -588,13 +608,45 @@ export function createViewport(
 
     const previous = current;
     current = next;
-    scene.background = next.dark ? new THREE.Color(0x202a34) : sky;
+    if (previous?.assessment !== next.assessment || previous?.assessmentFocus !== next.assessmentFocus) {
+      cancelAnimationFrame(fade);
+      const transitions: Array<{ material: THREE.Material; from: number; to: number }> = [];
+      for (const group of groups.assessment.children) {
+        const inactive = !!next.assessmentFocus && group.userData.floor !== next.assessmentFocus;
+        group.traverse(node => {
+          if (!(node instanceof THREE.Mesh || node instanceof THREE.LineSegments)) return;
+          node.userData.inactive = inactive;
+          const material = node.material as THREE.Material;
+          material.depthWrite = !inactive && material.userData.depthWrite;
+          transitions.push({ material, from: material.opacity, to: material.userData.opacity * (inactive ? .045 : 1) });
+        });
+      }
+      const start = performance.now();
+      const step = (now: number) => {
+        const k = reducedMotion || !previous ? 1 : Math.min(1, (now - start) / 450), eased = 1 - (1 - k) ** 3;
+        for (const { material, from, to } of transitions) material.opacity = THREE.MathUtils.lerp(from, to, eased);
+        render();
+        if (k < 1) fade = requestAnimationFrame(step);
+      };
+      step(start);
+    }
+    scene.background = next.dark ? new THREE.Color(0x202a34) : next.groundReference !== undefined ? new THREE.Color(0xeef1f4) : sky;
     renderer.toneMappingExposure = next.dark ? 0.8 : 1;
     fill.intensity = next.dark ? 0.85 : 1.2;
     sun.intensity = next.dark ? 2 : 3;
-    (ground.material as THREE.MeshStandardMaterial).color.set(
-      next.dark ? 0x333f43 : 0xc7c8bb,
-    );
+    ground.visible = next.groundReference !== null;
+    ground.material.transparent = !!next.groundReference;
+    ground.material.opacity = next.groundReference ? .3 : 1;
+    ground.material.depthWrite = !next.groundReference;
+    ground.material.color.set(next.groundReference ? (next.dark ? 0x739887 : 0x7f9b80) : (next.dark ? 0x333f43 : 0xc7c8bb));
+    if (next.groundReference) {
+      const [[minX, minZ], [maxX, maxZ]] = next.groundReference.bounds;
+      ground.scale.set((maxX - minX) / 4000, (maxZ - minZ) / 4000, 1);
+      ground.position.set((minX + maxX) / 2, -.04, (minZ + maxZ) / 2);
+    } else {
+      ground.scale.set(1, 1, 1);
+      ground.position.set(0, -.04, 0);
+    }
     grid.material.color.set(next.dark ? 0x90a8ae : 0x77857c);
     if (
       previous?.context !== next.context ||
@@ -900,7 +952,7 @@ export function createViewport(
       tag.center.set(0.5, 0);
       groups.construction.add(tag);
     }
-    grid.visible = !(next.layers.aerial && groups.aerial.children.length);
+    grid.visible = next.groundReference === undefined && !(next.layers.aerial && groups.aerial.children.length);
     if (next.measurement.length !== 1 || next.tool !== "measure") preview = null;
     drawMeasure(next.tool === "measure" || next.measurement.length === 2 ? next.measurement : []);
     const selected = Object.values(groups)
@@ -909,23 +961,28 @@ export function createViewport(
         (node) => node.userData.id === next.selected && node.parent?.visible,
       );
     const building = selected?.parent === groups.buildings || selected?.parent === groups.assessment ? selected : undefined;
-    if (building !== outlinedBuilding || (building && !groups.buildingSelection.children.length)) {
+    if (building !== outlinedBuilding || previous?.assessmentRelated !== next.assessmentRelated || previous?.assessment !== next.assessment
+      || previous?.assessmentFocus !== next.assessmentFocus || (building && !groups.buildingSelection.children.length)) {
       disposeGroup(groups.buildingSelection);
       outlinedBuilding = building;
-      building?.updateWorldMatrix(true, true);
-      building?.traverse((node) => {
+      const connected = building ? groups.assessment.children.filter(node => node !== building && next.assessmentRelated?.includes(node.userData.id)
+        && (!next.assessmentFocus || node.userData.floor === next.assessmentFocus)) : [];
+      for (const object of [...(building ? [building] : []), ...connected]) {
+      object.updateWorldMatrix(true, true);
+      object.traverse((node) => {
         if (!(node instanceof THREE.Mesh)) return;
         // Outline the rendered footprint extrusion, including concavities and holes, not its world-axis box.
         const edges = new THREE.EdgesGeometry(node.geometry, 25).applyMatrix4(node.matrixWorld);
         const geometry = new LineSegmentsGeometry().setPositions(edges.getAttribute("position").array as Float32Array);
         edges.dispose();
-        const material = new LineMaterial({ color: 0x7279d7, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
+        const material = new LineMaterial({ color: object === building ? 0x7279d7 : 0x718c91, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
           polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, toneMapped: false });
         material.resolution.set(renderer.domElement.width, renderer.domElement.height);
         const outline = new LineSegments2(geometry, material);
         outline.renderOrder = 13;
         groups.buildingSelection.add(outline);
       });
+      }
     }
     selection.visible = !!selected && !building;
     if (selected && !building) {
@@ -1027,6 +1084,7 @@ export function createViewport(
       .find(
         (h) =>
           !(h.object instanceof THREE.LineSegments) &&
+          !h.object.userData.inactive &&
           (!(h.object instanceof THREE.Points) ||
             h.point.y <= current!.clipHeight),
       );
@@ -1197,12 +1255,12 @@ export function createViewport(
       fly(target, target.clone().addScaledVector(offset.normalize(), distance), 250);
     },
     /** Frames local X/Z points from above ("top"), at the oblique 3D angle, or along the current view; `ms` 0 jumps. */
-    fit(points: Point2[], mode?: "top" | "perspective", ms = 450, height = 0) {
+    fit(points: Point2[], mode?: "top" | "perspective", ms = 450, height = 0, base = 0, padding = 1.15) {
       const direction = mode === "top" ? topDirection : mode === "perspective" ? homeDirection : viewDirection();
       if (!points.length) return frame(undefined, direction, ms);
       const box = new THREE.Box3();
-      for (const [x, z] of points) box.expandByPoint(new THREE.Vector3(x, 0, z)).expandByPoint(new THREE.Vector3(x, height, z));
-      frame(box, direction, ms);
+      for (const [x, z] of points) box.expandByPoint(new THREE.Vector3(x, base, z)).expandByPoint(new THREE.Vector3(x, base + height, z));
+      frame(box, direction, ms, padding);
     },
     focus(id?: string | null) {
       const node = id ? Object.values(groups)
@@ -1216,6 +1274,7 @@ export function createViewport(
     dispose() {
       resize.disconnect();
       cancelAnimationFrame(flight);
+      cancelAnimationFrame(fade);
       cancelAnimationFrame(coast);
       cancelAnimationFrame(dragFrame);
       dragEnd();

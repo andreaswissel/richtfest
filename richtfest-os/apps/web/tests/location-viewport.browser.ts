@@ -297,6 +297,52 @@ export async function testConstruction() {
   }
 }
 
+/** Run in Vite with reduced motion: import('/tests/location-viewport.browser.ts').then(m => m.testFloorFocus()). */
+export async function testFloorFocus() {
+  const assert = (condition: boolean, message: string) => { if (!condition) throw new Error(message); };
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;inset:0;width:640px;height:480px;z-index:9999";
+  document.body.append(host);
+  let selected: string | null = null;
+  const viewport = createViewport(host, { select: id => { selected = id; }, place: () => {}, measure: () => {}, align: () => {} });
+  const state: ViewportState = {
+    context: { siteId: "floors", address: "", origin: [0, 0], longitude: 0, latitude: 0, radius: 100, buildings: [], trees: [], sources: [], importedAt: "" },
+    objects: [], models: {},
+    groundReference: { bounds: [[-8, -8], [8, 8]] },
+    assessment: [
+      { id: "lower-wall", group: "lower", base: -2.9, height: 2.6, color: 0xb8ac96, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
+      { id: "upper-wall", group: "upper", base: 0, height: 2.8, color: 0x94a3b8, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
+    ],
+    layers: { buildings: false, trees: false, detectedTrees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
+    site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
+    selected: null, tool: "select", treeStyle: "schematic", measurement: [], clipHeight: 50, dark: false,
+    constructionLabel: "", projectExtentLabel: "", siteAddressLabel: "",
+  };
+  const canvas = host.querySelector("canvas")!;
+  const clickCentre = () => {
+    const box = canvas.getBoundingClientRect(), pointer = { clientX: box.x + box.width / 2, clientY: box.y + box.height / 2, button: 0 };
+    canvas.dispatchEvent(new PointerEvent("pointerdown", pointer)); canvas.dispatchEvent(new PointerEvent("pointerup", pointer));
+  };
+  try {
+    assert(matchMedia("(prefers-reduced-motion: reduce)").matches, "Run this deterministic rendering check with reduced motion enabled");
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    viewport.update(state);
+    viewport.fit([[-4, -4], [4, 4]], "top", 0, 5.7, -2.9);
+    const overview = canvas.toDataURL();
+    clickCentre(); assert(selected === "upper-wall", "Overview must pick the visible upper floor");
+    viewport.update({ ...state, assessmentFocus: "lower" });
+    assert(canvas.toDataURL() !== overview, "Floor focus must visibly fade other floors immediately with reduced motion");
+    clickCentre(); assert(selected === "lower-wall", "Ghosted upper floors must not intercept lower-floor selection");
+    const basement = canvas.toDataURL();
+    viewport.update({ ...state, assessmentFocus: "lower", assessment: state.assessment!.slice(1) });
+    assert(canvas.toDataURL() !== basement, "Basement geometry must visibly contribute through the translucent ground plane");
+    viewport.update(state);
+    assert(canvas.toDataURL() === overview, "Overview must restore the original opacity without changing source geometry");
+    clickCentre(); assert(selected === "upper-wall", "Restoring overview must make the upper floor selectable again");
+    return "PASS: floor fade, reduced-motion immediacy, basement visible/selectable through ground, overview restoration";
+  } finally { viewport.dispose(); host.remove(); }
+}
+
 /** Run on a loaded project location route. Exercises the real editor without saving project data. */
 export async function testMeasurementOverlay() {
   const host = document.querySelector<HTMLElement>(

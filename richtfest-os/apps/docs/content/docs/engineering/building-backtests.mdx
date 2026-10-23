@@ -5,7 +5,7 @@ description: Prepare PDF/IFC cases, compare recorded noise and fire assessment r
 
 ## What is available
 
-The offline building backtest prepares a private evaluation dossier from local PDF/IFC files and scores **recorded outputs** from the existing project workflow. The separate **fire-plan replay** executes the existing fire engine on a supplied, source-linked calculation snapshot and writes results for that scorer. Neither command uploads files, extracts geometry, calls a model or approves a concept. Both work without Railway or credentials. Actual project runs still use the normal application, configured providers and human review gates.
+The offline building backtest prepares a private evaluation dossier from local PDF/IFC files and scores **recorded outputs** from the existing project workflow. The **source-only plan replay** freshly extracts a PDF page and runs the read-only candidate preview without a saved project model or reference answers. The separate **fire-plan replay** executes the existing fire engine on a supplied, source-linked calculation snapshot and writes results for that scorer. These commands work without Railway, credentials or model calls; none approves a concept. Actual project runs still use the normal application, configured providers and human review gates.
 
 The Knowledge app owns the scorer in `richtfest-apps/knowledge/src/building-backtest.ts`. There is no new database, operational state store or parallel upload UI. Project sources, runs, model proposals, calculation artifacts and reviews remain in their existing Postgres-backed workflows. Local dossiers are offline evaluation exports, not operational records.
 
@@ -63,6 +63,27 @@ Save the exact artifacts and deterministic input/output receipts. Copy observed 
 For numeric checks, set `expectedValue`, `unit`, `tolerance`, `evidenceRequired`, `critical`, `tool` and `humanReviewRequired` in the reference. For a qualitative review, use null `expectedValue`, zero tolerance and `humanReviewRequired: true`. Reviewer names and hashes are recorded assertions, not cryptographic attestations: the operator must independently check artifacts, source evidence and receipts. The evaluator compares manifests; it does not reread original source/artifact files during scoring.
 
 The [printed exterior-noise reference comparison](/docs/architecture/agent-runtime#offline-exterior-noise-reference-comparison) remains useful as a separate arithmetic diagnostic. Do not count it as success at extracting or assessing an unseen building.
+
+## Extract and preview a source-only PDF page
+
+```sh
+bun scripts/run-plan-candidate-backtest.ts \
+  --source reference-project/plans.pdf --page 2 \
+  --case-id first-pdf-page-2 \
+  --out reference-project/backtests/source-only-01
+```
+
+This runner uses the production PDF extractor and candidate-preview assembler, not a hand-built room fixture. It accepts no saved model, engineering properties, reference file or expected values. It freezes the source bytes before hashing/extraction and creates a new private directory; an existing or partially written run is never overwritten. Poppler and the existing extraction dependencies must be available locally. The command exits 0 when the export was written, including blocked results, or 2 on invalid input/execution failure—not according to assessment quality.
+
+The export contains `source.pdf`, `input.json`, `extraction.json`, `preview.json`, `candidate.json` and `execution.json`. It retains source and code hashes, extractor/Bun versions, source-key/page-qualified room identities, all extracted outlines, exclusions, inferred connections and explicit gaps. The page-isolation building/storey containers do **not** assert the real building inventory or storey level. No reviewed values or saved manual corrections are imported. Geometry remains unreviewed, and absent scale prevents calculation rather than selecting a default.
+
+By default every extracted room gets an area observation. Repeat `--room-key KEY` to freeze a bounded selection **before scoring**; a requested room missing from the page remains a blocked observation instead of disappearing from coverage. All other rooms remain in the extraction and preview artifacts. Observation IDs are `room:PAGE/SOURCE_KEY:area`, with unrounded polygon-minus-holes area in m². Compare against independently transcribed source dimensions/areas, preserving GF/net/credited-area distinctions. A mismatch with a printed area is diagnostic until both area bases and boundaries are confirmed; never fit the polygon to the answer.
+
+Positive checks for `building:class`, `exterior:provided`, `interior:provided`, `fire-concept` and `noise-concept` stay explicitly blocked or unsupported. This geometry-only runner does not infer fire classification, use a provider-based room-use classifier, load an acoustic norm-pack host or produce released concepts. The application has broader acoustic capabilities; an offline host omission is not an assertion that those engines are unavailable. Include these positive gaps in the scoring rubric rather than presenting room-area coverage as assessment success.
+
+Score `candidate.json` separately with `evaluate-building-backtest.ts`. **Source-only execution is not a blind or holdout experiment:** a previously inspected/tuned case remains calibration. There are no model IDs or token costs to compare in this deterministic run; model benchmarks require separate actual provider-run receipts.
+
+For IFC, new source imports retain each `IfcRelSpaceBoundary`, `IfcRelVoidsElement` and `IfcRelFillsElement` as its own source entity, with declared endpoint attributes and boundary classifications. Exact relation IDs preserve repeated or contradictory claims, including virtual boundaries without a related element. Connection geometry is only referenced. These records do not establish canonical side orientation, traversable door adjacency or calculation-ready geometry, and existing imported revisions are not silently rewritten. Inspect the source declarations before asking a reviewer to reconstruct missing relationships from a rendering.
 
 ## Replay a fire plan without Railway
 

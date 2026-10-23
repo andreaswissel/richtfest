@@ -15,7 +15,13 @@ type Key = Parameters<T>[0];
 type States = Record<string, BuildingComponentPropertyState> | undefined;
 
 /** Latest value a person has not rejected; otherwise the last approved one. */
-const live = (states: States, key: string) => { const state = states?.[key]; return state ? (state.reviewStatus !== "rejected" ? state.value : state.reviewedValue) ?? null : null; };
+const live = (states: States, key: string) => {
+  const state = states?.[key];
+  if (!state) return null;
+  // Extracted fire heights cannot classify a building before human review.
+  if (key === "fireHeight") return state.reviewedValue ?? (state.reviewStatus !== "rejected" && (state.reviewStatus === "approved" || state.provenance === "manual") ? state.value : null);
+  return (state.reviewStatus !== "rejected" ? state.value : state.reviewedValue) ?? null;
+};
 const num = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
 const str = (value: unknown) => typeof value === "string" && value ? value : null;
 const bool = (value: unknown) => typeof value === "boolean" ? value : null;

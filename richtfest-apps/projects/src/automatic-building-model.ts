@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { SourceImageReceipt } from "@richtfest/shared";
+import { PLAN_HEIGHT_VERSION } from "@richtfest/shared/plan-heights";
 import type { AppDeps, SourceExtractionDeps } from "./deps";
 import {
   buildingBuildings,
@@ -322,7 +323,9 @@ export async function ensureAutomaticPlanExtractions(d: SourceExtractionDeps, si
       storeyIds, jobIds, reason: floorPages.length
         ? "Confident floor-plan pages were queued for unreviewed draft geometry. Other pages remain classified or unresolved as listed."
         : "No page met the automatic floor-plan threshold; no geometry was guessed. Page coverage remains available for review." };
-    await tx.update(sourceModels).set({ metadata: { ...(current.metadata ?? {}), automaticBuildingModel }, updatedAt: new Date() })
+    await tx.update(sourceModels).set({ metadata: { ...(current.metadata ?? {}), automaticBuildingModel,
+      heightExtraction: (current.metadata as any)?.heightExtraction ?? { version: PLAN_HEIGHT_VERSION, status: "queued", pages: [] },
+    }, updatedAt: new Date() })
       .where(and(eq(sourceModels.versionId, version.id), eq(sourceModels.tenantId, version.tenantId)));
     await d.audit(tx, version.tenantId, "projects.building.automatic_processing.planned", version.id,
       { projectId: file.projectId, modelId: model.id, status, pageCount, floorPlanPages: automaticBuildingModel.floorPlanPages,

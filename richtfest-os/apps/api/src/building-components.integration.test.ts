@@ -339,3 +339,68 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     ]);
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 60000);
+
+(local && poppler ? test : test.skip)("canonical connection reviews are scoped, revision guarded and preserved during re-derivation", async () => {
+  const namespace = `building_connections_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(isolated.href);
+  const tenant = crypto.randomUUID(), project = crypto.randomUUID(), actor = crypto.randomUUID(), model = crypto.randomUUID(), building = crypto.randomUUID(), storey = crypto.randomUUID(), file = crypto.randomUUID(), version = crypto.randomUUID();
+  const audits: string[] = [];
+  const app = express(); app.use(express.json());
+  app.use(createBuildingModelRouter(() => ({ db, tenantId: tenant, actorId: actor, requirePermission() {}, audit: async (_tx: unknown, action: string) => { audits.push(action); } }) as any));
+  app.use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ message: e.message }));
+  const server = app.listen(0), base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
+  const post = async (path: string, body: unknown) => { const response = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
+  const revision = async () => Number((await pool.query("select revision from projects_building_models where id=$1", [model])).rows[0].revision);
+  try {
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", "projects_inquiries", "projects_inquiry_entries", ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(row => row.tablename)]) {
+      if (!/^projects_[a-z_]+$/.test(table)) throw new Error("Unexpected test table");
+      await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
+    }
+    await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Connections test',$3)", [project, tenant, actor]);
+    await pool.query("insert into projects_building_models (id,tenant_id,project_id,created_by) values ($1,$2,$3,$4)", [model, tenant, project, actor]);
+    await pool.query("insert into projects_building_buildings (id,tenant_id,model_id,stable_key,name,created_by) values ($1,$2,$3,'test','Test',$4)", [building, tenant, model, actor]);
+    await pool.query("insert into projects_building_storeys (id,tenant_id,model_id,building_id,stable_key,name,level_index,created_by) values ($1,$2,$3,$4,'test','Ground floor',0,$5)", [storey, tenant, model, building, actor]);
+    await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'plan.pdf','upload',$4)", [file, tenant, project, actor]);
+    await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [version, tenant, file, actor]);
+    await pool.query("insert into projects_building_plan_sources (tenant_id,model_id,storey_id,source_version_id,page,created_by) values ($1,$2,$3,$4,1,$5)", [tenant, model, storey, version, actor]);
+    await db.insert(buildingExtractionJobs).values({ tenantId: tenant, modelId: model, sourceVersionId: version, storeyId: storey, page: 1, extractorVersion: "topology-v8", createdBy: actor });
+    const pdf = syntheticPlanPdf({ unitFill: true });
+    expect(await runBuildingExtraction({ db, fileStorage: { read: async () => Readable.from([pdf]) }, audit: async () => {}, reportError: () => {} } as any, new AbortController().signal)).toBe(true);
+    const candidates = (await pool.query("select id,geometry from projects_building_extraction_candidates")).rows;
+    for (const candidate of candidates.filter(row => ["enclosed_region", "draft_wall"].includes(row.geometry.quality)))
+      expect((await post(`/extraction-candidates/${candidate.id}/review`, { baseRevision: await revision(), decision: "approved" })).status).toBe(200);
+    expect((await post("/wall-adjacency", { baseRevision: await revision() })).status).toBe(200);
+    // Connection reviews survive derivation with their IDs and evidence; rejected boundaries stay inactive.
+    const readModel = async () => (await (await fetch(base)).json()).data;
+    const beforeConnections = (await readModel()).relationships;
+    const rejected = beforeConnections.find((link: any) => link.relationshipType === "separates");
+    const confirmed = beforeConnections.find((link: any) => link.relationshipType === "covers");
+    const originalRevision = await revision();
+    const rejectedResponse = await post(`/relationships/${rejected.id}/review`, { baseRevision: originalRevision, decision: "rejected", note: "Boundary does not match the plan" });
+    expect(rejectedResponse.status).toBe(200);
+    expect(rejectedResponse.body.data.relationship).toMatchObject({ id: rejected.id, reviewStatus: "rejected", metadata: { ...rejected.metadata, review: { by: actor, note: "Boundary does not match the plan" } } });
+    expect((await post(`/relationships/${confirmed.id}/review`, { baseRevision: originalRevision, decision: "approved" })).status).toBe(409);
+    const confirmedResponse = await post(`/relationships/${confirmed.id}/review`, { baseRevision: await revision(), decision: "approved" });
+    expect(confirmedResponse.status).toBe(200);
+    const currentRevision = await revision();
+    const foreignProject = crypto.randomUUID(), foreignModel = crypto.randomUUID(), foreignLink = crypto.randomUUID();
+    await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Other model',$3)", [foreignProject, tenant, actor]);
+    await pool.query("insert into projects_building_models (id,tenant_id,project_id,created_by) values ($1,$2,$3,$4)", [foreignModel, tenant, foreignProject, actor]);
+    await pool.query("insert into projects_building_relationships (id,tenant_id,model_id,from_entity_type,from_entity_id,to_entity_type,to_entity_id,relationship_type,created_by) values ($1,$2,$3,'element',$4,'room',$5,'separates',$6)", [foreignLink, tenant, foreignModel, rejected.fromEntityId, rejected.toEntityId, actor]);
+    expect((await post(`/relationships/${foreignLink}/review`, { baseRevision: currentRevision, decision: "approved" })).status).toBe(404);
+    expect(await revision()).toBe(currentRevision);
+    expect((await post("/wall-adjacency", { baseRevision: currentRevision })).status).toBe(200);
+    const afterConnections = (await readModel()).relationships;
+    expect(afterConnections).toHaveLength(beforeConnections.length);
+    for (const response of [rejectedResponse, confirmedResponse])
+      expect(afterConnections.find((link: any) => link.id === response.body.data.relationship.id)).toEqual(response.body.data.relationship);
+    const semanticKey = (link: any) => JSON.stringify([link.fromEntityId, link.toEntityId, link.relationshipType, link.metadata?.side ?? null]);
+    expect(new Set(afterConnections.map(semanticKey)).size).toBe(afterConnections.length);
+    const agentContext = (await (await fetch(base + "/agent-context")).json()).data;
+    expect(agentContext.wallAdjacency.some((link: any) => link.wallId === rejected.fromEntityId && link.roomId === rejected.toEntityId && link.side === rejected.metadata.side)).toBe(false);
+    expect((await pool.query("select status from projects_building_revisions where model_id=$1 and revision=$2", [model, confirmedResponse.body.data.revision])).rows[0].status).toBe("draft");
+    expect(audits).toContain("projects.building.relationship.reviewed");
+  } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
+}, 60000);

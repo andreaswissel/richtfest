@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import express from "express";
 import { createReadStream } from "node:fs";
 import { createBuildingModelRouter } from "@richtfest/projects/building-model";
-import { runBuildingExtraction } from "@richtfest/projects/building-extraction";
+import { runBuildingExtraction, runPlanHeightExtraction } from "@richtfest/projects/building-extraction";
 import { ensureAutomaticExtractionJob } from "@richtfest/projects/automatic-building-model";
 import { buildingExtractionJobs } from "@richtfest/projects/schema";
 import { createDatabase } from "./db/client";
@@ -181,3 +181,76 @@ const local=url && ["localhost","127.0.0.1","[::1]"].includes(new URL(url).hostn
     expect(audits).toBeGreaterThan(3);
   }finally{server.close();await pool.end();await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`);await admin.pool.end();}
 },30000);
+
+(local && fixture ? test : test.skip)("section heights persist source observations once and require separate property review", async () => {
+  const namespace = `height_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(isolated.href);
+  const tenant = crypto.randomUUID(), other = crypto.randomUUID(), project = crypto.randomUUID(), actor = crypto.randomUUID(),
+    model = crypto.randomUUID(), building = crypto.randomUUID(), file = crypto.randomUUID(), version = crypto.randomUUID();
+  const app = express(); app.use(express.json());
+  app.use(createBuildingModelRouter(req => ({ db, tenantId: req.headers["x-other"] ? other : tenant, actorId: actor,
+    requirePermission() { if (req.headers["x-denied"]) throw Object.assign(new Error("Forbidden"), { status: 403 }); },
+    audit: async () => {}, validateCustomer: async () => false, customerNames: async () => ({}), fileStorage: {} as any })));
+  app.use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ message: e.message }));
+  const server = app.listen(0), base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
+  const post = async (path: string, body: unknown, headers = {}) => {
+    const response = await fetch(base + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() };
+  };
+  let calls = 0;
+  try {
+    for (const table of ["projects_projects", "projects_files", "projects_file_versions", "projects_source_models", "projects_source_pages",
+      ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
+      if (!/^projects_[a-z_]+$/.test(table)) throw new Error("Unexpected table");
+      await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
+    }
+    await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Height test',$3)", [project, tenant, actor]);
+    await pool.query("insert into projects_building_models (id,tenant_id,project_id,created_by) values ($1,$2,$3,$4)", [model, tenant, project, actor]);
+    await pool.query("insert into projects_building_buildings (id,tenant_id,model_id,stable_key,name,created_by) values ($1,$2,$3,'test','Haus B',$4)", [building, tenant, model, actor]);
+    await pool.query("insert into projects_files (id,tenant_id,project_id,name,source_type,created_by) values ($1,$2,$3,'section.pdf','upload',$4)", [file, tenant, project, actor]);
+    await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [version, tenant, file, actor]);
+    await pool.query("insert into projects_source_models (version_id,tenant_id,status,metadata) values ($1,$2,'complete',$3)", [version, tenant, JSON.stringify({ automaticBuildingModel: { modelId: model, floorPlanPages: [] } })]);
+    await pool.query("insert into projects_building_plan_sources (tenant_id,model_id,source_version_id,page,created_by) values ($1,$2,$3,1,$4)", [tenant, model, version, actor]);
+    // The provider is stubbed: this test validates rendering/persistence/review, not visual semantic accuracy.
+    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,1,$3)", [version, tenant, JSON.stringify({ status: "available", text: "Schnitt B-B Höhe 954 cm First 13,80 m" })]);
+    expect((await post("/height-extractions", { sourceVersionId: version }, { "x-other": "1" })).status).toBe(404);
+    expect((await post("/height-extractions", { sourceVersionId: version }, { "x-denied": "1" })).status).toBe(403);
+    expect((await post("/height-extractions", { sourceVersionId: version })).status).toBe(202);
+    const height = { kind: "fire_height", value: 954, unit: "cm", unitBasis: "explicit", quote: "Höhe 954 cm", buildingLabel: "Haus B", storeyLabel: "DG",
+      upperReference: "highest_habitable_floor", lowerReference: "mean_terrain", floorBasis: "structural", constructionState: "proposed",
+      region: { x: .1, y: .2, width: .4, height: .5 }, reason: "Printed dimension with explicit endpoints." };
+    const worker = { db, fileStorage: { read: async () => createReadStream(fixture!) }, audit: async () => {}, reportError: () => {},
+      structureDocument: async (input: any) => {
+        calls++; expect(input.task).toBe("plan_heights"); expect(input.image.data.length).toBeGreaterThan(100);
+        return { status: "completed" as const, output: { observations: [height,
+          { ...height, kind: "ridge_height", upperReference: "ridge", value: 13.8, unit: "m", quote: "First 13,80 m" }], gaps: [] },
+          metadata: { provider: "test", model: "height-fixture", usage: { inputTokens: 100, outputTokens: 50 } } };
+      } };
+    expect(await runPlanHeightExtraction(worker, new AbortController().signal)).toBe(true);
+    expect(await runPlanHeightExtraction(worker, new AbortController().signal)).toBe(false);
+    expect(calls).toBe(1);
+    expect((await post("/height-extractions", { sourceVersionId: version })).body.data).toEqual({ status: "complete", reused: true });
+    const metadata = (await pool.query("select metadata from projects_source_models")).rows[0].metadata;
+    expect(metadata.heightExtraction.pages[0]).toMatchObject({ status: "completed", observations: [height, expect.objectContaining({ kind: "ridge_height" })], metadata: { model: "height-fixture" } });
+    expect((await pool.query("select count(*)::int n from projects_building_property_versions")).rows[0].n).toBe(0);
+    const selection = { baseRevision: 0, buildingId: building, sourceVersionId: version, page: 1, observationIndex: 0 };
+    expect((await post("/height-observations", { ...selection, observationIndex: 1 })).status).toBe(422);
+    expect((await post("/height-observations", { ...selection, sourceVersionId: crypto.randomUUID() })).status).toBe(422);
+    expect((await pool.query("select revision from projects_building_models")).rows[0].revision).toBe(0);
+    const proposed = await post("/height-observations", selection);
+    expect(proposed.status).toBe(201);
+    expect(proposed.body.data.version).toMatchObject({ value: 9.54, unit: "m", provenance: "inferred", reviewStatus: "unreviewed", evidence: [{ sourceVersionId: version, page: 1, quote: "Höhe 954 cm" }] });
+    expect((await post("/height-observations", { ...selection, baseRevision: 1 })).body.error.code).toBe("height_exists");
+    expect((await pool.query("select revision from projects_building_models")).rows[0].revision).toBe(1);
+    const review = await post(`/properties/${proposed.body.data.property.id}/versions/1/review`, { baseRevision: 1, reviewRevision: 0, decision: "approved" });
+    expect(review.status).toBe(200);
+    expect((await pool.query("select review_status from projects_building_property_versions")).rows[0].review_status).toBe("approved");
+    // An expired pre-dispatch claim is made terminal, not dispatched again.
+    await pool.query("update projects_source_models set metadata=jsonb_set(metadata,'{heightExtraction}', $1::jsonb)", [JSON.stringify({ version: "section-heights-v1", status: "processing", claimedAt: "2020-01-01T00:00:00Z", pages: [{ page: 1, status: "outcome_unknown", observations: [], gaps: ["Interrupted"] }] })]);
+    expect(await runPlanHeightExtraction(worker, new AbortController().signal)).toBe(true);
+    expect(await runPlanHeightExtraction(worker, new AbortController().signal)).toBe(false);
+    expect(calls).toBe(1);
+  } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
+}, 60000);

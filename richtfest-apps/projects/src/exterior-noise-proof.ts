@@ -1,8 +1,8 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or } from "drizzle-orm";
 import { z } from "zod";
 import {
-  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, installationKindSchema, stairCaseSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance, resolveRoomHeight,
+  buildingComponentProperties, buildingEvidenceSchema, doorRoleSchema, installationKindSchema, stairCaseSchema, exteriorNoiseCalculationUse, exteriorNoiseSuggestionInput, exteriorNoiseInputKeys, exteriorNoiseLaPeriod, exteriorNoiseRoomKinds, ok, validateBuildingComponentProperty, proposeExteriorNoiseRoom, segmentDistance, resolveRoomHeight, isActiveBuildingRelationship,
   type AcousticCalculationInput, type Compass, type ExteriorNoiseProof, type ExteriorNoiseRoomKind, type Point2,
   type ProofFacade, type ProofGap, type ProofRoof, type ProofRoom, type SitePlanPage, type ProofSuggestion, type ProofValue, type ProofWindow,
 } from "@richtfest/shared";
@@ -295,14 +295,19 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
   openingRows = elementRows.filter(row => row.kind !== "roof");
   const hosts = openingRows.length ? await d.db.select({ from: buildingRelationships.fromEntityId, to: buildingRelationships.toEntityId }).from(buildingRelationships)
     .where(and(eq(buildingRelationships.modelId, modelId), eq(buildingRelationships.tenantId, d.tenantId), eq(buildingRelationships.relationshipType, "opening_in"),
+      notInArray(buildingRelationships.reviewStatus, ["rejected", "superseded"]),
       inArray(buildingRelationships.fromEntityId, openingRows.map(row => row.id)))) as any[] : [];
   const hostOf = new Map(hosts.map(row => [row.from, row.to]));
-  // Derived room/wall adjacency (wall separates room); rooms without any use the geometric fallback.
-  const separates = roomIds.length ? await d.db.select({ wallId: buildingRelationships.fromEntityId, roomId: buildingRelationships.toEntityId }).from(buildingRelationships)
+  // An explicit rejection must not silently return through the geometric fallback.
+  const separates = roomIds.length ? await d.db.select({ wallId: buildingRelationships.fromEntityId, roomId: buildingRelationships.toEntityId, reviewStatus: buildingRelationships.reviewStatus }).from(buildingRelationships)
     .where(and(eq(buildingRelationships.modelId, modelId), eq(buildingRelationships.tenantId, d.tenantId), eq(buildingRelationships.relationshipType, "separates"),
       inArray(buildingRelationships.toEntityId, roomIds))) as any[] : [];
   const adjacentOf = new Map<string, Set<string>>();
-  for (const row of separates) adjacentOf.set(row.roomId, (adjacentOf.get(row.roomId) ?? new Set()).add(row.wallId));
+  for (const row of separates) {
+    const adjacent = adjacentOf.get(row.roomId) ?? new Set<string>();
+    if (isActiveBuildingRelationship(row)) adjacent.add(row.wallId);
+    adjacentOf.set(row.roomId, adjacent);
+  }
   const values = await currentValues(d, modelId, [buildingId, ...plans.map(plan => plan.storey.id), ...roomIds, ...exterior.map(wall => wall.id), ...elementRows.map(row => row.id)]);
   const value = <T,>(entityId: string, key: string) => {
     const found = values.get(`${entityId}:${key}`);

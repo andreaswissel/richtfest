@@ -131,6 +131,33 @@ describe("assembleFireProtectionSnapshot", () => {
     expect(available(data).plan.storeys[0]!.doors[0]!.rooms).toEqual([room, null]);
   });
 
+  test("a room touching both wall sides stays an unresolved boundary, not a self-exit", () => {
+    const data = fixture();
+    data.relationships[1]!.toEntityId = room;
+    const floor = available(data).plan.storeys[0]!;
+    expect(floor.walls[0]!.faces).toBeNull();
+    expect(floor.doors[0]!.rooms).toBeNull();
+  });
+
+  test("explicit candidate mode calculates a conditional route without relaxing the reviewed mode", () => {
+    const data = fixture();
+    Object.assign(data.relationships[1], { relationshipType: "faces_exterior", toEntityId: building });
+    const plan = available(data).plan;
+    plan.building.input.unitsGrossArea = 240;
+    plan.building.input.specialUse = "none";
+    plan.storeys[0]!.geometryReviewed = false;
+    const check = `route:${storey}/${room}:length`;
+    expect(assessFirePlan(plan).observations.find(o => o.id === check)).toMatchObject({ outcome: "blocked", value: null });
+    const preview = assessFirePlan(plan, "candidate_preview");
+    // Room is 6 × 3 m; exit at (8, 3). Its farthest corner is (2, 5).
+    expect(preview.observations.find(o => o.id === check)).toMatchObject({ outcome: "complete", value: 6.32 });
+    expect(preview.reviewStatus).toBe("unreviewed");
+    expect(preview.concept).toContain("CANDIDATE PREVIEW");
+    expect(plan.storeys[0]!.geometryReviewed).toBe(false);
+    plan.storeys[0]!.doors[0]!.rooms = null;
+    expect(assessFirePlan(plan, "candidate_preview").observations.find(o => o.id === check)).toMatchObject({ outcome: "blocked", value: null });
+  });
+
   test("missing scale leaves polygons and door positions unknown and blocks route review", () => {
     const data = fixture();
     delete data.extractions[0]!.result.pageScale;

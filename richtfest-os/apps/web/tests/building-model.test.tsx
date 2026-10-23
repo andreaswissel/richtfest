@@ -8,21 +8,136 @@ import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-eviden
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 import { metresToPoint, planDistanceM, pointToMetres } from "../src/components/building-model/outline-geometry";
-import { roomVolumeGeometry } from "../src/components/building-model/room-volumes";
+import { buildingVolumeGeometry, roomVolumeGeometry } from "../src/components/building-model/room-volumes";
+import { BuildingConnections } from "../src/components/building-model/connections";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 
-test("3D consumes canonical plan outlines and holes at the page scale, never label boxes or candidates", () => {
+test("connection inspector retains rejected evidence but excludes it from active room boundaries and opening hosts", () => {
+  const links = [
+    { id: "boundary", fromEntityType: "element", fromEntityId: "wall", toEntityType: "room", toEntityId: "room", relationshipType: "separates", reviewStatus: "rejected", metadata: { side: 0, sourceVersionId: "source", page: 2 } },
+    { id: "outside", fromEntityType: "element", fromEntityId: "wall", toEntityType: "storey", toEntityId: "storey", relationshipType: "faces_exterior", reviewStatus: "approved", metadata: { side: 1 } },
+    { id: "host", fromEntityType: "element", fromEntityId: "door", toEntityType: "element", toEntityId: "wall", relationshipType: "opening_in", reviewStatus: "superseded", metadata: null },
+  ];
+  const model = adaptBuildingModel({ relationships: links, rooms: [{ id: "room", name: "Office", storeyId: "storey" }],
+    elements: [{ id: "wall", kind: "wall", name: "Wall" }, { id: "door", kind: "door", name: "Door" }] });
+  expect(model.relationships).toEqual(links);
+  const objects = model.states.existing;
+  const wall = objects.find(object => object.id === "wall")!;
+  expect(wall.separates).toEqual([{ side: 1, roomIds: [], exterior: true }]);
+  expect(wall.openings).toBeUndefined();
+  expect(objects.find(object => object.id === "door")!.inWall).toBeUndefined();
+  const renderInspector = (id: string) => renderToStaticMarkup(<MemoryRouter><BuildingConnections model={model} objects={objects}
+    selected={objects.find(object => object.id === id)} hrefFor={object => `?entity=${object.entityType}:${object.id}`}
+    onReview={() => {}} onDerive={() => {}} pending={false} /></MemoryRouter>);
+  const html = renderInspector("wall");
+  expect(html).toContain("Rejected");
+  expect(html).toContain("Confirmed");
+  expect(html).toContain("Wall side 1 is unresolved");
+  expect(html).toContain("sourceVersion=source");
+  expect(html).toContain("entity=room:room");
+  expect(renderInspector("room")).toContain("Enclosure is unresolved");
+  expect(renderInspector("door")).toContain("No active wall host");
+});
+
+test("3D consumes canonical and provisional room outlines, but never label boxes, rejected drafts or duplicate matches", () => {
   const polygon = [{ x: .1, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .6 }, { x: .1, y: .6 }];
   const room = { id: "room", kind: "room" as const, entityType: "room" as const, label: "Room", page: 1, polygon,
     holes: [[{ x: .2, y: .3 }, { x: .25, y: .3 }, { x: .25, y: .35 }]] };
   const scale = { pageAspectRatio: 2, metresPerPageHeight: 10 };
-  const result = roomVolumeGeometry([room, { ...room, id: "label", geometryQuality: "anchor" }, { ...room, id: "candidate", isCandidate: true }], [], scale);
-  expect(result).toHaveLength(1);
+  const draft = { ...room, id: "candidate", isCandidate: true, status: "unreviewed", geometryQuality: "enclosed_region" };
+  const result = roomVolumeGeometry([room, draft, { ...draft, id: "label", geometryQuality: "anchor" },
+    { ...draft, id: "rejected", status: "rejected" }, { ...draft, id: "accepted", status: "approved" },
+    { ...draft, id: "matched", match: { existingId: room.id } }], [], scale);
+  expect(result.map(item => item.room.id)).toEqual(["room", "candidate"]);
   expect(result[0]!.mesh.polygons).toEqual([[[[2, 2], [8, 2], [8, 6], [2, 6]], [[4, 3], [5, 3], [5, 3.5]]]]);
+  expect(result[1]!.mesh.polygons).toEqual(result[0]!.mesh.polygons);
   expect(result[0]!.mesh.height).toBe(2.6);
   expect(result[0]!.height.calculationValue).toBeNull();
   expect(roomVolumeGeometry([room], [], null)).toEqual([]);
+  const reviewedHeight = { propertyId: "height", version: 1, value: 3.1, unit: "m", provenance: "inferred", reviewStatus: "approved", reviewRevision: 1, reviewedValue: 3.1 };
+  const inherited = roomVolumeGeometry([{ ...room, storeyId: "storey" }, { ...draft, storeyId: "storey" }],
+    [{ id: "storey", componentProperties: { clearRoomHeight: reviewedHeight } }], scale);
+  expect(inherited.map(item => item.mesh.height)).toEqual([3.1, 3.1]);
+  expect(inherited[1]!.mesh.color).toBe(result[1]!.mesh.color); // Reviewing the height must not visually approve a draft outline.
+  expect(inherited[0]!.mesh.color).not.toBe(inherited[1]!.mesh.color);
+});
+
+test("3D opens source-scoped extraction drafts before any canonical rooms exist and explains missing prerequisites", () => {
+  const model = {
+    revision: 1,
+    storeys: [{ id: "storey", name: "Ground floor" }],
+    planSources: [{ id: "plan", page: 3, storeyId: "storey", source: { versionId: "version", fileName: "Plan.pdf" } }],
+    extractions: [{ id: "job", page: 3, storeyId: "storey", sourceVersionId: "version", status: "complete", result: { pageScale: { pageAspectRatio: 2, metresPerPageHeight: 10 } } }],
+    extractionCandidates: [
+      { id: "draft", name: "Visible draft", page: 3, sourceVersionId: "version", status: "unreviewed" },
+      { id: "other-page", name: "Wrong page", page: 4, sourceVersionId: "version", status: "unreviewed" },
+      { id: "other-source", name: "Wrong revision", page: 3, sourceVersionId: "old", status: "unreviewed" },
+      { id: "rejected", name: "Rejected draft", page: 3, sourceVersionId: "version", status: "rejected" },
+    ].map(candidate => ({ ...candidate, entityType: "room", storeyId: "storey", geometry: { quality: "enclosed_region", polygon: [{ x: .1, y: .1 }, { x: .4, y: .1 }, { x: .4, y: .5 }] } })),
+  };
+  const route = "?view=building-model&modelView=3d&page=3&storey=storey&sourceVersion=version&candidate=candidate:draft";
+  const html = render(model, route);
+  expect(html).toContain("Visible draft");
+  expect(html).toContain("Draft outline · 2.60 m");
+  expect(html).toContain("Accept room outline");
+  expect(html).toContain("Review outline in 2D");
+  expect(html).not.toContain("Save assumed height"); // No properties may be written against a candidate ID.
+  for (const excluded of ["Wrong page", "Wrong revision", "Rejected draft"]) expect(html).not.toContain(excluded);
+  expect(render({ ...model, extractions: [] }, route)).toContain("this page has no metric scale");
+  expect(render({ ...model, extractionCandidates: [] }, route)).toContain("No rooms or room drafts on this source page");
+});
+
+test("3D stacks source-scaled floors and real wall polygons without inventing enclosure or mixing buildings and revisions", () => {
+  const storeys = [{ id: "upper", buildingId: "building", levelIndex: 1 }, { id: "lower", buildingId: "building", levelIndex: 0 },
+    { id: "section", buildingId: "building" }, { id: "other", buildingId: "other-building" }, { id: "old", buildingId: "building" }];
+  const polygon = [{ x: .1, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .6 }, { x: .1, y: .6 }];
+  const model = adaptBuildingModel({ storeys,
+    planSources: storeys.map((storey, i) => ({ id: `source-${storey.id}`, storeyId: storey.id, page: i + 1, source: { versionId: storey.id === "old" ? "old" : "version" } })),
+    supersededSources: [{ sourceVersionId: "old" }],
+    automaticPlanProcessing: [{ sourceVersionId: "version", nonFloorPlanPages: [{ page: 3 }] }],
+    extractions: storeys.map((storey, i) => ({ id: `job-${i}`, storeyId: storey.id, page: i + 1, sourceVersionId: "version", status: "complete",
+      result: { pageScale: { pageAspectRatio: i === 0 ? 1 : 2, metresPerPageHeight: i === 0 ? 30 : 10 } } })),
+    extractionCandidates: storeys.flatMap((storey, i) => ["draft_wall", "construction_fragment_assembly", "footprint"].map(quality => ({
+      id: `${storey.id}-${quality}`, entityType: "element", name: quality, storeyId: storey.id, page: i + 1,
+      sourceVersionId: "version", status: "unreviewed", geometry: { quality, polygon, holes: [[{ x: .2, y: .3 }, { x: .25, y: .3 }, { x: .2, y: .35 }]] },
+    }))),
+  });
+  const before = JSON.stringify(model);
+  const floors = buildingVolumeGeometry(model, model.extractionCandidates, "source-lower");
+  expect(floors.map(floor => floor.storey.id)).toEqual(["lower", "upper"]); // Level order, not PDF page order.
+  expect(floors.map(floor => floor.wallCount)).toEqual([1, 1]); // Generic fills never become walls.
+  expect(floors.map(floor => floor.base)).toEqual([0, 2.9]);
+  expect(floors[0]!.meshes[0]!.polygons[0]![0]).toEqual([[-3, -2], [3, -2], [3, 2], [-3, 2]]);
+  expect(floors[1]!.meshes[0]!.polygons[0]![0]).toEqual([[-4.5, -6], [4.5, -6], [4.5, 6], [-4.5, 6]]);
+  expect(floors[1]!.meshes[0]!.base).toBe(2.9);
+  expect(floors[0]!.meshes[0]!.polygons[0]).toHaveLength(2); // Preserve source holes, not a bounding-box enclosure.
+  expect(JSON.stringify(model)).toBe(before); // Stacking and alignment remain unsaved preview assumptions.
+  model.extractions[0]!.result!.pageScale = null;
+  const missing = buildingVolumeGeometry(model, model.extractionCandidates, "source-lower");
+  expect(missing.map(floor => floor.storey.id)).toEqual(["lower", "upper"]);
+  expect(missing[1]!.meshes).toEqual([]); // Missing floors remain navigable, never inherit a different page's scale.
+});
+
+test("3D anchors known basement levels below ground without inventing ground from page order", () => {
+  const levels = [-2, -1, 0, 1, 3];
+  const model = adaptBuildingModel({
+    storeys: levels.map(level => ({ id: `floor${level}`, name: `Floor ${level}`, levelIndex: level, buildingId: "building" })),
+    planSources: levels.map((level, index) => ({ id: `plan${level}`, storeyId: `floor${level}`, page: index + 1, source: { versionId: "version" } })),
+    extractions: levels.map((level, index) => ({ id: `job${level}`, storeyId: `floor${level}`, page: index + 1, sourceVersionId: "version", status: "complete",
+      result: { pageScale: { pageAspectRatio: 1, metresPerPageHeight: 10 } } })),
+    extractionCandidates: levels.map((level, index) => ({ id: `room${level}`, name: `Room ${level}`, entityType: "room", storeyId: `floor${level}`,
+      page: index + 1, sourceVersionId: "version", status: "unreviewed", geometry: { quality: "enclosed_region", polygon: [{ x: .1, y: .1 }, { x: .4, y: .1 }, { x: .4, y: .5 }] } })),
+  });
+  model.storeys[0]!.componentProperties = { clearRoomHeight: { propertyId: "height", version: 1, value: 3.2, unit: "m", provenance: "inferred", reviewStatus: "unreviewed", reviewRevision: 0 } };
+  const before = JSON.stringify(model);
+  const floors = buildingVolumeGeometry(model, model.extractionCandidates, "plan0");
+  expect(floors.map(floor => Number(floor.base.toFixed(2)))).toEqual([-6.4, -2.9, 0, 2.9, 8.7]);
+  expect(floors.map(floor => Number(floor.meshes[0]!.base.toFixed(2)))).toEqual([-6.4, -2.9, 0, 2.9, 8.7]);
+  expect(JSON.stringify(model)).toBe(before);
+  // Unknown ordering must not claim a ground datum, even when another floor is level zero.
+  model.storeys[0]!.levelIndex = null;
+  expect(buildingVolumeGeometry(model, [], "plan0").every(floor => floor.base >= 0)).toBe(true);
 });
 
 test("PDF evidence stays on the authenticated app origin for inline rendering", () => {

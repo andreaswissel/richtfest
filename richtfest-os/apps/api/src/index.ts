@@ -39,6 +39,7 @@ const extractionWorker = startSourceExtractionWorker({
 });
 const buildingExtractionWorker = startBuildingExtractionWorker({
   db, fileStorage,
+  structureDocument: input => structureSourceDocument(db, input),
   executeDecision: input => withProviderCredential(db,input.tenantId,input.actorId,"typesafe",
     key => callDecisionModel({state:input.state,questions:input.questions,signal:input.signal},key))
     .then(result=>result??{status:"unconfigured" as const}),

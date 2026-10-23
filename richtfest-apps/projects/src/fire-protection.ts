@@ -1,10 +1,10 @@
 import { firePlanSchema, validateFirePlan, type FirePlan, type FireProtectionSnapshot } from "@richtfest/shared/fire-plan";
 
-/** Assemble only saved model data. Pending agent proposals never override approved values. */
+/** Pending proposals never override approved values; explicit previews may use unreviewed inputs. */
 export function assembleFireProtectionSnapshot(data: {
   model: { id: string; revision: number }; buildings: any[]; storeys: any[]; rooms: any[]; elements: any[];
   properties: any[]; relationships: any[]; planSources: any[]; extractions: any[]; conflicts: any[];
-}): FireProtectionSnapshot {
+}, mode: "reviewed" | "candidate_preview" = "reviewed"): FireProtectionSnapshot {
   const active = (rows: any[]) => rows.filter(row => row.constructionState !== "demolished");
   const buildings = active(data.buildings);
   if (buildings.length !== 1) return { available: false, reason: "A single active building is required; multiple buildings must not be combined." };
@@ -25,13 +25,14 @@ export function assembleFireProtectionSnapshot(data: {
     if (data.conflicts.some(c => c.entityId === id && c.propertyKey === key)) return null;
     const property = data.properties.find(p => p.entityId === id && p.propertyKey === key);
     const chosen = property?.reviewed?.reviewStatus === "approved" ? property.reviewed
-      : property?.current?.provenance === "manual" && property.current.reviewStatus !== "rejected" ? property.current : null;
+      : property?.current && !["rejected", "superseded"].includes(property.current.reviewStatus)
+        && (property.current.provenance === "manual" || mode === "candidate_preview") ? property.current : null;
     if (property?.current && property.current.version !== chosen?.version) blockers.add(`${id}: ${key} has an unaccepted proposal; not used.`);
     if (!chosen) return null;
     if (!properties.some(p => p.entityId === id && p.key === key)) {
       properties.push({ entityId: id, key, version: chosen.version, reviewStatus: chosen.reviewStatus, provenance: chosen.provenance, evidence: chosen.evidence });
       for (const item of chosen.evidence ?? []) cite(item);
-      if (chosen.reviewStatus !== "approved") blockers.add(`${id}: ${key} is manually entered but not reviewed.`);
+      if (chosen.reviewStatus !== "approved") blockers.add(`${id}: ${key} is ${chosen.provenance === "manual" ? "manually entered" : "inferred"} but not reviewed.`);
     }
     return chosen.value;
   };
@@ -40,7 +41,8 @@ export function assembleFireProtectionSnapshot(data: {
     || data.conflicts.some(c => c.entityId === s.id && c.propertyKey === "level")
     ? number(s.id, "level") : typeof s.levelIndex === "number" ? s.levelIndex : null]));
   for (const conflict of data.conflicts) blockers.add(`${conflict.entityId}: unresolved ${conflict.propertyKey} conflict.`);
-  const relations = data.relationships.filter(r => r.reviewStatus === "approved");
+  const relations = data.relationships.filter(r => r.reviewStatus === "approved"
+    || mode === "candidate_preview" && r.reviewStatus === "unreviewed");
   const rooms = active(data.rooms), elements = active(data.elements);
   const plan: FirePlan = { building: {
     evidence,
@@ -89,12 +91,15 @@ export function assembleFireProtectionSnapshot(data: {
           roomIds: matching.filter(r => r.relationshipType === "separates").map(r => r.toEntityId as string) };
       });
       if (result.some(f => f.exterior ? f.roomIds.length > 0 : !f.roomIds.length || f.roomIds.some(id => !roomIds.has(id)))) return null;
+      // A merged/ambiguous outline can touch both wall faces. It cannot establish
+      // a separation or an exit from a room back into itself.
+      if (result[0]!.roomIds.some(id => result[1]!.roomIds.includes(id))) return null;
       return result as NonNullable<ReturnType<typeof faces>>;
     };
     const kind = (e: any) => get(e.id, "componentType") ?? (e.kind === "draft_wall" ? "wall" : e.kind === "draft_ceiling" ? "ceiling" : e.kind);
     const local = elements.filter(e => e.storeyId === storey.id);
     const item: FirePlan["storeys"][number] = { id: storey.id, evidence: localEvidence,
-      geometryReviewed: scaleValid && sourcePlan?.alignmentStatus === "reviewed" && extraction?.result?.scaleObservation?.status === "confirmed",
+      geometryReviewed: mode !== "candidate_preview" && scaleValid && sourcePlan?.alignmentStatus === "reviewed" && extraction?.result?.scaleObservation?.status === "confirmed",
       rooms: roomRows.map(r => ({ id: r.id, role: get(r.id, "fireRoomRole"), unit: get(r.id, "apartmentUnit"), basement,
         roomUse: get(r.id, "roomUse"), smokeVent: get(r.id, "stairwellSmokeVent"), polygon: polygon(r) })),
       walls: local.filter(e => kind(e) === "wall").map(e => ({ id: e.id, basement, loadBearing: get(e.id, "loadBearing"), faces: faces(e.id), actual: get(e.id, "fireResistance") })),
@@ -109,7 +114,8 @@ export function assembleFireProtectionSnapshot(data: {
           point: ring ? { x: ring.reduce((sum, p) => sum + p.x, 0) / ring.length, y: ring.reduce((sum, p) => sum + p.y, 0) / ring.length } : null };
       }),
     };
-    if (!item.geometryReviewed) blockers.add(`${storey.id}: plan alignment/scale not confirmed; routes blocked.`);
+    if (!item.geometryReviewed) blockers.add(mode === "candidate_preview" ? `${storey.id}: candidate geometry is unreviewed; any route result is provisional.`
+      : `${storey.id}: plan alignment/scale not confirmed; routes blocked.`);
     for (const room of item.rooms) if (!room.unit && !["common_corridor", "stairwell", "common_other", "exterior"].includes(get(room.id, "spaceType"))) {
       room.role = null; blockers.add(`${room.id}: unit/common-space membership is unknown.`);
     }

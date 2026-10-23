@@ -75,6 +75,23 @@ const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).h
     expect(await structureSourceDocument(db, { ...input, pages: [], image }, fetcher)).toMatchObject({ status: "completed", output });
     expect(body.messages[0].content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: image.data } });
     expect(JSON.parse(body.messages[0].content[0].text).context).toEqual({ versionId: input.versionId, pages: [], imageScope: "affinity_preview" });
+    output = { observations: [{ kind: "ridge_height", value: 13.8, unit: "m", unitBasis: "explicit", quote: "First 13,80 m",
+      buildingLabel: null, storeyLabel: null, upperReference: "ridge", lowerReference: "project_datum", floorBasis: "unknown",
+      constructionState: "unknown", region: { x: .1, y: .2, width: .4, height: .5 }, reason: "Printed ridge elevation, not fire height." }], gaps: ["Mean terrain missing"] };
+    const heightInput = { ...input, task: "plan_heights" as const, pages: [{ page: 6, text: "Schnitt A-A First 13,80 m" }], image: { ...image, scope: "image" as const } };
+    expect(await structureSourceDocument(db, heightInput, fetcher)).toMatchObject({ status: "completed", output,
+      metadata: { provider: "anthropic", model: "configured-source-model", extractorVersion: "section-heights-v2" } });
+    expect(body.system).toContain("mean terrain");
+    expect(body.max_tokens).toBe(800);
+    config.supervisor.maxOutputTokens = 12000;
+    config.executionLimits.timeoutSeconds = 180;
+    await pool.query("update os_agent_presets set config=$1", [JSON.stringify(config)]);
+    expect(await structureSourceDocument(db, heightInput, fetcher)).toMatchObject({ status: "completed", output,
+      metadata: { maxOutputTokens: 12000, request: { maxOutputTokens: 12000, timeoutMs: 180000 } } });
+    expect(body.max_tokens).toBe(12000);
+    config.supervisor.maxOutputTokens = 800;
+    await pool.query("update os_agent_presets set config=$1", [JSON.stringify(config)]);
+    expect(await structureSourceDocument(db, { ...heightInput, image }, fetcher)).toMatchObject({ status: "failed", metadata: { diagnostic: { code: "missing_page_evidence" } } });
     output = { entities: [], facts: [], approved: true };
     expect(await run()).toMatchObject({ status: "failed", metadata: { diagnostic: { code: "schema" }, usage: { inputTokens: 42, outputTokens: 12 } } });
     const truncated: ProviderFetch = async () => Response.json({ id: "bounded-response", model: "configured-source-model", stop_reason: "max_tokens",

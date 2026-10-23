@@ -77,109 +77,6 @@ export function ProjectTable({ projects }: { projects: RecordData[] }) {
     <Empty>{t("noProjects")}</Empty>
   );
 }
-export function Dashboard() {
-  const t = useT(),
-    query = useApi("/dashboard");
-  const data = query.data;
-  return (
-    <Page>
-      <PageHeader
-        title={t("overview")}
-        description={t("homeSubtitle")}
-        actions={
-          <Button asChild variant="default">
-            <Link to="/projects?create=1">＋ {t("newProject")}</Link>
-          </Button>
-        }
-      />
-      <LoadState query={query} />
-      {data && (
-        <>
-          <div className="overview-metrics">
-            {[
-              [t("projects"), list(data.projects).length],
-              [
-                t("assignedWork"),
-                list(data.tasks || data.assignedTasks).length,
-              ],
-              [
-                t("pendingReview"),
-                list(data.pendingDrafts || data.pendingReview).length,
-              ],
-            ].map(([label, n]) => (
-              <div className="metric-card" key={label}>
-                <span>{label}</span>
-                <strong>{n}</strong>
-              </div>
-            ))}
-          </div>
-          <Section
-            title={t("projects")}
-            meta={
-              <Button asChild variant="link">
-                <Link to="/projects">{t("allProjects")} ↗</Link>
-              </Button>
-            }
-          >
-            <ProjectTable projects={list(data.projects)} />
-          </Section>
-          <div className="split">
-            <Section title={t("assignedWork")}>
-              <WorkList
-                items={list(data.tasks || data.assignedTasks)}
-                empty={t("noWork")}
-              />
-            </Section>
-            <Section title={t("pendingReview")}>
-              <WorkList
-                items={list(data.pendingDrafts || data.pendingReview)}
-                empty={t("noReview")}
-                knowledge
-              />
-            </Section>
-          </div>
-          <Section title={t("missingInfo")}>
-            <WorkList
-              items={list(data.missingInformation || data.missingInfo)}
-              empty={t("noMissing")}
-            />
-          </Section>
-        </>
-      )}
-    </Page>
-  );
-}
-function WorkList({
-  items,
-  empty,
-  knowledge = false,
-}: {
-  items: RecordData[];
-  empty: string;
-  knowledge?: boolean;
-}) {
-  return items.length ? (
-    <div className="work-list">
-      {items.map((item, i) => (
-        <Link
-          key={item.id || i}
-          to={
-            knowledge
-              ? item.projectId
-                ? `/projects/${item.projectId}?view=knowledge`
-                : `/knowledge/${item.id}`
-              : `/projects/${item.projectId}`
-          }
-        >
-          <span>{item.title || item.name || item.message}</span>
-          <span>↗</span>
-        </Link>
-      ))}
-    </div>
-  ) : (
-    <Empty>{empty}</Empty>
-  );
-}
 export function Projects() {
   const t = useT(),
     query = useApi("/projects"),
@@ -631,6 +528,7 @@ export function SharedWork({
   const t = useT();
   const [create, setCreate] = useState(false);
   const taskWrite = useWrite("/knowledge/tasks", () => setCreate(false));
+  const project = useApi(`/projects/${projectId}`, create);
   return (
     <div className="shared-work-view">
       <Section
@@ -674,20 +572,22 @@ export function SharedWork({
             label={t("addTask")}
             pending={taskWrite.isPending}
             error={taskWrite.error}
-            onSubmit={(form) =>
-              taskWrite.mutate({
-                ...values(form),
-                projectId,
-                conversationId,
-              })
-            }
+            onSubmit={(form) => {
+              const input = values(form);
+              const assignment = String(input.assignment || "self");
+              taskWrite.mutate({ title: input.title, projectId, conversationId,
+                assigneeType: assignment === "agent" ? "agent" : "user",
+                ...(assignment !== "self" && assignment !== "agent" ? { assigneeId: assignment } : {}),
+              });
+            }}
           >
             <Field label={t("taskTitle")}>
               <Input name="title" required autoFocus />
             </Field>
             <Field label={t("assignTo")}>
-              <NativeSelect name="assigneeType">
-                <option value="user">{t("yourself")}</option>
+              <NativeSelect name="assignment">
+                <option value="self">{t("yourself")}</option>
+                {list(project.data?.responsibilityCandidates).map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
                 <option value="agent">{t("agent")}</option>
               </NativeSelect>
             </Field>

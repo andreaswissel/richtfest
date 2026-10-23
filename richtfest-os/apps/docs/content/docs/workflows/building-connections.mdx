@@ -1,0 +1,46 @@
+---
+title: Building connections
+description: Inspect and review the canonical links between rooms, walls, openings and storeys.
+---
+
+In **Building model → 3D**, choose **Connections** in the side panel. Select an
+object in the viewport or the panel's object list to inspect its stored links:
+walls bounding rooms or facing outside, openings hosted in walls, and ceilings
+covering rooms or lying below another storey. Linked objects and source-plan
+references navigate to the same canonical records used in 2D. Active connected
+geometry is outlined alongside the selected object; an outline is not approval.
+
+## Derive, inspect, confirm
+
+1. Review and accept the relevant room and wall outlines in the 2D plan. Merely
+   displaying an extraction draft in 3D does not accept its geometry.
+2. **Derive connections** runs the existing whole-model plan derivation. Besides
+   connections, this can propose wall roles, thicknesses, openings, storey levels
+   and ceilings. These remain proposals; the action does not approve them.
+3. Select an object and follow **Review plan** to inspect the source. Confirm or
+   reject each connection independently. The API records the reviewer, timestamp,
+   optional note and model revision; stale model revisions cannot overwrite a review.
+
+Rejected and superseded links remain in the inspector but are excluded from its
+active counts and highlighting, the 2D connection projections, agent adjacency
+context and acoustic adjacency inputs. Re-derivation preserves reviewed and
+rejected links and does not create a duplicate of the same derived connection.
+Review requires project write access and is scoped to the project's model.
+
+## What remains incomplete
+
+A missing wall side is **unresolved**, not automatically outside. Rooms without
+active wall boundaries and openings without one unambiguous wall host are called
+out next to their objects. A list of boundary links does not prove a closed shell.
+
+This first workflow does not register floor plans to shared building coordinates,
+repair incomplete outlines, infer a roof or validate enclosure continuity. The
+3D stack still uses visibly schematic alignment and spacing. Connection reviews
+are retained across re-derivation; after editing geometry, a person must revisit
+affected connections—automatic invalidation of stale geometric reviews is not yet
+implemented.
+
+Confirming a geometric connection does **not** approve fire resistance, acoustic
+ratings, building classification or escape-route connectivity. Missing engineering
+inputs and unknown topology remain incomplete. See [Building geometry](./building-geometry)
+for the separate assumption and height-review workflow.

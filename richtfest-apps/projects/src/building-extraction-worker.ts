@@ -13,6 +13,8 @@ const keepOutlineEdit = (geometry: any, previous: any) => {
 };
 import { proposeRoomUses } from "./room-use-classifier";
 import { ensureAutomaticPlanExtractions } from "./automatic-building-model";
+import { runPlanHeightExtraction } from "./plan-heights";
+export { runPlanHeightExtraction };
 
 /** Superseded plan sets are out of the model: never claim or upgrade their jobs. */
 const notSuperseded = () => sql`not exists (select 1 from ${buildingSupersededSources} as superseded
@@ -152,7 +154,8 @@ export function startBuildingExtractionWorker(d: SourceExtractionDeps) {
   // Idle planner scans are cheap but not free: back off to ~15 s after a pass that found nothing.
   let nextPlanAt=0;
   const onPlanned=(found:boolean)=>{nextPlanAt=found?0:Date.now()+15_000;};
-  const tick=()=>{if(active||controller.signal.aborted)return;active=runBuildingExtraction(d,controller.signal,{plan:Date.now()>=nextPlanAt,onPlanned}).then(()=>{},()=>d.reportError()).finally(()=>{active=null;});};
+  const tick=()=>{if(active||controller.signal.aborted)return;active=runBuildingExtraction(d,controller.signal,{plan:Date.now()>=nextPlanAt,onPlanned})
+    .then(async()=>{if(!controller.signal.aborted)await runPlanHeightExtraction(d,controller.signal);}).catch(()=>d.reportError()).finally(()=>{active=null;});};
   const timer=setInterval(tick,1000);timer.unref();tick();
   return {async stop(){clearInterval(timer);controller.abort();await active;}};
 }

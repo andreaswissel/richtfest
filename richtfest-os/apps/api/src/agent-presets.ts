@@ -23,7 +23,7 @@ export const isConfiguredPreset = (provider: Provider, config: AgentPresetConfig
 // Provider model IDs are configured by the deployment owner or workspace admin.
 // An empty ID is deliberately unconfigured, never silently replaced by another provider.
 export function vendorPreset(provider: Provider, effort: AgentEffort): AgentPresetConfig {
-  const directOpenAiModel = process.env.OPENAI_PROJECT_MODEL ?? "gpt-4.1-mini";
+  const directOpenAiModel = process.env.OPENAI_PROJECT_MODEL ?? { low: "gpt-6-luna", medium: "gpt-6-sol", high: "gpt-6-astra", ultra: "gpt-6-astra" }[effort];
   const supervisorModel = provider === "openai" ? (env.OPENAI_SUPERVISOR_MODEL ?? directOpenAiModel) : provider === "anthropic" ? env.ANTHROPIC_SUPERVISOR_MODEL : env.VERCEL_SUPERVISOR_MODEL;
   const specialistModel = provider === "openai" ? (env.OPENAI_SPECIALIST_MODEL ?? directOpenAiModel) : provider === "anthropic" ? env.ANTHROPIC_SPECIALIST_MODEL : env.VERCEL_SPECIALIST_MODEL;
   const limits = {

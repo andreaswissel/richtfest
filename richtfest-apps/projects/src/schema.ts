@@ -54,6 +54,9 @@ export const projects = pgTable("projects_projects", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull(),
   customerId: uuid("customer_id"),
+  /** Responsibility labels only; never membership or authorization grants. */
+  leadId: uuid("lead_id"),
+  delegateId: uuid("delegate_id"),
   name: text("name").notNull(),
   street: text("street"),
   postalCode: text("postal_code"),

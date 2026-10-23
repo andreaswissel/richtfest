@@ -68,6 +68,45 @@ for (const schema of ["IFC4", "IFC2X3"]) test(`${schema}: declared facts, identi
   expect(await extractIfcModel(fixture(schema))).toEqual(result);
 });
 
+for (const schema of ["IFC4", "IFC2X3"]) test(`${schema}: boundary, void and filling declarations retain direction and independent identity`, async () => {
+  const bytes = new TextEncoder().encode(new TextDecoder().decode(fixture(schema)).replace("#50=", `
+#60=IFCSPACE('room',$,'Room',$,$,$,$,$,.ELEMENT.,.INTERNAL.,$);
+#61=IFCSPACE('room2',$,'Other room',$,$,$,$,$,.ELEMENT.,.INTERNAL.,$);
+#62=IFCOPENINGELEMENT('opening',$,'Opening',$,$,$,$,$${schema === "IFC4" ? ",.OPENING." : ""});
+#63=IFCDOOR('door',$,'Door',$,$,$,$,$,2.,1.${schema === "IFC4" ? ",.DOOR.,.NOTDEFINED.,$" : ""});
+#70=IFCRELSPACEBOUNDARY('boundary',$,'Declared',$,#60,#63,$,.PHYSICAL.,.INTERNAL.);
+#71=IFCRELSPACEBOUNDARY('boundary2',$,$,$,#61,#63,$,.PHYSICAL.,.INTERNAL.);
+#72=IFCRELSPACEBOUNDARY('conflict',$,$,$,#60,#63,$,.PHYSICAL.,.EXTERNAL.);
+#73=IFCRELSPACEBOUNDARY('virtual',$,$,$,#60,$,$,.VIRTUAL.,.INTERNAL.);
+#74=IFCRELVOIDSELEMENT('void',$,$,$,#10,#62);
+#75=IFCRELFILLSELEMENT('fill',$,$,$,#62,#63);
+#76=IFCRELSPACEBOUNDARY('repeated',$,$,$,#60,#63,$,.PHYSICAL.,.INTERNAL.);
+#50=`));
+  const result = await extractIfcModel(bytes);
+  const fact = (id: number, predicate: string) => result.facts.find(f => f.entityKey === `#${id}` && f.predicate === predicate)!;
+  for (const [id, attribute, target] of [
+    [70, "RelatingSpace", 60], [70, "RelatedBuildingElement", 63],
+    [71, "RelatingSpace", 61], [71, "RelatedBuildingElement", 63],
+    [74, "RelatingBuildingElement", 10], [74, "RelatedOpeningElement", 62],
+    [75, "RelatingOpeningElement", 62], [75, "RelatedBuildingElement", 63],
+  ] as const) {
+    expect(fact(id, attribute)).toEqual({ entityKey: `#${id}`, predicate: attribute, kind: "relationship", value: { type: "reference", value: `#${target}` }, unit: null,
+      provenance: "deterministic", evidence: { kind: "ifc", expressId: id, attribute, relationshipId: id } });
+  }
+  expect(result.entities.find(e => e.key === "#70")).toEqual({ key: "#70", kind: "IFCRELSPACEBOUNDARY", name: "Declared", globalId: "boundary" });
+  for (const [id, declaration] of [[70, "INTERNAL"], [72, "EXTERNAL"], [76, "INTERNAL"]] as const) {
+    expect(fact(id, "InternalOrExternalBoundary").value).toEqual({ type: "text", value: declaration });
+    expect(fact(id, "InternalOrExternalBoundary").evidence).toEqual({ kind: "ifc", expressId: id, attribute: "InternalOrExternalBoundary", relationshipId: id });
+    expect(fact(id, "PhysicalOrVirtualBoundary").value).toEqual({ type: "text", value: "PHYSICAL" });
+  }
+  expect(fact(73, "PhysicalOrVirtualBoundary").value).toEqual({ type: "text", value: "VIRTUAL" });
+  expect(fact(73, "RelatedBuildingElement").value).toEqual({ type: "structured", value: null });
+  expect(fact(73, "RelatingSpace").value).toEqual({ type: "reference", value: "#60" });
+  expect(result.facts.filter(f => f.predicate === "InternalOrExternalBoundary")).toHaveLength(5);
+  for (const f of result.facts) expect(sourceFactInput.safeParse(f).success).toBe(true);
+  expect(await extractIfcModel(bytes)).toEqual(result);
+});
+
 test("detection and honest rejection", async () => {
   expect(isIfcSource("application/octet-stream", "MODEL.IFC")).toBe(true);
   expect(isIfcSource("application/x-ifc; charset=utf-8", "model")).toBe(true);

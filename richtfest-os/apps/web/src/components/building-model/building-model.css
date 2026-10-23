@@ -184,19 +184,20 @@
 .building-model-outline-midpoint:hover { opacity: 1; }
 /* Workbench: one toolbar, outliner, tool rail, plan, properties and a status bar filling the project page. */
 .building-model.is-workbench { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
-.building-model-toolbar { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.building-model-toolbar { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 10px; min-height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
 .building-model-toolbar > * { flex: 0 0 auto; }
 .building-model-toolbar-source { display: flex; align-items: center; gap: 6px; max-width: 300px; flex: 0 0 auto; color: var(--muted-foreground); }
 .building-model-toolbar-source strong { overflow: hidden; color: var(--foreground); font-size: var(--ui-xs); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .building-model-source-select { width: 260px; }
 .building-model-toolbar-source > strong { max-width: 260px; }
-.building-model-pages { display: flex; align-items: center; gap: 3px; padding-left: 10px; border-left: 1px solid var(--border); }
+.building-model-pages { display: flex; flex-wrap: wrap; max-width: 100%; align-items: center; gap: 3px; padding-left: 10px; border-left: 1px solid var(--border); }
 .building-model-pages button { min-width: 26px; height: var(--control-sm); padding: 0 6px; border: 1px solid transparent; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--muted-foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-2xs); }
 .building-model-pages button:hover { background: var(--muted); color: var(--foreground); }
 .building-model-pages button.is-floor-plan { color: var(--foreground); }
 .building-model-pages button.is-unresolved { border-style: dashed; border-color: var(--border); }
 .building-model-pages button[aria-pressed="true"] { border-color: var(--primary); color: var(--foreground); }
 .building-model-context-trigger { display: inline-flex; align-items: center; gap: 6px; height: var(--control-sm); padding: 0 8px; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--muted-foreground); font-size: var(--ui-xs); white-space: nowrap; }
+.building-model-context-trigger > span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .building-model-context-trigger:hover, .building-model-context-trigger[data-state="open"] { color: var(--foreground); }
 .building-model-attention-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--destructive); }
 .building-model-context-popover { display: grid; width: min(560px, calc(100vw - 24px)); max-height: min(70dvh, 640px); gap: 10px; overflow: auto; }
@@ -412,7 +413,12 @@
 .building-room-volumes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); flex: 1; min-height: 0; overflow: hidden; }
 .building-room-volume-canvas { position: relative; min-width: 0; min-height: 320px; overflow: hidden; }
 .building-room-volume-canvas > canvas { display: block; }
-.building-room-volume-empty { position: absolute; inset: 16px; z-index: 1; pointer-events: none; }
+.building-volume-floors { position: absolute; top: var(--stack); left: var(--stack); z-index: 2; display: grid; gap: 0; max-height: 45%; max-width: calc(100% - 2 * var(--stack)); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); box-shadow: 0 2px 8px #00000012; }
+.building-volume-floors > a { display: flex; flex-direction: column; align-items: flex-start; height: auto; gap: 2px; padding: calc(var(--cell) / 2) var(--stack); font-size: var(--ui-sm); border-radius: 0; border-bottom: 1px solid var(--border); white-space: normal; color: var(--foreground); }
+.building-volume-floors > a:last-child { border-bottom: 0; }
+.building-volume-floors > a:is(:hover, [aria-current="true"]) { background: var(--muted); }
+.building-volume-floors > a:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.building-room-volume-empty { position: absolute; inset: auto var(--stack) var(--stack); z-index: 1; pointer-events: none; }
 .building-room-volume-editor { display: flex; flex-direction: column; gap: calc(var(--stack) / 2); padding: var(--stack); overflow: auto; border-left: 1px solid var(--border); background: var(--background); }
 .building-room-volume-editor > form { gap: calc(var(--stack) / 2); }
 .building-room-volume-list { display: grid; max-height: 140px; overflow: auto; flex-shrink: 0; }

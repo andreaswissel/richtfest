@@ -9,6 +9,22 @@ export type BuildingConstructionState = z.infer<typeof buildingConstructionState
 export const buildingReviewStatusSchema = z.enum(["unreviewed", "proposed", "approved", "rejected", "superseded"]);
 export type BuildingReviewStatus = z.infer<typeof buildingReviewStatusSchema>;
 
+/** Connectivity claims retain their identity and evidence independently of component properties. */
+export type BuildingRelationship = {
+  id: string;
+  fromEntityType: BuildingEntityType;
+  fromEntityId: string;
+  toEntityType: BuildingEntityType;
+  toEntityId: string;
+  relationshipType: string;
+  reviewStatus: BuildingReviewStatus;
+  metadata: Record<string, unknown> | null;
+};
+export const buildingConnectionTypes = ["separates", "faces_exterior", "opening_in", "covers", "under_storey"] as const;
+/** Active does not mean approved: proposals may support previews, never imply compliance. */
+export const isActiveBuildingRelationship = (relationship: { reviewStatus?: string }) =>
+  relationship.reviewStatus !== "rejected" && relationship.reviewStatus !== "superseded";
+
 export const buildingPropertyProvenanceSchema = z.enum(["deterministic", "extracted", "inferred", "manual"]);
 export type BuildingPropertyProvenance = z.infer<typeof buildingPropertyProvenanceSchema>;
 export const buildingClaimKindSchema = z.enum(["observed_fact", "requirement", "assumption", "calculation_result"]);

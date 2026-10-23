@@ -41,7 +41,7 @@ const taskInput = z.object({
   projectId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   assigneeType: z.enum(["user", "agent"]).default("user"),
-  assigneeId: z.string().uuid().optional(),
+  assigneeId: z.string().uuid().nullable().optional(),
 });
 const draftInput = z.object({
   title: z.string().trim().min(1).max(300),
@@ -236,6 +236,27 @@ export function createRouter(getDeps: GetDeps) {
       return next(e);
     }
   });
+  router.patch("/tasks/:taskId", async (req, res, next) => {
+    try {
+      const d = getDeps(req);
+      d.requirePermission("knowledge:write");
+      const taskId = z.string().uuid().parse(req.params.taskId);
+      const input = z.object({
+        status: z.enum(["open", "in_progress", "needs_review", "completed", "cancelled"]).optional(),
+        assigneeId: z.string().uuid().nullable().optional(),
+      }).strict().refine(value => Object.keys(value).length > 0).parse(req.body);
+      if (input.assigneeId && !await d.validateUser(input.assigneeId))
+        throw Object.assign(new Error("Active assignee not found"), { status: 404, code: "not_found" });
+      const row = await d.db.transaction(async (tx: any) => {
+        const [updated] = await tx.update(tasks).set({ ...input, ...(input.assigneeId !== undefined ? { assigneeType: "user" } : {}) })
+          .where(and(eq(tasks.id, taskId), eq(tasks.tenantId, d.tenantId))).returning();
+        if (updated) await d.audit(tx, "knowledge.task.updated", "task", taskId, { fields: Object.keys(input) });
+        return updated;
+      });
+      if (!row) throw Object.assign(new Error("Task not found"), { status: 404, code: "not_found" });
+      return send(res, 200, ok(row, "Task updated"));
+    } catch (e) { return next(e); }
+  });
   router.post("/tasks", async (req, res, next) => {
     try {
       const d = getDeps(req);
@@ -271,7 +292,7 @@ export function createRouter(getDeps: GetDeps) {
             assigneeId:
               input.assigneeType === "agent"
                 ? null
-                : (input.assigneeId ?? d.actorId),
+                : (input.assigneeId === undefined ? d.actorId : input.assigneeId),
             tenantId: d.tenantId,
             createdBy: d.actorId,
           })

@@ -105,14 +105,17 @@ describe("agent provider presets", () => {
     const { independentReviewEnabled: _independentReviewEnabled, ...legacyPreset } = vendorPreset("openai", "medium");
     expect(agentPresetConfigSchema.parse(legacyPreset).independentReviewEnabled).toBe(false);
   });
-  test("keeps the direct OpenAI default when the env model is unset", () => {
+  test("defaults OpenAI tiers to Luna, Sol and Astra when the env model is unset", () => {
     const previous = process.env.OPENAI_PROJECT_MODEL;
     delete process.env.OPENAI_PROJECT_MODEL;
     try {
-      const preset = vendorPreset("openai", "medium");
-      expect(preset.supervisor.modelId).toBe("gpt-4.1-mini");
-      expect(preset.specialists.requirements_reviewer.modelId).toBe("gpt-4.1-mini");
-      expect(isConfiguredPreset("openai", preset)).toBe(true);
+      for (const [effort, modelId] of [["low", "gpt-6-luna"], ["medium", "gpt-6-sol"], ["high", "gpt-6-astra"], ["ultra", "gpt-6-astra"]] as const) {
+        const preset = vendorPreset("openai", effort);
+        expect(preset.supervisor.modelId).toBe(modelId);
+        expect(preset.specialists.source_reviewer.modelId).toBe(modelId);
+        expect(preset.specialists.requirements_reviewer.modelId).toBe(modelId);
+        expect(isConfiguredPreset("openai", preset)).toBe(true);
+      }
     } finally {
       if (previous !== undefined) process.env.OPENAI_PROJECT_MODEL = previous;
     }

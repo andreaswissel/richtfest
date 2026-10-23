@@ -1,4 +1,8 @@
 {
+  "projectLead": "Projektleitung",
+  "projectDelegate": "Delegierte Person",
+  "responsibilityUnassigned": "Nicht zugewiesen",
+  "taskTrackingOnly": "Der Aufgabenstatus dokumentiert nur die Arbeit. Er gibt keine technischen Daten frei.",
   "ifcReviewTitle": "Importiertes Modell prüfen",
   "ifcReviewScope": "Manuelle Modellwerte bleiben von IFC-Deklarationen getrennt und müssen ausdrücklich geprüft werden. Eine geprüfte Prüfnotiz ergänzt weder fehlende Geometrie noch Feuerwiderstände und gibt das Modell nicht für Berechnungen frei.",
   "ifcReviewOutstanding": "{count} Quellwarnungen ohne geprüfte Notiz. Quelleneinschränkungen bleiben nach der Prüfung sichtbar.",

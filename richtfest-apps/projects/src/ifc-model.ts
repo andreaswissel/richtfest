@@ -137,8 +137,27 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
       const rel = read(id);
       for (const obj of rel[related] ?? []) if (objects.has(ref(obj)!) && ref(rel[relating])) add(obj.value, predicate, "relationship", rel[relating], id, relating, id);
     }
+    // Keep each declaration as its own entity, not an inferred room side or a
+    // merged adjacency. Conflicting/repeated boundaries must remain joinable by
+    // their relation ID, including virtual boundaries with no related element.
+    for (const [type, attributes] of [
+      [webIfc.IFCRELSPACEBOUNDARY, ["RelatingSpace", "RelatedBuildingElement", "ConnectionGeometry", "PhysicalOrVirtualBoundary", "InternalOrExternalBoundary", "ParentBoundary", "CorrespondingBoundary"]],
+      [webIfc.IFCRELVOIDSELEMENT, ["RelatingBuildingElement", "RelatedOpeningElement"]],
+      [webIfc.IFCRELFILLSELEMENT, ["RelatingOpeningElement", "RelatedBuildingElement"]],
+    ] as const) for (const id of ids(type)) {
+      const rel = read(id);
+      entities.push({ key: key(id), kind: kind(rel), name: label(rel.Name), ...(label(rel.GlobalId) ? { globalId: label(rel.GlobalId) } : {}) });
+      for (const attribute of ["GlobalId", "Name", "Description", ...attributes]) {
+        if (!(attribute in rel)) continue;
+        if (rel[attribute] == null || (rel[attribute].type === 5 && rel[attribute].value == null)) {
+          // An explicitly absent optional endpoint is not an outside room.
+          facts.push({ entityKey: key(id), predicate: attribute, kind: "attribute", value: { type: "structured", value: null }, unit: null,
+            provenance: "deterministic", evidence: { kind: "ifc", expressId: id, attribute, relationshipId: id } });
+        } else add(id, attribute, ref(rel[attribute]) ? "relationship" : "attribute", rel[attribute], id, attribute, id);
+      }
+    }
     return { entities, facts, metadata: { schema, parser: "web-ifc", parserVersion: api.GetVersion(),
-      importScope: "Object definitions and scalar attributes; occurrence/type property sets; declared quantities; type, containment and decomposition references",
+      importScope: "Object definitions and scalar attributes; occurrence/type property sets; declared quantities; type, containment and decomposition references; declared space boundary, void and filling relation entities with attribute provenance (connection geometry references only, no geometry traversal or inferred adjacency)",
       omissions: ["Geometry, placements and owner history are not traversed", "No calculated quantities, unit conversion or inherited type-property merging", "Other IFC relationships and non-scalar object attributes are not imported", "Non-single property forms are structured declarations with unresolved references", "Unit definitions retain unresolved component references; defaults require a matching declared unit category", "Parsing is not exhaustive IFC schema or reference validation"],
       structuredPropertyForms: [...omittedForms].sort() } };
   } finally {

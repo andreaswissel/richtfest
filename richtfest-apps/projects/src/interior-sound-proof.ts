@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   alignPlanOutline, interiorSoundInputKeys, interiorSoundSuggestionInput, ok, verifiedWallRoles, resolveRoomHeight, type SitePlanPage,
@@ -524,6 +524,7 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
     .filter(room => room.constructionState !== "demolished");
   const elementRows = await d.db.select().from(buildingElements).where(and(eq(buildingElements.modelId, scope.modelId), eq(buildingElements.tenantId, scope.tenantId))) as any[];
   const relationships = await d.db.select().from(buildingRelationships).where(and(eq(buildingRelationships.modelId, scope.modelId), eq(buildingRelationships.tenantId, scope.tenantId),
+    notInArray(buildingRelationships.reviewStatus, ["rejected", "superseded"]),
     inArray(buildingRelationships.relationshipType, ["separates", "covers", "under_storey", "opening_in"]))) as any[];
   const storeyRows = await d.db.select().from(buildingStoreys).where(and(eq(buildingStoreys.modelId, scope.modelId), eq(buildingStoreys.tenantId, scope.tenantId))) as any[];
   const [building] = await d.db.select({ id: buildingBuildings.id }).from(buildingBuildings).where(and(eq(buildingBuildings.modelId, scope.modelId), eq(buildingBuildings.tenantId, scope.tenantId))).limit(1) as any[];

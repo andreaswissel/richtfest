@@ -41,6 +41,8 @@ const projectUpdateInput = z
     addressReference: addressReferenceInput.nullable().optional(),
     name: z.string().trim().min(1).max(200).optional(),
     customerId: z.string().uuid().nullable().optional(),
+    leadId: z.string().uuid().nullable().optional(),
+    delegateId: z.string().uuid().nullable().optional(),
     status: z.string().trim().min(1).max(40).optional(),
   })
   .strict();
@@ -204,6 +206,14 @@ export function createRouter(getDeps: GetDeps) {
           code: "not_found",
         });
       const row = await d.db.transaction(async (tx: any) => {
+        // Serialize responsibility replacements on the project, not on individual members.
+        const [locked] = await tx.select({ id: projects.id, status: projects.status }).from(projects)
+          .where(and(eq(projects.id, projectId), eq(projects.tenantId, d.tenantId))).for("update");
+        if (!locked) return undefined;
+        for (const userId of [input.leadId, input.delegateId]) {
+          if (userId && !await d.validateUser?.(userId))
+            throw Object.assign(new Error("Active tenant member not found"), { status: 404, code: "not_found" });
+        }
         const [updated] = await tx
           .update(projects)
           .set(input)
@@ -270,6 +280,7 @@ export function createRouter(getDeps: GetDeps) {
             ? (names[project.customerId] ?? null)
             : null,
           members,
+          responsibilityCandidates: await d.responsibilityCandidates?.() ?? [],
           files: await listFiles(d, projectId),
         }),
       );

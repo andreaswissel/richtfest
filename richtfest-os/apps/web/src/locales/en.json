@@ -1,4 +1,8 @@
 {
+  "projectLead": "Project lead",
+  "projectDelegate": "Delegate",
+  "responsibilityUnassigned": "Not assigned",
+  "taskTrackingOnly": "Task status tracks work only. It does not approve engineering data.",
   "ifcReviewTitle": "Review imported model",
   "ifcReviewScope": "Manual model values are separate from IFC declarations and need explicit review. Reviewing a warning note does not remove missing geometry, supply missing ratings or approve the model for calculations.",
   "ifcReviewOutstanding": "{count} source warnings without a reviewed note. Source limitations remain visible after review.",

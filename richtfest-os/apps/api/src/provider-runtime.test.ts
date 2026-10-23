@@ -34,6 +34,7 @@ test("Chat provider receives reviewed building state and returns a proposal for 
       tools: [{ name: "propose_building_model_change", input: proposal }], artifact: null,
     }) }] }] });
   });
+  expect(request.model).toBe(process.env.OPENAI_PROJECT_MODEL ?? "gpt-6-luna");
   expect(JSON.stringify(request.input)).toContain("Meeting room");
   expect(JSON.stringify(request.input)).toContain(deepLink);
   expect(request.instructions).toContain("never approves or changes a reviewed fact");

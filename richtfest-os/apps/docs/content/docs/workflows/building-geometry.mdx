@@ -1,18 +1,67 @@
 ---
 title: Building geometry
-description: One canonical room model in the plan and the provisional 3D view.
+description: Canonical rooms and walls in a provisional, navigable whole-building view.
 ---
 
-In a project's **Building model**, switch from **2D** to **3D** to see room volumes
-for the selected plan page and construction state. These use the same canonical
-room IDs, outlines, holes and metric plan scale as the 2D overlays. There is no
-separate visualization model to synchronize. Edit outlines in 2D; edit heights
-in the 3D dimension panel. The model is persisted in Postgres.
+In a project's **Building model**, switch from **2D** to **3D** to see available
+floors and wall footprints in the selected building and construction state. Canonical rooms and usable
+extraction drafts appear together, using the same persisted IDs, outlines, holes
+and metric plan scale as the 2D overlays. There is no separate visualization
+model to synchronize. Edit outlines in 2D; edit heights in the 3D dimension panel.
+
+## Navigate floors and inspect the enclosure
+
+**All floors** is the initial 3D view and shows the provisional stack. Select a floor in the linked floor
+list, or click an object in the overview, to glide closer and fade the other
+floors. Faded objects cannot intercept selection. **All floors** restores them;
+reduced-motion preferences make both transitions immediate. Floor links retain
+the source page and can be opened in another tab. **Review outline in 2D** returns
+to that floor's source plan and selected object.
+
+When all displayed storeys have level indices and one is level **0**, a translucent
+surface marks an **assumed ground reference** there. Negative storeys such as −1
+and −2 sit below it and remain visible and selectable through it. This is a schematic
+surface, not surveyed terrain, a slab or a calculation input. Missing levels do not
+become basement levels from PDF page order; without the required indices the ground
+surface is hidden and the panel explains why. A deep link to a focused floor keeps
+that focus instead of opening the overview.
+
+Walls use actual source polygons, including holes, and the storey's clear height.
+Generic construction fills and fragment groups are not silently treated as walls.
+Gaps remain open: rendering a wall is not confirmation of its exterior role, phase,
+fire resistance or a complete, weather-tight building envelope.
+
+**Assumed floor alignment and spacing** explains the temporary placement: floor
+plans are centred on their wall bounds (room bounds where no walls exist), without
+rotation or registration. Entered levels determine order; missing levels use plan
+page order. Vertical spacing uses the greatest room/storey clear height on the
+lower floor plus a **0.30 m assumed floor allowance**, not a measured slab.
+These transforms are display-only and never become engineering inputs. The view
+uses one primary plan per storey, preferring the current plan set, and excludes
+superseded revisions, other buildings and pages classified as sections/elevations.
+It does not merge alternative drawings or stitch multiple partial plans together.
+
+## Start from extracted outlines
+
+Usable room drafts appear immediately in amber, even before any room has been
+accepted. Opening 3D neither creates duplicate rooms nor approves the extraction.
+Draft room geometry does not enter engineering calculations.
+
+Select a draft volume or its linked row. **Review outline in 2D** opens the same
+object on the source plan for inspection and correction. **Accept room outline**
+uses the existing review workflow to create its canonical room, then opens that
+room's height editor. It does not confirm the height, construction phase, room
+use or topology. A suggested match to an existing room must be resolved in 2D
+instead of creating another room. Rejected drafts disappear from the preview.
+
+Drafts inherit a storey height or use the unsaved 2.60 m preview value. A storey
+default can be edited immediately; room-specific heights are saved after accepting
+the room outline. Draft room phases remain unconfirmed, as in the 2D review view.
 
 ## Complete and confirm heights
 
-1. Select a room in the volume view or its linked row. **Confirm heights** filters
-   the list to rooms whose effective height has not been reviewed.
+1. Select a room in the volume view or its linked row. **Needs confirmation**
+   includes draft outlines, rooms that cannot be rendered and unreviewed heights.
 2. Choose **Storey default** to set the clear height inherited by rooms in that
    storey, or **Room override** for a different height in one room.
 3. **Save assumed height** appends an inferred, unreviewed property version.
@@ -20,10 +69,48 @@ in the 3D dimension panel. The model is persisted in Postgres.
    **Use storey height** clears an override and restores inheritance.
 
 Without either value, the preview uses **2.60 m**. Merely opening 3D does not save
-that default or approve anything. Amber volumes have unreviewed heights; neutral
-volumes have reviewed heights, not necessarily reviewed outlines or topology.
+that default or approve anything. Amber volumes have draft outlines or unreviewed
+heights; neutral canonical volumes have reviewed heights, not necessarily reviewed topology.
 Source evidence, inferred provenance, prior reviewed values and later edits stay
 separate. Confirming an assumed height does not turn it into a source measurement.
+
+## Read building heights from plans
+
+Open **Fire protection → Section and elevation heights → Extract heights** for an enrolled PDF revision.
+New automatic plan imports also queue this pass. It reads up to six identified
+section/elevation pages, not every page or historical upload. Omitted pages,
+unavailable providers and uncertain references remain visible gaps.
+
+Expand a page to inspect its printed dimensions, floor and terrain elevations,
+ridge/eaves heights and possible fire-protection height. The receipt retains the
+source revision/page/quote, provider, model, preset, usage and input hash. Quotes
+and numbers must occur in the supplied page text; their meaning, units, endpoints
+and model-proposed regions still require visual review. A proposed region is not
+a verified crop and is not copied into canonical height evidence.
+
+Height reading uses the active provider's low preset and honors its configured
+output-token budget and per-call timeout, rather than imposing the ordinary
+document indexer's 3,000-token cap. Reasoning and the final JSON share that token
+budget. For dense sections, configure sufficient headroom in Agent model settings;
+the application does not silently increase a saved limit or switch models.
+Receipts record effective settings and prompt/instruction hashes. Version 2
+collapses PDF layout whitespace before checking the 500-character quote limit,
+while retaining literal source matching. It also asks the reader to trace both
+dimension endpoints and distinguish terrain markers from floor levels. These
+instructions do not guarantee correct interpretation or complete coverage.
+
+Only a height explicitly relating the highest habitable floor to mean terrain,
+with known units and floor basis, can be transferred to an empty building height.
+Transfer saves an **inferred, unreviewed** property; it neither overwrites an
+existing value nor approves it for classification. Confirm the saved property
+separately after checking the original page and applicable height definition.
+Roof height, an isolated elevation and a printed dimension with unknown endpoints
+are not substitutes. This pass does not infer Sonderbau status.
+
+Completed runs are retained rather than silently repeated. Explicit retries are
+available only when every attempted page stopped before provider execution
+(unconfigured, forbidden or unavailable). Failed or interrupted calls with an
+unknown provider outcome are not automatically replayed.
 
 ## Calculation boundary
 
@@ -37,14 +124,44 @@ heights, or an unconfirmed inferred height, leave height-dependent checks
 incomplete instead of silently substituting the storey default. This first
 workflow does not implement unequal-height junction calculations.
 
+## Calculate before engineering approval
+
+Open **Plan context → Candidate calculations** on a completed PDF floor-plan
+extraction. The read-only preview combines that page's canonical geometry with
+usable unreviewed room and wall candidates. It derives provisional connections,
+room areas and openings, then runs the existing fire and interior-sound assemblers.
+Rejected connections and properties stay rejected; confirmed values take precedence.
+Missing heights, materials, densities and performance ratings are not defaulted.
+
+The preview can calculate conditional first-route lengths when roles, geometry,
+scale and connections are supplied; it does not require geometry approval first.
+Missing exits, ambiguous connections, unsupported holes or IFC routes stay blocked.
+Exterior noise currently reports geometry and missing inputs, not a complete
+facade calculation. Cross-storey flanks, slabs and whole-building coverage remain
+outside this page-scoped preview.
+
+The result is explicitly **unreviewed**, even when a check can be evaluated.
+Download its JSON receipt for the source revision/page, candidate IDs, classifier
+receipts, extraction version, model revision, input hash, results and omissions.
+It does not write candidates, canonical entities, properties, reviews or a model
+revision. A new source/page or model revision clears the displayed result.
+
+**Accept room outline** remains a separate source-identity/geometry decision, not
+engineering approval. Area agreement alone is insufficient for automatic acceptance:
+check the source boundary, holes, connected spaces and area convention first.
+Reference-report input reproduction is a separate evaluation lane; matching its
+printed answers does not independently validate plan extraction or project compliance.
+
 ## Scope of the preview
 
-The view shows room volumes on one plan, not a complete BIM authoring system.
-Missing metric scale or room outlines prevent rendering; label anchors and
-unaccepted extraction candidates are not extruded. Edit or complete the canonical
-outlines in 2D first. Storeys are not stacked or registered against each other.
+The view shows a provisional room-and-wall stack, not a complete BIM authoring system.
+Missing metric scale or usable room outlines prevent rendering. The empty state
+distinguishes no rooms, missing scale and unusable outlines. **Set plan scale**
+opens Plan context when the metric scale is missing. Label anchors, invalid
+polygons and unclassified construction footprints are not extruded; unresolved rooms
+stay in the review list. Floors with missing geometry or scale remain listed.
 
-Walls, opening cut-outs, slabs, roofs, IFC mesh editing and direct vertex dragging
-in 3D are not part of this first workflow. It neither invents topology nor assigns
+Opening cut-outs, slabs, roofs, verified floor registration, IFC mesh editing and
+direct vertex dragging in 3D are not part of this workflow. It neither invents topology nor assigns
 fire resistance, acoustic ratings, classifications or escape-route connections.
 Those remain separate source-backed, explicitly reviewed inputs.

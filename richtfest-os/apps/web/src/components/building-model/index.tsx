@@ -28,6 +28,8 @@ import type { BuildingPlanPoint } from "./types";
 import type { InquirySummary } from "../inquiries/types";
 import { IfcBuildingModel } from "./ifc-building-model";
 import { RoomVolumes } from "./room-volumes";
+import { PlanHeights } from "./plan-heights";
+import { CandidateCalculationPreview } from "./calculation-preview";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -273,7 +275,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const [layers, setLayers] = useState<Record<string, boolean>>({});
   const [pdfLayers, setPdfLayers] = useState<PdfEvidenceLayer[]>([]);
   const [conflict, setConflict] = useState<string>();
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | undefined>(params.get("candidate") || undefined);
+  const [planContextOpen, setPlanContextOpen] = useState(false);
   const [candidateOverlayVisibility, setCandidateOverlayVisibility] = useState<CandidateOverlayVisibility>({ roomHypotheses: true, unresolvedAnchors: false, draftWalls: true, assemblies: false, footprints: false });
   const [viewerTransform, setViewerTransform] = useState<PdfViewerTransform>({ zoom: 1, pan: { x: 0, y: 0 } });
   const [planTool, setPlanTool] = useState<PlanTool>("select");
@@ -304,7 +307,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     setSourceVersionId((current) => current === nextVersion ? current : nextVersion);
     setSourceSelectionPinned((current) => current === nextSourceSelectionPinned ? current : nextSourceSelectionPinned);
     setSelectedId((current) => current === nextEntity ? current : nextEntity);
-    setSelectedCandidateId(undefined);
+    setSelectedCandidateId(params.get("candidate") || undefined);
   }, [paramsKey]);
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
@@ -363,6 +366,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const sourceForEvidence = currentSource || model.planSources[0];
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
   const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
+  const volumeRegions = useMemo(() => [...regions, ...stateCandidates], [regions, stateCandidates]);
   const sourceCandidates = useMemo(() => candidatesForSource(stateCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId), [stateCandidates, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId]);
   const hiddenWallCount = candidatesForSource(candidatesForModelState(candidates, "proposed"), page, sourceForEvidence?.source?.versionId, currentSource?.storeyId)
     .filter((candidate) => candidateRole(candidate) === "draft-wall" && !stateCandidates.includes(candidate)).length;
@@ -391,13 +395,16 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
       void queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
     }
   }, [activeExtraction?.id, activeExtraction?.status, projectId]);
-  const candidateVisible = (candidate: BuildingExtractionCandidate) => objectVisibility[candidate.id] ?? overlayBucketVisible(candidate, candidateOverlayVisibility);
+  const candidateVisible = (candidate: BuildingExtractionCandidate) => objectVisibility[candidate.id] ?? (candidate.id === params.get("candidate") || overlayBucketVisible(candidate, candidateOverlayVisibility));
   const visibleCandidates = sourceCandidates.filter(candidateVisible);
   const pageRegions = regionsForSource(regions, page, sourceForEvidence?.source?.versionId, currentSource?.storeyId);
   const visibleRegions = pageRegions.filter((region) => objectVisibility[region.id] ?? true);
   useEffect(() => {
-    if (selectedCandidateId && !visibleCandidates.some((candidate) => candidate.id === selectedCandidateId)) setSelectedCandidateId(undefined);
-  }, [selectedCandidateId, page, currentSource?.id, sourceForEvidence?.source?.versionId]);
+    // The 3D confirmation list includes unresolved rooms even when their 2D anchor overlay is hidden.
+    if (modelQuery.isLoading) return;
+    const selectable = params.get("modelView") === "3d" ? sourceCandidates : visibleCandidates;
+    if (selectedCandidateId && !selectable.some((candidate) => candidate.id === selectedCandidateId)) setSelectedCandidateId(undefined);
+  }, [selectedCandidateId, page, currentSource?.id, sourceForEvidence?.source?.versionId, params.get("modelView"), modelQuery.isLoading]);
 
   useEffect(() => {
     if (selected && selected.id !== selectedId) setSelectedId(selected.id);
@@ -409,11 +416,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const deepLinkPending = entityDeepLink && (modelQuery.isLoading || Boolean(deepLinkedRegion && currentSource && (page !== currentSource.page
     || sourceStoreyId !== (currentSource.storeyId || "") || (currentSource.source?.versionId && sourceVersionId !== currentSource.source.versionId))));
   useEffect(() => {
-    if (deepLinkPending) return;
+    if (deepLinkPending || modelQuery.isLoading) return;
     const next = new URLSearchParams(params);
     next.set("modelState", state);
     next.set("page", String(page));
-    if (selected?.id) next.set("entity", `${selected.entityType || "room"}:${selected.id}`);
+    if (selectedCandidate) next.set("candidate", selectedCandidate.id);
+    else next.delete("candidate");
+    if (selected?.id && !selectedCandidate) next.set("entity", `${selected.entityType || "room"}:${selected.id}`);
     else next.delete("entity");
     if (sourceStoreyId) next.set("storey", sourceStoreyId);
     else next.delete("storey");
@@ -423,7 +432,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     else next.delete("sourceSelection");
     next.delete("object");
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [state, page, selected?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned, deepLinkPending]);
+  }, [state, page, selected?.id, selectedCandidate?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned, deepLinkPending, modelQuery.isLoading]);
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
@@ -465,6 +474,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   });
   const deriveWallRoles = useMutation({
     mutationFn: () => api<{ summary: { walls: number; exterior: number; roles: number; roleProposals: number; thicknessProposals: number; ceilings: number; windows: number; doors: number; adopted: number; ambiguous: number } }>(`/projects/${projectId}/building-model/wall-adjacency`, { baseRevision: model.revision }),
+    onMutate: () => setConflict(undefined),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
+    onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
+  });
+  const reviewConnection = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: "approved" | "rejected" }) =>
+      modelApi(`/projects/${projectId}/building-model/relationships/${id}/review`, { baseRevision: model.revision, decision }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -585,10 +601,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
   const reviewCandidate = useMutation({
-    mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => api(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
-    onSuccess: async () => {
-      setSelectedCandidateId(undefined);
+    mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => modelApi<{ entity: { id: string } | null; candidate: { entityType: string }; revision: number }>(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
+    onSuccess: async (data) => {
       await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
+      setSelectedCandidateId(undefined);
+      const next = new URLSearchParams(params); next.delete("candidate");
+      if (data.entity) next.set("entity", `${data.candidate.entityType}:${data.entity.id}`);
+      setParams(next, { replace: true });
     },
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
@@ -916,7 +935,6 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
         <Segmented value={state} onChange={(value) => setModelState(value as BuildingModelState)}
           items={states.map((item) => ({ value: item.value, label: t(`buildingModelState${item.value[0].toUpperCase()}${item.value.slice(1)}` as keyof typeof import("../../locales/en.json")) }))} />
         <div><Segmented value={params.get("modelView") === "3d" ? "3d" : "2d"} onChange={value => {
-          if (value === "3d") setSelectedCandidateId(undefined);
           const next = new URLSearchParams(params); next.set("modelView", value); setParams(next, { replace: true });
         }} items={[{ value: "2d", label: "2D" }, { value: "3d", label: "3D", disabled: Boolean(outlineSession) }]} /></div>
         <div className="building-model-pages" aria-label={t("buildingModelPages")}>
@@ -928,7 +946,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
             return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${dispositionLabel}`} title={dispositionLabel} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, source?.source?.versionId || "", source?.storeyId || "")}>{pageNumber}</button>;
           })}
         </div>
-        <Popover>
+        <Popover open={planContextOpen} onOpenChange={setPlanContextOpen}>
           <PopoverTrigger asChild>
             <button type="button" className="building-model-context-trigger" aria-label={`${t("buildingModelContext")}: ${contextStatus}`} title={t("buildingModelContext")}>
               {(currentAutomaticActive || extractionActive) && <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />}
@@ -939,6 +957,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           </PopoverTrigger>
           <PopoverContent align="start" className="building-model-context-popover">
             <h2 className="building-model-panel-title">{t("buildingModelContext")}</h2>
+            {currentSource?.storeyId && evidence.sourceVersionId && <CandidateCalculationPreview
+              key={`${evidence.sourceVersionId}:${page}:${model.revision}:${activeExtraction?.updatedAt}`}
+              projectId={projectId} sourceVersionId={evidence.sourceVersionId} page={page} storeyId={currentSource.storeyId} />}
             <ExtractionPanel
               job={activeExtraction}
               coverage={activeExtraction?.result?.coverage ? { note: activeExtraction.result.coverage } : model.extractionCoverage}
@@ -957,6 +978,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               onRestore={(sourceVersionId) => supersedePlanSet.mutate({ sourceVersionId, supersededByVersionId: null })}
               colourPending={saveColourLegend.isPending} onSaveColours={(sourceVersionId, entries) => saveColourLegend.mutate({ sourceVersionId, entries })}
               scalePending={savePlanScale.isPending} onSaveScale={(sourceVersionId, denominator) => savePlanScale.mutate({ sourceVersionId, denominator })} t={t} />}
+            {evidence.sourceVersionId && !currentAutomaticProcessing?.planScale && <PlanScale scale={{ pages: [], savedDenominator: null }} pending={savePlanScale.isPending}
+              onSave={denominator => savePlanScale.mutate({ sourceVersionId: evidence.sourceVersionId!, denominator })} t={t} />}
           </PopoverContent>
         </Popover>
         <Popover open={soundOpen} onOpenChange={setSoundOpen}>
@@ -1015,6 +1038,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           </PopoverTrigger>
           <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
             <h2 className="building-model-panel-title">{t("buildingFireProtection")}</h2>
+            <PlanHeights projectId={projectId} model={model} onPage={(nextPage, sourceVersionId) => { selectSourcePage(nextPage, sourceVersionId); setFireOpen(false); }} />
             <FireProtectionPanel model={model} assessment={fireAssessment} routes={fireRoutes} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} roomNames={roomNames} elementNames={elementNames} t={t}
               pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
               onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
@@ -1029,8 +1053,12 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
       </div>
       {params.get("modelView") === "3d" ? <>
         {conflict && <Callout tone="warning">{conflict}</Callout>}
-        <RoomVolumes projectId={projectId} regions={pageRegions} storeys={model.storeys} storeyId={currentSource?.storeyId} scale={pageScale}
-          selectedId={selected?.id} onSelect={selectRegion} pending={saveGeometryHeight.isPending || reviewComponentProperty.isPending}
+        <RoomVolumes regions={volumeRegions} model={model} sourceId={currentSource?.id}
+          selectedId={selectedCandidate?.id || selected?.id}
+          pending={saveGeometryHeight.isPending || reviewComponentProperty.isPending || reviewCandidate.isPending || reviewConnection.isPending || deriveWallRoles.isPending}
+          onReviewConnection={(relationship, decision) => reviewConnection.mutate({ id: relationship.id, decision })}
+          onDeriveConnections={() => deriveWallRoles.mutate()}
+          onReviewOutline={reviewSelected} onConfigureScale={() => setPlanContextOpen(true)}
           onSave={(entityType, entityId, value) => saveGeometryHeight.mutate({ entityType, entityId, value })}
           onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
       </> : <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
@@ -1111,7 +1139,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           {outlineSession ? <>
             <Button size="sm" variant="ghost" type="button" disabled={saveOutline.isPending} onClick={() => setOutlineSession(null)}>{t("cancel")}</Button>
             <Button size="sm" type="button" disabled={!canSaveOutline} onClick={() => saveOutline.mutate(outlineSession)} title={t("buildingModelOutlineLogged")}>{saveOutline.isPending ? t("loading") : t("buildingModelSaveOutline")}<kbd>↵</kbd></Button>
-          </> : selectedCandidate ? <>
+          </> : selectedCandidate && params.get("modelView") !== "3d" ? <>
             <Button size="sm" variant="outline" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("rejected")}>{t("buildingModelRejectCandidate")}</Button>
             <Button size="sm" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("approved")}>{t("buildingModelAcceptCandidate")}<kbd>↵</kbd></Button>
           </> : null}

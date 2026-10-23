@@ -53,6 +53,8 @@ export type AppDeps = {
   /** Delete linked app records in the supplied transaction; return private object keys. */
   deleteLinkedProjectData?: (tx: any, projectId: string, sourceIds: string[]) => Promise<string[]>;
   validateCustomer: (customerId: string) => Promise<boolean>;
+  validateUser?: (userId: string) => Promise<boolean>;
+  responsibilityCandidates?: () => Promise<Array<{ id: string; name: string }>>;
   customerNames: (customerIds: string[]) => Promise<Record<string, string>>;
   fileStorage: FileStorage;
   geoapifyApiKey?: string;
@@ -121,6 +123,8 @@ export type LocationWorkerDeps = {
 export type SourceExtractionDeps = {
   db: any;
   fileStorage: Pick<FileStorage, "read">;
+  /** OS-owned provider adapter for bounded section/elevation reading. */
+  structureDocument?: (input: DocumentModelInput) => Promise<DocumentModelResult>;
   /** Optional OS-owned TypeSafe adapter. Source extraction remains complete when unavailable. */
   executeDecision?: (input: {
     tenantId: string;

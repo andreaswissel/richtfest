@@ -3,6 +3,12 @@
 ## 2026-10-23
 
 - **Optimization video preview:** App links now offer the short branded optimization video to iMessage and a matching image preview to WhatsApp and other image-based sharing clients. Media is public without sign-in; playback depends on the messaging client. The landing page remains offline.
+- **Source-only backtest:** Replay PDF extraction and draft calculations from frozen source bytes, with reproducible receipts and explicit missing inputs rather than reference answers. IFC imports now retain declared space boundaries and opening relationships, including contradictory claims, for review without treating them as approved connections.
+- **Calculate with draft geometry:** Run page-scoped, explicitly unreviewed calculations from accepted outlines and usable extraction candidates, with source-linked receipts and missing inputs visible. No candidates or engineering values are approved by a preview.
+- **Project responsibility and review work:** Assign a project lead and delegate in Details. Review tasks now appear in the dashboard with their assignee and status controls, visible to authorized project leads as well as assignees. Tasks can remain unassigned and link to their evidence conversation. Completing a task does not approve engineering data.
+- **Building heights from plans:** Read printed heights and reference levels from sections and elevations, with source pages, model receipts and unresolved references visible for review. Extraction respects configured output and time limits and tolerates layout whitespace in evidence quotes. Eligible fire-protection heights can be proposed without overwriting existing values; separate confirmation is required before classification.
+- **Whole-building review:** Preview extracted rooms and walls across floors, focus floors with zoom/fade and review assumed dimensions against their source plans. Floor placement and the translucent ground reference remain schematic. Inspect and confirm or reject canonical connections; re-derivation preserves those decisions, and rejected links stay out of calculation inputs.
+- **GPT-6 model defaults:** New OpenAI presets use Luna for low-cost extraction, Sol for medium effort and Astra for high/ultra effort. Saved workspace choices and historical model receipts remain intact.
 
 ## 2026-10-22
 

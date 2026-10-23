@@ -6,7 +6,7 @@ import { App } from "./app";
 import { Login } from "./screens/auth";
 import { Security } from "./screens/security";
 import { Team } from "./screens/team";
-import { Customers, Dashboard, Projects } from "./screens/foundation";
+import { Customers, Projects } from "./screens/foundation";
 import { Settings } from "./screens/settings";
 import { SettingsModels } from "./screens/settings-models";
 import { SettingsAgents } from "./screens/settings-agents";
@@ -42,7 +42,7 @@ const router = createBrowserRouter([
         element: <SettingsAgents />,
         loader: prefetch("/knowledge/agent-profiles"),
       },
-      { path: "/", element: <Dashboard />, loader: prefetch("/dashboard") },
+      { path: "/", lazy: async () => ({ Component: (await import("./screens/dashboard")).Dashboard }), loader: prefetch("/dashboard") },
       {
         path: "/knowledge/:draftId?",
         lazy: async () => ({

@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { documentModelOutput, type DocumentModelInput, type DocumentModelResult } from "@richtfest/shared";
+import { planHeightInstructions, planHeightOutputSchema, PLAN_HEIGHT_VERSION } from "@richtfest/shared/plan-heights";
 import type { Database } from "./db/client";
 import { memberships, roles, rolePermissions } from "./db/schema";
 import { getActiveProvider } from "./ai-connections";
@@ -13,6 +14,8 @@ When an image is attached, visual claims instead use evidence {"kind":"image","s
 
 /** OS-only authorization and provider adapter; revision fencing and evidence review belong to Projects. */
 export async function structureSourceDocument(db: Database, input: DocumentModelInput, fetcher?: ProviderFetch): Promise<DocumentModelResult> {
+  const heights = input.task === "plan_heights";
+  if (heights && (input.image?.scope !== "image" || input.pages.length !== 1)) return { status: "failed", metadata: { diagnostic: { code: "missing_page_evidence", retryable: false } } };
   const rows = await db.select({ permission: rolePermissions.permission })
     .from(memberships)
     .innerJoin(roles, and(eq(roles.id, memberships.roleId), eq(roles.tenantId, memberships.tenantId)))
@@ -24,9 +27,11 @@ export async function structureSourceDocument(db: Database, input: DocumentModel
   const provider = await getActiveProvider(db, input.tenantId);
   const preset = (await listAgentPresets(db, input.tenantId, provider)).find(item => item.effort === "low" && item.configured);
   if (!preset) return { status: "unconfigured" };
-  const maxOutputTokens = Math.min(preset.supervisor.maxOutputTokens, 3000);
+  // Height reading needs room for reasoning as well as JSON, within the administrator's limit.
+  const maxOutputTokens = heights ? preset.supervisor.maxOutputTokens : Math.min(preset.supervisor.maxOutputTokens, 3000);
   const factLimit = Math.max(1, Math.min(10, Math.floor(maxOutputTokens / 300)));
-  const metadata: Record<string, unknown> = { provider, model: preset.supervisor.modelId, presetVersion: preset.version, usage: null, maxOutputTokens, factLimit };
+  const metadata: Record<string, unknown> = { provider, model: preset.supervisor.modelId, presetVersion: preset.version, usage: null, maxOutputTokens, factLimit,
+    ...(heights ? { extractorVersion: PLAN_HEIGHT_VERSION } : {}) };
   let response: { modelId: string | null; responseId: string | null; finishReason: string | null } | undefined;
   let stage = "provider";
   const truncated = () => ["max_tokens", "max_output_tokens", "length"].includes(response?.finishReason ?? "")
@@ -36,11 +41,14 @@ export async function structureSourceDocument(db: Database, input: DocumentModel
       provider, modelId: preset.supervisor.modelId,
       reasoningEffort: preset.supervisor.reasoningEffort,
       maxOutputTokens,
-      systemInstructions: `${instructions}\nAt most 5 entities and ${factLimit} facts. Select only the most useful claims in this batch. Keep names, values and evidence compact; prefer quotes under 200 characters. Finish the entire JSON object within ${maxOutputTokens} output tokens; fewer facts are better than incomplete JSON.`,
+      ...(heights ? { executionLimits: preset.executionLimits } : {}),
+      systemInstructions: heights ? `${planHeightInstructions}\nReturn at most ${factLimit} observations. Finish the entire JSON within ${maxOutputTokens} output tokens; prioritize building heights and labelled floor/terrain elevations. Keep reasons concise.`
+        : `${instructions}\nAt most 5 entities and ${factLimit} facts. Select only the most useful claims in this batch. Keep names, values and evidence compact; prefer quotes under 200 characters. Finish the entire JSON object within ${maxOutputTokens} output tokens; fewer facts are better than incomplete JSON.`,
       includeOpenUI: false,
+      onRequest: async settings => { metadata.request = settings; },
       onUsage: async usage => { metadata.usage = usage; },
       onResponse: async value => { response = value; metadata.response = value; },
-      goal: "Structure supported source claims from the supplied evidence.",
+      goal: heights ? "Read printed heights and their reference endpoints from this original section/elevation; preserve unknowns for review." : "Structure supported source claims from the supplied evidence.",
       context: { versionId: input.versionId, pages: input.pages, ...(input.image ? { imageScope: input.image.scope } : {}) },
       image: input.image,
     }, fetcher);
@@ -49,6 +57,11 @@ export async function structureSourceDocument(db: Database, input: DocumentModel
     stage = "schema";
     // The shared provider adapter adds this transport-only field to all responses.
     const { openuiReferences: _references, ...output } = result.output as Record<string, unknown>;
+    if (heights) {
+      const parsed = planHeightOutputSchema.parse(output);
+      if (parsed.observations.length > factLimit) return { status: "failed", metadata: { ...metadata, diagnostic: { code: "schema", retryable: false } } };
+      return { status: "completed", output: parsed, metadata };
+    }
     const parsed = documentModelOutput.parse(output);
     if (parsed.facts.length > factLimit) return { status: "failed", metadata: { ...metadata, diagnostic: { code: "schema", retryable: false } } };
     return { status: "completed", output: parsed, metadata };

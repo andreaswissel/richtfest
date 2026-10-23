@@ -1,4 +1,5 @@
-import type { DataRequestProgress } from "@richtfest/shared";
+import { isActiveBuildingRelationship, type BuildingRelationship, type DataRequestProgress } from "@richtfest/shared";
+import type { PlanHeightExtraction } from "@richtfest/shared/plan-heights";
 import type { RecordData } from "../../api";
 
 export type BuildingModelState = "existing" | "demolition" | "proposed";
@@ -193,6 +194,7 @@ export type BuildingPlanScale = { savedDenominator: number | null;
   pages: Array<{ page: number; denominator: number | null; source: "dimension_chains" | "title_block" | "dimension_chains_and_title_block" | "planner" | null; agreeingPairs: number; quote: string | null }> };
 
 export type BuildingAutomaticPlanProcessing = {
+  heightExtraction?: Omit<PlanHeightExtraction, "token"> | null;
   fileId?: string;
   colourLegend?: { colours: BuildingWallColour[]; savedAt: string | null };
   planScale?: BuildingPlanScale;
@@ -244,6 +246,7 @@ export type BuildingModel = {
   reviewStatus?: "draft" | "needs-review" | "reviewed" | "conflict";
   evidence: BuildingEvidence;
   planSources: BuildingPlanSource[];
+  relationships: BuildingRelationship[];
   proposals: RecordData[];
   extraction?: BuildingExtractionJob | null;
   extractions: BuildingExtractionJob[];
@@ -548,9 +551,11 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     const storeySource = planSources.find((source) => source.storeyId && source.storeyId === region.storeyId);
     return { ...region, page: storeySource?.page ?? region.page, ...(storeySource?.source?.versionId ? { sourceVersionId: storeySource.source.versionId } : {}) };
   });
-  const separates = separatesByWall(Array.isArray(raw.relationships) ? raw.relationships : []);
-  const covers = coversByCeiling(Array.isArray(raw.relationships) ? raw.relationships : []);
-  const openings = openingsInWalls(Array.isArray(raw.relationships) ? raw.relationships : []);
+  const relationships: BuildingRelationship[] = Array.isArray(raw.relationships) ? raw.relationships : [];
+  const activeRelationships = relationships.filter(isActiveBuildingRelationship);
+  const separates = separatesByWall(activeRelationships);
+  const covers = coversByCeiling(activeRelationships);
+  const openings = openingsInWalls(activeRelationships);
   const entityRowsForState = (state: BuildingModelState) => [
     ...entityRows(raw.rooms, state, "room", "room", properties, measurements),
     ...entityRows(raw.elements, state, "element", "element", properties, measurements).map((region) => ({ ...region,
@@ -563,6 +568,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     reviewStatus: raw.conflicts?.length ? "conflict" : raw.proposals?.some((proposal: RecordData) => proposal.status === "pending") || hasUnreviewedCandidates ? "needs-review" : raw.revisions?.[0]?.status === "approved" ? "reviewed" : source.reviewStatus === "reviewed" || source.reviewStatus === "needs-review" || source.reviewStatus === "conflict" ? source.reviewStatus : "draft",
     evidence: fallbackEvidence,
     planSources,
+    relationships,
     proposals: Array.isArray(raw.proposals) ? raw.proposals : [],
     extraction: extractions[0] || undefined,
     extractions,

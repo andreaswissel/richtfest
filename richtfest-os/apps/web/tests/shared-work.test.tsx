@@ -3,6 +3,45 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SharedWork } from "../src/screens/foundation";
+import { Dashboard } from "../src/screens/dashboard";
+
+test("dashboard review tasks link to their evidence conversation and show unassigned humans", () => {
+  const client = new QueryClient();
+  client.setQueryData(["/auth/me"], { permissions: ["knowledge:write"] });
+  client.setQueryData(["/dashboard"], {
+    projects: [],
+    tasks: [],
+    reviewTasks: [
+      {
+        id: "review-one",
+        projectId: "project-one",
+        conversationId: "evidence-thread",
+        title: "Confirm separating wall construction",
+        assigneeType: "user",
+        assigneeId: null,
+        status: "needs_review",
+      },
+      {
+        id: "review-two",
+        projectId: "project-two",
+        title: "Review project without a conversation",
+        assigneeName: "Reviewer",
+        status: "needs_review",
+      },
+    ],
+  });
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <MemoryRouter><Dashboard /></MemoryRouter>
+    </QueryClientProvider>,
+  );
+  expect(html).toContain('href="/projects/project-one?conversation=evidence-thread"');
+  expect(html).toContain('href="/projects/project-two"');
+  expect(html).toContain("Confirm separating wall construction");
+  expect(html).toContain("Not assigned");
+  expect(html).toContain("Reviewer");
+  expect(html).toContain("Needs review");
+});
 
 test("shared work shows supplied thread tasks rather than a project-wide conversation list", () => {
   const client = new QueryClient();

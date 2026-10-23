@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   Link,
   Navigate,
@@ -163,9 +163,7 @@ export function ProjectWorkspace() {
   const threadArtifacts = list(workspace.data?.artifacts).filter(
     (artifact) => selected && artifact.conversationId === selected.id,
   );
-  const threadTasks = list(workspace.data?.tasks).filter(
-    (task) => selected && task.conversationId === selected.id,
-  );
+  const threadTasks = list(workspace.data?.tasks);
   const agentRunId = params.get("agentRun");
   const selectedRun = list(workspace.data?.runs).find(
     (run) => run.id === agentRunId,
@@ -651,6 +649,8 @@ export function ProjectWorkspace() {
                 const values = Object.fromEntries(form.entries());
                 const body: Record<string, unknown> = {
                   name: values.name,
+                  leadId: values.leadId || null,
+                  delegateId: values.delegateId || null,
                   status: values.status,
                   street: values.street,
                   postalCode: values.postalCode,
@@ -700,6 +700,14 @@ export function ProjectWorkspace() {
                   ))}
                 </NativeSelect>
               </Field>
+              {(["lead", "delegate"] as const).map(role => (
+                <Field key={role} label={t(role === "lead" ? "projectLead" : "projectDelegate")}>
+                  <NativeSelect name={`${role}Id`} defaultValue={details[`${role}Id`] || ""}>
+                    <option value="">{t("responsibilityUnassigned")}</option>
+                    {list(details.responsibilityCandidates).map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
+                  </NativeSelect>
+                </Field>
+              ))}
               {customers.isError && (
                 <Callout tone="error">{customers.error.message}</Callout>
               )}
@@ -762,6 +770,10 @@ export function ProjectWorkspace() {
                 <dd>{project.data?.customerName || t("noCustomer")}</dd>
                 <dt>{t("status")}</dt>
                 <dd>{projectStatusLabel(details.status, t)}</dd>
+                {(["lead", "delegate"] as const).map(role => {
+                  const userId = details[`${role}Id`];
+                  return <Fragment key={role}><dt>{t(role === "lead" ? "projectLead" : "projectDelegate")}</dt><dd>{list(details.responsibilityCandidates).find(user => user.id === userId)?.name || t("responsibilityUnassigned")}</dd></Fragment>;
+                })}
               </dl>
               {project.isSuccess && canWrite && (
                 <div className="grid gap-stack border-t pt-3">

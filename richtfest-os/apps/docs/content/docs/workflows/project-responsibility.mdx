@@ -1,0 +1,28 @@
+---
+title: Project responsibility and review tasks
+description: Assign a lead and delegate and track engineering work without approving engineering data.
+---
+
+## Assign responsibility
+
+Open a project's **Details**, choose **Edit project**, and select a **Project lead** and **Delegate**. Either assignment can be cleared. Only active workspace members can be selected. Saving requires the existing project write permission.
+
+These labels coordinate work; they do not grant access or replace the project's owner or membership. Existing tenant and app permissions still apply. There is at most one lead and one delegate per project.
+
+## Track engineering work
+
+Tasks use the existing Knowledge task records, with a project, title and user or agent assignee. Project work shows all tasks for that project rather than only the selected conversation. Creating or changing tasks requires Knowledge write permission. An assignee must be an active workspace member.
+
+The dashboard shows open, in-progress and needs-review tasks. Its **Pending review** queue includes tasks marked **Needs review** alongside Knowledge drafts. The project lead and delegate can see project tasks even when another person is assigned, within the existing tenant-wide read scope. Assignments do not hide tasks from other authorized workspace readers.
+
+Tasks linked to a conversation open that conversation from the dashboard, retaining the review instructions and source evidence. A human task can remain explicitly unassigned until the responsible person's active workspace account is available; do not substitute another account just to fill the field.
+
+Change a task's status from the dashboard to track progress, request review, complete or cancel work. Task completion and review status never approve technical inputs, calculations, source facts or engineering data. Knowledge draft approval remains a separate permission-controlled workflow.
+
+## API
+
+- `PATCH /api/projects/:projectId` accepts optional `leadId` and `delegateId` (active tenant user UUID or `null`). Omitted fields remain unchanged. Updates are serialized on the project and audited. Responsibility is stored in dedicated nullable `lead_id` and `delegate_id` columns on the project. Assigning or clearing responsibility never changes membership or access. The additive migration `0058_project_responsibility` adds these columns without transforming existing data; existing projects start unassigned.
+- `GET /api/projects/:projectId` includes `leadId`, `delegateId`, unchanged `members`, and active `responsibilityCandidates` (`id`, `name`). Responsibility never authorizes access.
+- `POST /api/knowledge/tasks` creates the durable task, including `projectId`, `title`, `assigneeType` and optional `assigneeId`. Explicit `assigneeId: null` creates an unassigned human task; omitting the field retains the default assignment to the creator.
+- `PATCH /api/knowledge/tasks/:taskId` accepts `status` (`open`, `in_progress`, `needs_review`, `completed`, `cancelled`) and/or an active tenant `assigneeId`; `null` clears the assignee and marks the task as human work. It changes task tracking only and creates an audit event.
+- `GET /api/dashboard` includes active `tasks`, `reviewTasks` and separate `pendingDrafts`.
