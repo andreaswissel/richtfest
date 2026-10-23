@@ -11,6 +11,7 @@ import {
   agentRuns,
   agentRunEvents,
   agentRunSteps,
+  agentRunAttempts,
   supervisorRuns,
   artifactRevisions,
   tasks,
@@ -418,12 +419,44 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     ) => {
       // Retry state lives in the existing durable phase history. A restart must
       // honor the saved deadline and attempt budget, not start a fresh burst.
-      const callKey = checkpointHash({ phase, goal, context, runId, revision: state.revision });
+      // Tool receipts change coverage during this very call. They must not change
+      // its identity; all evidence, batch, findings and exact visual scope remain bound.
+      const { visualReadCoverage: _coverage, ...specialistContext } = context as Record<string, unknown>;
+      const identity = { phase, goal, context: phase === "specialist" ? specialistContext : context, runId, revision: state.revision };
+      let callKey = checkpointHash(identity);
       const [sender] = runId === run.id ? [run] : await d.db.select().from(agentRuns).where(and(
         eq(agentRuns.id, runId), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.parentRunId, run.id),
       ));
       if (!sender) throw conflict("Message sender is not part of this execution");
-      const checkpoint = state.history.findLast((entry: any) => entry.phase === "provider_retry" && entry.callKey === callKey);
+      let checkpoint = state.history.findLast((entry: any) => entry.phase === "provider_retry" && entry.callKey === callKey);
+      if (!checkpoint && phase === "specialist" && d.inspectSource) {
+        const legacy = state.history.filter((entry: any) => entry.phase === "provider_retry" && entry.callId);
+        if (legacy.length) {
+          const prepared = await d.db.select({ input: agentRunSteps.input, operationId: agentRunAttempts.operationId })
+            .from(agentRunSteps).innerJoin(agentRunAttempts, eq(agentRunAttempts.id, agentRunSteps.attemptId)).where(and(
+              eq(agentRunSteps.tenantId, d.tenantId), eq(agentRunSteps.runId, runId), eq(agentRunSteps.kind, "model"),
+              eq(agentRunSteps.stepKey, "specialist"), eq(agentRunAttempts.tenantId, d.tenantId),
+              eq(agentRunAttempts.runId, runId), inArray(agentRunAttempts.operationId, legacy.map((entry: any) => entry.callId)),
+            )).orderBy(desc(agentRunSteps.createdAt));
+          for (const saved of prepared) {
+            let coverage: unknown;
+            try {
+              // Prepared prompts are redacted. Use ONLY their coverage as a candidate;
+              // hash all other fields from the current unredacted logical inputs.
+              coverage = JSON.parse((saved.input as { prompt: string }).prompt)?.context?.visualReadCoverage;
+            } catch { continue; }
+            if (!coverage) continue;
+            const legacyKey = checkpointHash({ ...identity, context: { ...specialistContext, visualReadCoverage: coverage } });
+            const match = legacy.findLast((entry: any) => entry.callId === saved.operationId && entry.callKey === legacyKey);
+            if (!match) continue;
+            callKey = legacyKey;
+            checkpoint = match;
+            break;
+          }
+        }
+        // Missing/unparseable prepared inputs or a mismatched hash cannot prove
+        // legacy receipt scope. Re-read images; never authorize by assignment alone.
+      }
       const sameGeneration = checkpoint?.generation === state.generation;
       const callId = sameGeneration ? checkpoint.callId : crypto.randomUUID();
       failurePhase = phase;
@@ -1444,7 +1477,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
                 if (!saved) throw conflict("Supervisor no longer active");
                 accumulated = output;
               }
-              const output = specialistOutput.parse(accumulated);
+              const output = schemas.specialist.parse(accumulated);
               await commit(d, run, token, async (tx, current) => {
                 const receipts = (current.assignments as Assignment[]).find(a => a.runId === assignment.runId)?.calculationReceipts ?? [];
                 output.citations = [...new Set([...output.citations, ...receipts.flatMap(receipt =>

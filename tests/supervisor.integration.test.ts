@@ -23,6 +23,7 @@ import {
 } from "../richtfest-apps/knowledge/src/supervisor";
 import { workspaceRouter } from "../richtfest-apps/knowledge/src/workspace";
 import { runsRouter } from "../richtfest-apps/knowledge/src/runs";
+import { stepHash } from "../richtfest-apps/knowledge/src/run-steps";
 import { soundInsulationPlanningFixture as fixture } from "./fixtures/sound-insulation-planning";
 import type { AppDeps } from "../richtfest-apps/knowledge/src/deps";
 import { calculateAcoustics } from "../richtfest-apps/acoustics/src/calculations";
@@ -125,6 +126,117 @@ integration(`visual source scope and durable citation authorization: ${scenario}
       const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
       expect((state!.assignments as any[])[0].output).toBeUndefined();
     }
+  } finally {
+    server.close();
+    for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+for (const format of ["stable", "legacy"] as const)
+for (const changed of ["none", "source", "goal", "run", "revision", "batch", "findings", "scope", "missing_prompt", "malformed_prompt", "redacted_prompt"] as const)
+integration(`visual replay proves logical receipt identity: ${format}/${changed}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID(), versionId = crypto.randomUUID();
+  const target = { versionId, page: 1, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.5 } };
+  const compatible = changed === "none" || changed === "redacted_prompt"
+    || (format === "stable" && (changed === "missing_prompt" || changed === "malformed_prompt"));
+  let calls = 0, renders = 0;
+  let original: any;
+  const d: any = { db, tenantId, actorId, supervisorEnabled: true, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: [{ versionId }], truncated: false }),
+    resolveSource: async () => ({ status: "resolved", source: { versionId, name: "Drawing", version: 1 },
+      content: { status: "extraction_failed", reason: "No readable text" } }),
+    inspectSource: async (_: string, input: any) => {
+      expect(input).toEqual(target);
+      renders++;
+      return { ...input, status: "available", scope: "pdf_page", reason: "Unreviewed",
+        image: { mediaType: "image/jpeg", data: "c3ludGhldGlj" } };
+    },
+    executeSupervisor: async (request: any) => {
+      if (request.phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Inspect drawing", sourceVersionIds: [versionId] },
+      ] } };
+      calls++;
+      // Match the runtime's persisted prepared prompt, including host enrichment.
+      await request.onPrepared({ version: 1, instructions: "Inspect supplied evidence",
+        prompt: JSON.stringify({ goal: request.goal, context: request.context }) });
+      if (calls === 1) {
+        const { fireProtection, buildingModel, buildingModelPolicy, companyKnowledge, companyKnowledgeCategories,
+          acousticToolsAvailable, messaging, componentCatalog, documentReview, workspaceGuidance, budgets,
+          outputValidationFeedback, ...context } = request.context;
+        original = { phase: "specialist", goal: request.goal, context, runId: request.runId, revision: 0 };
+        await request.inspectSource(target);
+        throw Object.assign(new Error("Interrupted after visual read"), { code: "timeout", providerFailure: true, retryable: false });
+      }
+      if (calls === 2) {
+        expect(request.context.visualReadCoverage.entries).toHaveLength(1);
+        expect(renders).toBe(1);
+        // The presence of an assignment receipt alone must never authorize this.
+      } else {
+        expect(compatible).toBe(false);
+        expect(request.context.outputValidationFeedback).toMatchObject({
+          errorId: "SOURCE_CITATION_OUT_OF_SCOPE", rejectedCitations: [versionId],
+        });
+        await request.inspectSource(target);
+      }
+      return { status: "completed", output: { summary: "Visual findings", rationale: "Unreviewed", citations: [versionId] } };
+    },
+  };
+  const server = express().use(express.json()).use(runsRouter(() => d)).listen(0);
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(),
+      goal: "Replay identity regression", provider: "openai", requestedBy: actorId, correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", policy);
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const retry = (state!.history as any[]).find(entry => entry.phase === "provider_retry");
+    const { visualReadCoverage, ...stableContext } = original.context;
+    expect(stepHash({ ...original, context: stableContext })).toBe(retry.callKey);
+    const historical = structuredClone(original);
+    if (format === "stable") delete historical.context.visualReadCoverage;
+    // Synthesize saved calls with one differing identity dimension. Their
+    // receipts stay in the same assignment, but must not authorize this replay.
+    if (changed === "source") historical.context.unreadableSources[0].reason = "Different extraction";
+    if (changed === "goal") historical.goal = "A different instruction";
+    if (changed === "run") historical.runId = crypto.randomUUID();
+    if (changed === "revision") historical.revision = 1;
+    if (changed === "batch") historical.context.sourceCoverage.batch = 2;
+    if (changed === "findings") historical.context.previousFindings = { summary: "Other findings", rationale: "", citations: [] };
+    if (changed === "scope") historical.context.visualRequests = [{ ...target, page: 2 }];
+    const historicalKey = stepHash(historical);
+    await db.update(supervisorRuns).set({ history: (state!.history as any[]).map(entry => entry === retry
+      ? { ...entry, callKey: historicalKey } : entry) }).where(eq(supervisorRuns.runId, run!.id));
+    const saved = await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, original.runId));
+    expect(saved.filter(step => step.kind === "model" && typeof (step.input as any).prompt === "string")).toHaveLength(2);
+    for (const step of saved) {
+      if (step.kind === "tool") await db.update(agentRunSteps).set({
+        stepKey: step.stepKey.replace(retry.callKey, historicalKey),
+      }).where(eq(agentRunSteps.id, step.id));
+      if (step.kind === "model") {
+        const input = { ...(step.input as any) };
+        if (changed === "missing_prompt") delete input.prompt;
+        else if (changed === "malformed_prompt") input.prompt = "not JSON";
+        else input.prompt = JSON.stringify({ goal: changed === "redacted_prompt" ? "[redacted]" : historical.goal,
+          context: { ...JSON.parse(input.prompt).context, ...historical.context } });
+        await db.update(agentRunSteps).set({ input }).where(eq(agentRunSteps.id, step.id));
+      }
+    }
+    const retryResponse = await fetch(`http://127.0.0.1:${(server.address() as any).port}/runs/${run!.id}/retry`, { method: "POST" });
+    expect(retryResponse.status).toBe(201);
+    await stepSupervisor(d, run!.id);
+    const [done] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    expect(done!.phase).toBe("review");
+    expect((done!.assignments as any[])[0].output.citations).toEqual([versionId]);
+    expect(calls).toBe(compatible ? 2 : 3);
+    expect(renders).toBe(compatible ? 1 : 2);
+    const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, original.runId));
+    expect(attempts.filter(attempt => attempt.failureCategory === "validation")).toHaveLength(compatible ? 0 : 1);
+    const receipts = await db.select().from(agentRunSteps).where(eq(agentRunSteps.runId, original.runId));
+    expect(JSON.stringify(receipts)).not.toContain("c3ludGhldGlj");
   } finally {
     server.close();
     for (const table of [agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
@@ -863,6 +975,81 @@ integration("acoustic tools retain scoped, repeatable receipts through failure, 
   } finally {
     server.close();
     for (const table of [artifactRevisions, artifacts, agentRunSteps, agentRunUsage, agentRunAttempts, agentRunEvents, supervisorRuns, agentRuns, tasks])
+      await db.delete(table).where(eq(table.tenantId, tenantId));
+    await pool.end();
+  }
+});
+
+for (const overflow of ["none", "summary", "rationale"] as const)
+integration(`specialist finalization honors snapshotted output limits: ${overflow}`, async () => {
+  const { db, pool } = createDatabase(process.env.DATABASE_URL!);
+  const tenantId = crypto.randomUUID(), actorId = crypto.randomUUID();
+  const versions = [crypto.randomUUID(), crypto.randomUUID()];
+  const executionLimits = { summaryMaxCharacters: 30000, rationaleMaxCharacters: 4000,
+    documentMaxCharacters: 60000, timeoutSeconds: 180 };
+  const findings = { summary: "S".repeat(executionLimits.summaryMaxCharacters),
+    rationale: "R".repeat(executionLimits.rationaleMaxCharacters) };
+  const batches: number[] = [];
+  const d: any = { db, tenantId, actorId, requirePermission: () => {}, auditRun: async () => {},
+    validateProject: async () => true, validateSourceVersion: async () => true,
+    listProjectSources: async () => ({ sources: versions.map(versionId => ({ versionId })), truncated: false }),
+    resolveSource: async (_: string, { versionId }: any) => ({ status: "resolved", source: { versionId },
+      content: { status: "available", text: "Evidence ".repeat(4000) } }),
+    executeSupervisor: async ({ phase, context }: any) => {
+      if (phase === "plan") return { status: "completed", output: { tasks: [
+        { role: "source_reviewer", goal: "Read every source", sourceVersionIds: versions },
+      ] } };
+      if (phase === "review") {
+        expect(context.assignments[0].output).toEqual({ ...findings, citations: versions });
+        return { status: "completed", output: { summary: "Review required", rationale: "Draft only",
+          citations: versions, decision: "accept", revisions: [] } };
+      }
+      const batch = context.sourceCoverage.batch;
+      batches.push(batch);
+      expect(context.sourceCoverage.batchCount).toBe(2);
+      if (batch === 2) expect(context.previousFindings).toEqual({ ...findings, citations: [versions[0]] });
+      return { status: "completed", output: { ...findings,
+        ...(batch === 2 && overflow !== "none" ? { [overflow]: findings[overflow] + "!" } : {}),
+        citations: context.sourceVersionIds,
+      } };
+    },
+  };
+  try {
+    const [run] = await db.insert(agentRuns).values({ tenantId, projectId: crypto.randomUUID(),
+      goal: "Configured specialist limits", provider: "openai", requestedBy: actorId,
+      correlationId: crypto.randomUUID() }).returning();
+    await createSupervisor(d, db, run, "medium", { ...policy, executionLimits });
+    await stepSupervisor(d, run!.id);
+    await stepSupervisor(d, run!.id);
+    const [state] = await db.select().from(supervisorRuns).where(eq(supervisorRuns.runId, run!.id));
+    const assignment = (state!.assignments as any[])[0];
+    if (overflow === "none") {
+      expect(batches).toEqual([1, 2]);
+      expect(state!.phase).toBe("review");
+      expect(assignment.output).toEqual({ ...findings, citations: versions });
+      expect(assignment.sourceProgress).toBeUndefined();
+      const [child] = await db.select().from(agentRuns).where(eq(agentRuns.id, assignment.runId));
+      expect(child!.status).toBe("needs_review");
+      expect(child!.outputSummary).toBe(findings.summary);
+      expect(child!.rationale).toBe(findings.rationale);
+      await stepSupervisor(d, run!.id);
+      const [reviewed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+      expect(reviewed!.status).toBe("needs_review");
+    } else {
+      expect(batches).toEqual([1, 2, 2, 2]);
+      const [failed] = await db.select().from(agentRuns).where(eq(agentRuns.id, run!.id));
+      expect(failed!.status).toBe("failed");
+      expect(assignment.output).toBeUndefined();
+      expect(assignment.sourceProgress.completedBatches).toBe(1);
+      expect(assignment.sourceProgress.output).toEqual({ ...findings, citations: [versions[0]] });
+      const attempts = await db.select().from(agentRunAttempts).where(eq(agentRunAttempts.runId, assignment.runId));
+      const failures = attempts.filter(attempt => attempt.status === "failed");
+      expect(failures).toHaveLength(3);
+      expect(failures.every(attempt => attempt.failureCategory === "validation")).toBe(true);
+    }
+  } finally {
+    for (const table of [artifactRevisions, artifacts, agentRunSteps, agentRunUsage, agentRunAttempts,
+      agentRunEvents, supervisorRuns, agentRuns, tasks])
       await db.delete(table).where(eq(table.tenantId, tenantId));
     await pool.end();
   }
