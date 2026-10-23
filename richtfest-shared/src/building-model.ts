@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { StateCode } from "./states";
 
 export const buildingEntityTypeSchema = z.enum(["building", "storey", "room", "element"]);
 export type BuildingEntityType = z.infer<typeof buildingEntityTypeSchema>;
@@ -30,8 +31,18 @@ export type BuildingPropertyProvenance = z.infer<typeof buildingPropertyProvenan
 export const buildingClaimKindSchema = z.enum(["observed_fact", "requirement", "assumption", "calculation_result"]);
 export type BuildingClaimKind = z.infer<typeof buildingClaimKindSchema>;
 
-/** A source revision is always named. Page/region or IFC identity is required; labels alone are not evidence. */
+/** Evidence names a source revision or retains a validated address snapshot. */
 export const buildingEvidenceSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("project_address"),
+    quote: z.string().min(1).max(4000),
+  }).strict(),
+  z.object({
+    kind: z.literal("site_assessment"),
+    revision: z.number().int().positive(),
+    field: z.string().min(1).max(200),
+    quote: z.string().min(1).max(4000),
+  }).strict(),
   z.object({
     kind: z.literal("page"),
     sourceVersionId: z.string().uuid(),
@@ -59,6 +70,7 @@ export const buildingEvidenceSchema = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 export type BuildingEvidence = z.infer<typeof buildingEvidenceSchema>;
+export type BuildingAddressStateSuggestion = { value: StateCode; evidence: Extract<BuildingEvidence, { kind: "project_address" }> };
 
 export const buildingEntityRefSchema = z.object({
   entityType: buildingEntityTypeSchema,

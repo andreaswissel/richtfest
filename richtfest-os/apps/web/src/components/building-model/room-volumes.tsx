@@ -148,6 +148,9 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
   const aerial = useSiteImage(projectId, siteContext, "aerial/near", !!aerialSource, t("buildingPresentationAerialUnavailable"));
   const siteOverlay = useMemo(() => ({ ...site, aerial: { near: aerial.url, far: null } }), [aerial.url]);
   const surroundings = !!transform && !focus && params.get("buildingScope") !== "building";
+  const overviewParams = new URLSearchParams(params);
+  for (const key of ["floorFocus", "roomFocus", "entity", "candidate"]) overviewParams.delete(key);
+  overviewParams.set("buildingScope", "building");
   const objectParams = (region: BuildingRegion) => {
     const next = new URLSearchParams(params);
     next.delete("entity"); next.delete("candidate");
@@ -161,8 +164,9 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
     if (region.entityType === "room") next.set("roomFocus", "1"); else next.delete("roomFocus");
     return next;
   };
-  const select = useRef((id: string) => {});
+  const select = useRef((id: string | null) => {});
   select.current = id => {
+    if (!id) { if (focus || selectedId) setParams(overviewParams); return; }
     const region = regions.find(region => region.id === id);
     if (region) { setShowInspector(true); setParams(objectParams(region)); return; }
     const floor = floors.find(floor => floor.storey.id === id);
@@ -177,6 +181,7 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
   };
   const [ready, setReady] = useState(false), [error, setError] = useState(false);
   const [appearance, setAppearance] = useState("building"), [cutaway, setCutaway] = useState(true), [showInspector, setShowInspector] = useState(true);
+  const [hoveredFloor, setHoveredFloor] = useState<string | null>(null);
   const [scope, setScope] = useState("room"), [onlyPending, setOnlyPending] = useState(false);
   const [inspector, setInspector] = useState("dimensions");
   const related = useMemo(() => inspector === "connections" && selectedId ? model.relationships.filter(isActiveBuildingRelationship)
@@ -215,7 +220,7 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
     let active = true;
     void import("../location/viewport").then(({ createViewport }) => {
       if (!active || !host.current) return;
-      viewport.current = createViewport(host.current, { select: id => { if (id) select.current(id); }, place: () => {}, measure: () => {}, align: () => {} });
+      viewport.current = createViewport(host.current, { select: id => select.current(id), place: () => {}, measure: () => {}, align: () => {} });
       setReady(true);
     }).catch(() => { if (active) setError(true); });
     return () => { active = false; viewport.current?.dispose(); viewport.current = null; };
@@ -223,12 +228,12 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
   useEffect(() => {
     if (!ready) return;
     viewport.current?.update({ context: displayContext, surroundingsOpacity: focus ? .06 : 1,
-      assessment: meshes, assessmentFocus: focus?.source.id ?? null, assessmentRelated: related,
+      assessment: meshes, assessmentFocus: focus?.source.id ?? null, assessmentHover: hoveredFloor, assessmentRelated: related,
       groundReference: transform && !focus ? undefined : groundReference, objects: [], models: {}, site: siteOverlay, selected: selectedId ?? null,
       orbitDrag: true, assessmentCutaway: appearance === "building" && cutaway && focus ? focus.base + 1.15 : null,
       layers: { buildings: !!transform, trees: !!transform, detectedTrees: !!transform, objects: true, lidar: false, roads: !!transform, railNoise: false, plan: false, aerial: !!transform },
       tool: "select", treeStyle: "illustrative", measurement: [], clipHeight: 200, dark, constructionLabel: "", projectExtentLabel: "", siteAddressLabel: "" });
-  }, [ready, meshes, selectedId, dark, focus?.source.id, focus?.base, groundReference, related, appearance, cutaway, transform, displayContext, siteOverlay]);
+  }, [ready, meshes, selectedId, dark, focus?.source.id, focus?.base, hoveredFloor, groundReference, related, appearance, cutaway, transform, displayContext, siteOverlay]);
   const roomFocus = focus && params.get("roomFocus") === "1" ? selectedRoom : undefined;
   // Explicit room/floor navigation flies to canonical bounds; property edits preserve the user's camera.
   const framed = roomFocus ? meshes.filter(mesh => mesh.id === roomFocus.id) : focus ? meshes.filter(mesh => mesh.group === focus.source.id) : meshes;
@@ -255,7 +260,6 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
     if (currentFloor.source.source?.versionId) planParams.set("sourceVersion", currentFloor.source.source.versionId);
     if (!selected) { planParams.delete("entity"); planParams.delete("candidate"); }
   }
-  const overviewParams = new URLSearchParams(params); overviewParams.delete("floorFocus"); overviewParams.delete("roomFocus"); overviewParams.set("buildingScope", "building");
   const surroundingsParams = new URLSearchParams(overviewParams); surroundingsParams.delete("buildingScope");
   const locationParams = new URLSearchParams(params); locationParams.set("view", "location");
   const status = (state?: BuildingComponentPropertyState | null) => state?.reviewStatus === "approved" ? t(state.provenance === "inferred" ? "buildingVolumeReviewedAssumption" : "buildingModelReviewed")
@@ -273,7 +277,7 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
           {focus && appearance === "building" && <Button size="sm" variant="outline" aria-pressed={cutaway} onClick={() => setCutaway(value => !value)}>{t("buildingPresentationCutaway")}</Button>}
         </div>
       </div>
-      {appearance === "building" && <div className="building-volume-legend text-ui-xs">{t("buildingPresentationLegend")}{aerial.url && aerialSource && <div>{aerialSource.attribution}</div>}</div>}
+      {appearance === "building" && framed.length > 0 && !error && <div className="building-volume-legend text-ui-xs">{t("buildingPresentationLegend")}{aerial.url && aerialSource && <div>{aerialSource.attribution}</div>}</div>}
       <nav className="building-volume-floors" aria-label={t("buildingVolumeFloors")}>
         {transform && <Link to={`?${surroundingsParams}`} aria-current={surroundings ? "true" : undefined}>{t("buildingPresentationSurroundings")}</Link>}
         <Link to={`?${overviewParams}`} aria-current={!focus && !surroundings ? "true" : undefined}>{t("buildingVolumeOverview")}</Link>
@@ -283,18 +287,20 @@ export function RoomVolumes({ projectId, regions, model, sourceId, selectedId, o
           next.set("floorFocus", "1"); next.set("page", String(floor.source.page));
           next.set("storey", floor.storey.id); next.set("sourceSelection", "manual");
           if (floor.source.source?.versionId) next.set("sourceVersion", floor.source.source.versionId);
-          return <Link key={floor.source.id} to={`?${next}`} aria-current={focus?.source.id === floor.source.id ? "true" : undefined}>
+          return <Link key={floor.source.id} to={`?${focus?.source.id === floor.source.id && !roomFocus ? overviewParams : next}`} aria-current={focus?.source.id === floor.source.id ? "true" : undefined}
+            onPointerEnter={() => setHoveredFloor(floor.source.id)} onPointerLeave={() => setHoveredFloor(null)}
+            onFocus={() => setHoveredFloor(floor.source.id)} onBlur={() => setHoveredFloor(null)}>
             <span>{floor.storey.name ?? `${t("buildingModelPage")} ${floor.source.page}`}{floor.level != null ? ` · ${t("buildingVolumeLevel").replace("{level}", String(floor.level))}` : ""}</span>
             <span className="text-ui-xs text-muted-foreground">{floor.volumes.length} {t("buildingVolumeRooms")} · {floor.wallCount} {t("buildingVolumeWalls")}{!floor.meshes.length ? ` · ${t("buildingVolumeNotRendered")}` : ""}</span>
           </Link>;
         })}
       </nav>
-      {error && <Callout>{t("buildingVolumeUnavailable")}</Callout>}
-      {!framed.length && <div className="building-room-volume-empty"><Callout>{t(!currentFloor?.objects.length ? "buildingVolumeNoRooms" : !hasMetricScale(scale) ? "buildingVolumeNoScale" : "buildingVolumeNoGeometry")}</Callout></div>}
+      {(error || !framed.length) && <div className="building-room-volume-empty" role="status"><Callout>{t(error ? "buildingVolumeUnavailable" : !currentFloor?.objects.length ? "buildingVolumeNoRooms" : !hasMetricScale(scale) ? "buildingVolumeNoScale" : "buildingVolumeNoGeometry")}</Callout></div>}
     </div>
     <aside className="building-room-volume-editor" aria-label={t("buildingVolumeDimensions")} hidden={!showInspector}>
       <h2 className="text-ui font-semibold">{currentFloor?.storey.name ?? t("buildingVolumeBuilding")}</h2>
       <Callout>{t("buildingVolumeDisclaimer")}</Callout>
+      {currentFloor?.source.storeyTitle && <p className="text-ui-xs text-muted-foreground">{t("buildingStoreyTitleEvidence").replace("{quote}", currentFloor.source.storeyTitle.quote)}</p>}
       {!transform && <p className="text-ui-xs text-muted-foreground">{t("buildingPresentationSiteUnaligned")} <Link className="underline" to={`?${locationParams}`}>{t("buildingPresentationOpenLocation")}</Link></p>}
       {transform && <details className="text-ui-xs text-muted-foreground"><summary>{t("buildingPresentationSiteSources")}</summary>
         {siteContext?.sources.map(source => <a key={source.url} className="block underline" href={source.url} target="_blank" rel="noreferrer">{source.label}</a>)}

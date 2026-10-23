@@ -3,7 +3,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AutomaticPlanCoverage, BuildingModelBootstrap, BuildingModelMode, CandidateInspector, ExtractionPanel, outlineTargetsAt, automaticPageDisposition, automaticProcessingActive, candidateOverlaysForSource, candidatesForGroup, candidatesForSource, candidatesForModelState, copyStableObjectId, isEntityDeepLink, planSourceForSelection, planSourceForView, preferredAutomaticProcessing, preferredPlanSource, regionsForSource } from "../src/components/building-model";
-import en from "../src/locales/en.json";
+import commonEn from "../src/locales/en.json";
+import commonDe from "../src/locales/de.json";
+import buildingEn from "../src/components/building-model/locales/en.json";
+import buildingDe from "../src/components/building-model/locales/de.json";
+import { RegulatoryBasis } from "../src/components/building-model/sound-insulation";
+import { PropertyRow } from "../src/components/building-model/component-properties";
+import { assessFireProtection } from "../src/components/building-model/fire-protection";
+import { BUILDING_CODES } from "@richtfest/shared/building-codes";
 import { PdfEvidenceRenderer } from "../src/components/building-model/pdf-evidence-renderer";
 import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOverlayStyle, polygonClipPath } from "../src/components/building-model/pdf-evidence-renderer";
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
@@ -12,8 +19,38 @@ import { buildingVolumeGeometry, roomVolumeGeometry } from "../src/components/bu
 import { buildingPresentation, buildingSiteTransform } from "../src/components/building-model/building-presentation";
 import { geometryArea } from "@richtfest/shared/site-geometry";
 import { BuildingConnections } from "../src/components/building-model/connections";
+import { buildingComponentProperties, createEmptySiteAssessmentInput } from "@richtfest/shared";
 
+const en = { ...commonEn, ...buildingEn };
+const de = { ...commonDe, ...buildingDe };
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
+
+test("floor navigation uses semantic names, preserves custom names and never treats page numbers or conflicting titles as levels", () => {
+  const storeys = ["ground", "unknown", "conflict", "entered", "custom"].map((id, index) => ({ id, name: id === "custom" ? "Workshop mezzanine" : `Plan page ${index + 8} (draft)`, levelIndex: id === "entered" ? -2 : null }));
+  const planSources = storeys.map((storey, index) => ({ id: storey.id, storeyId: storey.id, page: index + 8,
+    source: { versionId: "plan", fileName: "Plan.pdf" }, storeyTitle: storey.id === "unknown" ? null : { level: 0, quote: "Grundriss EG" } }));
+  const model = { storeys, planSources: [...planSources, { ...planSources[2], id: "conflicting", page: 50, storeyTitle: { level: 2, quote: "Grundriss 2. OG" } }] };
+  const html = render(model, "?view=building-model&modelView=3d&page=8&storey=ground&sourceVersion=plan&floorFocus=1&roomFocus=1&entity=room:old-selection");
+  const nav = html.split('<nav class="building-volume-floors"')[1]!.split("</nav>")[0]!;
+  expect(nav).toContain("Ground floor");
+  expect(nav).toContain("Basement 2 (2. UG)");
+  expect(nav).toContain("Workshop mezzanine");
+  expect(nav.match(/Unidentified floor/g)).toHaveLength(2);
+  expect(nav).not.toContain("Plan page");
+  expect(html).toContain("Printed floor title · unreviewed: Grundriss EG");
+  const currentLink = nav.match(/<a\b[^>]*aria-current="true"[^>]*>/g)!.find(link => link.includes("storey=ground"))!;
+  expect(currentLink).not.toContain("floorFocus");
+  expect(currentLink).not.toContain("roomFocus");
+  expect(currentLink).not.toContain("entity=");
+  const roomHtml = render({ ...model, rooms: [{ id: "room", storeyId: "ground", name: "Office", geometry: { source: { sourceVersionId: "plan", page: 8 } } }] },
+    "?view=building-model&modelView=3d&page=8&storey=ground&sourceVersion=plan&floorFocus=1&roomFocus=1&entity=room:room");
+  const roomNav = roomHtml.split('<nav class="building-volume-floors"')[1]!.split("</nav>")[0]!;
+  const returnToFloor = roomNav.match(/<a\b[^>]*aria-current="true"[^>]*>/g)!.find(link => link.includes("storey=ground"))!;
+  expect(returnToFloor).toContain("floorFocus=1");
+  expect(returnToFloor).not.toContain("roomFocus");
+  expect(returnToFloor).not.toContain("entity=");
+  expect(JSON.stringify(model)).toContain("Plan page 8 (draft)"); // Display projection, not a canonical rename.
+});
 
 test("connection inspector retains rejected evidence but excludes it from active room boundaries and opening hosts", () => {
   const links = [
@@ -86,7 +123,9 @@ test("3D opens source-scoped extraction drafts before any canonical rooms exist 
   expect(html).toContain("Review outline in 2D");
   expect(html).not.toContain("Save assumed height"); // No properties may be written against a candidate ID.
   for (const excluded of ["Wrong page", "Wrong revision", "Rejected draft"]) expect(html).not.toContain(excluded);
-  expect(render({ ...model, extractions: [] }, route)).toContain("this page has no metric scale");
+  const noScale = render({ ...model, extractions: [] }, route);
+  expect(noScale).toContain("this page has no metric scale");
+  expect(noScale).not.toContain('class="building-volume-legend');
   expect(render({ ...model, extractionCandidates: [] }, route)).toContain("No rooms or room drafts on this source page");
 });
 
@@ -804,6 +843,129 @@ test("explicit page navigation can leave the selected storey for a non-plan or u
   ];
   const selected = { storeyId: "storey-a", sourceVersionId: "version-a", page: 1 };
   expect(planSourceForView(sources, 2, "storey-a", selected)?.id).toBe("source-elevation");
+});
+
+test("PDF selection keeps an unregistered page in its document and coverage does not invent contiguous registrations", () => {
+  const source = (versionId: string, page: number) => ({ id: `${versionId}-${page}`, page, pageCount: 72, storeyId: null,
+    source: { fileId: versionId, fileName: `${versionId}.pdf`, versionId, version: 1, downloadUrl: `/${versionId}` } });
+  const sources = [source("other", 72), source("plans", 3), source("plans", 22)];
+  expect(planSourceForView(sources, 72, "", undefined, "plans")).toBeUndefined();
+  expect(planSourceForView(sources, 22, "", undefined, "plans")?.id).toBe("plans-22");
+  const raw = { model: { id: "model", revision: 1 }, planSources: sources, rooms: [], elements: [] };
+  const html = render(raw, "?view=building-model&page=72&sourceVersion=plans&sourceSelection=manual");
+  expect(html).toContain('value="72" selected=""');
+  expect(html).toContain("PDF page 72 of 72");
+  expect(html).toContain('<option value="plans" selected="">plans.pdf</option>');
+  expect(html).not.toContain('<option value="other" selected="">');
+  const unknownCount = render({ ...raw, planSources: Array.from({ length: 13 }, (_, index) => ({ ...source("plans", index + 20), pageCount: null })) },
+    "?view=building-model&page=22&sourceVersion=plans&sourceSelection=manual");
+  expect(unknownCount).toContain("Page 22 · Unresolved page");
+  expect(unknownCount).not.toContain("of 13");
+  expect(unknownCount).not.toContain('<option value="1">');
+  const coverage = renderToStaticMarkup(<AutomaticPlanCoverage processing={[{ fileName: "Report.pdf", sourceVersionId: "plans", status: "unresolved", registeredPageCount: 2,
+    floorPlanPages: [], nonFloorPlanPages: [{ page: 22, pageType: "section" }], unresolvedPages: [3],
+    reason: "No page met the automatic floor-plan threshold; no geometry was guessed. Page coverage remains available for review." }]}
+    sources={sources} storeys={[]} selectedPage={22} selectedSourceVersionId="plans" onPage={() => {}} t={key => de[key]} />);
+  expect(coverage).toContain("<span>3</span>");
+  expect(coverage).toContain("<span>22</span>");
+  expect(coverage).not.toContain("<span>1</span>");
+  expect(coverage).not.toContain("<span>72</span>");
+  expect(coverage).toContain("Keine Grundrissseite · Schnitt");
+  expect(coverage).toContain(de.buildingModelCoverageNoPlan);
+  expect(coverage).not.toContain("No page met");
+});
+
+test("every unknown component input offers a source route, while explicit zero and false are not missing", () => {
+  const render = (key: string, state?: any) => renderToStaticMarkup(<PropertyRow propertyKey={key} state={state} t={key => en[key]} pending={false}
+    onSave={() => { throw Error("must not save while looking for sources"); }} onReview={() => { throw Error("must not approve"); }} />);
+  for (const key of new Set(Object.values(buildingComponentProperties).flatMap(Object.keys)))
+    expect(render(key)).toContain('aria-label="Find source / missing evidence:');
+  for (const [key, value] of [["fireOtherUnits", 0], ["loadBearing", false]])
+    expect(render(String(key), { value, reviewStatus: "unreviewed", provenance: "manual" })).not.toContain('aria-label="Find source / missing evidence:');
+});
+
+test("detected apartments do not establish a complete unit schedule or zero other units for fire classification", () => {
+  const state = (value: unknown) => ({ propertyId: "p", version: 1, value, unit: null, provenance: "manual", reviewStatus: "unreviewed", reviewRevision: 0, reviewedValue: null });
+  const model = adaptBuildingModel({ buildings: [{ id: "b", name: "Building" }], storeys: [{ id: "s", buildingId: "b", levelIndex: 0 }], rooms: [{ id: "r", name: "Living room", storeyId: "s" }] });
+  model.buildings[0]!.componentProperties = { federalState: state("RP"), fireHeight: state(6), fireDetached: state(true), fireSpecialUse: state("none"), garageArea: state(0) };
+  model.states.existing[0]!.componentProperties = { apartmentUnit: state("WE 1"), spaceType: state("apartment") };
+  expect(assessFireProtection(model).derived.dwellings).toBe(1);
+  expect(assessFireProtection(model).classification.buildingClass).toBeNull();
+  expect(assessFireProtection(model).classification.gaps).toContain("otherUnits");
+  model.buildings[0]!.componentProperties.fireDwellings = state(1);
+  expect(assessFireProtection(model).classification.buildingClass).toBeNull();
+  model.buildings[0]!.componentProperties.fireOtherUnits = state(0);
+  expect(assessFireProtection(model).classification.buildingClass).toBe(1);
+});
+
+test("regulatory suggestions preserve custom source wording and never populate or approve unknown values", () => {
+  const state = (value: string) => ({ propertyId: value, version: 1, value, unit: null, provenance: "manual", reviewStatus: "unreviewed", reviewRevision: 0 });
+  const renderBasis = (properties: Record<string, ReturnType<typeof state>>, addressState?: import("@richtfest/shared").BuildingAddressStateSuggestion) => renderToStaticMarkup(<RegulatoryBasis properties={properties} addressState={addressState} t={key => en[key]} pending={false}
+    onSave={() => { throw new Error("render must not save a suggestion"); }} onReview={() => { throw new Error("render must not approve a suggestion"); }} />);
+  const html = renderBasis({ federalState: state("RP"), bebauungsplan: state("applies"), bebauungsplanAreaType: state("WA 1 / WA 2"), din4109Edition: state("Project-specific edition") });
+  expect(html).toContain('value="WA 1 / WA 2"');
+  expect(html).toContain('value="Project-specific edition"');
+  expect(html).toContain('<option value="WA">General residential area</option>');
+  expect(html).toContain('<option value="VV TB RP vom 02.10.2025">');
+  expect(html).toContain('placeholder="Unknown" value=""');
+  expect(html).toContain("Selection does not approve a value");
+  expect(html).not.toContain(">Reviewed<");
+  const unknown = renderBasis({});
+  expect(unknown).not.toContain("VV TB RP vom");
+  expect(unknown).not.toContain("LBO BW ·");
+  const address = { value: "RP" as const, evidence: { kind: "project_address" as const, quote: "Teststraße 1, Mainz · RP · BKG VG250" } };
+  const suggested = renderBasis({}, address);
+  expect(suggested).toContain("Rhineland-Palatinate · from address");
+  expect(suggested).toContain("Use address value");
+  expect(suggested).toContain("Teststraße 1, Mainz");
+  expect(suggested).toContain("VV TB RP vom");
+  expect(suggested).not.toContain('<option value="RP" selected="">');
+  const entered = renderBasis({ federalState: state("BE") }, address);
+  expect(entered).toContain('<option value="BE" selected="">');
+  expect(entered).toContain("VV TB Bln vom");
+  expect(entered).not.toContain("VV TB RP vom");
+  expect(entered).not.toContain("Use address value");
+  for (const code of Object.values(BUILDING_CODES)) if (code.stand) expect(`${code.abbreviation} · ${code.stand}`.length).toBeLessThanOrEqual(120);
+});
+
+test("planning context links the saved basis and offers only source-backed B-Plan facts into empty fields", () => {
+  const assessment = { ...createEmptySiteAssessmentInput(), revision: 3 };
+  assessment.planningBasis = "b_plan";
+  assessment.checks.planningBasis = { status: "confirmed", source: "Plan register 7-42", note: "Parcel inside adopted plan" };
+  assessment.constraints.grz = { value: .4, source: "Plan 7-42 §2", sourceDate: "2026-01-03", kind: "official", reviewed: true };
+  assessment.constraints.gfz = { value: 1.7, source: "Neighbour comparison", sourceDate: "2026-01-03", kind: "calculated", reviewed: true };
+  assessment.planningFacts = { landUse: { value: "WA 2", source: "Plan 7-42", sourceDate: "2026-01-03", kind: "official", reviewed: false } };
+  const renderContext = (basis: typeof assessment.planningBasis, revision = 3) => {
+    const client = new QueryClient();
+    client.setQueryData([`/feasibility/projects/${projectId}/site-assessment`], { assessment: { ...assessment, planningBasis: basis, revision } });
+    return renderToStaticMarkup(<QueryClientProvider client={client}><MemoryRouter><RegulatoryBasis projectId={projectId}
+      properties={{ bebauungsplanAreaType: { propertyId: "area", version: 1, value: "MI", unit: null, provenance: "manual", reviewStatus: "approved", reviewRevision: 1 } }}
+      t={key => en[key]} pending={false} onSave={() => { throw Error("must not auto-copy"); }} onReview={() => { throw Error("must not auto-approve"); }} /></MemoryRouter></QueryClientProvider>);
+  };
+  const html = renderContext("b_plan");
+  expect(html).toContain("view=feasibility&amp;study=site&amp;step=limits");
+  expect(html).toContain('aria-label="Use value: GRZ"');
+  expect(html).toContain('aria-label="Use value: Bebauungsplan"');
+  expect(html).toContain("WA 2");
+  expect(html).toContain('title="MI">Differs');
+  expect(html).not.toContain('aria-label="Use value: Area type');
+  expect(html).not.toContain('aria-label="Use value: GFZ"');
+  for (const basis of ["section34", "section35", "unresolved"] as const) {
+    const other = renderContext(basis);
+    expect(other).not.toContain('aria-label="Use value:');
+    expect(other).toContain(en[basis === "section34" ? "buildingPlanningSection34" : basis === "section35" ? "buildingPlanningSection35" : "buildingPlanningUnresolved"]);
+  }
+  expect(renderContext("b_plan", 0)).not.toContain('aria-label="Use value:');
+  assessment.constraints.parcelArea = { value: 987.5, source: "Cadastral extract parcel 42", sourceDate: "2026-01-03", kind: "official", reviewed: true };
+  for (const basis of ["b_plan", "section34", "section35", "unresolved"] as const) {
+    const parcel = renderContext(basis);
+    expect(parcel).toContain('aria-label="Use value: Parcel area"');
+    expect(parcel).toContain("987.5 m²");
+  }
+  for (const kind of ["estimated", "calculated", "assessment"] as const) {
+    assessment.constraints.parcelArea.kind = kind;
+    expect(renderContext("b_plan")).not.toContain('aria-label="Use value: Parcel area"');
+  }
 });
 
 test("default source selection opens a detected plan page instead of a report cover", () => {

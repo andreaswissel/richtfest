@@ -12,10 +12,10 @@
     "fumadocs-core": "16.17.1",
     "fumadocs-mdx": "15.4.7",
     "fumadocs-ui": "16.17.1",
-    "next": "16.4.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.4.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "lucide-react": "^0.577.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

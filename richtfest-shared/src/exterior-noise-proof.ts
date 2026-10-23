@@ -15,7 +15,7 @@ export type ExteriorNoiseRoomKind = (typeof exteriorNoiseRoomKinds)[number];
 
 const proposals: Array<[RegExp, ExteriorNoiseRoomKind]> = [
   // Living rooms first: "Wohnküche" and "Wohndiele" are living rooms, not kitchens or halls.
-  [/wohn|ess|living|dining|lounge/i, "living"],
+  [/wohn|ess|living|dining|lounge|\bwo\.\s*-?\s*es\.\s*-?\s*ko\./i, "living"],
   [/schlaf|kind|gast|eltern|bedroom|child|guest|nursery/i, "sleeping"],
   [/büro|buero|arbeit|office|study|praxis|besprech/i, "office"],
   [/küche|kueche|kitchen|bad|dusch|wc|toilet|bath|flur|diele|gang|corridor|hall|abstell|lager|storage|hwr|hauswirt|technik|utility|treppe|stair|garderobe|ankleide|keller|garage|loggia|balkon|terrasse/i, "not_protected"],

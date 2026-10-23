@@ -7,6 +7,7 @@ import { runBuildingExtraction } from "@richtfest/projects/building-extraction";
 import { buildingExtractionJobs } from "@richtfest/projects/schema";
 import { syntheticPlanPdf } from "../../../../richtfest-apps/projects/src/test-fixtures/synthetic-plan";
 import { createDatabase } from "./db/client";
+import { projectsDeps } from "./app-hosts";
 
 const url = process.env.BUILDING_EXTRACTION_TEST_DATABASE_URL;
 const local = url && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname);
@@ -44,6 +45,87 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
   } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
 }, 30000);
 
+(local ? test : test.skip)("planning and address suggestions retain same-project evidence without approving copied values", async () => {
+  const namespace = `planning_evidence_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
+  const isolated = new URL(url!); isolated.searchParams.set("options", `-c search_path=${namespace}`);
+  const { db, pool } = createDatabase(isolated.href);
+  const tenant = crypto.randomUUID(), project = crypto.randomUUID(), actor = crypto.randomUUID(), model = crypto.randomUUID(), building = crypto.randomUUID();
+  const app = express(); app.use(express.json());
+  app.use(createBuildingModelRouter(() => ({ ...projectsDeps(db, { actor: { id: actor, tenantId: tenant, permissions: new Set(["projects:read", "projects:write"]) } } as any), audit: async () => {} })));
+  app.use((e: any, _req: any, res: any, _next: any) => res.status(e.status ?? 500).json({ message: e.message }));
+  const server = app.listen(0), base = `http://127.0.0.1:${(server.address() as any).port}/projects/${project}/building-model`;
+  try {
+    for (const table of ["projects_projects", "projects_locations", "projects_files", "projects_file_versions", "projects_source_extractions", "projects_source_models", "projects_source_pages", "feasibility_site_assessments", "feasibility_site_assessment_revisions",
+      ...(await admin.pool.query("select tablename from pg_tables where schemaname='public' and tablename like 'projects_building_%'")).rows.map(r => r.tablename)]) {
+      if (!/^(projects|feasibility)_[a-z_]+$/.test(table)) throw Error("Unexpected test table");
+      await pool.query(`CREATE TABLE ${table} (LIKE public.${table} INCLUDING ALL)`);
+    }
+    await pool.query("insert into projects_projects (id,tenant_id,name,created_by) values ($1,$2,'Planning test',$3)", [project, tenant, actor]);
+    await pool.query("insert into projects_building_models (id,tenant_id,project_id,created_by) values ($1,$2,$3,$4)", [model, tenant, project, actor]);
+    await pool.query("insert into projects_building_buildings (id,tenant_id,model_id,stable_key,name,created_by) values ($1,$2,$3,'building','Building',$4)", [building, tenant, model, actor]);
+    for (const [scopeTenant, scopeProject, revision] of [[tenant, project, 3], [tenant, crypto.randomUUID(), 8], [crypto.randomUUID(), project, 9]] as const) {
+      const id = crypto.randomUUID();
+      await pool.query("insert into feasibility_site_assessments (id,tenant_id,project_id,input,created_by,updated_by) values ($1,$2,$3,'{}',$4,$4)", [id, scopeTenant, scopeProject, actor]);
+      await pool.query("insert into feasibility_site_assessment_revisions (tenant_id,assessment_id,revision,method,input,created_by) values ($1,$2,$3,'test','{}',$4)", [scopeTenant, id, revision, actor]);
+    }
+    const evidence = { kind: "site_assessment", revision: 3, field: "constraints.grz", quote: "r3 · GRZ 0.4 · Plan 7-42 §2" };
+    const post = (revision: number) => fetch(`${base}/properties`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: 0,
+      entityType: "building", entityId: building, propertyKey: "bebauungsplanGrz", value: "0.4", unit: null, provenance: "manual", evidence: [{ ...evidence, revision }] }) });
+    for (const revision of [8, 9, 99]) expect((await post(revision)).status).toBe(422);
+    const accepted = await post(3);
+    expect(accepted.status).toBe(201);
+    const property = (await (await fetch(base)).json()).data.properties[0];
+    expect(String(property.current.value)).toBe("0.4");
+    expect(property.current).toMatchObject({ reviewStatus: "unreviewed", provenance: "manual", evidence: [evidence] });
+    expect(property.reviewed).toBeNull();
+    const addressSuggestion = async () => {
+      const response = await fetch(`${base}/component-sources`);
+      expect(response.status).toBe(200);
+      return (await response.json()).data.addressState;
+    };
+    expect(await addressSuggestion()).toBeNull();
+    const address = async (city: string, country = "DE", reference: object | null = null) => {
+      await pool.query("update projects_projects set street='Teststraße 1', city=$1, country=$2, address_reference=$3 where id=$4", [city, country, reference, project]);
+    };
+    await address("Berlin");
+    const berlin = await addressSuggestion();
+    expect(berlin).toMatchObject({ value: "BE", evidence: { kind: "project_address" } });
+    expect(berlin.evidence.quote).toContain("AGS 11000000");
+    const saveAddress = (quote: string) => fetch(`${base}/properties`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: 1,
+      entityType: "building", entityId: building, propertyKey: "federalState", value: "BE", unit: null, provenance: "manual", evidence: [{ kind: "project_address", quote }] }) });
+    expect((await saveAddress("Forged address")).status).toBe(422);
+    await address("Mainz");
+    expect((await saveAddress(berlin.evidence.quote)).status).toBe(422); // Address changed since the panel opened.
+    await address("Berlin");
+    expect((await saveAddress(berlin.evidence.quote)).status).toBe(201);
+    const savedState = (await (await fetch(base)).json()).data.properties.find((item: any) => item.propertyKey === "federalState");
+    expect(savedState.current).toMatchObject({ value: "BE", reviewStatus: "unreviewed", evidence: [berlin.evidence] });
+    expect(savedState.reviewed).toBeNull();
+    await address("Frankfurt");
+    expect(await addressSuggestion()).toBeNull(); // More than one state's municipality matches.
+    const point = { provider: "geoapify", placeId: "test", longitude: 8.6821, latitude: 50.1109, attribution: "Test" };
+    await address("Frankfurt", "DE", point);
+    expect((await addressSuggestion()).value).toBe("HE");
+    await address("Berlin", "DE", point);
+    expect(await addressSuggestion()).toBeNull(); // Coordinates contradict the municipality.
+    await address("Berlin", "US");
+    expect(await addressSuggestion()).toBeNull();
+    await address("Frankfurt");
+    const context = { projectAddress: { street: "Teststraße 1", city: "Frankfurt", country: "DE" }, address: "Teststraße 1, Frankfurt", siteId: "fixture", importedAt: "2026-10-23", longitude: 8.6821, latitude: 50.1109 };
+    await pool.query("insert into projects_locations (project_id,tenant_id,context) values ($1,$2,$3)", [project, tenant, context]);
+    expect((await addressSuggestion()).value).toBe("HE");
+    await address("Halle");
+    expect(await addressSuggestion()).toBeNull(); // A saved import for another address is not reused.
+    await address("Frankfurt");
+    await pool.query("update projects_locations set tenant_id=$1", [crypto.randomUUID()]);
+    expect(await addressSuggestion()).toBeNull();
+    // Mainz/Wiesbaden border: a nearby state must not be picked just because it sorts first.
+    await address("", "DE", { ...point, longitude: 8.278, latitude: 50.004 });
+    expect(await addressSuggestion()).toBeNull();
+  } finally { server.close(); await pool.end(); await admin.pool.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.pool.end(); }
+}, 30000);
+
 (local && poppler ? test : test.skip)("wall adjacency derives roles from accepted plan geometry without overriding people", async () => {
   const namespace = `building_components_test_${crypto.randomUUID().replaceAll("-", "")}`;
   const admin = createDatabase(url!); await admin.pool.query(`CREATE SCHEMA ${namespace}`);
@@ -73,7 +155,18 @@ const poppler = Bun.spawnSync(["which", "pdftotext"]).exitCode === 0;
     await pool.query("insert into projects_file_versions (id,tenant_id,file_id,version,status,storage_key,mime_type,created_by) values ($1,$2,$3,1,'ready','test','application/pdf',$4)", [version, tenant, file, actor]);
     // The page's printed title names the storey.
     await pool.query("insert into projects_building_plan_sources (tenant_id,model_id,storey_id,source_version_id,page,created_by) values ($1,$2,$3,$4,1,$5)", [tenant, model, storey, version, actor]);
-    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,1,$3)", [version, tenant, JSON.stringify({ status: "available", text: "Wohnen\nGrundriss EG\nOKFF 1. OG +2,95\nM 1:100" })]);
+    await pool.query("insert into projects_source_pages (version_id,tenant_id,page,content) values ($1,$2,1,$3)", [version, tenant, JSON.stringify({ status: "available", text: "Wohnen\n" + " ".repeat(110_000) + "Grundriss EG\nOKFF 1. OG +2,95\nM 1:100" })]);
+    const beforeRead = await revision();
+    const response = await fetch(base), body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const modelRead = body.data;
+    expect(modelRead.planSources[0].storeyTitle).toEqual({ level: 0, quote: "Grundriss EG" });
+    expect(modelRead.storeys[0]).toMatchObject({ name: "Test", levelIndex: null });
+    expect(modelRead.properties).toHaveLength(0);
+    expect(await revision()).toBe(beforeRead); // Title display does not approve or persist a level.
+    await pool.query("update projects_source_pages set content=$1 where version_id=$2", [JSON.stringify({ status: "available", text: "Grundriss EG\n" + " ".repeat(110_000) + "Grundriss 2. OG" }), version]);
+    expect((await (await fetch(base)).json()).data.planSources[0].storeyTitle).toBeNull();
+    await pool.query("update projects_source_pages set content=$1 where version_id=$2", [JSON.stringify({ status: "available", text: "Grundriss EG\nOKFF 1. OG +2,95" }), version]);
     await db.insert(buildingExtractionJobs).values({ tenantId: tenant, modelId: model, sourceVersionId: version, storeyId: storey, page: 1, extractorVersion: "topology-v8", createdBy: actor });
     const pdf = syntheticPlanPdf({ unitFill: true });
     expect(await runBuildingExtraction({ db, fileStorage: { read: async () => Readable.from([pdf]) }, audit: async () => {}, reportError: () => {} } as any, new AbortController().signal)).toBe(true);

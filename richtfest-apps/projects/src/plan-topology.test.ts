@@ -31,6 +31,32 @@ test("rectangular rooms follow fully supported source faces, not raster-cell pad
   expect(run(walls.slice(0, 3)).planRegion.width).not.toBeCloseTo(.275, 7);
 });
 
+test("asymmetric orthogonal rooms refine source faces but retain an unsupported floor seam and its endpoints", () => {
+  const outline = [{ x: .214, y: .215 }, { x: .489, y: .215 }, { x: .489, y: .335 },
+    { x: .37, y: .335 }, { x: .37, y: .487 }, { x: .214, y: .487 }];
+  const walls = [footprint("top", .201, .203, .3, .012), footprint("right", .489, .203, .012, .132),
+    footprint("return", .37, .335, .131, .012), footprint("inner", .37, .335, .013, .164),
+    footprint("bottom", .201, .487, .182, .012), footprint("left", .201, .203, .013, .296)];
+  const run = (sources: PlanFootprint[], holes: ReturnType<typeof rectangle>[] = []) => inferPlanTopology(
+    planLabels([word("Flur", .25, .26)]), sources, [], 200, [], 0,
+    [{ ...fill, rings: [outline, ...holes] }], 1, undefined, { metresPerPageHeight: 10 }).rooms[0].geometry;
+  const complete = run(walls);
+  expect(complete.topology.boundaryRefinement).toBe("source_faces_within_one_grid_cell");
+  expect(complete.polygon).toHaveLength(6);
+  for (const p of outline) expect(complete.polygon!.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 1e-8)).toBe(true);
+  const partial = run(walls.filter(w => w.sourceKey !== "inner"));
+  expect(partial.topology.boundaryRefinement).toBe("source_faces_within_one_grid_cell");
+  // The unsupported vertical seam and both corners retain the raster geometry.
+  expect(partial.polygon).toContainEqual({ x: .37, y: .35 });
+  expect(partial.polygon).toContainEqual({ x: .38, y: .35 });
+  expect(partial.polygon).toContainEqual({ x: .38, y: .485 });
+  expect(partial.planRegion.x).toBeCloseTo(.214, 8);
+  expect(partial.planRegion.y).toBeCloseTo(.215, 8);
+  const holed = run([...walls, footprint("column", .26, .38, .03, .03)], [rectangle(.26, .38, .03, .03)]);
+  expect(holed.holes).toHaveLength(1);
+  expect(holed.topology.boundaryRefinement).toBeUndefined();
+});
+
 test("opening jambs use the same reviewed construction state as room barriers", () => {
   const pair = [footprint("left", .2, .3, .1, .01), footprint("right", .35, .3, .1, .01)].map(f => ({ ...f, fillColor: "#339977" }));
   const run = (state: "proposed" | "retained" | "demolished" | "not_wall", existing = false) => inferPlanTopology([], existing ? [] : pair, [], 400, existing ? pair : [], 0, [], 1, undefined, {

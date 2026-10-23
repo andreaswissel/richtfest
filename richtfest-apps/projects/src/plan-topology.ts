@@ -647,7 +647,9 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     // A bounding box alone must never masquerade as the traced room boundary.
     const contour = status === "enclosed" ? traceRegion(component, n, id, region!) : status === "conflicting" ? traceRegion(partition,n,i,region!) : null;
     const traceFailed = (status === "enclosed" || status === "conflicting") && !contour;
-    const aligned = status === "enclosed" && contour && !contour.holes.length ? alignRectangularRoom(contour.polygon, boundaryRings, 1 / n) : null;
+    const aligned = status === "enclosed" && contour && !contour.holes.length
+      ? alignRectangularRoom(contour.polygon, boundaryRings, 1 / n)
+        ?? (contour.polygon.length > 4 ? alignOrthogonalRoom(contour.polygon, boundaryRings, 1 / n) : null) : null;
     const candidatePolygon=aligned ?? contour?.polygon;
     const candidateBounds=candidatePolygon?box(candidatePolygon):null;
     // Whole-apartment/sheet regions are not room proposals merely because a
@@ -1246,6 +1248,65 @@ function alignRectangularRoom(polygon: Point[], rings: Point[][], tolerance: num
   // The enlarged corners must also be supported, not just the original raster span.
   if (sides.some((side, i) => !side!.covers(side!.intervals, i % 2 ? left : top, i % 2 ? right : bottom))) return null;
   return [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+}
+
+/** Partial refinement keeps unsupported edges AND their endpoints unchanged.
+ * Only outward source-face offsets within one cell qualify. No simplification:
+ * short returns at doorways are evidence too, not permission to square a room. */
+function alignOrthogonalRoom(polygon: Point[], rings: Point[][], tolerance: number): Point[] | null {
+  const count = polygon.length, epsilon = 1e-8;
+  const signedArea = polygon.reduce((sum, a, i) => { const b = polygon[(i + 1) % count]; return sum + a.x * b.y - b.x * a.y; }, 0);
+  const edges = polygon.map((a, i) => {
+    const b = polygon[(i + 1) % count], vertical = a.x === b.x;
+    return { a, b, vertical, at: vertical ? a.x : a.y,
+      from: Math.min(vertical ? a.y : a.x, vertical ? b.y : b.x),
+      to: Math.max(vertical ? a.y : a.x, vertical ? b.y : b.x),
+      outward: Math.sign((vertical ? b.y - a.y : a.x - b.x) * signedArea) };
+  });
+  if (!signedArea || edges.some(e => e.a.x !== e.b.x && e.a.y !== e.b.y || e.to - e.from <= epsilon)
+    || edges.some((e, i) => e.vertical === edges[(i + 1) % count].vertical)) return null;
+  const covers = (intervals: number[][], from: number, to: number) => {
+    let end = from;
+    for (const [a, b] of intervals) { if (a > end + epsilon) break; end = Math.max(end, b); }
+    return end >= to - epsilon;
+  };
+  const support = edges.map(e => {
+    const groups = new Map<number, number[][]>();
+    for (const ring of rings) for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length], at = e.vertical ? a.x : a.y;
+      if (Math.abs(at - (e.vertical ? b.x : b.y)) > epsilon) continue;
+      const offset = (at - e.at) * e.outward;
+      if (offset < -epsilon || offset > tolerance + epsilon) continue;
+      const intervals = groups.get(at) ?? [];
+      intervals.push([Math.min(e.vertical ? a.y : a.x, e.vertical ? b.y : b.x), Math.max(e.vertical ? a.y : a.x, e.vertical ? b.y : b.x)]);
+      groups.set(at, intervals);
+    }
+    return [...groups].sort(([a], [b]) => Math.abs(a - e.at) - Math.abs(b - e.at))
+      .map(([at, intervals]) => ({ at, intervals: intervals.sort(([a], [b]) => a - b) }))
+      .find(s => covers(s.intervals, e.from, e.to));
+  });
+  // Lock the two incident lines at each unsupported edge, preserving its ends.
+  const movable = support.map((s, i) => Boolean(s && support[(i + count - 1) % count] && support[(i + 1) % count]));
+  const coordinates = edges.map((e, i) => movable[i] ? support[i]!.at : e.at);
+  const result = edges.map((e, i) => {
+    const previous = coordinates[(i + count - 1) % count];
+    return e.vertical ? { x: coordinates[i], y: previous } : { x: previous, y: coordinates[i] };
+  });
+  if (!movable.some((move, i) => move && Math.abs(coordinates[i] - edges[i].at) > epsilon)) return null;
+  for (let i = 0; i < count; i++) {
+    const a = result[i], b = result[(i + 1) % count], e = edges[i];
+    // No edge reversal, collapsed return, or extension beyond source support.
+    if ((e.vertical ? b.y - a.y : b.x - a.x) * (e.vertical ? e.b.y - e.a.y : e.b.x - e.a.x) <= epsilon * epsilon) return null;
+    if (movable[i] && !covers(support[i]!.intervals, Math.min(e.vertical ? a.y : a.x, e.vertical ? b.y : b.x),
+      Math.max(e.vertical ? a.y : a.x, e.vertical ? b.y : b.x))) return null;
+    for (let j = i + 2; j < count; j++) {
+      if ((j + 1) % count === i) continue;
+      const c = result[j], d = result[(j + 1) % count];
+      if (Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)) <= Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x)) + epsilon
+        && Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y)) <= Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y)) + epsilon) return null;
+    }
+  }
+  return result;
 }
 
 /** Trace a grid region into rings. Pinch vertices (cells touching only at a

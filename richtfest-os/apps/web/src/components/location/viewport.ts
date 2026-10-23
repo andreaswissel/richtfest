@@ -25,6 +25,8 @@ export type ViewportState = {
     edges?: boolean; roughness?: number; metalness?: number; section?: boolean; roof?: boolean }>;
   /** Fade other assessment groups without replacing their geometry; null restores the overview. */
   assessmentFocus?: string | null;
+  /** Preview a floor's outline without moving the camera or changing selection. */
+  assessmentHover?: string | null;
   /** Optional building cutaway; only walls/openings in the focused floor are clipped. */
   assessmentCutaway?: number | null;
   /** Keep geographic context visible but unobtrusive while inspecting the building. */
@@ -965,12 +967,16 @@ export function createViewport(
       );
     const building = selected?.parent === groups.buildings || selected?.parent === groups.assessment ? selected : undefined;
     if (building !== outlinedBuilding || previous?.assessmentRelated !== next.assessmentRelated || previous?.assessment !== next.assessment
-      || previous?.assessmentFocus !== next.assessmentFocus || (building && !groups.buildingSelection.children.length)) {
+      || previous?.assessmentFocus !== next.assessmentFocus || previous?.assessmentHover !== next.assessmentHover || (building && !groups.buildingSelection.children.length)) {
       disposeGroup(groups.buildingSelection);
       outlinedBuilding = building;
       const connected = building ? groups.assessment.children.filter(node => node !== building && next.assessmentRelated?.includes(node.userData.id)
         && (!next.assessmentFocus || node.userData.floor === next.assessmentFocus)) : [];
-      for (const object of [...(building ? [building] : []), ...connected]) {
+      const floor = next.assessmentHover ? groups.assessment.children.filter(node => node.userData.floor === next.assessmentHover) : [];
+      // Presentation floor caps give a legible silhouette instead of outlining every item of furniture.
+      const caps = floor.filter(node => node.userData.roof);
+      const hovered = new Set(caps.length ? caps : floor);
+      for (const object of new Set([...(building ? [building] : []), ...connected, ...hovered])) {
       object.updateWorldMatrix(true, true);
       object.traverse((node) => {
         if (!(node instanceof THREE.Mesh)) return;
@@ -978,8 +984,8 @@ export function createViewport(
         const edges = new THREE.EdgesGeometry(node.geometry, 25).applyMatrix4(node.matrixWorld);
         const geometry = new LineSegmentsGeometry().setPositions(edges.getAttribute("position").array as Float32Array);
         edges.dispose();
-        const material = new LineMaterial({ color: object === building ? 0x7279d7 : 0x718c91, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
-          transparent: true, depthTest: object !== building,
+        const material = new LineMaterial({ color: object === building || hovered.has(object) ? 0x7279d7 : 0x718c91, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
+          transparent: true, depthTest: object !== building && !hovered.has(object),
           polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, toneMapped: false });
         material.resolution.set(renderer.domElement.width, renderer.domElement.height);
         const outline = new LineSegments2(geometry, material);

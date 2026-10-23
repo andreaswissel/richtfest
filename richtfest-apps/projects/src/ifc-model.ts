@@ -67,6 +67,7 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
         if (!ref(u)) continue;
         const unit = read(u.value);
         const type = label(unit.UnitType);
+        if (!type) continue; // Monetary units have no dimensional UnitType.
         defaults.set(type, [...(defaults.get(type) ?? []), { project: key(project), ...unit }]);
       }
     }
@@ -79,7 +80,8 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
     const unitInfo = (explicit: any, ifcType: string): Record<string, unknown> | null => {
       const id = ref(explicit);
       if (id) return { source: "explicit", expressId: id, definition: pack(read(id)) };
-      const candidates = defaults.get(unitType(ifcType) ?? "") ?? [];
+      const category = unitType(ifcType);
+      const candidates = category ? defaults.get(category) ?? [] : [];
       return candidates.length ? { source: "project-default", candidates: candidates.map(pack), ambiguous: candidates.length > 1 } : null;
     };
     const add = (entity: number, predicate: string, factKind: SourceFactInput["kind"], v: any, source: number, attribute: string,
@@ -99,7 +101,7 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
     });
     const importSet = (entity: number, setId: number, scope: string, relationshipId?: number) => {
       const set = read(setId);
-      const members = set.HasProperties ?? set.Quantities;
+      const members = set.HasProperties ?? set.ExtendedProperties ?? set.Properties ?? set.Quantities;
       if (!Array.isArray(members)) { omittedForms.add(kind(set)); add(entity, `${scope}.${label(set.Name) || key(setId)}`, "property", set, setId, "definition", relationshipId); return; }
       const visit = (id: number, path: string, ancestors: Set<number>) => {
         if (ancestors.has(id)) throw new Error(`Cyclic IFC property/quantity #${id}`);
@@ -127,6 +129,50 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
       // IFC4 permits an aggregate select of definitions as well as a single reference.
       const sets = Array.isArray(rel.RelatingPropertyDefinition) ? rel.RelatingPropertyDefinition : [rel.RelatingPropertyDefinition];
       for (const obj of rel.RelatedObjects ?? []) if (objects.has(ref(obj)!)) for (const set of sets) if (ref(set)) importSet(obj.value, set.value, "instance", id);
+    }
+    // Materials are not IfcObjectDefinitions. Preserve their declared graph,
+    // including aggregate membership, without interpreting list order as layers
+    // in physical space or following profile references into geometry.
+    const materialIds = new Set<number>();
+    const importMaterial = (id: number) => {
+      if (materialIds.has(id)) return;
+      const line = read(id);
+      if (!kind(line).startsWith("IFCMATERIAL")) return;
+      materialIds.add(id);
+      entities.push({ key: key(id), kind: kind(line), name: label(line.Name) });
+      for (const [attribute, v] of Object.entries(line)) {
+        if (["expressID", "type"].includes(attribute) || v == null) continue;
+        add(id, attribute, ref(v) ? "relationship" : "attribute", v, id, attribute, undefined, unitInfo(null, v?.name ?? ""));
+        for (const target of Array.isArray(v) ? v : [v]) {
+          if (ref(target) && kind(read(target.value)).startsWith("IFCMATERIAL")) importMaterial(target.value);
+        }
+      }
+    };
+    for (const id of ids(webIfc.IFCMATERIAL)) importMaterial(id);
+    for (const id of ids(webIfc.IFCRELASSOCIATESMATERIAL)) {
+      const rel = read(id);
+      entities.push({ key: key(id), kind: kind(rel), name: label(rel.Name), ...(label(rel.GlobalId) ? { globalId: label(rel.GlobalId) } : {}) });
+      for (const attribute of ["GlobalId", "Name", "Description", "RelatedObjects", "RelatingMaterial"]) {
+        add(id, attribute, ref(rel[attribute]) ? "relationship" : "attribute", rel[attribute], id, attribute, id);
+      }
+      if (ref(rel.RelatingMaterial)) importMaterial(rel.RelatingMaterial.value);
+    }
+    // IFC4 uses Properties; IFC2X3 extended sets use ExtendedProperties and
+    // specialized material properties expose typed scalar attributes directly.
+    for (const id of ids(webIfc.IFCMATERIALPROPERTIES)) {
+      const set = read(id), material = ref(set.Material);
+      if (!material) continue;
+      importMaterial(material);
+      entities.push({ key: key(id), kind: kind(set), name: label(set.Name) });
+      for (const [attribute, v] of Object.entries(set)) {
+        if (["expressID", "type"].includes(attribute) || v == null) continue;
+        add(id, attribute, ref(v) ? "relationship" : "attribute", v, id, attribute, undefined, unitInfo(null, v?.name ?? ""));
+      }
+      if (Array.isArray(set.Properties ?? set.ExtendedProperties)) importSet(material, id, "material");
+      else for (const [attribute, v] of Object.entries(set)) {
+        if (["expressID", "type", "Material"].includes(attribute) || v == null) continue;
+        add(material, `material.${kind(set)}.${attribute}`, "property", v, id, attribute, undefined, unitInfo(null, v?.name ?? ""));
+      }
     }
     for (const [type, related, relating, predicate] of [
       [webIfc.IFCRELDEFINESBYTYPE, "RelatedObjects", "RelatingType", "type"],
@@ -157,7 +203,7 @@ export async function extractIfcModel(bytes: Uint8Array): Promise<SourceModelImp
       }
     }
     return { entities, facts, metadata: { schema, parser: "web-ifc", parserVersion: api.GetVersion(),
-      importScope: "Object definitions and scalar attributes; occurrence/type property sets; declared quantities; type, containment and decomposition references; declared space boundary, void and filling relation entities with attribute provenance (connection geometry references only, no geometry traversal or inferred adjacency)",
+      importScope: "Object definitions and scalar attributes; occurrence/type property sets; declared quantities; type, containment and decomposition references; material entities, declared material graph, association relations and material properties; declared space boundary, void and filling relation entities with attribute provenance (connection geometry references only, no geometry traversal or inferred adjacency)",
       omissions: ["Geometry, placements and owner history are not traversed", "No calculated quantities, unit conversion or inherited type-property merging", "Other IFC relationships and non-scalar object attributes are not imported", "Non-single property forms are structured declarations with unresolved references", "Unit definitions retain unresolved component references; defaults require a matching declared unit category", "Parsing is not exhaustive IFC schema or reference validation"],
       structuredPropertyForms: [...omittedForms].sort() } };
   } finally {

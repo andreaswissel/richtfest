@@ -9,14 +9,37 @@ extraction drafts appear together, using the same persisted IDs, outlines, holes
 and metric plan scale as the 2D overlays. There is no separate visualization
 model to synchronize. Edit outlines in 2D; edit heights in the 3D dimension panel.
 
+## Select PDF pages and review coverage
+
+The source selector chooses a document revision; page numbers refer to that PDF,
+not to building floors. Documents with more than twelve pages use a compact page
+selector. Non-plan, unresolved and not-yet-registered pages remain viewable without
+creating storeys or guessing geometry. Selecting an object opens its own source page.
+
+**Plan context → PDF page coverage** lists each source separately, with detected
+floor-plan pages, non-plan pages and unresolved pages. The known PDF page count is
+not the registration count: when the count is unknown, only actual registered or
+classified page numbers are shown. A truncated extraction remains explicitly marked.
+Source descriptions and plan-set replacement controls have separate rows; replacing
+a plan set still requires an explicit choice and action.
+
 ## Navigate floors and inspect the enclosure
 
 **All floors** shows the provisional stack. Without saved site alignment it is the initial view. Select a floor in the linked floor
 list, or click an object in the overview, to glide closer and fade the other
-floors. Faded objects cannot intercept selection. **All floors** restores them;
+floors. Hover or keyboard-focus a floor link to highlight its outline without moving
+the camera. Click the focused floor again, click empty canvas, or use **All floors**
+to restore the overview. When inspecting a room, its floor link first returns to the
+whole floor. Faded objects cannot intercept selection;
 reduced-motion preferences make both transitions immediate. Floor links retain
 the source page and can be opened in another tab. **Review outline in 2D** returns
 to that floor's source plan and selected object.
+
+Automatically created floors display their entered level or a consistent floor
+title read from active plan sources, rather than “Plan page N”. Custom names are
+preserved. Missing or conflicting identities display **Unidentified floor**.
+The inspector quotes the source title as **unreviewed**. Displaying that title
+does not rename stored records, assign a level, approve geometry or change calculations.
 
 When all displayed storeys have level indices and one is level **0**, a translucent
 surface marks an **assumed ground reference** there. Negative storeys such as −1

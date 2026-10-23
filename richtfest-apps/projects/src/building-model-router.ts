@@ -29,6 +29,9 @@ import {
   zoningChecks,
   zoningCheckMethod,
   validateBuildingComponentProperty,
+  formatProjectAddress,
+  locationMatchesAddress,
+  type BuildingAddressStateSuggestion,
   type FeasibilitySiteFigures,
   type BuildingComponentRecord,
   type SitePlan,
@@ -57,6 +60,7 @@ import {
   fileVersions,
   files,
   projects,
+  projectLocations,
   sourceExtractions,
   sourceModels,
 } from "./schema";
@@ -73,6 +77,7 @@ import { sourcePages } from "./schema";
 import { documentTypesFor } from "./document-types";
 import { developmentPlanNoiseMethod, developmentPlanZoningMethod, readDevelopmentPlanNoise, readDevelopmentPlanZoning } from "./development-plan";
 import { constructionDescriptionMethod, mergeComponentStatements, readConstructionDescription } from "./construction-description";
+import { municipalityCandidates, statesNear } from "./address-points";
 
 type GetDeps = (req: Request) => AppDeps;
 // Existing route handlers return validation results. Roll those results back,
@@ -169,9 +174,42 @@ const entityExists = async (db: any, d: AppDeps, modelId: string, type: string, 
   const rows = await db.select({ id: table.id }).from(table).where(and(eq(table.id, entityId), eq(table.modelId, modelId), eq(table.tenantId, d.tenantId))).limit(1);
   return Boolean(rows[0]);
 };
+/** Reuse saved metadata only: no geocoding call, border guess, or stale location import. */
+async function addressStateSuggestion(db: AppDeps["db"], tenantId: string, projectId: string): Promise<BuildingAddressStateSuggestion | null> {
+  const [row] = await db.select({ project: projects, context: projectLocations.context }).from(projects)
+    .leftJoin(projectLocations, and(eq(projectLocations.projectId, projects.id), eq(projectLocations.tenantId, tenantId)))
+    .where(and(eq(projects.id, projectId), eq(projects.tenantId, tenantId))).limit(1);
+  if (!row) return null;
+  const address = row.project;
+  if (address.country && !["de", "deu", "deutschland", "germany"].includes(address.country.trim().toLowerCase())) return null;
+  const municipalities = address.city ? await municipalityCandidates(address.city) : [];
+  const namedStates = [...new Set(municipalities.map(item => item.state))];
+  const points = [
+    ...(address.addressReference ? [{ ...address.addressReference, source: "Geoapify" }] : []),
+    ...(row.context && locationMatchesAddress(row.context, address) ? [{ ...row.context, source: `Location ${row.context.siteId} · ${row.context.importedAt}` }] : []),
+  ];
+  const pointStates = await Promise.all(points.map(point => statesNear(point.longitude, point.latitude)));
+  // The simplified boundaries have a 400 m margin; two candidates are not a reliable state assignment.
+  if (pointStates.some(states => states.length !== 1)) return null;
+  const resolved = [...new Set(pointStates.flat())];
+  if (resolved.length > 1 || (resolved.length && namedStates.length && !namedStates.includes(resolved[0]!))) return null;
+  const value = resolved[0] ?? (namedStates.length === 1 ? namedStates[0] : null);
+  if (!value) return null;
+  const source = points.length ? points.map(point => `${point.source} (${point.longitude}, ${point.latitude})`).join("; ")
+    : municipalities.map(item => `${item.name} · AGS ${item.ags}`).join("; ");
+  return { value, evidence: { kind: "project_address", quote: `${formatProjectAddress(address)} · ${value} · BKG VG250 · ${source}` } };
+}
+
 export const evidenceVersionsForProject = async (db: any, d: AppDeps, projectId: string, evidence: z.infer<typeof buildingEvidenceSchema>[]) => {
   // Correspondence evidence is written only by Richtfest when it reads an inquiry reply.
   if (evidence.some(item => item.kind === "correspondence")) return false;
+  const addressEvidence = evidence.filter(item => item.kind === "project_address");
+  if (addressEvidence.length) {
+    const suggestion = await addressStateSuggestion(db, d.tenantId, projectId);
+    if (!suggestion || addressEvidence.some(item => item.quote !== suggestion.evidence.quote)) return false;
+  }
+  for (const item of evidence) if (item.kind === "site_assessment"
+    && !(await d.siteAssessmentRevisionExists?.(projectId, item.revision))) return false;
   const ids = [...new Set(evidence.flatMap(item => "sourceVersionId" in item && item.sourceVersionId ? [item.sourceVersionId] : []))];
   if (!ids.length) return true;
   const rows = await db.select({ id: fileVersions.id }).from(fileVersions).innerJoin(files, eq(files.id, fileVersions.fileId)).where(and(inArray(fileVersions.id, ids), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.status, "ready"), eq(files.projectId, projectId), eq(files.tenantId, d.tenantId)));
@@ -256,9 +294,11 @@ const readModel = async (d: AppDeps, model: any) => {
     d.db.select().from(buildingProperties).where(eq(buildingProperties.modelId, model.id)),
     d.db.select().from(buildingPropertyVersions).where(eq(buildingPropertyVersions.tenantId, d.tenantId)).orderBy(desc(buildingPropertyVersions.version)),
     d.db.select().from(buildingMeasurements).where(eq(buildingMeasurements.modelId, model.id)).orderBy(desc(buildingMeasurements.createdAt)),
-    d.db.select({ plan: buildingPlanSources, file: files, version: fileVersions }).from(buildingPlanSources)
+    d.db.select({ plan: buildingPlanSources, file: files, version: fileVersions,
+      titleText: sql<string>`regexp_replace(coalesce(${sourcePages.content}->>'text',''), '[[:blank:]]+', ' ', 'g')` }).from(buildingPlanSources)
       .innerJoin(fileVersions, and(eq(fileVersions.id, buildingPlanSources.sourceVersionId), eq(fileVersions.tenantId, d.tenantId)))
       .innerJoin(files, and(eq(files.id, fileVersions.fileId), eq(files.tenantId, d.tenantId)))
+      .leftJoin(sourcePages, and(eq(sourcePages.versionId, buildingPlanSources.sourceVersionId), eq(sourcePages.page, buildingPlanSources.page), eq(sourcePages.tenantId, d.tenantId)))
       .where(and(eq(buildingPlanSources.modelId, model.id), eq(buildingPlanSources.tenantId, d.tenantId))).orderBy(asc(buildingPlanSources.page)),
     d.db.select().from(buildingPlacements).where(and(eq(buildingPlacements.modelId, model.id), eq(buildingPlacements.tenantId, d.tenantId))).limit(1),
     d.db.select().from(buildingRelationships).where(eq(buildingRelationships.modelId, model.id)).orderBy(asc(buildingRelationships.createdAt)),
@@ -342,7 +382,7 @@ const readModel = async (d: AppDeps, model: any) => {
     properties: propertiesWithCurrent,
     measurements,
     placement: (placementRows as any[])[0] ?? null,
-    planSources: (planSources as any[]).map(row => ({ ...row.plan, source: { fileId: row.file.id, fileName: row.file.name, versionId: row.version.id, version: row.version.version, mimeType: row.version.mimeType, downloadUrl: `/api/projects/${model.projectId}/files/${row.file.id}/versions/${row.version.version}/download` } })),
+    planSources: (planSources as any[]).map(row => ({ ...row.plan, storeyTitle: storeyLevelFromText(row.titleText ?? ""), source: { fileId: row.file.id, fileName: row.file.name, versionId: row.version.id, version: row.version.version, mimeType: row.version.mimeType, downloadUrl: `/api/projects/${model.projectId}/files/${row.file.id}/versions/${row.version.version}/download` } })),
     relationships,
     conflicts,
     proposals,
@@ -1204,7 +1244,7 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         likelyConstructionDescription: types.get(row.fileId)?.documentType === "construction_description" || Boolean(row.mentions) }))
         // Plans and other drawings state no component data; a confirmed or inferred Baubeschreibung comes first.
         .filter(doc => doc.documentType?.documentType !== "plans").sort((a, b) => Number(b.likelyConstructionDescription) - Number(a.likelyConstructionDescription));
-      return res.json(ok({ documents }));
+      return res.json(ok({ documents, addressState: await addressStateSuggestion(d.db, d.tenantId, projectId) }));
     } catch (e) { return next(e); }
   });
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { Point2 } from "@richtfest/shared";
+import { proposeExteriorNoiseRoom, resolveRoomHeight, type Point2 } from "@richtfest/shared";
 import { assessFirePlan } from "@richtfest/shared/fire-plan";
 import type { AppDeps } from "./deps";
 import { assembleFireProtectionSnapshot } from "./fire-protection";
@@ -16,7 +16,9 @@ type Model = Parameters<typeof assembleFireProtectionSnapshot>[0] & { extraction
 const fail = (message: string) => Object.assign(new Error(message), { status: 422, code: "candidate_preview_unavailable" });
 
 /** A read-only page projection. No accepted entity, property, review or model revision is written. */
-export function calculateCandidates(data: Model, rawScope: unknown, host: Pick<AppDeps, "interiorSound"> = {}) {
+export function calculateCandidates(data: Model, rawScope: unknown, host: {
+  interiorSound?: Pick<NonNullable<AppDeps["interiorSound"]>, "requirements" | "massiveRw" | "lightweightRow" | "airborne" | "impact"> | null;
+} = {}) {
   const scope = candidateCalculationRequest.parse(rawScope);
   const source = data.planSources.find(s => s.sourceVersionId === scope.sourceVersionId && s.page === scope.page && s.storeyId === scope.storeyId);
   const storey = data.storeys.find(s => s.id === scope.storeyId && s.constructionState !== "demolished");
@@ -71,7 +73,8 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: Pick<A
     propose("room", room.id, "spaceType", context.spaceType, room.name);
     // A use proposal is not enough to establish necessary corridors/stairs or a fire role.
     const use = room.geometry?.roomUseProposal?.roomUse;
-    const acousticUse = use === "bedroom" || use === "child_room" ? "sleeping" : use === "living_dining_kitchen" ? "living" : use === "office" ? "office" : null;
+    const acousticUse = use === "bedroom" || use === "child_room" ? "sleeping" : use === "living_dining_kitchen" ? "living" : use === "office" ? "office"
+      : proposeExteriorNoiseRoom(room.name, null);
     propose("room", room.id, "exteriorNoiseRoom", acousticUse, room.name);
     if (acousticUse) propose("room", room.id, "roomUse", acousticUse, room.name);
   }
@@ -132,7 +135,7 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: Pick<A
     holes: (r.geometry?.holes ?? []).map(metres), adjacentWallIds: new Set<string>(active().filter(a => a.relationshipType === "separates" && a.toEntityId === r.id).map(a => a.fromEntityId)),
     ceilingIds: active().filter(a => a.relationshipType === "covers" && a.toEntityId === r.id).map(a => a.fromEntityId),
     spaceType: get(r.id, "spaceType"), apartmentUnit: get(r.id, "apartmentUnit"), use: get(r.id, "exteriorNoiseRoom"),
-    clearHeight: get(r.id, "clearRoomHeight") ?? get(storey.id, "clearRoomHeight") }));
+    clearHeight: resolveRoomHeight(property(r.id, "clearRoomHeight"), property(storey.id, "clearRoomHeight")).calculationValue }));
   const wallGeometry = elements.filter(e => walls.some(w => w.wallId === e.id) && validRing(e.geometry?.polygon)).map(e => ({
     id: e.id, name: e.name, ring: metres(e.geometry.polygon), role: get(e.id, "wallRole"),
     exterior: active().some(r => r.fromEntityId === e.id && r.relationshipType === "faces_exterior") }));
@@ -143,21 +146,37 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: Pick<A
   const requirementLevel = get(storey.buildingId, "soundInsulationLevel") === "elevated" ? "elevated" : "statutory_minimum";
   const requirements = host.interiorSound?.requirements(requirementLevel);
   const interior = host.interiorSound && requirements ? assembleInteriorSound({ storeyId: storey.id,
-    clearHeight: get(storey.id, "clearRoomHeight"), rooms: roomGeometry, walls: wallGeometry, ceilings: [], floorId: null, elements: elementValues,
+    clearHeight: resolveRoomHeight(null, property(storey.id, "clearRoomHeight")).calculationValue,
+    rooms: roomGeometry, walls: wallGeometry, ceilings: [], floorId: null, elements: elementValues,
     wallRequirement: requirements.wall, ceilingRequirement: requirements.ceiling,
     airborne: host.interiorSound.airborne, impact: host.interiorSound.impact,
   }) : null;
   const exterior = assembleExteriorNoiseProof({ sourceLabel: "Unreviewed candidate preview", storeyId: storey.id,
-    source: { versionId: scope.sourceVersionId, page: scope.page }, applicability: null, flanking: null, clearHeight: null,
-    rooms: roomGeometry.map(r => ({ ...r, clearHeight: null, roomUse: r.use, kind: property(r.id, "exteriorNoiseRoom"), surfacesComplete: null })),
-    walls: wallGeometry.filter(w => w.exterior).map(w => ({ ...w, construction: get(w.id, "construction"), rw: null, rwBasis: null })),
-    levels: new Map(), openings: [],
+    source: { versionId: scope.sourceVersionId, page: scope.page },
+    applicability: property(storey.buildingId, "exteriorNoiseApplicability"), flanking: property(storey.buildingId, "exteriorNoiseFlanking"),
+    clearHeight: property(storey.id, "clearRoomHeight"),
+    rooms: roomGeometry.map(r => ({ ...r, clearHeight: property(r.id, "clearRoomHeight"), roomUse: r.use,
+      kind: property(r.id, "exteriorNoiseRoom"), surfacesComplete: property(r.id, "exteriorSurfacesComplete") })),
+    walls: wallGeometry.filter(w => w.exterior).map(w => ({ ...w, construction: get(w.id, "construction"),
+      rw: property(w.id, "soundReductionIndex"), rwBasis: property(w.id, "soundReductionIndexBasis") })),
+    // Site noise is not inferred from a room outline or a noise-map colour.
+    levels: new Map(), openings: elements.flatMap(e => {
+      const kind = get(e.id, "componentType") ?? e.kind;
+      const wallId = active().find(r => r.fromEntityId === e.id && r.relationshipType === "opening_in")?.toEntityId;
+      if (!["window", "door", "small_element"].includes(kind) || !e.roomId || !wallId) return [];
+      return [{ id: e.id, name: e.name, componentType: kind, roomId: e.roomId, wallId,
+        area: property(e.id, "openingArea"), rw: property(e.id, "soundReductionIndex"), basis: property(e.id, "soundReductionIndexBasis"),
+        width: property(e.id, "openingWidth"), height: property(e.id, "openingHeight"),
+        count: property(e.id, "elementCount"), dnew: property(e.id, "normalizedLevelDifference") }];
+    }),
   });
   return { version: 1, mode: "candidate_preview", reviewStatus: "unreviewed", modelId: data.model.id, modelRevision: data.model.revision,
     scope, extraction: { id: job.id, version: job.extractorVersion, updatedAt: job.updatedAt },
     inputHash: createHash("sha256").update(JSON.stringify({ scope, job, rooms, elements, relationships, properties, conflicts: data.conflicts, buildings: projected.buildings, storeys: data.storeys })).digest("hex"),
     candidates: used, excluded, scale, relationships,
     geometry: roomGeometry.map(r => ({ id: r.id, name: r.name, areaM2: r.polygon ? polygonArea(r.polygon) - r.holes.reduce((sum: number, hole: Point2[]) => sum + polygonArea(hole), 0) : null,
+      printedArea: rooms.find(room => room.id === r.id)?.geometry?.printedArea ?? null,
+      areaZones: rooms.find(room => room.id === r.id)?.geometry?.openSpace?.zones ?? [],
       adjacentWallIds: [...r.adjacentWallIds], clearHeight: r.clearHeight })),
     properties: properties.filter(p => scopedIds.has(p.entityId) || p.entityId === storey.id || p.entityId === storey.buildingId), openings: openings.summary,
     fire: { snapshot: fireSnapshot, assessment: fire },

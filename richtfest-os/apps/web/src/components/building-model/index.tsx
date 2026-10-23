@@ -133,6 +133,19 @@ export function automaticPageDisposition(processing: BuildingAutomaticPlanProces
   return "unresolved" as const;
 }
 
+// Translate persisted system messages without replacing source quotations or unrecognised diagnostics.
+function automaticCoverageReason(reason: string | null | undefined, t: ReturnType<typeof useT>) {
+  if (reason === "No page met the automatic floor-plan threshold; no geometry was guessed. Page coverage remains available for review.") return t("buildingModelCoverageNoPlan");
+  if (reason === "Confident floor-plan pages were queued for unreviewed draft geometry. Other pages remain classified or unresolved as listed.") return t("buildingModelCoveragePlansQueued");
+  return reason;
+}
+
+const pageTypeLabels: Record<string, Parameters<ReturnType<typeof useT>>[0]> = {
+  elevation: "buildingModelPageTypeElevation", section: "buildingModelPageTypeSection", site_plan: "buildingModelPageTypeSitePlan",
+  detail: "buildingModelPageTypeDetail", schedule: "buildingModelPageTypeSchedule", text: "buildingModelPageTypeText",
+  cover: "buildingModelPageTypeCover", mixed: "buildingModelPageTypeMixed", other: "buildingModelPageTypeOther",
+};
+
 export function regionsForSource(regions: BuildingRegion[], page: number, sourceVersionId?: string, storeyId?: string | null) {
   return regions.filter((region) => region.page === page && (!storeyId || region.storeyId === storeyId) && (!sourceVersionId || region.sourceVersionId === sourceVersionId));
 }
@@ -183,8 +196,9 @@ export function planSourceForView(sources: BuildingPlanSource[], page: number, e
   selected?: Pick<BuildingRegion, "storeyId" | "sourceVersionId" | "page">, explicitSourceVersionId?: string | null,
   processing: BuildingAutomaticPlanProcessing[] = []) {
   const explicitVersionSources = explicitSourceVersionId ? sources.filter((source) => source.source?.versionId === explicitSourceVersionId) : [];
-  if (explicitVersionSources.length) return explicitVersionSources.find((source) => source.page === page)
-    || preferredPlanSource(explicitVersionSources, processing);
+  // A PDF page can be viewed before it has a model registration. Never silently jump to another page.
+  if (explicitSourceVersionId) return explicitVersionSources.find((source) => source.page === page && source.storeyId === explicitStoreyId)
+    || explicitVersionSources.find((source) => source.page === page);
   const explicitPage = explicitStoreyId ? sources.find((source) => source.storeyId === explicitStoreyId && source.page === page) : undefined;
   if (explicitPage) return explicitPage;
   const selectedPageSource = selected?.page === page ? sources.find((source) => source.storeyId === selected.storeyId
@@ -311,7 +325,24 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   }, [paramsKey]);
   const modelQuery = useApi(`/projects/${projectId}/building-model`);
   const modelError = modelQuery.error instanceof Error ? modelQuery.error : null;
-  const model = useMemo(() => adaptBuildingModel(modelQuery.data), [modelQuery.data]);
+  const model = useMemo(() => {
+    const adapted = adaptBuildingModel(modelQuery.data);
+    // Page identities remain source references. Never turn their page numbers into floor names.
+    return { ...adapted, storeys: adapted.storeys.map(storey => {
+      if (storey.name && !/^Plan page \d+(?: \(draft\))?$/i.test(storey.name)) return storey;
+      const property = storey.componentProperties?.level;
+      const entered = property && !["rejected", "superseded"].includes(property.reviewStatus) ? property.value : property?.reviewedValue;
+      const level = typeof entered === "number" ? entered : storey.levelIndex;
+      const titles = adapted.planSources.filter(source => source.storeyId === storey.id && source.storeyTitle
+        && !adapted.supersededSources.some(old => old.sourceVersionId === source.source?.versionId)
+        && !adapted.automaticPlanProcessing.some(item => item.sourceVersionId === source.source?.versionId && item.nonFloorPlanPages.some(page => page.page === source.page)))
+        .map(source => source.storeyTitle!.level);
+      const title = new Set(titles).size === 1 ? titles[0] : null;
+      const name = level != null ? storeyLevelLabel(level, t) : title === "top" ? t("buildingStoreyTop")
+        : typeof title === "number" ? storeyLevelLabel(title, t) : t("buildingStoreyUnidentified");
+      return { ...storey, name };
+    }) };
+  }, [modelQuery.data, t]);
   // Property and review writes run one at a time and continue from the revision the previous write
   // returned, so quick consecutive edits are not rejected as stale before the model reloads.
   const writeQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -363,7 +394,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const deepLinkedRegion = entityDeepLink && selectedById?.id === deepLinkedEntity ? selectedById : undefined;
   const currentSource = planSourceForSelection(model.planSources, { page, storeyId: sourceStoreyId, sourceVersionId, pinned: sourceSelectionPinned, selected,
     deepLinked: deepLinkedRegion }, automaticPlanProcessing);
-  const sourceForEvidence = currentSource || model.planSources[0];
+  const sourceForEvidence = currentSource || (sourceSelectionPinned && sourceVersionId
+    ? model.planSources.find((source) => source.source?.versionId === sourceVersionId) : model.planSources[0]);
   const evidence = sourceForEvidence?.source ? { ...model.evidence, fileName: sourceForEvidence.source.fileName, sourceVersionId: sourceForEvidence.source.versionId, fileId: sourceForEvidence.source.fileId, version: sourceForEvidence.source.version, pdfUrl: sourceForEvidence.source.downloadUrl, pageCount: sourceForEvidence.pageCount || 1, layers: sourceForEvidence.layers?.map((layer, index) => ({ id: layer.id || String(index), label: layer.label || layer.name || String(layer.id || index), visible: layer.visible ?? layer.defaultVisible })) } : model.evidence;
   const stateCandidates = useMemo(() => candidatesForModelState(candidates, state), [candidates, state]);
   const volumeRegions = useMemo(() => [...regions, ...stateCandidates], [regions, stateCandidates]);
@@ -411,7 +443,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     if (currentSource && page !== currentSource.page) setPage(currentSource.page);
     if (currentSource && sourceStoreyId !== (currentSource.storeyId || "")) setSourceStoreyId(currentSource.storeyId || "");
     if (currentSource?.source?.versionId && sourceVersionId !== currentSource.source.versionId) setSourceVersionId(currentSource.source.versionId);
-  }, [selected?.id, selectedId, currentSource?.id, sourceStoreyId, sourceVersionId]);
+  }, [selected?.id, selectedId, currentSource?.id, page, sourceStoreyId, sourceVersionId]);
   // Keep an entity-only deep link in the URL until the model has loaded and the view state has moved to its source page.
   const deepLinkPending = entityDeepLink && (modelQuery.isLoading || Boolean(deepLinkedRegion && currentSource && (page !== currentSource.page
     || sourceStoreyId !== (currentSource.storeyId || "") || (currentSource.source?.versionId && sourceVersionId !== currentSource.source.versionId))));
@@ -501,7 +533,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const saveBuildingProperty = useMutation({
     mutationFn: ({ buildingId, save }: { buildingId: string; save: ComponentPropertySave }) => modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
       // Zoning check areas and the exterior noise assessment are observations of the site and building; everything else here is a requirement.
-      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: ["parcelArea", "footprintArea", "exteriorNoiseApplicability", "exteriorNoiseFlanking"].includes(save.key) ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
+      entityType: "building", entityId: buildingId, propertyKey: save.key, claimKind: ["parcelArea", "footprintArea", "exteriorNoiseApplicability", "exteriorNoiseFlanking"].includes(save.key) ? "observed_fact" : "requirement", value: save.value, unit: save.unit, provenance: "manual", evidence: save.evidence ?? [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -510,7 +542,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const [soundOpen, setSoundOpen] = useState(false);
   const [fireOverlay, setFireOverlay] = useState(false);
   const [fireOpen, setFireOpen] = useState(false);
-  const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen);
+  const componentSources = useApi(`/projects/${projectId}/building-model/component-sources`, soundOpen || fireOpen);
   const inquiries = useApi(`/projects/${projectId}/inquiries`, soundOpen);
   const createInquiry = useMutation({
     mutationFn: (input: { counterpart: string; body: string }) => api(`/projects/${projectId}/inquiries`, { kind: "component_data", title: t("buildingRequestTitle"), counterpart: input.counterpart,
@@ -553,11 +585,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
   });
-  const storeyNames = useMemo(() => new Map(model.storeys.map((storey) => {
-    const state = storey.componentProperties?.level;
-    const level = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : storey.levelIndex ?? null;
-    return [storey.id, level === null ? storey.name || storey.id : `${storeyLevelLabel(level, t)} · ${storey.name || storey.id}`];
-  })), [model, t]);
+  const storeyNames = useMemo(() => new Map(model.storeys.map(storey => [storey.id, storey.name || t("buildingStoreyUnidentified")])), [model, t]);
   const modelComponents = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region)).map((region) => [region.id, region])).values()], [model]);
   const soundChecks = useMemo(() => { const checks = soundInsulationChecks(modelComponents.map(componentRecord)); return { total: checks.length, ready: checks.filter((check) => check.ready).length }; }, [modelComponents]);
   const modelWalls = useMemo(() => [...new Map(Object.values(model.states).flat().filter((region) => region.entityType === "element" && regionComponentType(region) === "wall").map((region) => [region.id, region])).values()], [model]);
@@ -747,8 +775,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     if (region) {
       setSourceVersionId(region.sourceVersionId || "");
       setSourceStoreyId(region.storeyId || "");
-      setPage(model.planSources.find((source) => source.storeyId && source.storeyId === region.storeyId
-        && (!region.sourceVersionId || source.source?.versionId === region.sourceVersionId))?.page || region.page);
+      setPage(region.page);
     }
   };
   const selectSourcePage = (nextPage: number, nextVersion = "", nextStorey = "") => {
@@ -913,7 +940,12 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     : planTool === "measure" ? [[t("buildingModelKeyClick"), t("buildingModelMeasureHint")], ["Esc", t("buildingModelMeasureClear")]]
     : selectedCandidate ? [["E", t("buildingModelEditOutline")], ["W", t("buildingModelToolMagic")]]
     : [["V", t("buildingModelToolSelect")], ["W", t("buildingModelToolMagic")], ["H", t("buildingModelToolPan")], ["M", t("buildingModelToolMeasure")]];
-  const pageNumbers = model.planSources.length ? [...new Set(model.planSources.filter((source) => !evidence.sourceVersionId || source.source?.versionId === evidence.sourceVersionId).map((source) => source.page))] : [1];
+  const knownPageCount = sourceForEvidence ? sourceForEvidence.pageCount : evidence.pageCount;
+  const pageNumbers = [...new Set([
+    ...Array.from({ length: knownPageCount || 0 }, (_, index) => index + 1),
+    ...model.planSources.filter((source) => source.source?.versionId === evidence.sourceVersionId).map((source) => source.page),
+    page,
+  ])].sort((a, b) => a - b);
   const extractionActive = activeExtraction?.status === "queued" || activeExtraction?.status === "running";
   const contextStatus = currentAutomaticActive ? automaticPhaseLabel(currentAutomaticProcessing, t) : contextExtractionStatus(activeExtraction?.status, t);
   const geometry = <GeometrySection draft={geometryDraft} scale={pageScale} printed={geometryPrinted} editing={Boolean(outlineSession)} snap={snapToWalls} onSnap={setSnapToWalls}
@@ -938,12 +970,17 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           const next = new URLSearchParams(params); next.set("modelView", value); setParams(next, { replace: true });
         }} items={[{ value: "2d", label: "2D" }, { value: "3d", label: "3D", disabled: Boolean(outlineSession) }]} /></div>
         <div className="building-model-pages" aria-label={t("buildingModelPages")}>
-          {pageNumbers.map((pageNumber) => {
+          {pageNumbers.length > 12 ? <NativeSelect aria-label={t("buildingModelPage")} value={String(page)} onChange={(event) => {
+            const nextPage = Number(event.target.value);
+            const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === nextPage);
+            selectSourcePage(nextPage, evidence.sourceVersionId || "", source?.storeyId || "");
+          }}>{pageNumbers.map((pageNumber) => <option key={pageNumber} value={pageNumber}>
+            {knownPageCount ? t("buildingModelPdfPageOf").replace("{page}", String(pageNumber)).replace("{total}", String(knownPageCount)) : `${t("buildingModelPage")} ${pageNumber}`} · {t(automaticPageDisposition(currentAutomaticProcessing, pageNumber) === "floor_plan" ? "buildingModelPageFloorPlan" : automaticPageDisposition(currentAutomaticProcessing, pageNumber) === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved")}
+          </option>)}</NativeSelect> : pageNumbers.map((pageNumber) => {
             const source = model.planSources.find((item) => item.source?.versionId === evidence.sourceVersionId && item.page === pageNumber);
-            const processing = automaticPlanProcessing.find((item) => item.sourceVersionId === source?.source?.versionId);
-            const disposition = automaticPageDisposition(processing, pageNumber);
+            const disposition = automaticPageDisposition(currentAutomaticProcessing, pageNumber);
             const dispositionLabel = t(disposition === "floor_plan" ? "buildingModelPageFloorPlan" : disposition === "non_floor_plan" ? "buildingModelPageNonPlan" : "buildingModelPageUnresolved");
-            return <button key={`${source?.source?.versionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${dispositionLabel}`} title={dispositionLabel} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, source?.source?.versionId || "", source?.storeyId || "")}>{pageNumber}</button>;
+            return <button key={`${evidence.sourceVersionId || "source"}-${pageNumber}`} type="button" className={`is-${disposition.replaceAll("_", "-")}`} aria-label={`${t("buildingModelPage")} ${pageNumber} · ${dispositionLabel}`} title={dispositionLabel} aria-pressed={page === pageNumber} onClick={() => selectSourcePage(pageNumber, evidence.sourceVersionId || "", source?.storeyId || "")}>{pageNumber}</button>;
           })}
         </div>
         <Popover open={planContextOpen} onOpenChange={setPlanContextOpen}>
@@ -993,7 +1030,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           <PopoverContent align="start" className="building-model-context-popover building-model-sound-popover">
             {model.buildings[0] && <>
               <h2 className="building-model-panel-title">{t("buildingRegulatoryBasis")}</h2>
-              <RegulatoryBasis properties={model.buildings[0].componentProperties} t={t} pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+              <RegulatoryBasis projectId={projectId} properties={model.buildings[0].componentProperties} t={t} pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
+                addressState={(componentSources.data as { addressState?: import("@richtfest/shared").BuildingAddressStateSuggestion | null } | undefined)?.addressState}
                 onSave={(save) => saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
               <BebauungsplanReader documents={((componentSources.data as { documents?: ComponentSourceDocument[] } | undefined)?.documents) ?? []} t={t} pending={readBebauungsplan.isPending}
                 result={readBebauungsplan.data?.summary} onRead={(sourceVersionId) => readBebauungsplan.mutate(sourceVersionId)} />
@@ -1040,6 +1078,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
             <h2 className="building-model-panel-title">{t("buildingFireProtection")}</h2>
             <PlanHeights projectId={projectId} model={model} onPage={(nextPage, sourceVersionId) => { selectSourcePage(nextPage, sourceVersionId); setFireOpen(false); }} />
             <FireProtectionPanel model={model} assessment={fireAssessment} routes={fireRoutes} storeyLabel={(storeyId) => storeyNames.get(storeyId) ?? storeyId} roomNames={roomNames} elementNames={elementNames} t={t}
+              addressState={(componentSources.data as { addressState?: import("@richtfest/shared").BuildingAddressStateSuggestion | null } | undefined)?.addressState}
               pending={saveBuildingProperty.isPending || reviewComponentProperty.isPending}
               onSave={(save) => model.buildings[0] && saveBuildingProperty.mutate({ buildingId: model.buildings[0].id, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
           </PopoverContent>
@@ -1120,7 +1159,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
                 onReview={(decision, correction) => reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } })} />
               : selected ? <ObjectInspector region={selected} sourcePage={selected.page} sourceVersionId={selected.sourceVersionId || evidence.sourceVersionId} sourceRegion={selected.box} proposals={selectedProposals} t={t} geometry={isRoom(selected) ? geometry : undefined}
                 onPage={(nextPage) => selectSourcePage(nextPage, selected.sourceVersionId || evidence.sourceVersionId || "", selected.storeyId || currentSource?.storeyId || "")} onSave={(body) => updateObject.mutate({ id: selected.id, entityType: selected.entityType || "room", body })} onMeasurementSave={(measurement, value) => createMeasurement.mutate({ region: selected, measurement, value })} pending={updateObject.isPending || createMeasurement.isPending}
-                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties region={selected} roomNames={roomNames} elementNames={elementNames} storeyNames={storeyNames} elementHref={entityHref} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                components={(selected.entityType === "room" || regionComponentType(selected)) ? <ComponentProperties projectId={projectId} region={selected} roomNames={roomNames} elementNames={elementNames} storeyNames={storeyNames} elementHref={entityHref} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })}
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
@@ -1223,7 +1262,7 @@ export function AutomaticBuildingModelPreparation({ projectId, processing, files
     </div>
     {active && <div className="building-model-automatic-meter" role="status"><span /><small>{t("buildingModelAutomaticDurableHint")}</small></div>}
     <div className="building-model-automatic-sources">
-      {processing.map((item) => <div className="building-model-automatic-source" key={item.sourceVersionId}><div><strong>{item.fileName}</strong><small>{item.reason || t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{automaticPhaseLabel(item, t)}</Badge></div>)}
+      {processing.map((item) => <div className="building-model-automatic-source" key={item.sourceVersionId}><div><strong>{item.fileName}</strong><small>{automaticCoverageReason(item.reason, t) || t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{automaticPhaseLabel(item, t)}</Badge></div>)}
       {!processing.length && files.map((file) => <div className="building-model-automatic-source" key={file.id}><div><strong>{String(file.name)}</strong><small>{t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{filesLoading ? t("loading") : t("buildingModelAutomaticReadingSource")}</Badge></div>)}
       {filesLoading && !processing.length && !files.length && <div className="building-model-automatic-source"><div><strong>{t("buildingModelAutomaticCheckingUploads")}</strong><small>{t("buildingModelAutomaticWaitingForCoverage")}</small></div><Badge>{t("loading")}</Badge></div>}
     </div>
@@ -1264,16 +1303,21 @@ export function AutomaticPlanCoverage({ processing, sources, storeys, selectedPa
   return <section className="building-model-page-coverage" aria-label={t("buildingModelPageCoverage")}>
     <div className="building-model-page-coverage-heading"><div><h2>{t("buildingModelPageCoverage")}</h2><p>{t("buildingModelPageCoverageHint")}</p></div><div className="building-model-page-legend"><span className="is-floor-plan">{t("buildingModelPageFloorPlan")}</span><span className="is-non-floor-plan">{t("buildingModelPageNonPlan")}</span><span className="is-unresolved">{t("buildingModelPageUnresolved")}</span></div></div>
     {processing.map((item) => {
-      const pages = Array.from({ length: Math.max(0, item.registeredPageCount || item.pageCount || 0) }, (_, index) => index + 1);
+      const pages = [...new Set([
+        ...Array.from({ length: Math.max(0, item.pageCount ?? 0) }, (_, index) => index + 1),
+        ...sources.filter((source) => source.source?.versionId === item.sourceVersionId).map((source) => source.page),
+        ...item.floorPlanPages, ...item.nonFloorPlanPages.map((entry) => entry.page), ...item.unresolvedPages,
+      ])].sort((a, b) => a - b);
       return <div className="building-model-page-coverage-source" key={item.sourceVersionId}>
-        <div className="building-model-page-coverage-meta"><strong>{item.fileName}</strong><Badge>{automaticStatusLabel(item.status, t)}</Badge><small>{item.reason}</small>
+        <div className="building-model-page-coverage-meta"><strong>{item.fileName}</strong><Badge>{automaticStatusLabel(item.status, t)}</Badge><small>{automaticCoverageReason(item.reason, t)}</small>
           {onSupersede && processing.length > 1 && <SupersedePlanSet item={item} processing={processing} pending={pending} onSupersede={onSupersede} t={t} />}</div>
         <div className="building-model-page-coverage-pages">{pages.map((pageNumber) => {
           const disposition = automaticPageDisposition(item, pageNumber);
           const nonPlan = item.nonFloorPlanPages.find((entry) => entry.page === pageNumber);
           const pageSource = sources.find((source) => source.source?.versionId === item.sourceVersionId && source.page === pageNumber);
           const storeyName = storeys.find((storey) => storey.id === pageSource?.storeyId)?.name;
-          const label = disposition === "floor_plan" ? `${t("buildingModelPageFloorPlan")}${storeyName ? ` · ${storeyName}` : ""}` : disposition === "non_floor_plan" ? `${t("buildingModelPageNonPlan")}${nonPlan?.pageType ? ` · ${nonPlan.pageType.replaceAll("_", " ")}` : ""}` : t("buildingModelPageUnresolved");
+          const pageTypeKey = nonPlan?.pageType ? pageTypeLabels[nonPlan.pageType] : undefined;
+          const label = disposition === "floor_plan" ? `${t("buildingModelPageFloorPlan")}${storeyName ? ` · ${storeyName}` : ""}` : disposition === "non_floor_plan" ? `${t("buildingModelPageNonPlan")}${pageTypeKey ? ` · ${t(pageTypeKey)}` : ""}` : t("buildingModelPageUnresolved");
           return <button type="button" key={pageNumber} className={`is-${disposition.replaceAll("_", "-")}`} aria-pressed={selectedSourceVersionId === item.sourceVersionId && selectedPage === pageNumber} title={label} onClick={() => onPage({ page: pageNumber, sourceVersionId: item.sourceVersionId, storeyId: pageSource?.storeyId || null })}><span>{pageNumber}</span><small>{label}</small></button>;
         })}</div>
         {item.coverageTruncated && <Callout tone="warning">{t("buildingModelCoverageTruncated")}</Callout>}

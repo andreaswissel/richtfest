@@ -39,6 +39,8 @@ export type AppDeps = {
   db: any;
   tenantId: string;
   actorId: string;
+  /** A saved Feasibility revision in this actor's tenant and project, never a cross-project reference. */
+  siteAssessmentRevisionExists?: (projectId: string, revision: number) => Promise<boolean>;
   publicDataUpdates?: (releaseIds: string[]) => Promise<import("@richtfest/shared").PublicDataUpdate[]>;
   /** Imported file-published traffic counts (BASt, state road authorities) overlapping a WGS84 [west, south, east, north] box. */
   trafficCounts?: (bbox: [number, number, number, number]) => Promise<import("@richtfest/shared").TrafficCountRecord[]>;

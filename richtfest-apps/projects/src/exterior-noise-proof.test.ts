@@ -129,6 +129,8 @@ describe("exterior noise proof assembly", () => {
 
   test("room kinds are proposed from names, living before kitchen and hall", () => {
     expect(proposeExteriorNoiseRoom("Wohnküche", null)).toBe("living");
+    expect(proposeExteriorNoiseRoom("Wo.- Es.- Ko. / Diele", null)).toBe("living");
+    expect(proposeExteriorNoiseRoom("Diele", null)).toBe("not_protected");
     expect(proposeExteriorNoiseRoom("Küche", null)).toBe("not_protected");
     expect(proposeExteriorNoiseRoom("Kind 2", null)).toBe("sleeping");
     expect(proposeExteriorNoiseRoom("Raum 3", null)).toBeNull();

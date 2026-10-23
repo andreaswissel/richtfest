@@ -1,11 +1,17 @@
 import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { componentDataRequest, developmentPlanZoningKeys, regulatoryBasisGaps, regulatoryBasisKeys, soundInsulationChecks, type BuildingComponentRecord, type ComponentRequestGroup, type DataRequestProgress } from "@richtfest/shared";
+import { BUILDING_CODES, type Bundesland } from "@richtfest/shared/building-codes";
+import type { BuildingAddressStateSuggestion, SiteAssessmentInput } from "@richtfest/shared";
+import { ArrowUpRight, Check, CircleDashed } from "lucide-react";
 import { useT } from "../../i18n";
+import { useApi } from "../../query";
 import { Button } from "../ui/button";
 import { NativeSelect } from "../ui/native-select";
 import { Input } from "../ui/input";
+import { Badge } from "../ui/badge";
 import { fieldLabel, optionLabel, PropertyRow, regionComponentType, StatusLine, type ComponentPropertySave } from "./component-properties";
+import { InputSourceHelp } from "./input-sources";
 import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
 import { inquiryLink, type InquirySummary } from "../inquiries/types";
 import { inquiryStatusLabel } from "../inquiries/labels";
@@ -115,7 +121,7 @@ export function DataRequest({ projectId, components, inquiries, t, pending, onCr
 
 /** "EG", "1. OG", "UG" style label for a storey level. */
 export const storeyLevelLabel = (level: number, t: T) => level === 0 ? t("buildingStoreyGround")
-  : (level > 0 ? t("buildingStoreyUpper") : t("buildingStoreyBasement")).replace("{n}", String(Math.abs(level)));
+  : (level > 0 ? t("buildingStoreyUpper") : t("buildingStoreyBasement")).replaceAll("{n}", String(Math.abs(level)));
 const levelOptions = Array.from({ length: 16 }, (_, index) => index - 3);
 
 /** Storey levels: read from each plan's title, set by a person when the title does not say. Ceilings use them to find the storey above. */
@@ -130,7 +136,7 @@ export function StoreyLevels({ storeys, t, pending, onSave, onReview }: {
         const state = storey.componentProperties?.level;
         const value = state && state.reviewStatus !== "rejected" && typeof state.value === "number" ? state.value : state?.reviewedValue ?? storey.levelIndex ?? null;
         return <Fragment key={storey.id}>
-          <dt>{storey.name || storey.id}</dt>
+          <dt><span>{storey.name || storey.id}</span>{value === null && <InputSourceHelp field="level" label={`${t("buildingStoreyLevel")}: ${storey.name || storey.id}`} t={t} />}</dt>
           <dd>
             <NativeSelect aria-label={`${t("buildingStoreyLevel")}: ${storey.name || storey.id}`} value={value === null ? "" : String(value)} disabled={pending}
               onChange={(event) => onSave(storey.id, event.target.value === "" ? null : Number(event.target.value))}>
@@ -159,7 +165,7 @@ export function ExteriorNoiseBasis({ properties, storeys, storeyLabel, t, pendin
       {storeys.map((storey) => {
         const state = storey.componentProperties?.clearRoomHeight;
         return <Fragment key={storey.id}>
-          <dt>{fieldLabel("clearRoomHeight", t)} · {storeyLabel(storey.id)}</dt>
+          <dt><span>{fieldLabel("clearRoomHeight", t)} · {storeyLabel(storey.id)}</span>{(!state || state.value == null || state.reviewStatus === "rejected") && <InputSourceHelp field="clearRoomHeight" label={fieldLabel("clearRoomHeight", t)} t={t} />}</dt>
           <dd><ClearHeight state={state} label={`${fieldLabel("clearRoomHeight", t)} (m): ${storeyLabel(storey.id)}`} t={t} pending={pending}
             onSave={(save) => onSaveStorey(storey.id, save)} onReview={(decision) => state && onReview(state, decision)} /></dd>
         </Fragment>;
@@ -188,25 +194,98 @@ function ClearHeight({ state, label, t, pending, onSave, onReview }: { state?: B
   </>;
 }
 
-/**
- * Which law and editions apply, checked first: federal state, Bebauungsplan, Landesbauordnung, VVTB and DIN 4109. Approving a value confirms it.
- * When a plan applies, its Art und Maß der baulichen Nutzung follow; they are not part of the sound insulation basis and are not checked yet.
- */
-export function RegulatoryBasis({ properties, t, pending, onSave, onReview }: { properties: Record<string, BuildingComponentPropertyState>; t: T; pending: boolean;
+/** The planning basis stays owned by Feasibility. Only explicit, source-backed B-Plan facts are transferable. */
+function PlanningContext({ projectId, properties, t, pending, onSave }: { projectId: string; properties: Record<string, BuildingComponentPropertyState>; t: T; pending: boolean; onSave: (save: ComponentPropertySave) => void }) {
+  const query = useApi(`/feasibility/projects/${projectId}/site-assessment`);
+  const assessment = (query.data as { assessment?: Omit<SiteAssessmentInput, "baseRevision"> & { revision: number } } | undefined)?.assessment;
+  const href = `/projects/${projectId}?view=feasibility&study=site&step=limits`;
+  const saved = assessment && assessment.revision > 0 ? assessment : undefined;
+  const basis = saved?.planningBasis ?? "unresolved";
+  const check = saved?.checks.planningBasis;
+  const source = check?.source.trim() || saved?.planRegime?.source.trim() || "";
+  const confirmed = basis !== "unresolved" && check?.status === "confirmed" && Boolean(check.source.trim() && check.note.trim());
+  const basisLabel = t(({ b_plan: "buildingPlanningBPlan", section34: "buildingPlanningSection34", section35: "buildingPlanningSection35", unresolved: "buildingPlanningUnresolved" } as const)[basis]);
+  const suggestions: Array<{ key: string; field: string; value: string | number; unit?: string; source: string; reviewed: boolean }> = [];
+  const parcel = saved?.constraints.parcelArea;
+  // The actual cadastral area is independent of planning basis; an estimated design polygon is not a substitute.
+  if (parcel?.kind === "official" && parcel.source.trim() && parcel.value !== null && parcel.value > 0 && parcel.value <= 10_000_000)
+    suggestions.push({ key: "parcelArea", field: "constraints.parcelArea", value: parcel.value, unit: "m²", source: [parcel.source, parcel.sourceDate].filter(Boolean).join(" · "), reviewed: parcel.reviewed });
+  if (saved && basis === "b_plan") {
+    if (source) suggestions.push({ key: "bebauungsplan", field: "planningBasis", value: "applies", source, reviewed: Boolean(confirmed) });
+    for (const [key, field] of [["bebauungsplanAreaType", "landUse"], ["bebauungsplanBauweise", "buildingForm"], ["bebauungsplanHeight", "heightRule"]] as const) {
+      const fact = saved.planningFacts?.[field];
+      if (fact?.kind === "official" && fact.source.trim() && fact.value.trim() && fact.value.length <= 300)
+        suggestions.push({ key, field: `planningFacts.${field}`, value: fact.value, source: [fact.source, fact.sourceDate].filter(Boolean).join(" · "), reviewed: fact.reviewed });
+    }
+    for (const [key, field] of [["bebauungsplanGrz", "grz"], ["bebauungsplanGfz", "gfz"], ["bebauungsplanStoreys", "maxFullStoreys"]] as const) {
+      const fact = saved.constraints[field];
+      // Neighbourhood comparisons and calculated/estimated design envelopes are not B-Plan limits.
+      if (fact.kind === "official" && fact.source.trim() && fact.value !== null)
+        suggestions.push({ key, field: `constraints.${field}`, value: String(fact.value), source: [fact.source, fact.sourceDate].filter(Boolean).join(" · "), reviewed: fact.reviewed });
+    }
+  }
+  const current = (key: string) => properties[key]?.reviewStatus === "rejected" ? null : properties[key]?.value;
+  return <section className="building-model-planning-context" aria-label={t("buildingPlanningContext")}>
+    <div className="building-model-planning-heading">
+      <Link to={href} title={source || t("buildingPlanningContext")}><strong>{basisLabel}</strong><ArrowUpRight className="size-icon-sm" /></Link>
+      <Badge>{query.isPending ? t("loading") : query.isError ? t("buildingPlanningUnavailable") : confirmed ? t("buildingComponentReviewed") : t("buildingComponentUnreviewed")}</Badge>
+    </div>
+    <div className="building-model-planning-origin">
+      <Link to={href}>{saved?.planRegime?.planName && basis === "b_plan" ? saved.planRegime.planName : t("buildingPlanningContext")}</Link>
+      {saved && <span>r{saved.revision}</span>}
+      {query.isError && <Button size="xs" variant="ghost" onClick={() => void query.refetch()}>{t("retry")}</Button>}
+    </div>
+    {suggestions.filter(item => item.key === "parcelArea" || item.key === "bebauungsplan" || current("bebauungsplan") !== "none").map(item => {
+      const existing = current(item.key);
+      const empty = existing === null || existing === undefined || existing === "";
+      const matches = !empty && String(existing) === String(item.value);
+      const label = fieldLabel(item.key, t);
+      const display = item.key === "bebauungsplan" ? optionLabel(item.key, String(item.value), t) : `${item.value}${item.unit ? ` ${item.unit}` : ""}`;
+      return <div className="building-model-planning-suggestion" key={item.key}>
+        <span>{label}</span>
+        <Link to={href} title={item.source} className="building-model-planning-value">{display}
+          {item.reviewed ? <Check className="size-icon-sm" aria-label={t("buildingComponentReviewed")} /> : <CircleDashed className="size-icon-sm" aria-label={t("buildingComponentUnreviewed")} />}
+        </Link>
+        {empty ? <Button size="xs" variant="outline" disabled={pending} aria-label={`${t("buildingPlanningUse")}: ${label}`} onClick={() => onSave({ key: item.key, value: item.value, unit: item.unit ?? null,
+          evidence: [{ kind: "site_assessment", revision: saved!.revision, field: item.field, quote: `r${saved!.revision} · ${item.field}: ${item.value}\n${item.source}`.slice(0, 4000) }] })}>{t("buildingPlanningUse")}</Button>
+          : <Badge title={String(existing)}>{t(matches ? "buildingPlanningMatches" : "buildingPlanningDiffers")}</Badge>}
+      </div>;
+    })}
+  </section>;
+}
+
+/** Law and editions are confirmed for this project separately from the linked planning assessment. */
+export function RegulatoryBasis({ projectId, addressState, properties, t, pending, onSave, onReview }: { projectId?: string; addressState?: BuildingAddressStateSuggestion | null; properties: Record<string, BuildingComponentPropertyState>; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void }) {
   const live = (key: string) => properties[key] && properties[key].reviewStatus !== "rejected" ? properties[key].value : null;
+  const state = live("federalState") || addressState?.value;
+  const code = BUILDING_CODES[state as Bundesland];
+  // Published references, not a claim that this edition applies to the project. Other editions remain enterable.
+  // RP: https://www.landesrecht.rlp.de/bsrp/document/VVRP-VVRP000006177
+  // BE: https://www.berlin.de/sen/stadt/_assets/service/rechtsvorschriften/bereich-bauen/vvtbblnlesefassung.pdf
+  const vvtb = state === "RP" ? ["VV TB RP vom 02.10.2025"] : state === "BE" ? ["VV TB Bln vom 29.04.2026", "VV TB Bln vom 09.04.2025"] : [];
+  const suggestions: Record<string, Array<{ value: string; label?: string }>> = {
+    stateBuildingCodeEdition: code?.stand ? [{ value: `${code.abbreviation} · ${code.stand}` }] : [],
+    vvtbEdition: vvtb.map((value) => ({ value })),
+    // Edition cited by the supported exterior-noise methodology; not a default for the regulatory basis.
+    din4109Edition: [{ value: "DIN 4109-1:2018-01" }],
+    bebauungsplanAreaType: ["WS", "WR", "WA", "WB", "MDW", "MD", "MI", "MU", "MK", "GE", "GI", "SO"].map((value) => ({ value, label: t(`buildingZoningArea${value}` as Parameters<T>[0]) })),
+    bebauungsplanBauweise: ["offene Bauweise", "geschlossene Bauweise", "abweichende Bauweise"].map((value, index) => ({ value, label: t((["buildingZoningOpen", "buildingZoningClosed", "buildingZoningDeviating"] as const)[index]!) })),
+  };
   const gaps = regulatoryBasisGaps(Object.fromEntries(Object.entries(properties).map(([key, state]) => [key, { value: state.value, reviewStatus: state.reviewStatus }])));
   return <>
+    {projectId && <PlanningContext projectId={projectId} properties={properties} t={t} pending={pending} onSave={onSave} />}
     <dl className="building-model-component-rows">
       {regulatoryBasisKeys.filter((key) => key !== "bebauungsplanNoise" || live("bebauungsplan") === "applies").map((key) =>
-        <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
+        <PropertyRow key={key} propertyKey={key} state={properties[key]} addressSuggestion={key === "federalState" ? addressState : undefined} suggestions={suggestions[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
     </dl>
-    <p className="muted text-ui-2xs">{gaps.length ? `${t("buildingRegulatoryOpen")}: ${gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingRegulatoryUnconfirmed")})`).join(", ")}` : t("buildingRegulatoryConfirmed")}</p>
+    <details className="muted text-ui-2xs"><summary>{t("buildingPlanningReferences")}</summary><p>{t("buildingRegulatorySuggestionsHint")}{code && <> <a href={code.sourceUrl} target="_blank" rel="noreferrer">{t("buildingRegulatoryCodeSource")}</a></>}</p></details>
+    {gaps.length ? <details className="muted text-ui-2xs"><summary>{t("buildingRegulatoryOpen")} · {gaps.length}</summary><ul>{gaps.map(gap => <li key={gap.field}>{fieldLabel(gap.field, t)} · {t(gap.status === "missing" ? "buildingComponentGapMissing" : "buildingRegulatoryUnconfirmed")}</li>)}</ul></details> : <Badge>{t("buildingRegulatoryConfirmed")}</Badge>}
     {live("bebauungsplan") === "applies" && <>
       <p className="text-ui-xs font-medium">{t("buildingZoningTitle")}</p>
       <dl className="building-model-component-rows">
         {developmentPlanZoningKeys.map((key) =>
-          <PropertyRow key={key} propertyKey={key} state={properties[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
+          <PropertyRow key={key} propertyKey={key} state={properties[key]} suggestions={suggestions[key]} t={t} pending={pending} onSave={onSave} onReview={(decision) => properties[key] && onReview(properties[key], decision)} />)}
       </dl>
       <p className="muted text-ui-2xs">{t("buildingZoningHint")}</p>
     </>}

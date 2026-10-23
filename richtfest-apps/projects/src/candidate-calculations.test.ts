@@ -37,7 +37,9 @@ test("candidate calculations are page-scoped, source-linked, non-mutating and do
   expect(result.fire.snapshot.available && result.fire.snapshot.plan.storeys[0]!.geometryReviewed).toBe(false);
   expect(result.reviewStatus).toBe("unreviewed");
   expect(result.fire.assessment?.classification.buildingClass).toBeNull();
-  expect(result.exterior.batch).toBeNull();
+  expect(result.exterior.batch?.inventory.map(room => room.roomId)).toEqual(["Living"]);
+  expect(result.exterior.batch?.rooms).toEqual([]);
+  expect(result.exterior.rooms[0]!.gaps).toContain("clear_height");
   expect(data).toEqual(before);
   expect(calculateCandidates(data, scope).inputHash).toBe(result.inputHash);
   expect(() => calculateCandidates(data, { ...scope, page: 3 })).toThrow("active plan page");
@@ -62,4 +64,36 @@ test("candidate previews retain accepted identities and rejected connections/pro
   expect(result.properties.filter(p => p.entityId === id(7) && p.propertyKey === "apartmentUnit")).toHaveLength(1);
   expect(result.properties.find(p => p.entityId === id(7) && p.propertyKey === "apartmentUnit").current.reviewStatus).toBe("rejected");
   expect(result.fire.snapshot.available && result.fire.snapshot.plan.storeys[0]!.rooms.find(r => r.id === id(7))!.unit).toBeNull();
+});
+
+test("candidate acoustic inputs retain source proposals and available heights/openings, without approving or substituting printed areas", () => {
+  const data = fixture();
+  data.extractionCandidates[0].name = "Wo.- Es.- Ko. / Diele";
+  data.extractionCandidates[0].geometry.printedArea = { value: 17.2, quote: "17.20 m²", status: "unreviewed" };
+  data.elements.push({ id: id(20), name: "Facade", kind: "draft_wall", storeyId: scope.storeyId,
+    geometry: { source: scope, polygon: rect(.1, .09, .2, .01) } },
+  { id: id(21), name: "Window", kind: "window", roomId: id(6), storeyId: scope.storeyId,
+    geometry: { source: scope, polygon: rect(.14, .09, .05, .01) } });
+  data.relationships.push({ fromEntityId: id(21), toEntityId: id(20), relationshipType: "opening_in", reviewStatus: "approved" });
+  const add = (entityId: string, propertyKey: string, value: unknown, provenance = "manual") => data.properties.push({ entityId, propertyKey,
+    current: { value, provenance, reviewStatus: "unreviewed", propertyId: `${entityId}:${propertyKey}`, version: 1, reviewRevision: 0 } });
+  add(scope.storeyId, "clearRoomHeight", 2.8);
+  add(id(21), "openingWidth", 1.1); add(id(21), "openingHeight", 1.4);
+  add(id(21), "soundReductionIndex", 32);
+  const before = structuredClone(data);
+  const result = calculateCandidates(data, scope), room = result.exterior.rooms[0]!;
+  expect(room.kind).toMatchObject({ value: "living", reviewStatus: "unreviewed", provenance: "inferred" });
+  expect(room.clearHeight?.value).toBe(2.8);
+  expect(room.facades.find(f => f.wallId === id(20))?.windows[0]).toMatchObject({ id: id(21), area: { value: 1.54 }, rw: { value: 32 } });
+  expect(room.gaps).toContain("facade_level");
+  expect(result.geometry[0]).toMatchObject({ areaM2: expect.closeTo(15.88), printedArea: { value: 17.2 } });
+  expect(result.exterior.batch?.rooms).toEqual([]);
+  expect(data).toEqual(before);
+  // An inferred height must not become usable in interior calculations while exterior checks withhold it.
+  data.properties[0].current.provenance = "inferred";
+  const unreviewed = calculateCandidates(data, scope);
+  expect(unreviewed.geometry[0]!.clearHeight).toBeNull();
+  expect(unreviewed.exterior.rooms[0]!.gaps).toContain("clear_height");
+  data.properties.push({ entityId: id(6), propertyKey: "exteriorNoiseRoom", current: { value: "living", reviewStatus: "rejected" } });
+  expect(calculateCandidates(data, scope).exterior.rooms[0]!.kind).toBeNull();
 });

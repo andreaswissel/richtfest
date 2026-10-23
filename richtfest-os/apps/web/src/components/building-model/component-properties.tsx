@@ -1,19 +1,23 @@
 import { Link } from "react-router-dom";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { bebauungsplanSchema, ceilingRoleSchema, doorLeafTypeSchema, doorRoleSchema, installationKindSchema, installationProofSchema, liningSidesSchema, liningTypeSchema, screedInsulationSchema, screedTypeSchema, stairCaseSchema, timberCeilingUndersideSchema, timberWallLiningSchema, windowFrameSchema, windowOpeningSchema, componentConstructionSchema, exteriorNoiseRoomKinds, fireClosureSchema, fireRatingSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema, stairwellSmokeVentSchema, fullStoreySchema, componentInputGaps, proposeExteriorNoiseRoom, componentTypeSchema, elementComponentType, federalStateSchema, soundInsulationLevelSchema, spaceTypeSchema, wallRoleSchema, type ComponentType } from "@richtfest/shared";
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
 import { Input, Textarea } from "../ui/input";
 import { NativeSelect } from "../ui/native-select";
 import { Badge } from "../ui/primitives";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { useApi } from "../../query";
+import type { BuildingAddressStateSuggestion, LightweightCatalogueOption } from "@richtfest/shared";
 import type { BuildingComponentPropertyState, BuildingRegion } from "./types";
+import { InputSourceHelp } from "./input-sources";
 
 type T = ReturnType<typeof useT>;
 // Statements rather than values: shown in full.
 const longText = new Set(["bebauungsplanNoise", "bebauungsplanGrz", "bebauungsplanHeight", "fireResistanceBasis"]);
 type Key = Parameters<T>[0];
-export type ComponentPropertySave = { key: string; value: string | number | boolean | null; unit: string | null };
+export type ComponentPropertySave = { key: string; value: string | number | boolean | null; unit: string | null; evidence?: import("@richtfest/shared").BuildingEvidence[] };
 
 const enumOptions: Record<string, readonly string[]> = {
   componentType: componentTypeSchema.options, construction: componentConstructionSchema.options,
@@ -101,11 +105,13 @@ export function StatusLine({ state, t, pending, onReview }: { state?: BuildingCo
   );
 }
 
-export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSave, onReview }: { propertyKey: string; state?: BuildingComponentPropertyState; placeholder?: string; t: T; pending: boolean;
+export function PropertyRow({ propertyKey, state, placeholder, addressSuggestion, suggestions, t, pending, onSave, onReview }: { propertyKey: string; state?: BuildingComponentPropertyState; placeholder?: string; addressSuggestion?: BuildingAddressStateSuggestion | null; suggestions?: readonly { value: string; label?: string }[]; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (decision: "approved" | "rejected") => void }) {
+  const suggestionsId = useId();
   const current = state && state.reviewStatus !== "rejected" ? state.value : null;
   const text = current === null || current === undefined ? "" : String(current);
   const [draft, setDraft] = useState(text);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   // Enter and the blur that follows commit the same entry once, even before the saved value reloads.
   const committed = useRef(text);
   useEffect(() => { setDraft(text); committed.current = text; }, [text]);
@@ -118,23 +124,36 @@ export function PropertyRow({ propertyKey, state, placeholder, t, pending, onSav
     const value = !trimmed ? null : booleanKeys.has(propertyKey) ? trimmed === "true" : unit || countKeys.has(propertyKey) ? Number(trimmed.replace(",", ".")) : trimmed;
     if (typeof value === "number" && !(Number.isFinite(value) && (zeroAllowed.has(propertyKey) ? value >= 0 : value > 0))) { setDraft(text); return; }
     committed.current = trimmed;
-    onSave({ key: propertyKey, value, unit: value === null ? null : unit });
+    onSave({ key: propertyKey, value, unit: value === null ? null : unit,
+      ...(value === addressSuggestion?.value ? { evidence: [addressSuggestion.evidence] } : {}) });
   };
   // Fields stay editable while a save runs: saves queue, so quick consecutive entries all land.
   return <>
-    <dt>{label}</dt>
+    <dt><span>{label}</span>{!text && !addressSuggestion && <InputSourceHelp field={propertyKey} label={label} t={t} />}</dt>
     <dd>
       {options
         ? <NativeSelect aria-label={label} value={draft} onChange={(event) => { setDraft(event.target.value); commit(event.target.value); }}>
-            <option value="">{placeholder ? `${t("buildingComponentInferredPrefix")} ${optionLabel(propertyKey, placeholder, t)}` : t("buildingModelUnknownValue")}</option>
+            <option value="">{addressSuggestion ? `${optionLabel(propertyKey, addressSuggestion.value, t)} · ${t("buildingAddressSuggestion")}` : placeholder ? `${t("buildingComponentInferredPrefix")} ${optionLabel(propertyKey, placeholder, t)}` : t("buildingModelUnknownValue")}</option>
             {options.map((option) => <option key={option} value={option}>{optionLabel(propertyKey, option, t)}</option>)}
           </NativeSelect>
         : longText.has(propertyKey) ? <Textarea aria-label={label} rows={propertyKey === "bebauungsplanNoise" ? 3 : 2} value={draft} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) commit(event.currentTarget.value); }} />
-        : <Input aria-label={label} value={draft} inputMode={unit ? "decimal" : countKeys.has(propertyKey) ? "numeric" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
+        : <div className="relative"><Input className={suggestions?.length ? "pr-8" : undefined} aria-label={label} list={suggestions?.length ? suggestionsId : undefined} value={draft} inputMode={unit ? "decimal" : countKeys.has(propertyKey) ? "numeric" : undefined} placeholder={placeholder || t("buildingModelUnknownValue")} title={state?.evidenceQuote ?? undefined}
             onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />}
+            onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget.value); }} />
+          {Boolean(suggestions?.length) && <Popover open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
+            <PopoverTrigger asChild><Button className="absolute right-1 top-1/2 -translate-y-1/2" variant="ghost" size="icon-xs" aria-label={`${t("buildingPropertySuggestions")}: ${label}`} title={t("buildingPropertySuggestions")}><ChevronDown className="size-icon-sm" /></Button></PopoverTrigger>
+            <PopoverContent align="end" className="building-model-property-suggestions">
+              {suggestions!.map((suggestion) => <button type="button" key={suggestion.value} onClick={() => { setDraft(suggestion.value); commit(suggestion.value); setSuggestionsOpen(false); }}>
+                <span>{suggestion.value}</span>{suggestion.label && <small>{suggestion.label}</small>}
+              </button>)}
+            </PopoverContent>
+          </Popover>}
+        </div>}
+      {suggestions && <datalist id={suggestionsId}>{suggestions.map((suggestion) => <option key={suggestion.value} value={suggestion.value}>{suggestion.label}</option>)}</datalist>}
+      {addressSuggestion && !text && <Button variant="ghost" size="xs" disabled={pending} title={addressSuggestion.evidence.quote}
+        onClick={() => { setDraft(addressSuggestion.value); commit(addressSuggestion.value); }}>{t("buildingAddressUse")}</Button>}
       <StatusLine state={state} t={t} pending={pending} onReview={onReview} />
     </dd>
   </>;
@@ -145,7 +164,7 @@ export type WallTypeCopy = { pending: boolean; sameRoleCount: number; result?: {
 const copyKeys = ["construction", "material", "thickness", "bulkDensity"];
 
 /** Shared component data for a selected wall/ceiling or room, laid out as property rows. */
-export function ComponentProperties({ region, roomNames, elementNames, storeyNames, elementHref, t, pending, onSave, onReview, derivation, copy }: { region: BuildingRegion; roomNames: Map<string, string>; elementNames?: Map<string, string>; storeyNames?: Map<string, string>;
+export function ComponentProperties({ projectId, region, roomNames, elementNames, storeyNames, elementHref, t, pending, onSave, onReview, derivation, copy }: { projectId?: string; region: BuildingRegion; roomNames: Map<string, string>; elementNames?: Map<string, string>; storeyNames?: Map<string, string>;
   /** Link that selects another element, such as an opening in this wall or the wall an opening sits in. */
   elementHref?: (id: string) => string; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void; derivation?: WallRoleDerivation; copy?: WallTypeCopy }) {
@@ -154,6 +173,10 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
   const componentType = isRoom ? null : regionComponentType(region);
   const gaps = componentInputGaps(componentType, Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { value: state.value, reviewStatus: state.reviewStatus }])));
   const keys = isRoom ? roomKeys : keysFor(componentType, states.construction && states.construction.reviewStatus !== "rejected" ? states.construction.value : null);
+  const catalogue = useApi(`/projects/${projectId}/interior-sound/catalogue`, Boolean(projectId && keys.includes("lightweightCatalogueRow")));
+  const catalogueRows = (catalogue.data as { rows?: LightweightCatalogueOption[] } | undefined)?.rows ?? [];
+  const catalogueSuggestions = catalogueRows.filter((row) => (componentType === "ceiling" ? ["ceiling", "flanking_ceiling"] : ["wall_separating", "flanking_wall"]).includes(row.kind))
+    .map((row) => ({ value: row.key, label: `${row.ref} · ${row.description}` }));
   const placeholder = (key: string) => key === "componentType" && (region.elementKind === "draft_wall" || region.elementKind === "draft_ceiling") ? regionComponentType(region) ?? undefined
     : key === "apartmentUnit" ? region.groupLabel || undefined
     : key === "exteriorNoiseRoom" ? proposeExteriorNoiseRoom(region.label, region.roomUse ?? null) ?? undefined
@@ -185,7 +208,7 @@ export function ComponentProperties({ region, roomNames, elementNames, storeyNam
         <dt>{t("buildingComponentStoreyAbove")}</dt>
         <dd className={region.underStorey ? undefined : "muted"}>{region.underStorey ? storeyNames?.get(region.underStorey) || region.underStorey : t("buildingComponentStoreyAboveUnknown")}</dd>
       </>}
-      {keys.map((key) => <PropertyRow key={`${region.id}:${key}`} propertyKey={key} state={states[key]} placeholder={placeholder(key)} t={t} pending={pending}
+      {keys.map((key) => <PropertyRow key={`${region.id}:${key}`} propertyKey={key} state={states[key]} placeholder={placeholder(key)} suggestions={key === "lightweightCatalogueRow" ? catalogueSuggestions : undefined} t={t} pending={pending}
         onSave={onSave} onReview={(decision) => states[key] && onReview(states[key], decision)} />)}
     </dl>
     {gaps.length > 0 && <p className="muted text-ui-2xs">{t("buildingComponentGaps")}: {gaps.map((gap) => `${fieldLabel(gap.field, t)} (${gap.status === "missing" ? t("buildingComponentGapMissing") : t("buildingComponentGapUnreviewed")})`).join(", ")}</p>}

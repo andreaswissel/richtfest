@@ -17,6 +17,8 @@ export type BuildingEvidence = {
 export type BuildingPlanSource = {
   id: string;
   storeyId?: string | null;
+  /** Printed title reading for display only; not an approved storey level. */
+  storeyTitle?: { level: number | "top"; quote: string } | null;
   page: number;
   pageCount?: number | null;
   layers?: Array<{ id?: string; name?: string; label?: string; visible?: boolean; defaultVisible?: boolean }>;

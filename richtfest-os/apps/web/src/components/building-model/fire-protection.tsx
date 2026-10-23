@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { fireBuildingKeys } from "@richtfest/shared";
+import { fireBuildingKeys, type BuildingAddressStateSuggestion } from "@richtfest/shared";
 import { classifyFireBuilding, closureSatisfies, ceilingRequirement, deriveFireRoomRole, escapeRouteLengths, fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireRequirement,
   fireWallRequirement, fireWaterDemand, maxEscapeDistance, ratingSatisfies, type EscapeRoute, type FireBuildingClass, type FireClassification, type FireClosure, type FireComponentRequirement, type FireRating,
   type FireRoomRole, type FireSpace, type StairwellSmokeVent } from "@richtfest/shared/fire-protection";
@@ -87,7 +87,7 @@ export function assessFireProtection(model: Pick<BuildingModel, "buildings" | "s
     ? model.storeys.filter((storey) => live(storey.componentProperties, "fullStorey") === "full").length : null;
   const classification = classifyFireBuilding({
     state: str(live(site, "federalState")), height: num(live(site, "fireHeight")), detached: bool(live(site, "fireDetached")),
-    dwellings: num(live(site, "fireDwellings")) ?? derived.dwellings, otherUnits: num(live(site, "fireOtherUnits")) ?? (derived.dwellings !== null ? 0 : null),
+    dwellings: num(live(site, "fireDwellings")), otherUnits: num(live(site, "fireOtherUnits")),
     usableArea: num(live(site, "fireUsableArea")), storeysAboveGround: derived.storeysAboveGround, specialUse: str(live(site, "fireSpecialUse")) as FireClassification["specialUse"],
     garageArea: num(live(site, "garageArea")), largestUnitArea: num(live(site, "fireLargestUnitArea")), unitsGrossArea: num(live(site, "fireUnitsGrossArea")),
   });
@@ -171,7 +171,8 @@ export function fireSummary(assessment: FireAssessment, t: T) {
  * component, escape route lengths on the shown page and the written part as a
  * draft to copy. It applies the LBauO RLP; it never approves anything.
  */
-export function FireProtectionPanel({ model, assessment, routes, storeyLabel, roomNames, elementNames, t, pending, onSave, onReview }: {
+export function FireProtectionPanel({ model, addressState, assessment, routes, storeyLabel, roomNames, elementNames, t, pending, onSave, onReview }: {
+  addressState?: BuildingAddressStateSuggestion | null;
   model: Pick<BuildingModel, "buildings" | "storeys">; assessment: FireAssessment; routes: EscapeRoute[]; storeyLabel: (storeyId: string) => string; roomNames: Map<string, string>; elementNames: Map<string, string>; t: T; pending: boolean;
   onSave: (save: ComponentPropertySave) => void; onReview: (state: BuildingComponentPropertyState, decision: "approved" | "rejected") => void;
 }) {
@@ -186,7 +187,7 @@ export function FireProtectionPanel({ model, assessment, routes, storeyLabel, ro
     : key === "fireDetached" ? (classification.buildingClass === null || classification.buildingClass <= 2) && (classification.gaps.includes("detached") || live(states, key) !== null || (num(live(states, "fireHeight")) ?? 99) <= 7)
     : key === "garageEnclosure" ? (num(live(states, "garageArea")) ?? 0) > 100
     : key === "stairwellSmokeVent" ? (classification.buildingClass ?? 0) >= 3 : true);
-  const placeholder = (key: string) => key === "fireDwellings" && derived.dwellings !== null ? String(derived.dwellings) : key === "fireOtherUnits" && derived.dwellings !== null ? "0" : undefined;
+  const placeholder = (key: string) => key === "fireDwellings" && derived.dwellings !== null ? String(derived.dwellings) : undefined;
   const summary = useMemo(() => {
     const counts = { met: 0, not_met: 0, open: 0 };
     const byKind = new Map<string, { total: number; met: number; not_met: number; open: number }>();
@@ -205,7 +206,7 @@ export function FireProtectionPanel({ model, assessment, routes, storeyLabel, ro
   const copyDraft = async () => {
     const stairwells = [...assessment.roomRoles].filter(([, { role }]) => role === "necessary_stairwell")
       .map(([id]) => ({ name: roomNames.get(id) ?? id, smokeVent: assessment.stairwellVents.get(id) ?? assessment.smokeVent }));
-    const text = fireConceptDraft({ classification, height: num(live(states, "fireHeight")), dwellings: num(live(states, "fireDwellings")) ?? derived.dwellings,
+    const text = fireConceptDraft({ classification, height: num(live(states, "fireHeight")), dwellings: num(live(states, "fireDwellings")),
       garageEnclosure: str(live(states, "garageEnclosure")) as "open" | "closed" | null, stairwells,
       components: [...assessment.components].map(([id, item]) => ({ kind: item.kind, name: elementNames.get(id) ?? id, status: item.status, reasons: item.requirement.reasons })),
       routes: routes.map((route) => ({ room: roomNames.get(route.roomId) ?? route.roomId, length: route.length })), water });
@@ -218,7 +219,7 @@ export function FireProtectionPanel({ model, assessment, routes, storeyLabel, ro
   if (!site) return null;
   return <>
     <dl className="building-model-component-rows">
-      <PropertyRow propertyKey="federalState" state={states.federalState} t={t} pending={pending} onSave={onSave} onReview={(decision) => states.federalState && onReview(states.federalState, decision)} />
+      <PropertyRow propertyKey="federalState" state={states.federalState} addressSuggestion={addressState} t={t} pending={pending} onSave={onSave} onReview={(decision) => states.federalState && onReview(states.federalState, decision)} />
       {visibleKeys.map((key) => <PropertyRow key={key} propertyKey={key} state={states[key]} placeholder={placeholder(key)} t={t} pending={pending} onSave={onSave}
         onReview={(decision) => states[key] && onReview(states[key]!, decision)} />)}
     </dl>

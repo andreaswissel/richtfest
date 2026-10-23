@@ -153,7 +153,58 @@ Under the fields, **Needed for sound insulation** lists what a calculation still
 
 **Sound insulation** in the building model toolbar collects what the assessment needs before anyone calculates:
 
-- **Regulatory basis**: checked first. The federal state (whose Landesbauordnung and VVTB apply), whether a Bebauungsplan covers the site and, if so, its noise requirements, and the editions of the Landesbauordnung, VVTB and DIN 4109 that apply. Approving a value confirms it for the project; the list below the fields shows what is still missing or unconfirmed. When a source is typed as a development plan, **Read Bebauungsplan** reads its text (textliche Festsetzungen, Begründung) and proposes that a Bebauungsplan applies and what it requires: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation (R'w,ges), measures such as sound-insulated ventilation or floor plans oriented away from the noise, and the DIN 4109 edition it cites, quoting each sentence. Several zones are listed with a note to check the Planzeichnung, since zones drawn only on the map are not read; a plan without noise text proposes no requirements. Richtfest does not look up plans or editions itself.
+Legal editions, zoning area types and building arrangements offer **Show suggestions**
+alongside editable text. Building-code editions come from the recorded state rule
+table; VVTB references are currently provided for Rheinland-Pfalz and Berlin, and
+DIN 4109-1:2018-01 is offered as a supported reference. These are not automatic
+project-applicability decisions or a complete historical edition list. Keep the exact
+source wording where needed, including subareas such as WA 1. Unknown values stay
+blank; selecting or typing a value does not approve it. Engineering quantities and
+source requirements retain numeric or free-text entry as appropriate. Existing
+sound/fire categories use their shared enums, and lightweight catalogue suggestions
+come only from the configured catalogue, filtered for walls or ceilings.
+
+The federal-state control suggests a value **from address** using saved geocoded
+coordinates, matching 3D-location metadata, or an unambiguous municipality in the
+bundled BKG VG250 data. **Use address value** saves the address/source snapshot as
+an unreviewed value. Changed addresses invalidate old suggestions; stale location
+imports, conflicting metadata, ambiguous state borders and non-German addresses
+are not used. The suggested state narrows legal-reference choices without choosing
+an applicable edition. Existing state values are never replaced automatically.
+
+Every empty component input has a **Find source / missing evidence** icon beside
+its label, including storey levels and clear heights. It explains the missing
+assignment or decision and links matching document types from the project's
+current sources. These are **candidate documents**, not proof that the document
+states the value. Untyped files remain available through **Review or add sources**;
+a failed file-list request is retryable, not reported as no evidence.
+
+| Inputs | Usable source or remaining blocker |
+| --- | --- |
+| State, parcel area, plan limits | Saved address, official cadastral fact or source-backed Feasibility assessment. Estimates and design envelopes are not cadastral facts. |
+| Legal editions, sound target, method and flanking | Permit/transitional basis, project agreement and specialist assessment; not an address-based default. |
+| Construction, material, thickness and density | The construction-description reader proposes explicit statements after component roles are assigned; conflicts stay open. |
+| Dimensions, clear heights and storey levels | Assigned dimensions and calibrated geometry, finished floor-to-ceiling height, or source storey title. Page order and 3D display defaults are not evidence. |
+| Build-ups and acoustic performance | Exact assembly/product specification, test certificate or supported catalogue calculation. A required rating is not an achieved rating. |
+| Roles, room use and completeness | Accepted connections and room schedules; completeness and installation confirmations require an explicit check. |
+| Fire height, units, areas and use | Correct height references, a complete unit/area schedule and fire strategy. Partial room grouping cannot establish zero other units. |
+| Load-bearing, fire ratings and smoke venting | Structural statement, assembly/door approval and actual ventilation design; these cannot be inferred from wall thickness or a window symbol. |
+| Full storeys, GFZ and footprint | Applicable legal counting rules and assigned geometry; summed room areas are not a legal footprint or BGF. |
+
+The linked **Site assessment** shows the saved planning basis (B-Plan, §34, §35 or
+unresolved), its review status and revision. Open the value to inspect it in
+**Feasibility → Planning limits**; no second planning-basis record is created.
+Under a saved B-Plan basis, source-backed official plan facts offer **Use value**
+for empty building fields. Existing values show **Matches** or **Differs** and are
+never replaced by this action. Copies retain the assessment revision, field and
+source quote, but remain unreviewed even when the source was reviewed. Neighbourhood
+comparisons, calculated envelopes and missing register results are not imported
+as B-Plan limits or used to infer §34. No lookup or AI run starts on opening this panel.
+An official, source-backed **parcel area** can also be copied independently of
+the planning basis; it retains m², its assessment citation and unreviewed status.
+Reference explanations and the list of missing confirmations are collapsible.
+
+- **Regulatory basis**: checked first. The federal state (whose Landesbauordnung and VVTB apply), whether a Bebauungsplan covers the site and, if so, its noise requirements, and the editions of the Landesbauordnung, VVTB and DIN 4109 that apply. Approving a value confirms it for the project; the list below the fields shows what is still missing or unconfirmed. When a source is typed as a development plan, **Read Bebauungsplan** reads its text (textliche Festsetzungen, Begründung) and proposes that a Bebauungsplan applies and what it requires: Lärmpegelbereiche, maßgebliche Außenlärmpegel, required facade insulation (R'w,ges), measures such as sound-insulated ventilation or floor plans oriented away from the noise, and the DIN 4109 edition it cites, quoting each sentence. Several zones are listed with a note to check the Planzeichnung, since zones drawn only on the map are not read; a plan without noise text proposes no requirements. This reader uses uploaded documents; register lookups remain in Feasibility.
 - **Art und Maß der baulichen Nutzung**: shown below the regulatory basis once a Bebauungsplan applies. The same read proposes the Baugebiet (WA, MI, MU, GE, MK …, with its number such as WA 1), GRZ, GFZ, number of Vollgeschosse, building, ridge and eave heights and the Bauweise, each as an unreviewed value quoting the sentence it comes from (hover the field to see the quote). A value is kept with the Baugebiet its sentence names, for example "0,4 (WA 1) · 0,35 (WA 2)"; values without one are listed with a note to check the Planzeichnung. A GRZ the plan allows to be exceeded under § 19 Abs. 4 BauNVO is listed as such, not as the GRZ. A Baugebiet that a sentence only mentions (as in "Im WA 2 gilt Lärmpegelbereich IV") is not proposed as its type. Values entered only in the Planzeichnung (Nutzungsschablone) are not read: enter them by hand. Approve or reject each value; these values are not part of the sound insulation basis and do not appear in its "still to settle" list. Agents receive the approved single values (GRZ, GFZ, maximum Vollgeschosse) as numbers.
 - **Zoning check**: below those values. Enter and approve the parcel area (from the Lageplan), each building's Grundfläche, and per storey whether it is a Vollgeschoss and, if so, its Geschossfläche. Confirm each active building's **Storey inventory** as complete and approve the site's **GFZ counting basis**: full storeys only, or include countable areas of other storeys as required by the plan. For the latter, enter and approve each non-full storey's countable area, including explicit zero where appropriate. Existing models remain incomplete until these assertions are reviewed; absent or undecided floors are not silently excluded. Richtfest shows GRZ, GFZ and Vollgeschosse against approved single limits as **Within limit**, **Exceeds limit** or **Incomplete**. GRZ covers main buildings only (§ 19 Abs. 2 BauNVO), not overruns under § 19 Abs. 4. Vollgeschosse are counted per building and the highest count is checked; classification follows the Landesbauordnung and is your decision. Mandatory/minimum storey constraints, ranges and Baufeld-specific limits remain incomplete and need separate assessment, not interpretation as maxima. Extraction preserves stated height reference datums and source quotes. Demolished buildings do not count. Areas are entered, not derived from room outlines. Agents receive the same checks.
 - **Requirement level**: the level agreed with client and architect, DIN 4109-1 minimum, elevated (about 3 dB better) or DEGA 103. It is a reviewed requirement on the building.
