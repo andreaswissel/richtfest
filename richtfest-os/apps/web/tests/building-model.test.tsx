@@ -9,6 +9,8 @@ import { inlinePdfSource, overlayInteractionStyle, overlayRegionAtPoint, partOve
 import { adaptBuildingModel, candidateRole } from "../src/components/building-model/types";
 import { metresToPoint, planDistanceM, pointToMetres } from "../src/components/building-model/outline-geometry";
 import { buildingVolumeGeometry, roomVolumeGeometry } from "../src/components/building-model/room-volumes";
+import { buildingPresentation, buildingSiteTransform } from "../src/components/building-model/building-presentation";
+import { geometryArea } from "@richtfest/shared/site-geometry";
 import { BuildingConnections } from "../src/components/building-model/connections";
 
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
@@ -109,14 +111,57 @@ test("3D stacks source-scaled floors and real wall polygons without inventing en
   expect(floors.map(floor => floor.wallCount)).toEqual([1, 1]); // Generic fills never become walls.
   expect(floors.map(floor => floor.base)).toEqual([0, 2.9]);
   expect(floors[0]!.meshes[0]!.polygons[0]![0]).toEqual([[-3, -2], [3, -2], [3, 2], [-3, 2]]);
-  expect(floors[1]!.meshes[0]!.polygons[0]![0]).toEqual([[-4.5, -6], [4.5, -6], [4.5, 6], [-4.5, 6]]);
+  expect(floors[1]!.meshes[0]!.polygons[0]![0]).toEqual([[-2, 2], [7, 2], [7, 14], [-2, 14]]); // Same metric sheet origin, not independently re-centred.
   expect(floors[1]!.meshes[0]!.base).toBe(2.9);
   expect(floors[0]!.meshes[0]!.polygons[0]).toHaveLength(2); // Preserve source holes, not a bounding-box enclosure.
   expect(JSON.stringify(model)).toBe(before); // Stacking and alignment remain unsaved preview assumptions.
+  const context = { siteId: "test", address: "", origin: [990, 2010] as [number, number], crs: "EPSG:25832" as const,
+    longitude: 0, latitude: 0, radius: 100, buildings: [], trees: [], sources: [], importedAt: "" };
+  const placement = { id: "placement", origin: { x: 1000, y: 2000, crs: "EPSG:25832" as const }, orientation: { degrees: 90 },
+    alignmentStatus: "approximate" as const, evidence: [{ kind: "page", sourceVersionId: "version", page: 2 }] };
+  const transform = buildingSiteTransform(floors, context, placement)!;
+  // Sheet (2,2) rotated 90° gives UTM (1002,2002), then site-local (12,8).
+  expect(transform(floors[0]!.meshes[0]!.polygons[0]![0]![0]!)).toEqual([12, 8]);
+  expect(transform(floors[1]!.meshes[0]!.polygons[0]![0]![0]!)).toEqual([16, 7]);
+  expect(buildingSiteTransform(floors, context, null)).toBeNull();
+  expect(buildingSiteTransform(floors, context, { ...placement, alignmentStatus: "unknown" })).toBeNull();
+  expect(buildingSiteTransform(floors, { ...context, crs: "EPSG:25833" }, placement)).toBeNull();
+  expect(buildingSiteTransform(floors, context, { ...placement, evidence: [{ kind: "page", sourceVersionId: "obsolete", page: 2 }] })).toBeNull();
   model.extractions[0]!.result!.pageScale = null;
   const missing = buildingVolumeGeometry(model, model.extractionCandidates, "source-lower");
   expect(missing.map(floor => floor.storey.id)).toEqual(["lower", "upper"]);
   expect(missing[1]!.meshes).toEqual([]); // Missing floors remain navigable, never inherit a different page's scale.
+});
+
+test("building presentation preserves holes, uses canonical openings before traced infill and never writes illustrative facts", () => {
+  const box = (x: number, y: number, width: number, height: number) => [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }];
+  const geometry = { polygon: box(.1, .1, .6, .6), holes: [box(.3, .3, .2, .2)], source: { sourceVersionId: "version", storeyId: "floor", page: 1 } };
+  const opening = { sourceKey: "gap", kind: "jamb_pair", wallAxis: "horizontal", sourceKeys: ["jamb"], closure: { x: .3, y: .08, width: .15, height: .02 } };
+  const model = adaptBuildingModel({ storeys: [{ id: "floor", levelIndex: 0 }],
+    planSources: [{ id: "plan", storeyId: "floor", page: 1, source: { versionId: "version" } }],
+    extractions: [{ id: "job", storeyId: "floor", page: 1, sourceVersionId: "version", result: {
+      pageScale: { pageAspectRatio: 1, metresPerPageHeight: 10 }, topologyCoverage: { openingEvidence: [opening, { ...opening, sourceKey: "wrong-phase", sourceKeys: ["demolished-jamb"] }] },
+    } }],
+    rooms: [{ id: "bedroom", name: "Schlafen", geometry }],
+    elements: [{ id: "wall", kind: "wall", geometry: { ...geometry, polygon: box(.1, .08, .2, .02), holes: [], sourceFootprintKeys: ["jamb"] } },
+      { id: "window", kind: "window", geometry: { ...geometry, polygon: box(.3, .08, .15, .02), holes: [] } }],
+  });
+  const before = JSON.stringify(model);
+  const floors = buildingVolumeGeometry(model, model.states.existing, "plan");
+  const result = buildingPresentation(floors);
+  expect(result.placedOpenings).toBe(1);
+  expect(result.provisionalOpenings).toBe(0); // No duplicate infill, no gap from a wall outside this construction state.
+  expect(result.furnishedRooms).toBe(0); // A bed at the bounding-box centre would sit in a shaft.
+  const slab = result.meshes.find(mesh => mesh.id === "floor" && !mesh.roof)!;
+  expect(geometryArea(slab.polygons)).toBeCloseTo(32.7); // 6×6 room minus 2×2 hole + (2+1.5)×0.2 wall/opening.
+  const glazed = result.meshes.find(mesh => mesh.id === "window" && mesh.opacity! < 1)!;
+  expect(glazed.base).toBeCloseTo(.97);
+  expect(glazed.height).toBeCloseTo(1.26);
+  const previewOnly = buildingPresentation(buildingVolumeGeometry(model, model.states.existing.filter(object => object.id !== "window"), "plan"));
+  expect(previewOnly.placedOpenings).toBe(0);
+  expect(previewOnly.provisionalOpenings).toBe(1);
+  expect(previewOnly.meshes.some(mesh => mesh.id === "wall" && mesh.opacity! < 1)).toBe(true); // Clickable source jamb, not a fabricated canonical window ID.
+  expect(JSON.stringify(model)).toBe(before);
 });
 
 test("3D anchors known basement levels below ground without inventing ground from page order", () => {

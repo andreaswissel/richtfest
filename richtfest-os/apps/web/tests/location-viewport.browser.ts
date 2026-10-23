@@ -304,14 +304,15 @@ export async function testFloorFocus() {
   host.style.cssText = "position:fixed;inset:0;width:640px;height:480px;z-index:9999";
   document.body.append(host);
   let selected: string | null = null;
-  const viewport = createViewport(host, { select: id => { selected = id; }, place: () => {}, measure: () => {}, align: () => {} });
+  let measuredHeight = NaN;
+  const viewport = createViewport(host, { select: id => { selected = id; }, place: () => {}, measure: point => { measuredHeight = point[1]; }, align: () => {} });
   const state: ViewportState = {
     context: { siteId: "floors", address: "", origin: [0, 0], longitude: 0, latitude: 0, radius: 100, buildings: [], trees: [], sources: [], importedAt: "" },
     objects: [], models: {},
     groundReference: { bounds: [[-8, -8], [8, 8]] },
     assessment: [
-      { id: "lower-wall", group: "lower", base: -2.9, height: 2.6, color: 0xb8ac96, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
-      { id: "upper-wall", group: "upper", base: 0, height: 2.8, color: 0x94a3b8, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
+      { id: "lower-wall", group: "lower", base: -2.9, height: 2.6, opacity: 1, color: 0xb8ac96, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
+      { id: "upper-wall", group: "upper", base: 0, height: 2.8, opacity: 1, color: 0x94a3b8, polygons: [[[[-4, -4], [4, -4], [4, 4], [-4, 4]]]] },
     ],
     layers: { buildings: false, trees: false, detectedTrees: false, objects: true, lidar: false, roads: false, railNoise: false, plan: false, aerial: false },
     site: { axes: [], plan: null, distances: [], railNoise: null, aerial: { near: null, far: null }, picks: [], snaps: [] },
@@ -325,7 +326,12 @@ export async function testFloorFocus() {
   };
   try {
     assert(matchMedia("(prefers-reduced-motion: reduce)").matches, "Run this deterministic rendering check with reduced motion enabled");
+    viewport.update(state);
+    viewport.fit([[-4, -4], [4, 4]], "perspective", 0, 5.7, -2.9);
     await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const initialPerspective = canvas.toDataURL();
+    viewport.fit([[-4, -4], [4, 4]], "perspective", 0, 5.7, -2.9);
+    assert(canvas.toDataURL() === initialPerspective, "The first resize must preserve an explicitly framed perspective view");
     viewport.update(state);
     viewport.fit([[-4, -4], [4, 4]], "top", 0, 5.7, -2.9);
     const overview = canvas.toDataURL();
@@ -339,7 +345,30 @@ export async function testFloorFocus() {
     viewport.update(state);
     assert(canvas.toDataURL() === overview, "Overview must restore the original opacity without changing source geometry");
     clickCentre(); assert(selected === "upper-wall", "Restoring overview must make the upper floor selectable again");
-    return "PASS: floor fade, reduced-motion immediacy, basement visible/selectable through ground, overview restoration";
+    const sectioned: ViewportState = { ...state, assessmentFocus: "lower", assessmentCutaway: -1.75,
+      assessment: [...state.assessment!.map(mesh => ({ ...mesh, section: true })),
+        { ...state.assessment![0]!, id: "roof", roof: true, base: -.3, height: .05 }] };
+    viewport.update({ ...sectioned, assessmentFocus: null, assessmentCutaway: null });
+    viewport.update(sectioned);
+    clickCentre(); assert(selected === "lower-wall", "Hidden roof caps must not intercept the cutaway's closed wall face");
+    const cutaway = canvas.toDataURL();
+    viewport.update({ ...sectioned, assessment: sectioned.assessment!.map(item => item.roof ? { ...item, polygons: [] } : item) });
+    assert(canvas.toDataURL() === cutaway, "A formerly opaque roof must be visually absent, not merely excluded from picking");
+    viewport.update({ ...sectioned, tool: "measure" });
+    clickCentre(); assert(Math.abs(measuredHeight - (-1.75)) < .001, "The cutaway must have a solid face at the section plane, not an open/hollow wall");
+    viewport.update({ ...sectioned, assessmentCutaway: null, tool: "select" });
+    clickCentre(); assert(selected === "roof", "Turning off cutaway must restore the roof and its hit target");
+    const surroundings = { ...state, layers: { ...state.layers, trees: true }, context: { ...state.context,
+      trees: [{ id: "context-tree", sourceId: "tree", species: "Test tree", position: [0, 0] as [number, number], height: 12, crownDiameter: 6 }] } };
+    viewport.update(surroundings);
+    const siteOverview = canvas.toDataURL();
+    clickCentre(); assert(selected === "tree:context-tree", "Recorded surroundings must remain selectable in the overview");
+    viewport.update({ ...surroundings, assessmentFocus: "lower", surroundingsOpacity: .06 });
+    assert(canvas.toDataURL() !== siteOverview, "Surroundings and other floors must visibly fade on focus");
+    clickCentre(); assert(selected === "lower-wall", "Faded surroundings must not intercept canonical floor selection");
+    viewport.update(surroundings);
+    assert(canvas.toDataURL() === siteOverview, "Overview must restore surroundings without mutating source data");
+    return "PASS: floor/context fade, basement selection, overview restoration, closed cutaway face and roof restoration";
   } finally { viewport.dispose(); host.remove(); }
 }
 

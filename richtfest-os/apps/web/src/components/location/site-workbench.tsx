@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Crosshair, FileStack, Image as ImageIcon, Route, Volume2 } from "lucide-react";
 import {
   segmentDistance,
   toUtm,
   type MappedNoiseSource,
   aerialSourceFor,
-  locationImageVersion,
   railNoiseAttribution,
   siteToPlan,
   twoPointPlacement,
@@ -25,22 +24,12 @@ import { Badge, Callout } from "../ui/primitives";
 import { Input } from "../ui/input";
 import { fromLocal, useSiteGeometry, type NoiseData, type SiteGeometry, type SiteOverlay } from "./site-geometry";
 import { SiteSuggestionsSection, useSiteSuggestions } from "./site-suggestions";
+import { useSiteImage } from "./site-image";
 import "./site-workbench.css";
 
 type T = ReturnType<typeof useT>;
 type Pick = { local: Point2; plan?: Point2; site?: Point2 };
 const SNAP_M = 1.5;
-
-/** Cache image bytes, not a URL whose lifetime ends when this viewer unmounts. */
-function useImageUrl(image: Blob | undefined) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    const next = image ? URL.createObjectURL(image) : null;
-    setUrl(next);
-    return () => { if (next) URL.revokeObjectURL(next); };
-  }, [image]);
-  return url;
-}
 
 /** EBA legend colours, Lden bands in dB(A). */
 const railNoiseBands = [
@@ -294,27 +283,11 @@ export function useSiteWorkbench({ projectId, context, layers, tool, setTool }: 
   const suggestedAxes = useMemo(() => new Set(suggestedKey.split("\n")), [suggestedKey]);
   const [zoomedOut, setZoomedOut] = useState(false);
   const aerialSource = context ? aerialSourceFor(context) : null;
-  const imageVersion = context ? locationImageVersion(context) : "";
-  const image = (path: string, enabled: boolean, error: string) => ({
-    queryKey: [`/projects/${projectId}/location/${path}`, imageVersion],
-    queryFn: async () => {
-      const response = await fetch(`/api/projects/${projectId}/location/${path}?v=${encodeURIComponent(imageVersion)}`, { credentials: "include" });
-      if (!response.ok) throw new Error(error);
-      return response.blob();
-    },
-    enabled: enabled && !!context,
-    staleTime: Infinity,
-    gcTime: 10 * 60_000,
-    retry: false,
-    meta: { persist: false },
-  });
-  const railNoise = useQuery(image("rail-noise", layers.railNoise, t("siteRailNoiseUnavailable")));
-  const aerialNear = useQuery(image("aerial/near", layers.aerial && !!aerialSource, t("siteAerialUnavailable")));
+  const railNoise = useSiteImage(projectId, context, "rail-noise", layers.railNoise, t("siteRailNoiseUnavailable"));
+  const aerialNear = useSiteImage(projectId, context, "aerial/near", layers.aerial && !!aerialSource, t("siteAerialUnavailable"));
   // The wide window is only fetched once the planner zooms out of the neighbourhood.
-  const aerialFar = useQuery(image("aerial/far", layers.aerial && !!aerialSource && zoomedOut, t("siteAerialUnavailable")));
-  const nearUrl = useImageUrl(aerialNear.data);
-  const farUrl = useImageUrl(aerialFar.data);
-  const railNoiseUrl = useImageUrl(railNoise.data);
+  const aerialFar = useSiteImage(projectId, context, "aerial/far", layers.aerial && !!aerialSource && zoomedOut, t("siteAerialUnavailable"));
+  const nearUrl = aerialNear.url, farUrl = aerialFar.url, railNoiseUrl = railNoise.url;
   const aligning = tool === "align";
   useEffect(() => { if (!aligning && picks.length < 4) setPicks([]); }, [aligning]);
   const planVertices = useMemo(() => (geometry?.walls ?? []).flatMap((wall) => wall.ring), [geometry?.walls]);

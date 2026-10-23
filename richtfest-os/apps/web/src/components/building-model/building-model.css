@@ -411,9 +411,14 @@
 
 .building-model[data-model-view="3d"] :is(.building-model-panel-toggle, [data-plan-control], .building-model-toolbar-end, .building-model-statusbar-hints) { display: none; }
 .building-room-volumes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); flex: 1; min-height: 0; overflow: hidden; }
+.building-room-volumes.is-presentation { grid-template-columns: minmax(0, 1fr); }
+.building-room-volume-editor[hidden] { display: none; }
+.building-volume-controls { position: absolute; top: var(--stack); right: var(--stack); z-index: 2; display: grid; gap: 6px; justify-items: end; max-width: 55%; }
+.building-volume-legend { position: absolute; bottom: var(--stack); left: var(--stack); right: var(--stack); z-index: 2; width: fit-content; max-width: calc(100% - 2 * var(--stack)); padding: 6px var(--stack); border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); color: var(--muted-foreground); pointer-events: none; }
 .building-room-volume-canvas { position: relative; min-width: 0; min-height: 320px; overflow: hidden; }
 .building-room-volume-canvas > canvas { display: block; }
-.building-volume-floors { position: absolute; top: var(--stack); left: var(--stack); z-index: 2; display: grid; gap: 0; max-height: 45%; max-width: calc(100% - 2 * var(--stack)); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); box-shadow: 0 2px 8px #00000012; }
+/* A translucent scroll layer avoids black occlusion tiles over WebGL in software Chromium. */
+.building-volume-floors { position: absolute; top: var(--stack); left: var(--stack); z-index: 2; display: grid; gap: 0; max-height: 60%; max-width: calc(100% - 2 * var(--stack)); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); opacity: .98; box-shadow: 0 2px 8px #00000012; }
 .building-volume-floors > a { display: flex; flex-direction: column; align-items: flex-start; height: auto; gap: 2px; padding: calc(var(--cell) / 2) var(--stack); font-size: var(--ui-sm); border-radius: 0; border-bottom: 1px solid var(--border); white-space: normal; color: var(--foreground); }
 .building-volume-floors > a:last-child { border-bottom: 0; }
 .building-volume-floors > a:is(:hover, [aria-current="true"]) { background: var(--muted); }

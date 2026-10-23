@@ -11,7 +11,7 @@ model to synchronize. Edit outlines in 2D; edit heights in the 3D dimension pane
 
 ## Navigate floors and inspect the enclosure
 
-**All floors** is the initial 3D view and shows the provisional stack. Select a floor in the linked floor
+**All floors** shows the provisional stack. Without saved site alignment it is the initial view. Select a floor in the linked floor
 list, or click an object in the overview, to glide closer and fade the other
 floors. Faded objects cannot intercept selection. **All floors** restores them;
 reduced-motion preferences make both transitions immediate. Floor links retain
@@ -28,12 +28,13 @@ that focus instead of opening the overview.
 
 Walls use actual source polygons, including holes, and the storey's clear height.
 Generic construction fills and fragment groups are not silently treated as walls.
-Gaps remain open: rendering a wall is not confirmation of its exterior role, phase,
-fire resistance or a complete, weather-tight building envelope.
+Rendering a wall is not confirmation of its exterior role, phase, fire resistance
+or a complete, weather-tight building envelope.
 
 **Assumed floor alignment and spacing** explains the temporary placement: floor
-plans are centred on their wall bounds (room bounds where no walls exist), without
-rotation or registration. Entered levels determine order; missing levels use plan
+plans retain their shared metric sheet coordinates, with a single common origin.
+Smaller upper floors keep their offsets instead of being independently centred.
+Registration between drawings is still unverified. Entered levels determine order; missing levels use plan
 page order. Vertical spacing uses the greatest room/storey clear height on the
 lower floor plus a **0.30 m assumed floor allowance**, not a measured slab.
 These transforms are display-only and never become engineering inputs. The view
@@ -41,11 +42,61 @@ uses one primary plan per storey, preferring the current plan set, and excludes
 superseded revisions, other buildings and pages classified as sections/elevations.
 It does not merge alternative drawings or stitch multiple partial plans together.
 
+## Present the building and furnished cutaways
+
+**Building** assembles opaque plaster walls, framed opening infills, room finishes,
+illustrative furniture, slabs and horizontal roof caps from the same outlines.
+Select a floor to reveal its furnished **Cutaway**; other floors fade, stop
+intercepting clicks and stop casting shadows over its interior. Toggle **Cutaway**
+off to see the selected floor at full height. Drag to orbit, use **Top view** for
+the floor layout, or **Expand view** to hide the review panel. Construction-state
+filters still apply: use **Proposed** for the intended design, not **Existing**.
+
+Floor changes animate the camera, cutaway and fading together. Select a room in
+the model or room list to fly into its source-outline bounds and inspect its source and
+height assumptions. The floor link returns from the room to the entire floor;
+**All floors** restores the complete building.
+
+When the model has a saved site placement matching its plan revision, page and
+coordinate system, **Surroundings** is the initial view. It reuses the project's
+recorded neighbouring buildings, trees and official aerial imagery, with source
+attribution. **All floors** moves closer to the building; selecting a floor fades
+the surroundings as well as the other floors. Tree detections remain unreviewed,
+not surveyed vegetation. Where the regional provider supplies no trees, none are
+invented. An unavailable aerial image does not block model inspection.
+In **Building** presentation, contextual building masses overlapping the model's
+footprint are hidden so they do not cover the interior. This is only a display
+mask, not a declaration that the buildings are the same object or demolished;
+their source records are unchanged.
+
+An address alone is not a plan alignment. Without a matching saved placement the
+viewer stays schematic and links to **3D location** for site setup, rather than
+centering the building on a guessed address. Site placement does not verify the
+registration between floor drawings or approve engineering inputs.
+
+**Source geometry** removes presentation additions and shows the underlying
+wall and translucent room geometry. **Presentation assumptions** lists what was
+added. Canonical opening geometry takes precedence over traced gaps; saved
+opening heights are used where available. Other traced gaps are only illustrative
+infills, not confirmed windows, wall hosts or escape-route connections. Their
+default glazing is 1.40 m tall with a 0.90 m sill, or a 2.10 m door where a door
+swing was traced, shortened as necessary to fit the storey.
+
+Furniture and finishes are illustrative and are never saved as surveyed facts.
+Furniture is omitted when it cannot fit inside a room, including its holes.
+Slabs and roof caps follow the union of available outlines without bridging
+separate blocks or courtyards. Roof caps do **not** represent verified pitched
+roofs. Missing roof profiles, balconies, unclassified openings and incomplete
+extraction still need review; this is a provisional presentation, not an as-built
+or construction-ready model. None of these display additions enters calculations.
+
 ## Start from extracted outlines
 
-Usable room drafts appear immediately in amber, even before any room has been
+In **Source geometry**, usable room drafts appear immediately in amber, even before any room has been
 accepted. Opening 3D neither creates duplicate rooms nor approves the extraction.
-Draft room geometry does not enter engineering calculations.
+Opening 3D does not enable draft geometry in the normal assessment workflow. The
+separate, explicitly unreviewed candidate-calculation preview described below can
+use it for conditional calculations without accepting or approving it.
 
 Select a draft volume or its linked row. **Review outline in 2D** opens the same
 object on the source plan for inspection and correction. **Accept room outline**

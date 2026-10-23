@@ -21,9 +21,16 @@ import { AERIAL_HALF_WIDTH_M, RAIL_NOISE_HALF_WIDTH_M, type Point2 } from "@rich
 export type ViewportState = {
   context: LocationContext;
   /** Proposal/canonical geometry in local X/Z metres; optional groups support floor isolation. */
-  assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number; group?: string; opacity?: number }>;
+  assessment?: Array<{ id: string; polygons: Point2[][][]; height: number; base: number; color: number; group?: string; opacity?: number;
+    edges?: boolean; roughness?: number; metalness?: number; section?: boolean; roof?: boolean }>;
   /** Fade other assessment groups without replacing their geometry; null restores the overview. */
   assessmentFocus?: string | null;
+  /** Optional building cutaway; only walls/openings in the focused floor are clipped. */
+  assessmentCutaway?: number | null;
+  /** Keep geographic context visible but unobtrusive while inspecting the building. */
+  surroundingsOpacity?: number;
+  /** Building presentation uses direct orbit; site editors retain map-style pan. */
+  orbitDrag?: boolean;
   /** Active canonical connections to the selected object; never inferred from mesh proximity. */
   assessmentRelated?: string[];
   /** A schematic, translucent level-zero surface. Null hides unknown ground; omitted keeps the site ground. */
@@ -221,22 +228,26 @@ export function createViewport(
     let turn = to.theta - from.theta;
     if (turn > Math.PI) turn -= 2 * Math.PI;
     if (turn < -Math.PI) turn += 2 * Math.PI;
-    const start = performance.now();
+    let start: number | undefined;
     const step = (now: number) => {
-      const k = ms <= 0 || reducedMotion ? 1 : Math.min(1, (now - start) / ms), e = 1 - (1 - k) ** 3;
+      start ??= now;
+      const k = ms <= 0 || reducedMotion ? 1 : Math.min(1, (now - start) / ms), e = k * k * (3 - 2 * k);
       controls.target.lerpVectors(fromTarget, target, e);
       const offset = new THREE.Vector3().setFromSphericalCoords(
         THREE.MathUtils.lerp(from.radius, to.radius, e), THREE.MathUtils.lerp(from.phi, to.phi, e), from.theta + turn * e);
       camera.position.copy(controls.target).add(offset);
       controls.update();
       if (k < 1) flight = requestAnimationFrame(step);
+      else flight = 0;
     };
-    if (ms <= 0 || reducedMotion) step(start);
+    if (ms <= 0 || reducedMotion) step(performance.now());
     else flight = requestAnimationFrame(step);
   };
   const viewDirection = () => camera.position.clone().sub(controls.target).normalize();
   /** Fits a box into view along `direction` (default: the current heading and tilt). */
   const frame = (box?: THREE.Box3, direction = viewDirection(), ms = 450, padding = 1.15) => {
+    // An explicit caller framing wins even before ResizeObserver's first delivery.
+    initialFrame = false;
     const target = box ? box.getCenter(new THREE.Vector3()) : homeTarget;
     const radius = box ? box.getSize(new THREE.Vector3()).length() / 2 : 58;
     const halfFov = Math.atan(
@@ -255,6 +266,7 @@ export function createViewport(
   };
   controls.addEventListener("start", () => {
     cancelAnimationFrame(flight);
+    flight = 0;
     interacting = true;
     renderer.domElement.style.cursor = "grabbing";
     if (!coast) coast = requestAnimationFrame(tick);
@@ -574,12 +586,15 @@ export function createViewport(
     for (const p of ends) groups.measure.add(handle(p));
   };
   function update(next: ViewportState) {
+    controls.mouseButtons.LEFT = next.orbitDrag ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+    controls.mouseButtons.RIGHT = next.orbitDrag ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
     if (current?.assessment !== next.assessment) {
       disposeGroup(groups.assessment);
       // The outline belongs to meshes that are about to be replaced.
       if (outlinedBuilding?.parent === groups.assessment) outlinedBuilding = undefined;
       for (const item of next.assessment ?? []) {
         const group = new THREE.Group(); group.userData.id = item.id; group.userData.floor = item.group;
+        group.userData.roof = item.roof; group.userData.section = item.section;
         for (const polygon of item.polygons) {
           if (!polygon[0]?.length) continue;
           const shape = new THREE.Shape(polygon[0].map(([x,z]) => new THREE.Vector2(x,-z)));
@@ -587,17 +602,26 @@ export function createViewport(
           const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(.04,item.height), bevelEnabled: false });
           geometry.rotateX(-Math.PI / 2);
           const opacity = item.opacity ?? (item.height > .1 ? .8 : .35);
-          const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color:item.color, transparent:true, opacity,
+          const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color:item.color, transparent: opacity < 1, opacity,
+            roughness: item.roughness ?? .85, metalness: item.metalness ?? 0,
             depthWrite: item.opacity === undefined || opacity >= .5 }));
-          mesh.position.y = item.base; edges(mesh,item.color); group.add(mesh);
+          mesh.position.y = item.base;
+          mesh.userData.height = Math.max(.04, item.height);
+          if (item.edges !== false) edges(mesh,item.color);
+          mesh.castShadow = item.edges === false && opacity >= .98;
+          mesh.userData.castShadow = mesh.castShadow;
+          mesh.receiveShadow = item.edges === false;
+          group.add(mesh);
           mesh.traverse(node => {
             if (node instanceof THREE.Mesh || node instanceof THREE.LineSegments) {
               const material = node.material as THREE.Material;
               material.userData.opacity = material.opacity;
               material.userData.depthWrite = material.depthWrite;
+              material.userData.transparent = material.transparent;
               if (next.assessmentFocus && group.userData.floor !== next.assessmentFocus) {
                 material.opacity *= .045;
                 material.depthWrite = false;
+                material.transparent = true;
               }
             }
           });
@@ -608,29 +632,8 @@ export function createViewport(
 
     const previous = current;
     current = next;
-    if (previous?.assessment !== next.assessment || previous?.assessmentFocus !== next.assessmentFocus) {
-      cancelAnimationFrame(fade);
-      const transitions: Array<{ material: THREE.Material; from: number; to: number }> = [];
-      for (const group of groups.assessment.children) {
-        const inactive = !!next.assessmentFocus && group.userData.floor !== next.assessmentFocus;
-        group.traverse(node => {
-          if (!(node instanceof THREE.Mesh || node instanceof THREE.LineSegments)) return;
-          node.userData.inactive = inactive;
-          const material = node.material as THREE.Material;
-          material.depthWrite = !inactive && material.userData.depthWrite;
-          transitions.push({ material, from: material.opacity, to: material.userData.opacity * (inactive ? .045 : 1) });
-        });
-      }
-      const start = performance.now();
-      const step = (now: number) => {
-        const k = reducedMotion || !previous ? 1 : Math.min(1, (now - start) / 450), eased = 1 - (1 - k) ** 3;
-        for (const { material, from, to } of transitions) material.opacity = THREE.MathUtils.lerp(from, to, eased);
-        render();
-        if (k < 1) fade = requestAnimationFrame(step);
-      };
-      step(start);
-    }
     scene.background = next.dark ? new THREE.Color(0x202a34) : next.groundReference !== undefined ? new THREE.Color(0xeef1f4) : sky;
+    marker.visible = next.groundReference === undefined && !!next.siteAddressLabel;
     renderer.toneMappingExposure = next.dark ? 0.8 : 1;
     fill.intensity = next.dark ? 0.85 : 1.2;
     sun.intensity = next.dark ? 2 : 3;
@@ -976,6 +979,7 @@ export function createViewport(
         const geometry = new LineSegmentsGeometry().setPositions(edges.getAttribute("position").array as Float32Array);
         edges.dispose();
         const material = new LineMaterial({ color: object === building ? 0x7279d7 : 0x718c91, linewidth: 2 * renderer.getPixelRatio(), depthWrite: false,
+          transparent: true, depthTest: object !== building,
           polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, toneMapped: false });
         material.resolution.set(renderer.domElement.width, renderer.domElement.height);
         const outline = new LineSegments2(geometry, material);
@@ -1052,6 +1056,79 @@ export function createViewport(
         groups.handles.add(grip, tag);
       }
     }
+    // Run after context/image rebuilds so newly loaded geography inherits the current focus.
+    if (previous?.assessment !== next.assessment || previous?.assessmentFocus !== next.assessmentFocus
+      || previous?.assessmentCutaway !== next.assessmentCutaway || previous?.surroundingsOpacity !== next.surroundingsOpacity
+      || previous?.context !== next.context || previous?.site.aerial.near !== next.site.aerial.near
+      || previous?.site.aerial.far !== next.site.aerial.far || previous?.treeStyle !== next.treeStyle) {
+      cancelAnimationFrame(fade);
+      const transitions = new Map<THREE.Material, { from: number; to: number; transparent: boolean }>();
+      const sections: Array<{ mesh: THREE.Mesh; from: number; to: number }> = [];
+      const ghostCaps = next.assessment?.some(item => item.roof);
+      const visibility: Array<{ group: THREE.Object3D; visible: boolean }> = [];
+      for (const group of groups.assessment.children) {
+        const inactive = !!next.assessmentFocus && group.userData.floor !== next.assessmentFocus;
+        group.visible = true;
+        // Retain floor silhouettes after the fade, not thousands of translucent
+        // beds and internal faces that obscure the room being inspected.
+        visibility.push({ group, visible: !inactive || !ghostCaps || !!group.userData.roof });
+        const cutaway = !inactive && next.assessmentFocus && next.assessmentCutaway != null;
+        group.traverse(node => {
+          if (!(node instanceof THREE.Mesh || node instanceof THREE.LineSegments)) return;
+          const sectionHeight = cutaway && group.userData.section && node instanceof THREE.Mesh
+            ? Math.max(0, next.assessmentCutaway! - node.position.y) : Infinity;
+          const hidden = !!(cutaway && group.userData.roof) || sectionHeight === 0;
+          if (node instanceof THREE.Mesh) {
+            // Animate capped extrusions, not hollow clipping planes.
+            sections.push({ mesh: node, from: node.scale.y, to: Math.min(1, sectionHeight / node.userData.height) });
+            node.castShadow = !inactive && !hidden && node.userData.castShadow;
+          }
+          node.userData.inactive = inactive || hidden;
+          const material = node.material as THREE.Material;
+          material.depthWrite = !node.userData.inactive && material.userData.depthWrite;
+          const to = material.userData.opacity * (hidden ? 0 : inactive ? .035 : 1);
+          const transparent = material.userData.transparent || material.opacity !== to || to < 1;
+          if (material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true; }
+          transitions.set(material, { from: material.opacity, to, transparent: material.userData.transparent || to < 1 });
+        });
+      }
+      for (const group of [groups.buildings, groups.trees, groups.detectedTrees, groups.aerial, groups.roads]) group.traverse(node => {
+        if (!(node instanceof THREE.Mesh || node instanceof THREE.Line || node instanceof THREE.Sprite)) return;
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        for (const material of materials) {
+          material.userData.contextOpacity ??= material.opacity;
+          material.userData.contextDepthWrite ??= material.depthWrite;
+          material.userData.contextTransparent ??= material.transparent;
+          const opacity = next.surroundingsOpacity ?? 1;
+          const to = material.userData.contextOpacity * opacity;
+          const transparent = material.userData.contextTransparent || material.opacity !== to || to < 1;
+          if (material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true; }
+          material.depthWrite = opacity === 1 && material.userData.contextDepthWrite;
+          transitions.set(material, { from: material.opacity, to, transparent: material.userData.contextTransparent || to < 1 });
+        }
+        node.userData.contextCastShadow ??= node.castShadow;
+        node.castShadow = (next.surroundingsOpacity ?? 1) === 1 && node.userData.contextCastShadow;
+      });
+      // Shader compilation during update must not consume the transition's duration.
+      let start: number | undefined;
+      const step = (now: number) => {
+        start ??= now;
+        const k = reducedMotion || !previous ? 1 : Math.min(1, (now - start) / 1200), eased = k * k * (3 - 2 * k);
+        for (const [material, { from, to, transparent }] of transitions) {
+          material.opacity = THREE.MathUtils.lerp(from, to, eased);
+          if (k === 1 && material.transparent !== transparent) { material.transparent = transparent; material.needsUpdate = true; }
+        }
+        if (k === 1) for (const { group, visible } of visibility) group.visible = visible;
+        for (const { mesh, from, to } of sections) mesh.scale.y = THREE.MathUtils.lerp(from, to, eased);
+        // Keep a camera flight cheap; refresh the static shadow map at the
+        // endpoints instead of redrawing every wall into it on every frame.
+        if (k === 0 || k === 1) renderer.shadowMap.needsUpdate = true;
+        if (!flight) render();
+        if (k < 1) fade = requestAnimationFrame(step);
+      };
+      if (reducedMotion || !previous) step(performance.now());
+      else fade = requestAnimationFrame(step);
+    }
     renderer.domElement.style.cursor = cursorFor(next);
     render();
   }
@@ -1072,9 +1149,7 @@ export function createViewport(
   const groundPoint = () => raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
   const surfaceHit = () => {
     const targets = [
-      groups.buildings,
-      groups.trees,
-      groups.detectedTrees,
+      ...((current?.surroundingsOpacity ?? 1) === 1 ? [groups.buildings, groups.trees, groups.detectedTrees] : []),
       groups.objects,
       groups.assessment,
       ...(current?.tool === "measure" ? [groups.lidar] : []),

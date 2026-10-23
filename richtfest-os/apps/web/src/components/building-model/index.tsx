@@ -343,7 +343,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const needsBootstrap = missingModelOrSource && !automaticLookupPending && !automaticWorkActive && !hasAutomaticWork && !hasUploadedPdfAwaitingModel;
   const selectedBootstrapFile = projectFiles.find((file) => file.id === bootstrapFileId);
   const bootstrapVersions = useMemo(() => list(versionsQuery.data).filter((version) => version.status === undefined || version.status === "ready"), [versionsQuery.data]);
-  const regions = pickRegions(model, state);
+  const regions = useMemo(() => pickRegions(model, state), [model, state]);
   const regionMatchesView = (region: BuildingRegion) => region.page === page
     && (!sourceStoreyId || region.storeyId === sourceStoreyId)
     && (!sourceVersionId || region.sourceVersionId === sourceVersionId);
@@ -1053,7 +1053,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
       </div>
       {params.get("modelView") === "3d" ? <>
         {conflict && <Callout tone="warning">{conflict}</Callout>}
-        <RoomVolumes regions={volumeRegions} model={model} sourceId={currentSource?.id}
+        <RoomVolumes projectId={projectId} regions={volumeRegions} model={model} sourceId={currentSource?.id}
           selectedId={selectedCandidate?.id || selected?.id}
           pending={saveGeometryHeight.isPending || reviewComponentProperty.isPending || reviewCandidate.isPending || reviewConnection.isPending || deriveWallRoles.isPending}
           onReviewConnection={(relationship, decision) => reviewConnection.mutate({ id: relationship.id, decision })}

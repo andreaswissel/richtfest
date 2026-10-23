@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **Building walkthrough:** Explore the provisional 3D building with furnished floor cutaways, smooth building-to-room camera moves and source-linked room selection. Surroundings and aerial imagery appear only with matching saved site placement; illustrative finishes, furniture and roof caps remain separate from engineering inputs.
 - **Optimization video preview:** App links now offer the short branded optimization video to iMessage and a matching image preview to WhatsApp and other image-based sharing clients. Media is public without sign-in; playback depends on the messaging client. The landing page remains offline.
 - **Source-only backtest:** Replay PDF extraction and draft calculations from frozen source bytes, with reproducible receipts and explicit missing inputs rather than reference answers. IFC imports now retain declared space boundaries and opening relationships, including contradictory claims, for review without treating them as approved connections.
 - **Calculate with draft geometry:** Run page-scoped, explicitly unreviewed calculations from accepted outlines and usable extraction candidates, with source-linked receipts and missing inputs visible. No candidates or engineering values are approved by a preview.

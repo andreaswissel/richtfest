@@ -1,4 +1,4 @@
-import { isActiveBuildingRelationship, type BuildingRelationship, type DataRequestProgress } from "@richtfest/shared";
+import { isActiveBuildingRelationship, type BuildingRelationship, type DataRequestProgress, type StoredPlacement } from "@richtfest/shared";
 import type { PlanHeightExtraction } from "@richtfest/shared/plan-heights";
 import type { RecordData } from "../../api";
 
@@ -171,6 +171,11 @@ export type BuildingExtractionJob = {
       unsupportedFootprintCount?: number;
       sourceFootprintCount?: number;
       printedAreaCount?: number;
+      /** Persisted tracing evidence, not classified/approved window or door elements. */
+      openingEvidence?: Array<{
+        sourceKey: string; kind: string; wallAxis: string; sourceKeys: string[]; doorSwingKey?: string | null;
+        closure: { x: number; y: number; width: number; height: number }; status?: string;
+      }>;
     } | null;
     geometryExtraction?: {
       status?: string;
@@ -243,6 +248,7 @@ export type BuildingComponentPropertyState = {
 export type BuildingModel = {
   id?: string;
   revision?: number;
+  placement: StoredPlacement | null;
   reviewStatus?: "draft" | "needs-review" | "reviewed" | "conflict";
   evidence: BuildingEvidence;
   planSources: BuildingPlanSource[];
@@ -382,6 +388,7 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
       evidence: Array.isArray(row.evidence) ? row.evidence : fieldEvidence.concat(geometryEvidence),
       elementKind: entityType === "element" && typeof row.kind === "string" ? row.kind : null,
       groupLabel: typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null,
+      sourceFootprintKeys: Array.isArray(geometry?.sourceFootprintKeys) ? geometry.sourceFootprintKeys.filter((key): key is string => typeof key === "string") : [],
       componentProperties: componentStates(entityProperties),
       measurements: Array.isArray(row.measurements) ? row.measurements : entityMeasurements.map((item) => ({ key: item.id, label: item.label || item.quantity || "Measurement", semanticQuantity: item.quantity, value: item.value == null ? null : Number(item.value), sourceValue: item.method === "manual" ? null : item.value ?? item.quantity, calibratedValue: item.method === "manual" ? item.value : item.calibratedValue, unit: item.unit, sourcePage: item.evidence?.[0]?.page, method: item.method, uncertainty: item.uncertainty, evidence: item.evidence })),
       status: row.status === "reviewed" || row.status === "needs-review" ? row.status : "unreviewed",
@@ -565,6 +572,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
   return {
     id: asString(source.id) || undefined,
     revision: asNumber(source.revision, 0),
+    placement: raw.placement ?? null,
     reviewStatus: raw.conflicts?.length ? "conflict" : raw.proposals?.some((proposal: RecordData) => proposal.status === "pending") || hasUnreviewedCandidates ? "needs-review" : raw.revisions?.[0]?.status === "approved" ? "reviewed" : source.reviewStatus === "reviewed" || source.reviewStatus === "needs-review" || source.reviewStatus === "conflict" ? source.reviewStatus : "draft",
     evidence: fallbackEvidence,
     planSources,
