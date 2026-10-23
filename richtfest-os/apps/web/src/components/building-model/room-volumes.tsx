@@ -49,17 +49,18 @@ export function roomVolumeGeometry(regions: BuildingRegion[], storeys: BuildingM
 
 /** A display projection of persisted objects. No alignment, elevation or closure is written back as a fact. */
 export function buildingVolumeGeometry(model: BuildingModel, regions: BuildingRegion[], sourceId?: string, hideEmptyFloors = false) {
-  const selectedSource = model.planSources.find(source => source.id === sourceId);
+  const selectedSource = model.planSources.find(source => source.id === sourceId) ?? model.planSources[0];
   const buildingId = model.storeys.find(storey => storey.id === selectedSource?.storeyId)?.buildingId;
   const sources = model.planSources.filter(source => source.storeyId
+    && source.source?.versionId === selectedSource?.source?.versionId
     && (!buildingId || model.storeys.some(storey => storey.id === source.storeyId && storey.buildingId === buildingId))
     && !model.supersededSources.some(item => item.sourceVersionId === source.source?.versionId)
     && !model.automaticPlanProcessing.some(item => item.sourceVersionId === source.source?.versionId
       && item.nonFloorPlanPages.some(page => page.page === source.page)));
-  // One source per storey; prefer the currently selected plan set over an alternative drawing.
+  // Separate uploads can create separate storey IDs for the same physical floor.
+  // Keep one plan set throughout the stack; never fill its gaps from another set.
   const allFloors = model.storeys.flatMap(storey => {
-    const options = sources.filter(source => source.storeyId === storey.id);
-    const source = options.find(source => source.source?.versionId === selectedSource?.source?.versionId) ?? options[0];
+    const source = sources.find(source => source.storeyId === storey.id);
     if (!source) return [];
     const extraction = model.extractions.find(job => job.page === source.page && job.storeyId === storey.id
       && job.sourceVersionId === source.source?.versionId);

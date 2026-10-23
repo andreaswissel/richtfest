@@ -178,6 +178,36 @@ test("3D stacks source-scaled floors and real wall polygons without inventing en
   expect(missing[1]!.meshes).toEqual([]); // Missing floors remain navigable, never inherit a different page's scale.
 });
 
+test("3D isolates the selected plan set even when uploads created separate storey identities", () => {
+  const rows = [
+    { id: "a-ground", version: "a", page: 1 },
+    { id: "b-ground", version: "b", page: 1 },
+    { id: "a-upper", version: "a", page: 2 },
+    { id: "b-upper", version: "b", page: 2 },
+    { id: "b-roof", version: "b", page: 3 },
+  ];
+  const model = adaptBuildingModel({
+    storeys: rows.map(row => ({ id: row.id, buildingId: "building", levelIndex: null })),
+    planSources: rows.map(row => ({ id: `source-${row.id}`, storeyId: row.id, page: row.page, source: { versionId: row.version } })),
+    extractions: rows.map(row => ({ id: `job-${row.id}`, storeyId: row.id, sourceVersionId: row.version, page: row.page,
+      status: "complete", result: { pageScale: { pageAspectRatio: 1, metresPerPageHeight: 10 } } })),
+    extractionCandidates: rows.map(row => ({ id: `wall-${row.id}`, storeyId: row.id, sourceVersionId: row.version, page: row.page,
+      entityType: "element", status: "unreviewed", geometry: { quality: "draft_wall",
+        polygon: [{ x: .1, y: .1 }, { x: .7, y: .1 }, { x: .7, y: .13 }, { x: .1, y: .13 }] } })),
+  });
+  const before = JSON.stringify(model);
+  for (const hideEmpty of [false, true]) {
+    const a = buildingVolumeGeometry(model, model.extractionCandidates, "source-a-upper", hideEmpty);
+    expect(a.map(floor => floor.storey.id)).toEqual(["a-ground", "a-upper"]);
+    expect(a.map(floor => floor.base)).toEqual([0, 2.9]);
+    const b = buildingVolumeGeometry(model, model.extractionCandidates, "source-b-ground", hideEmpty);
+    expect(b.map(floor => floor.storey.id)).toEqual(["b-ground", "b-upper", "b-roof"]);
+    expect(b.map(floor => floor.base)).toEqual([0, 2.9, 5.8]);
+  }
+  expect(buildingVolumeGeometry(model, model.extractionCandidates).map(floor => floor.storey.id)).toEqual(["a-ground", "a-upper"]);
+  expect(JSON.stringify(model)).toBe(before);
+});
+
 test("building presentation preserves holes, uses canonical openings before traced infill and never writes illustrative facts", () => {
   const box = (x: number, y: number, width: number, height: number) => [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }];
   const geometry = { polygon: box(.1, .1, .6, .6), holes: [box(.3, .3, .2, .2)], source: { sourceVersionId: "version", storeyId: "floor", page: 1 } };

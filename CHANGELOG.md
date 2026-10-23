@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **One plan set per 3D view:** The source-PDF selector now controls the entire building stack. Floors extracted from other documents no longer appear as extra levels; source records remain available for separate inspection.
 - **3D view options:** Hide empty floors without deleting model records, and control the ground plane and source-aligned aerial imagery. Schematic ground remains visible when floor elevations are incomplete.
 - **Brandschutz project tab:** Open fire-protection inputs, classification, review controls and draft text directly from every project perspective, with source heights alongside and a link to the fire-coloured plan. The tab shares the existing building model and approvals.
 - **Readable building properties:** Long German labels in the fire-protection panel now wrap without overlapping inputs or source-help buttons, in both display densities.

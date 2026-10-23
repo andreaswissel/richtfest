@@ -61,9 +61,14 @@ Registration between drawings is still unverified. Entered levels determine orde
 page order. Vertical spacing uses the greatest room/storey clear height on the
 lower floor plus a **0.30 m assumed floor allowance**, not a measured slab.
 These transforms are display-only and never become engineering inputs. The view
-uses one primary plan per storey, preferring the current plan set, and excludes
+uses only the plan set selected in **Source PDF**, with one primary plan per storey, and excludes
 superseded revisions, other buildings and pages classified as sections/elevations.
-It does not merge alternative drawings or stitch multiple partial plans together.
+Switching **Source PDF** switches the entire 3D stack. Other uploads, even when
+they created separate storey records, never fill missing floors or become extra
+levels in that stack. The view does not merge alternative drawings or stitch
+multiple partial plans together. This selection does not delete records, change
+upload extraction or mark a document as obsolete; use **Mark plan set superseded**
+only when a replacement has deliberately been chosen.
 
 ## Present the building and furnished cutaways
 
