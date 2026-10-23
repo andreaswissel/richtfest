@@ -29,7 +29,13 @@ test("floor navigation uses semantic names, preserves custom names and never tre
   const storeys = ["ground", "unknown", "conflict", "entered", "custom"].map((id, index) => ({ id, name: id === "custom" ? "Workshop mezzanine" : `Plan page ${index + 8} (draft)`, levelIndex: id === "entered" ? -2 : null }));
   const planSources = storeys.map((storey, index) => ({ id: storey.id, storeyId: storey.id, page: index + 8,
     source: { versionId: "plan", fileName: "Plan.pdf" }, storeyTitle: storey.id === "unknown" ? null : { level: 0, quote: "Grundriss EG" } }));
-  const model = { storeys, planSources: [...planSources, { ...planSources[2], id: "conflicting", page: 50, storeyTitle: { level: 2, quote: "Grundriss 2. OG" } }] };
+  const model = { storeys, planSources: [...planSources, { ...planSources[2], id: "conflicting", page: 50, storeyTitle: { level: 2, quote: "Grundriss 2. OG" } }],
+    extractions: storeys.map((storey, i) => ({ id: `job${i}`, storeyId: storey.id, page: i + 8, sourceVersionId: "plan", status: "complete",
+      result: { pageScale: { pageAspectRatio: 1, metresPerPageHeight: 10 } } })),
+    extractionCandidates: storeys.map((storey, i) => ({ id: `candidate${i}`, entityType: "room", storeyId: storey.id, page: i + 8,
+      sourceVersionId: "plan", status: "unreviewed", geometry: { quality: "enclosed_region",
+        polygon: [{ x: .1, y: .1 }, { x: .5, y: .1 }, { x: .5, y: .3 }] } })),
+  };
   const html = render(model, "?view=building-model&modelView=3d&page=8&storey=ground&sourceVersion=plan&floorFocus=1&roomFocus=1&entity=room:old-selection");
   const nav = html.split('<nav class="building-volume-floors"')[1]!.split("</nav>")[0]!;
   expect(nav).toContain("Ground floor");
@@ -222,6 +228,31 @@ test("3D anchors known basement levels below ground without inventing ground fro
   // Unknown ordering must not claim a ground datum, even when another floor is level zero.
   model.storeys[0]!.levelIndex = null;
   expect(buildingVolumeGeometry(model, [], "plan0").every(floor => floor.base >= 0)).toBe(true);
+});
+
+test("3D can hide empty stack slots without changing records or erasing unexplained level gaps", () => {
+  const levels = [0, 1, 2, 4, null];
+  const model = adaptBuildingModel({
+    storeys: levels.map((levelIndex, i) => ({ id: `floor${i}`, levelIndex, buildingId: "building" })),
+    planSources: levels.map((_, i) => ({ id: `plan${i}`, storeyId: `floor${i}`, page: i + 1, source: { versionId: "version" } })),
+    extractions: levels.map((_, i) => ({ id: `job${i}`, storeyId: `floor${i}`, page: i + 1, sourceVersionId: "version", status: "complete",
+      result: { pageScale: { pageAspectRatio: 1, metresPerPageHeight: 10 } } })),
+    extractionCandidates: [0, 2, 3].map(i => ({ id: `room${i}`, entityType: "room", storeyId: `floor${i}`, page: i + 1,
+      sourceVersionId: "version", status: "unreviewed", geometry: { quality: "enclosed_region",
+        polygon: [{ x: .1, y: .1 }, { x: .6, y: .1 }, { x: .6, y: .3 }, { x: .1, y: .3 }] } })),
+  });
+  const before = JSON.stringify(model);
+  const all = buildingVolumeGeometry(model, model.extractionCandidates, "plan0");
+  const hidden = buildingVolumeGeometry(model, model.extractionCandidates, "plan0", true);
+  expect(all).toHaveLength(5);
+  expect(hidden.map(floor => floor.storey.id)).toEqual(["floor0", "floor2", "floor3"]);
+  expect(hidden.map(floor => Number(floor.base.toFixed(2)))).toEqual([0, 2.9, 8.7]); // Empty level 1 removed; unknown level 3 is not fabricated away.
+  expect(hidden.map(floor => floor.level)).toEqual([0, 2, 4]);
+  model.storeys.forEach(storey => { storey.levelIndex = null; });
+  expect(buildingVolumeGeometry(model, model.extractionCandidates, "plan0", true).map(floor => Number(floor.base.toFixed(2)))).toEqual([0, 2.9, 5.8]);
+  model.storeys.forEach((storey, i) => { storey.levelIndex = levels[i]!; });
+  expect(JSON.stringify(model)).toBe(before);
+  expect(buildingVolumeGeometry(model, [], "plan0", true)).toEqual([]);
 });
 
 test("PDF evidence stays on the authenticated app origin for inline rendering", () => {

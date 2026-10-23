@@ -80,6 +80,16 @@ the model or room list to fly into its source-outline bounds and inspect its sou
 height assumptions. The floor link returns from the room to the entire floor;
 **All floors** restores the complete building.
 
+**View options** controls **Hide floors without geometry** (on by default),
+**Ground plane** and **Aerial imagery**. Hiding empty floors removes their display
+slots and navigation entries, without deleting storeys or changing calculations.
+Unexplained gaps in entered level numbers remain; only explicitly hidden empty
+levels are collapsed. Turn the option off to inspect missing-geometry floors.
+The ground plane remains available when levels are incomplete, but is then only
+a schematic scene-zero reference, not a surveyed elevation or basement classification.
+Aerial imagery requires both a visible ground plane and a matching saved site
+placement; the control explains when alignment or imagery is unavailable.
+
 When the model has a saved site placement matching its plan revision, page and
 coordinate system, **Surroundings** is the initial view. It reuses the project's
 recorded neighbouring buildings, trees and official aerial imagery, with source
