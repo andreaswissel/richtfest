@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { calculateCandidates } from "./candidate-calculations";
+import { calculateCandidates, projectCandidates } from "./candidate-calculations";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const scope = { sourceVersionId: id(1), page: 2, storeyId: id(2) };
@@ -23,6 +23,19 @@ function fixture(): Parameters<typeof calculateCandidates>[0] {
     ],
   };
 }
+
+test("the reusable projection is the preview's unchanged source candidate assembly", () => {
+  const data = fixture(), before = structuredClone(data);
+  const projection = projectCandidates(data, scope), preview = calculateCandidates(data, scope);
+  expect(projection.used).toEqual(preview.candidates);
+  expect(projection.excluded).toEqual(preview.excluded);
+  expect(projection.relationships).toEqual(preview.relationships);
+  expect(projection.properties).toEqual(preview.properties);
+  expect(projection.rooms.map(r => r.id)).toEqual(preview.geometry.map(r => r.id));
+  expect(projection.projected.rooms).toBe(projection.rooms);
+  expect(projection.openings.summary).toEqual(preview.openings);
+  expect(data).toEqual(before);
+});
 
 test("candidate calculations are page-scoped, source-linked, non-mutating and do not invent heights or approve geometry", () => {
   const data = fixture(), before = structuredClone(data);
@@ -64,6 +77,34 @@ test("candidate previews retain accepted identities and rejected connections/pro
   expect(result.properties.filter(p => p.entityId === id(7) && p.propertyKey === "apartmentUnit")).toHaveLength(1);
   expect(result.properties.find(p => p.entityId === id(7) && p.propertyKey === "apartmentUnit").current.reviewStatus).toBe("rejected");
   expect(result.fire.snapshot.available && result.fire.snapshot.plan.storeys[0]!.rooms.find(r => r.id === id(7))!.unit).toBeNull();
+});
+
+test("a labelled terrace exposes the facade and its traced opening without approving it or resurrecting rejected faces", () => {
+  const data = fixture();
+  data.extractionCandidates.push({ id: id(30), jobId: id(5), entityType: "room", sourceKey: "terrace", name: "Terrasse", status: "unreviewed",
+    geometry: { quality: "enclosed_region", polygon: rect(.1, .01, .2, .08) } });
+  data.elements.push({ id: id(20), name: "Facade", kind: "draft_wall", storeyId: scope.storeyId,
+    geometry: { source: scope, polygon: rect(.1, .09, .075, .01), sourceFootprintKeys: ["facade"] } });
+  data.extractions[0].result.topologyCoverage = { openingEvidence: [{ sourceKey: "window", kind: "jamb_pair", wallAxis: "horizontal",
+    sourceKeys: ["facade"], doorSwingKey: null, physicalWidthM: 1, jambLength: .01,
+    midpoint: { x: .2, y: .095 }, closure: { x: .175, y: .09, width: .05, height: .01 }, sides: ["terrace", "same-key-on-another-page"] }] };
+  const result = calculateCandidates(data, scope), living = result.exterior.rooms.find(r => r.id === id(6))!;
+  expect(living.gaps).not.toContain("no_facade");
+  expect(living.facades[0]!.windows).toEqual([expect.objectContaining({ width: expect.objectContaining({ value: 1 }), height: null, area: null })]);
+  expect(living.gaps).toContain("window_area");
+  const face = result.relationships.find(r => r.fromEntityId === id(20) && r.relationshipType === "faces_exterior")!;
+  expect(face.reviewStatus).toBe("unreviewed");
+  expect(result.fire.snapshot.available && result.fire.snapshot.plan.storeys[0]!.walls.find(w => w.id === id(20))!.faces)
+    .toContainEqual({ exterior: true, roomIds: [] });
+  data.relationships.push({ ...face, reviewStatus: "rejected" });
+  expect(calculateCandidates(data, scope).exterior.rooms.find(r => r.id === id(6))!.gaps).toContain("no_facade");
+  data.relationships = [];
+  data.properties.push({ entityType: "room", entityId: id(30), propertyKey: "spaceType", reviewed: null,
+    current: { value: "apartment", reviewStatus: "approved", provenance: "manual" } });
+  expect(calculateCandidates(data, scope).exterior.rooms.find(r => r.id === id(6))!.gaps).toContain("no_facade");
+  data.properties[0].current.value = "exterior";
+  data.conflicts.push({ entityId: id(30), propertyKey: "spaceType" });
+  expect(calculateCandidates(data, scope).exterior.rooms.find(r => r.id === id(6))!.gaps).toContain("no_facade");
 });
 
 test("candidate acoustic inputs retain source proposals and available heights/openings, without approving or substituting printed areas", () => {

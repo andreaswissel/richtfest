@@ -15,10 +15,8 @@ export const candidateCalculationRequest = z.object({
 type Model = Parameters<typeof assembleFireProtectionSnapshot>[0] & { extractionCandidates: any[] };
 const fail = (message: string) => Object.assign(new Error(message), { status: 422, code: "candidate_preview_unavailable" });
 
-/** A read-only page projection. No accepted entity, property, review or model revision is written. */
-export function calculateCandidates(data: Model, rawScope: unknown, host: {
-  interiorSound?: Pick<NonNullable<AppDeps["interiorSound"]>, "requirements" | "massiveRw" | "lightweightRow" | "airborne" | "impact"> | null;
-} = {}) {
+/** Source-only, read-only page projection shared by previews and offline dossiers. */
+export function projectCandidates(data: Model, rawScope: unknown) {
   const scope = candidateCalculationRequest.parse(rawScope);
   const source = data.planSources.find(s => s.sourceVersionId === scope.sourceVersionId && s.page === scope.page && s.storeyId === scope.storeyId);
   const storey = data.storeys.find(s => s.id === scope.storeyId && s.constructionState !== "demolished");
@@ -82,7 +80,7 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: {
   const obstacles = data.extractionCandidates.filter(c => c.jobId === job.id && c.entityType === "room"
     && c.status === "unreviewed" && validRing(c.geometry?.polygon)).map(c => ({ id: c.id, name: c.name,
     geometry: { ...c.geometry, source: { sourceVersionId: scope.sourceVersionId, page: scope.page } } }));
-  const walls = planWallAdjacency({ rooms, elements, properties, candidateRooms: obstacles,
+  const walls = planWallAdjacency({ rooms, elements, properties, conflicts: data.conflicts, candidateRooms: obstacles,
     scales: new Map([[`${scope.sourceVersionId}:${scope.page}`, scale]]) });
   const scopedIds = new Set([...rooms, ...elements].map(row => row.id));
   const relationships = structuredClone(data.relationships.filter(r => scopedIds.has(r.fromEntityId) && (scopedIds.has(r.toEntityId) || r.toEntityId === storey.id)));
@@ -96,8 +94,8 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: {
     propose("element", wall.wallId, "wallRole", wall.role, "Inferred from source-labelled spaces on both wall sides.");
     propose("element", wall.wallId, "thickness", wall.thicknessCm, "Measured across the extracted polygon at the page scale; not a construction specification.");
     wall.sides.forEach((side, index) => {
-      if (side === "exterior") link(wall.wallId, storey.id, "faces_exterior", index);
-      else for (const room of side ?? []) link(wall.wallId, room.roomId, "separates", index);
+      if (wall.exteriorSides[index]) link(wall.wallId, storey.id, "faces_exterior", index);
+      else for (const room of Array.isArray(side) ? side : []) link(wall.wallId, room.roomId, "separates", index);
     });
   }
   const active = () => relationships.filter(r => !["rejected", "superseded"].includes(r.reviewStatus));
@@ -105,7 +103,8 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: {
   const openings = planOpenings({ pages: [{ ...scope, pageAspectRatio: scale.pageAspectRatio, openings: job.result?.topologyCoverage?.openingEvidence ?? [] }],
     walls: walls.map(w => ({ id: w.wallId, ...scope, footprintKeys: elements.find(e => e.id === w.wallId)?.geometry?.sourceFootprintKeys ?? [],
       polygon: elements.find(e => e.id === w.wallId)?.geometry?.polygon,
-      exterior: active().some(r => r.fromEntityId === w.wallId && r.relationshipType === "faces_exterior"),
+      exterior: active().some(r => r.fromEntityId === w.wallId && r.relationshipType === "faces_exterior") ? true
+        : w.sides.every(side => side !== null) ? false : null,
       roomIds: active().filter(r => r.fromEntityId === w.wallId && r.relationshipType === "separates").map(r => r.toEntityId) })),
     rooms: rooms.map(r => ({ id: r.id, ...scope, polygon: r.geometry?.polygon ?? null, holes: r.geometry?.holes,
       boundaryResolved: r.geometry?.quality !== "approximate_partition", exterior: get(r.id, "spaceType") === "exterior",
@@ -126,6 +125,16 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: {
   }
   const projected = { ...data, buildings: data.buildings.filter(b => b.id === storey.buildingId),
     rooms, elements, relationships, properties, planSources: [source], extractions: [job] };
+  return { projected, scope, storey, job, scale, rooms, elements, properties, relationships,
+    used, excluded, scopedIds, walls, openings, property, get, active, validRing };
+}
+
+/** A read-only page projection. No accepted entity, property, review or model revision is written. */
+export function calculateCandidates(data: Model, rawScope: unknown, host: {
+  interiorSound?: Pick<NonNullable<AppDeps["interiorSound"]>, "requirements" | "massiveRw" | "lightweightRow" | "airborne" | "impact"> | null;
+} = {}) {
+  const { projected, scope, storey, job, scale, rooms, elements, properties, relationships,
+    used, excluded, scopedIds, walls, openings, property, get, active, validRing } = projectCandidates(data, rawScope);
   // Retain all building storeys for classification counts, but only this page's geometry is in scope.
   const fireSnapshot = assembleFireProtectionSnapshot(projected, "candidate_preview");
   const fire = fireSnapshot.available ? assessFirePlan({ ...fireSnapshot.plan,
@@ -165,6 +174,7 @@ export function calculateCandidates(data: Model, rawScope: unknown, host: {
       const wallId = active().find(r => r.fromEntityId === e.id && r.relationshipType === "opening_in")?.toEntityId;
       if (!["window", "door", "small_element"].includes(kind) || !e.roomId || !wallId) return [];
       return [{ id: e.id, name: e.name, componentType: kind, roomId: e.roomId, wallId,
+        planPolygon: validRing(e.geometry?.polygon) ? metres(e.geometry.polygon) : null,
         area: property(e.id, "openingArea"), rw: property(e.id, "soundReductionIndex"), basis: property(e.id, "soundReductionIndexBasis"),
         width: property(e.id, "openingWidth"), height: property(e.id, "openingHeight"),
         count: property(e.id, "elementCount"), dnew: property(e.id, "normalizedLevelDifference") }];

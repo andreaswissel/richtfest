@@ -34,6 +34,24 @@ describe("facade geometry", () => {
     expect(lengths.get("west")).toBeCloseTo(4, 9);
     expect(facadeLengths(room, [{ id: "far", ring: [[0, 20], [10, 20], [10, 20.3], [0, 20.3]] }]).size).toBe(0);
   });
+
+  test("parallel layers count once and only traced openings extend partial solid facades", () => {
+    const rect = (x: number, y: number, w: number, h: number): Point2[] => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    const walls = [{ id: "inner", ring: rect(.3, 0, 1.2, .3) }, { id: "outer", ring: rect(.3, -.2, 1.2, .2) },
+      { id: "right", ring: rect(4, 0, 1.3, .3) }];
+    const adjacent = new Set(walls.map(wall => wall.id));
+    const solid = facadeLengths(room, walls, adjacent);
+    expect([...solid.values()].reduce((a, b) => a + b, 0)).toBeCloseTo(2.5);
+    expect(solid.has("outer")).toBe(false);
+    const opening = { wallId: "inner", planPolygon: rect(1.5, 0, 2.5, .3) };
+    const full = facadeLengths(room, walls, adjacent, .3, [opening]);
+    expect(full.get("inner")).toBeCloseTo(3.7);
+    expect(full.get("right")).toBeCloseTo(1.3);
+    expect(full.has("outer")).toBe(false);
+    expect([...facadeLengths(room, [...walls].reverse(), adjacent, .3, [opening])].sort()).toEqual([...full].sort());
+    // A width without a source polygon cannot fill the gap; neither can an opening of another host.
+    expect(facadeLengths(room, walls, adjacent, .3, [{ wallId: "inner" }, { ...opening, wallId: "other-page" }])).toEqual(solid);
+  });
 });
 
 describe("exterior noise proof assembly", () => {
@@ -75,6 +93,11 @@ describe("exterior noise proof assembly", () => {
     expect(rooms[0]!.gaps.sort()).toEqual(["clear_height", "flanking", "surfaces_unconfirmed", "window_rw"]);
     expect(batch!.inventory).toHaveLength(1);
     expect(batch!.rooms).toHaveLength(0);
+    const detachedHost = input({ walls: input().walls.map(wall => wall.id === "north" ? { ...wall, ring: wall.ring.map(([x, y]) => [x, y - 10] as Point2) } : wall) });
+    const detached = assembleExteriorNoiseProof(detachedHost);
+    expect(detached.rooms[0]!.gaps).toContain("surfaces_unconfirmed");
+    expect(detached.batch!.rooms).toHaveLength(0);
+    expect(assembleExteriorNoiseProof(input({ openings: [{ ...input().openings[0]!, wallId: "interior-door-host" }] })).rooms[0]!.gaps).toEqual([]);
   });
 
   test("small elements count by Dn,e,w with their area per element; a roof takes the loudest La of the room", () => {

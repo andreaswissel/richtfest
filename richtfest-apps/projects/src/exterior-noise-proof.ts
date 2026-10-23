@@ -49,27 +49,43 @@ export function overlapAlongWall(room: Point2[], wall: Point2[]): number {
 }
 
 /**
- * Exterior wall length per wall that a room faces. With the model's room/wall
- * adjacency, the room's extent along each adjacent wall; without it, room edges
- * whose midpoint lies on or within `toleranceM` of a wall.
+ * Attribute disjoint intervals of the room boundary to adjacent exterior faces.
+ * Parallel construction layers cannot count the same interval twice. Only
+ * traced opening polygons extend a wall beyond its solid source fragments;
+ * neither an entered width nor a gap between jambs invents missing geometry.
  */
-export function facadeLengths(room: Point2[], walls: Array<{ id: string; ring: Point2[] }>, adjacent: Set<string> | null = null, toleranceM = 0.3): Map<string, number> {
+export function facadeLengths(room: Point2[], walls: Array<{ id: string; ring: Point2[] }>, adjacent: Set<string> | null = null, toleranceM = 0.3,
+  openings: Array<{ wallId: string | null; planPolygon?: Point2[] | null }> = []): Map<string, number> {
   const lengths = new Map<string, number>();
-  if (adjacent) {
-    for (const wall of walls) if (adjacent.has(wall.id)) lengths.set(wall.id, overlapAlongWall(room, wall.ring));
-    return lengths;
-  }
+  const eligible = walls.filter(wall => !adjacent || adjacent.has(wall.id));
+  const surfaces = [...eligible.map(wall => ({ ...wall, opening: false })), ...openings.flatMap(opening =>
+    opening.wallId && opening.planPolygon?.length && eligible.some(wall => wall.id === opening.wallId)
+      ? [{ id: opening.wallId, ring: opening.planPolygon, opening: true }] : [])];
   room.forEach((a, i) => {
     const b = room[(i + 1) % room.length]!;
     const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
     if (length < 0.05) return;
-    const mid: Point2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    let best: { id: string; distance: number } | null = null;
-    for (const wall of walls) {
-      const distance = distanceToRing(mid, wall.ring);
-      if (distance <= toleranceM && (!best || distance < best.distance)) best = { id: wall.id, distance };
+    const u: Point2 = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+    const intervals: Array<{ id: string; start: number; end: number; distance: number; opening: boolean }> = [];
+    for (const surface of surfaces) {
+      const edges = surface.ring.map((p, j) => { const q = surface.ring[(j + 1) % surface.ring.length]!;
+        return { dx: q[0] - p[0], dy: q[1] - p[1], length: Math.hypot(q[0] - p[0], q[1] - p[1]) }; });
+      const axis = edges.sort((a, b) => b.length - a.length)[0];
+      if (!axis?.length || Math.abs((axis.dx * u[0] + axis.dy * u[1]) / axis.length) < .99) continue;
+      const along = surface.ring.map(p => (p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1]);
+      const across = surface.ring.map(p => -(p[0] - a[0]) * u[1] + (p[1] - a[1]) * u[0]);
+      const near = Math.min(...across), far = Math.max(...across);
+      const distance = near <= 0 && far >= 0 ? 0 : Math.min(Math.abs(near), Math.abs(far));
+      const start = Math.max(0, Math.min(...along)), end = Math.min(length, Math.max(...along));
+      if (distance <= toleranceM && end > start) intervals.push({ id: surface.id, start, end, distance, opening: surface.opening });
     }
-    if (best) lengths.set(best.id, (lengths.get(best.id) ?? 0) + length);
+    const cuts = [...new Set(intervals.flatMap(interval => [interval.start, interval.end]))].sort((a, b) => a - b);
+    for (let j = 1; j < cuts.length; j++) {
+      const start = cuts[j - 1]!, end = cuts[j]!, middle = (start + end) / 2;
+      const best = intervals.filter(interval => interval.start <= middle && interval.end >= middle)
+        .sort((a, b) => Number(b.opening) - Number(a.opening) || a.distance - b.distance || a.id.localeCompare(b.id))[0];
+      if (best) lengths.set(best.id, (lengths.get(best.id) ?? 0) + end - start);
+    }
   });
   return lengths;
 }
@@ -93,6 +109,7 @@ export type ProofAssemblyInput = {
   walls: Array<{ id: string; name: string; ring: Point2[]; construction: unknown; rw: ProofValue<number> | null; rwBasis: ProofValue<string> | null }>;
   levels: Map<string, { compass: Compass; dayDb: number; sleepingDb: number; basis: "calculated" | "turned_away" }>;
   openings: Array<{ id: string; name: string; componentType: "window" | "door" | "small_element"; roomId: string; wallId: string | null;
+    planPolygon?: Point2[] | null;
     area: ProofValue<number> | null; rw: ProofValue<number> | null; basis: ProofValue<string> | null;
     count?: ProofValue<number> | null; dnew?: ProofValue<number> | null; glazing?: ProofValue<string> | null;
     width?: ProofValue<number> | null; height?: ProofValue<number> | null }>;
@@ -128,7 +145,8 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
     const kind = room.kind && (exteriorNoiseRoomKinds as readonly string[]).includes(room.kind.value) ? room.kind.value as ExteriorNoiseRoomKind : null;
     const floorAreaM2 = room.polygon && room.polygon.length >= 3
       ? round2(Math.max(0, polygonArea(room.polygon) - room.holes.reduce((sum, hole) => sum + polygonArea(hole), 0))) : null;
-    const lengths = room.polygon ? facadeLengths(room.polygon, input.walls, room.adjacentWallIds) : new Map<string, number>();
+    const lengths = room.polygon ? facadeLengths(room.polygon, input.walls, room.adjacentWallIds, .3,
+      input.openings.filter(opening => opening.roomId === room.id)) : new Map<string, number>();
     const resolvedHeight = resolveRoomHeight(room.clearHeight, input.clearHeight);
     const height = resolvedHeight.calculationValue;
     const facades: ProofFacade[] = input.walls.filter(wall => (lengths.get(wall.id) ?? 0) >= 0.1).map(wall => {
@@ -169,7 +187,11 @@ export function assembleExteriorNoiseProof(input: ProofAssemblyInput): { rooms: 
         }
         if (facade.opaqueAreaM2 !== null && facade.opaqueAreaM2 < 0) gaps.add("openings_exceed_facade");
       }
-      if (room.surfacesComplete?.value !== true) gaps.add("surfaces_unconfirmed");
+      // A completeness flag cannot hide an exterior opening whose host has no
+      // attributed interval. Interior doors are not part of this envelope.
+      if (room.surfacesComplete?.value !== true || input.openings.some(opening => opening.roomId === room.id
+        && input.walls.some(wall => wall.id === opening.wallId)
+        && !facades.some(facade => facade.windows.some(window => window.id === opening.id)))) gaps.add("surfaces_unconfirmed");
       if (input.applicability?.value !== "standard_exterior_noise") gaps.add("applicability");
       if (input.flanking?.value !== "negligible") gaps.add("flanking");
       inventory.push({ roomId: label, provenance: fromPlan(`Raum „${room.name}“, aus dem Plan in das Richtfest-Gebäudemodell übernommen.`) });
@@ -339,6 +361,8 @@ export async function readExteriorNoiseProof(d: AppDeps, projectId: string): Pro
       levels: facadeLevel,
       openings: openingRows.filter(row => storeyRooms.some(room => room.id === row.roomId)).map(row => ({ id: row.id, name: row.name,
         componentType: row.kind === "door" ? "door" : row.kind === "small_element" ? "small_element" : "window", roomId: row.roomId, wallId: hostOf.get(row.id) ?? null,
+        planPolygon: row.geometry?.source?.sourceVersionId === page.sourceVersionId && row.geometry?.source?.page === page.page
+          && Array.isArray(row.geometry?.polygon) ? row.geometry.polygon.map(toMetres) : null,
         area: value(row.id, "openingArea"), rw: value(row.id, "soundReductionIndex"), basis: value(row.id, "soundReductionIndexBasis"),
         count: value(row.id, "elementCount"), dnew: value(row.id, "normalizedLevelDifference"), glazing: value(row.id, "glazing"),
         width: value(row.id, "openingWidth"), height: value(row.id, "openingHeight") })),

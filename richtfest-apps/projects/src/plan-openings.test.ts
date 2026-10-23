@@ -22,6 +22,12 @@ describe("openings from the plan trace", () => {
     const terrace = { ...rooms[0], id: "terrace", exterior: true, candidateKey: "terrace", polygon: [{ x: .1, y: .1 }, { x: .5, y: .1 }, { x: .5, y: .19 }, { x: .1, y: .19 }] };
     const outside = planOpenings({ pages: [page([gap({ sides: ["terrace", "topology-v5:living"] })])], walls, rooms: [...rooms, terrace], existing: [] });
     expect(outside.planned[0]).toMatchObject({ kind: "window", roomId: "living", roomSides: ["terrace", "living"] });
+    const otherJamb = { ...wall("other-jamb", ["fb"], false, ["living"]), exterior: null };
+    const run = (exterior: boolean | null) => planOpenings({ pages: [page([gap({})])],
+      walls: [walls[0], { ...otherJamb, exterior }], rooms, existing: [] });
+    expect(run(null).planned[0]).toMatchObject({ wallId: "north-a", kind: "window" });
+    // An explicitly interior jamb remains a conflict, not an unresolved neighbour.
+    expect(run(false).outcomes[0].outcome).toBe("ambiguous");
   });
 
   test("a door swing makes a door anywhere; a gap without one inside the building is a passage", () => {

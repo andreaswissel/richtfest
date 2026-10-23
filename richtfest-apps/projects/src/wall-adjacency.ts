@@ -1,7 +1,7 @@
 import { deriveWallRole, type SpaceContext, type SpaceType, type WallRole } from "@richtfest/shared";
 
 type Point = { x: number; y: number };
-export type AdjacencyRoom = { id: string; polygon: Point[]; holes?: Point[][] };
+export type AdjacencyRoom = { id: string; polygon: Point[]; holes?: Point[][]; exterior?: boolean };
 /**
  * Rooms touched by a wall face, with probe hits; "exterior" when nothing lies
  * beyond the face up to the page edge; null when the face is unresolved.
@@ -9,7 +9,7 @@ export type AdjacencyRoom = { id: string; polygon: Point[]; holes?: Point[][] };
 export type WallSide = Array<{ roomId: string; hits: number }> | "exterior" | null;
 export type PageScale = { pageAspectRatio: number; metresPerPageHeight: number | null; denominator?: number | null };
 
-export const wallAdjacencyMethod = "plan_side_probe_v3";
+export const wallAdjacencyMethod = "plan_side_probe_v4";
 const probeFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
 
 const inside = (point: Point, ring: Point[]) => {
@@ -88,13 +88,21 @@ export function wallSides(wall: Point[], rooms: AdjacencyRoom[], obstacles: Adja
   };
   const side = (direction: 1 | -1): WallSide => {
     const counts = new Map<string, number>();
+    const misses: number[] = [];
     for (const fraction of probeFractions) {
-      const point = at(minAlong + (maxAlong - minAlong) * fraction, centre + direction * clearance);
+      const along = minAlong + (maxAlong - minAlong) * fraction;
+      const point = at(along, centre + direction * clearance);
       const room = rooms.find(candidate => inRoom(point, candidate));
       if (room) counts.set(room.id, (counts.get(room.id) ?? 0) + 1);
+      else misses.push(along);
     }
     const hits = [...counts.values()].reduce((sum, count) => sum + count, 0);
-    if (hits > probeFractions.length / 2) return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([roomId, count]) => ({ roomId, hits: count }));
+    // A terrace may occupy only part of an otherwise outdoor face. Retain its
+    // identity, but bridge no unknown space: every missed probe must have an
+    // unobstructed ray, and every touched space must be explicitly outdoors.
+    const allOutdoors = hits > 0 && [...counts.keys()].every(id => rooms.find(room => room.id === id)?.exterior === true)
+      && misses.every(along => outside(along, direction));
+    if (hits > probeFractions.length / 2 || allOutdoors) return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([roomId, count]) => ({ roomId, hits: count }));
     if (hits === 0 && [0.35, 0.5, 0.65].every(fraction => outside(minAlong + (maxAlong - minAlong) * fraction, direction))) return "exterior";
     return null;
   };
@@ -134,7 +142,7 @@ export const effectiveValue = (property: ModelProperty | undefined) =>
   property?.current && property.current.reviewStatus !== "rejected" ? property.current.value : property?.reviewed?.value ?? null;
 
 export type PlannedWall = { wallId: string; sourceVersionId: string; page: number; planRegion: PlanGeometry["planRegion"] | null;
-  sides: [WallSide, WallSide]; role: WallRole | null; writeRole: boolean; thicknessCm: number | null; writeThickness: boolean; scaleDenominator: number | null };
+  sides: [WallSide, WallSide]; exteriorSides: [boolean, boolean]; role: WallRole | null; writeRole: boolean; thicknessCm: number | null; writeThickness: boolean; scaleDenominator: number | null };
 
 /** An inferred value from another source, such as a construction description, outranks a plan measurement. */
 const statedElsewhere = (existing: ModelProperty | undefined) => existing?.current?.provenance === "inferred"
@@ -150,7 +158,7 @@ export const derivedWritable = (existing: ModelProperty | undefined, value: unkn
  * sides across the wall yields the same role.
  */
 export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: ModelEntity[]; properties: ModelProperty[];
-  candidateRooms?: ModelEntity[]; scales?: Map<string, PageScale> }) {
+  candidateRooms?: ModelEntity[]; scales?: Map<string, PageScale>; conflicts?: Array<{ entityId: string; propertyKey: string }> }) {
   const props = new Map<string, ModelProperty>();
   for (const property of input.properties) props.set(`${property.entityType}:${property.entityId}:${property.propertyKey}`, property);
   const prop = (type: string, id: string, key: string) => props.get(`${type}:${id}:${key}`);
@@ -160,9 +168,10 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
   for (const room of input.rooms) {
     const g = geometry(room), key = sourceKey(g);
     if (!key || !Array.isArray(g.polygon) || g.polygon.length < 3) continue;
-    const context = roomSpaceContext({ name: room.name, groupLabel: g.groupLabel },
+    const context = input.conflicts?.some(conflict => conflict.entityId === room.id && ["spaceType", "apartmentUnit"].includes(conflict.propertyKey))
+      ? { apartmentUnit: null, spaceType: null } : roomSpaceContext({ name: room.name, groupLabel: g.groupLabel },
       { apartmentUnit: effectiveValue(prop("room", room.id, "apartmentUnit")), spaceType: effectiveValue(prop("room", room.id, "spaceType")) });
-    roomsBySource.set(key, [...(roomsBySource.get(key) ?? []), { id: room.id, polygon: g.polygon, holes: g.holes, context }]);
+    roomsBySource.set(key, [...(roomsBySource.get(key) ?? []), { id: room.id, polygon: g.polygon, holes: g.holes, context, exterior: context.spaceType === "exterior" }]);
   }
   // Unreviewed room regions still block the exterior test: an unaccepted room is not outside.
   const candidatesBySource = new Map<string, AdjacencyRoom[]>();
@@ -187,9 +196,15 @@ export function planWallAdjacency(input: { rooms: ModelEntity[]; elements: Model
     const contexts = (side: WallSide) => side === "exterior" ? [outside] : side ? side.map(item => rooms.find(room => room.id === item.roomId)!.context) : [null];
     const roles = contexts(sides[0]).flatMap(a => contexts(sides[1]).map(b => deriveWallRole(a, b)));
     const role = roles.every(item => item && item === roles[0]) ? roles[0] : null;
+    // A labelled terrace is outdoors too. Keep its source identity in sides,
+    // but never turn a mixed or unresolved face into an exterior connection.
+    const exteriorSides = sides.map(side => {
+      const values = contexts(side);
+      return values.length > 0 && values.every(context => context?.spaceType === "exterior");
+    }) as [boolean, boolean];
     const scale = input.scales?.get(key);
     const thicknessCm = scale ? wallThicknessCm(g.polygon, scale) : null;
-    walls.push({ wallId: element.id, sourceVersionId: g.source!.sourceVersionId!, page: g.source!.page!, planRegion: g.planRegion ?? null, sides, role,
+    walls.push({ wallId: element.id, sourceVersionId: g.source!.sourceVersionId!, page: g.source!.page!, planRegion: g.planRegion ?? null, sides, exteriorSides, role,
       writeRole: derivedWritable(prop("element", element.id, "wallRole"), role), thicknessCm,
       writeThickness: derivedWritable(prop("element", element.id, "thickness"), thicknessCm) && !statedElsewhere(prop("element", element.id, "thickness")), scaleDenominator: scale?.denominator ?? null });
   }

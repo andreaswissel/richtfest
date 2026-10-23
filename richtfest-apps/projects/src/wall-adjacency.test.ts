@@ -50,6 +50,20 @@ test("a face is outside only when nothing, not even an unreviewed room, lies bey
   expect(sideRooms(planWallAdjacency({ rooms: [...rooms, room("east", "Bad", rect(0.7, 0.1, 0.8, 0.3), "WE 3")], elements: [gap], properties: [] })[0])).toEqual([null, "treppe"]);
 });
 
+test("a partial terrace resolves a facade only when every remaining probe is unobstructed outdoors", () => {
+  const facade = walls.find(w => w.id === "facade")!;
+  const terrace = room("terrace", "Terrasse", rect(.22, .02, .298, .095));
+  const run = (name = "Terrasse", blockers: ReturnType<typeof wall>[] = [], conflicts: Array<{ entityId: string; propertyKey: string }> = []) =>
+    planWallAdjacency({ rooms: [...rooms, { ...terrace, name }], elements: [facade, ...blockers], properties: [], conflicts })[0];
+  expect(run().role).toBe("exterior");
+  expect(sideRooms(run())).toEqual(["terrace", "we1-wohnen"]);
+  expect(run().exteriorSides.filter(Boolean)).toHaveLength(1);
+  expect(run("Bad").role).toBeNull();
+  // A distant wall still blocks: absence of room labels is not outdoor proof.
+  expect(run("Terrasse", [wall("distant", rect(.1, .01, .21, .011))]).role).toBeNull();
+  expect(run("Terrasse", [], [{ entityId: "terrace", propertyKey: "spaceType" }]).role).toBeNull();
+});
+
 test("thickness comes from the printed scale, in metres on both page axes", () => {
   // Landscape sheet (width 1.414 × height); the page height spans 30 m at this scale.
   const scales = new Map([[`${source.sourceVersionId}:${source.page}`, { pageAspectRatio: 1.414, metresPerPageHeight: 30, denominator: 100 }]]);

@@ -214,6 +214,17 @@ Exterior noise currently reports geometry and missing inputs, not a complete
 facade calculation. Cross-storey flanks, slabs and whole-building coverage remain
 outside this page-scoped preview.
 
+Labelled terraces and balconies establish provisional outside faces, while mixed
+or unresolved faces stay unresolved. A terrace occupying only part of a face also
+qualifies when every remaining probe has an unobstructed outdoor ray; an intervening
+wall or disputed space classification still blocks that inference. A resolved exterior jamb can host a traced
+opening even when its other jamb is unresolved; an explicitly contradictory
+interior jamb still blocks the assignment. Facade lengths count disjoint room-edge
+intervals, not every parallel construction layer. Traced opening polygons can
+extend those intervals; an entered width alone cannot fill a geometric gap.
+Partial facade coverage is not a complete envelope, and an opening that cannot be
+assigned to its exterior host blocks completeness even if it was previously confirmed.
+
 The result is explicitly **unreviewed**, even when a check can be evaluated.
 Download its JSON receipt for the source revision/page, candidate IDs, classifier
 receipts, extraction version, model revision, input hash, results and omissions.

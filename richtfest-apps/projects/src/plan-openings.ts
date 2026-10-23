@@ -1,7 +1,7 @@
 type Point = { x: number; y: number };
 type Box = { x: number; y: number; width: number; height: number };
 
-export const planOpeningMethod = "plan_opening_gap_v2";
+export const planOpeningMethod = "plan_opening_gap_v3";
 
 /** An opening the plan trace found: a gap between two facing wall ends, optionally with a door swing. Page-normalised coordinates. */
 export type TracedOpening = {
@@ -9,7 +9,7 @@ export type TracedOpening = {
   physicalWidthM: number | null; jambLength: number; midpoint: Point; closure: Box; sides: string[]; sideProbes?: Point[];
 };
 export type OpeningPage = { sourceVersionId: string; page: number; storeyId: string; pageAspectRatio: number; openings: TracedOpening[] };
-export type OpeningWall = { id: string; storeyId: string; sourceVersionId: string; page: number; footprintKeys: string[]; exterior: boolean; roomIds: string[]; polygon?: Point[] };
+export type OpeningWall = { id: string; storeyId: string; sourceVersionId: string; page: number; footprintKeys: string[]; exterior: boolean | null; roomIds: string[]; polygon?: Point[] };
 export type OpeningRoom = { id: string; storeyId: string; polygon: Point[] | null; holes?: Point[][]; candidateKey: string | null; sourceVersionId?: string; page?: number; boundaryResolved?: boolean; exterior?: boolean };
 /**
  * Openings already in the model. `planKey` is the plan opening an element was
@@ -104,10 +104,12 @@ export function planOpenings(input: { pages: OpeningPage[]; walls: OpeningWall[]
       const interiorRooms = roomIds.filter(id => !rooms.find(room => room.id === id)?.exterior);
       const roomId = interiorRooms[0];
       if (!roomId) { outcome("no_room"); continue; }
-      if (!door && (!hosts.some(wall => wall.exterior) || interiorRooms.length > 1)) { outcome("passage"); continue; }
+      if (!door && (interiorRooms.length > 1 || hosts.every(wall => wall.exterior === false))) { outcome("passage"); continue; }
+      if (!door && !hosts.some(wall => wall.exterior === true)) { outcome("ambiguous"); continue; }
       // Equivalent jambs are interchangeable hosts; conflicting exterior roles
-      // are not. Never fall back to a wall that does not bound this room.
-      const bounding = hosts.filter(wall => wall.roomIds.includes(roomId));
+      // are not. An unresolved jamb is not evidence of an interior wall and
+      // cannot veto a resolved host. It cannot itself host a window either.
+      const bounding = hosts.filter(wall => wall.roomIds.includes(roomId) && (door || wall.exterior !== null));
       if (!bounding.length || bounding.some(wall => wall.exterior !== bounding[0]!.exterior)) { outcome("ambiguous"); continue; }
       const host = bounding.sort((a, b) => a.id.localeCompare(b.id))[0]!;
       candidates.push({ kind: door ? "door" : "window", storeyId: page.storeyId, wallId: host.id, roomId, roomSides, planKey,

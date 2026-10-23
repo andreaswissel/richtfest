@@ -530,6 +530,55 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
   const [building] = await d.db.select({ id: buildingBuildings.id }).from(buildingBuildings).where(and(eq(buildingBuildings.modelId, scope.modelId), eq(buildingBuildings.tenantId, scope.tenantId))).limit(1) as any[];
   const values = await currentValues(d, modelId, [...elementRows.map(row => row.id), ...roomRows.map(row => row.id), ...storeyRows.map(row => row.id), ...(building ? [building.id] : [])],
     [...elementKeys, ...roomKeys, "clearRoomHeight", "soundInsulationLevel"]);
+  const levels = await storeyLevels(d, modelId, storeyRows);
+  const proof = assembleInteriorSoundSnapshot({ model: { revision: modelRow.model.revision }, buildingId: building?.id ?? storeyRows[0]?.buildingId,
+    pages, rooms: roomRows, elements: elementRows, storeys: storeyRows, relationships,
+    values: [...values].map(([key, found]) => { const separator = key.indexOf(":");
+      return { entityId: key.slice(0, separator), propertyKey: key.slice(separator + 1), ...found }; }),
+    levels: [...levels].map(([storeyId, level]) => ({ storeyId, level })),
+  }, host);
+  if (!proof.available) return proof;
+  // Include missing/demolished elements referenced by gaps, just as the assembly's used-element set does.
+  const used = new Set([...proof.elements.map(element => element.id),
+    ...[...proof.walls, ...proof.ceilings, ...proof.impacts, ...proof.services].flatMap(check => check.gaps.flatMap(gap => gap.code === "element" ? [gap.elementId] : [])),
+    ...proof.stairs.flatMap(check => check.wall ? [check.wall.id] : [])]);
+  type Entity = [ProofSuggestion["entityType"], string, string];
+  // Doors carry their role and Rw, stairs and installations their own keys; walls and ceilings their build-up (an exterior wall's Rw belongs to the exterior check).
+  const own = new Set([...doorKeys, ...stairKeys, ...installationKeys, ...roomKeys]);
+  const checkedRooms = new Set([...proof.walls.flatMap(check => check.rooms.map(room => room.id)), ...proof.ceilings.map(check => check.room.id)]);
+  const ofType = (type: string) => elementRows.filter(row => row.constructionState !== "demolished" && (values.get(`${row.id}:componentType`)?.value ?? row.kind) === type);
+  proof.suggestions = [
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, [...proof.storeys.map(storey => ["storey", storey.id, storey.name] as Entity),
+      ...elementRows.filter(row => used.has(row.id)).map(row => ["element", row.id, row.name] as Entity)], interiorSoundInputKeys.filter(key => !own.has(key))),
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, proof.doors.map(door => ["element", door.id, door.name] as Entity), doorKeys),
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, [...ofType("stair"), ...ofType("installation")].map(row => ["element", row.id, row.name] as Entity), [...stairKeys, ...installationKeys]),
+    ...await suggestionsOf(d, values as Map<string, CurrentValue>, roomRows.filter(room => checkedRooms.has(room.id)).map(room => ["room", room.id, room.name] as Entity), roomKeys),
+  ];
+  return proof;
+}
+
+/** Source-pinned, current model facts only; no database, provider or suggestion reads. */
+export type InteriorSoundSnapshotInput = {
+  model: { revision: number };
+  buildingId: string;
+  pages: SitePlanPage[];
+  rooms: any[];
+  elements: any[];
+  storeys: any[];
+  relationships: any[];
+  values: Array<{ entityId: string; propertyKey: string; value: unknown; reviewStatus: string; provenance: string; propertyId: string; version: number; reviewRevision: number }>;
+  levels: Array<{ storeyId: string; level: number | null }>;
+};
+
+/** The same deterministic model-to-proof mapping used by production, with suggestions intentionally empty. */
+export function assembleInteriorSoundSnapshot(input: InteriorSoundSnapshotInput, host: Host): InteriorSoundProof {
+  const pages = input.pages.filter(page => page.storey && page.walls.length);
+  if (!pages.length) return { available: false, reason: "plan_missing" };
+  const roomRows = input.rooms.filter(room => room.constructionState !== "demolished");
+  const elementRows = input.elements, storeyRows = input.storeys;
+  const relationships = input.relationships.filter(row => !["rejected", "superseded"].includes(row.reviewStatus)
+    && ["separates", "covers", "under_storey", "opening_in"].includes(row.relationshipType));
+  const values = new Map(input.values.map(found => [`${found.entityId}:${found.propertyKey}`, found]));
   const raw = (entityId: string, key: string) => values.get(`${entityId}:${key}`) ?? null;
   const value = <T,>(entityId: string, key: string) => {
     const found = raw(entityId, key);
@@ -562,16 +611,21 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
   const places: Extract<InteriorSoundProof, { available: true }>["places"] = [];
   let floorAssumed = false, wallsAboveAssumed = false, oneSidedLining = false;
   const used = new Set<string>();
-  const levelOf = await storeyLevels(d, modelId, storeyRows);
+  const levelOf = new Map(input.levels.map(item => [item.storeyId, item.level]));
+  const buildingOf = new Map(storeyRows.map(row => [row.id, row.buildingId]));
   // The agreed level decides the requirements; an elevated level the pack has no table for is checked against the minimum and said so.
-  const agreed = (raw(building?.id ?? "", "soundInsulationLevel")?.value as string | undefined) ?? null;
+  const agreed = (raw(input.buildingId, "soundInsulationLevel")?.value as string | undefined) ?? null;
   const requirements = (agreed === "elevated" ? host.requirements("elevated") : null) ?? host.requirements("statutory_minimum");
   if (!requirements) return { available: false, reason: "norm_pack_missing" };
   const exteriorRings = (page: SitePlanPage) => page.walls.filter(wall => wall.exterior).map(wall => wall.ring);
   // The plan of the storey one level up or down, shifted onto this plan by the building outline; none when it does not fit.
   const neighbourOf = (page: SitePlanPage, step: 1 | -1) => {
     const level = levelOf.get(page.storey!.id);
-    const other = level == null ? undefined : pages.find(item => item.storey && levelOf.get(item.storey.id) === level + step);
+    const buildingId = buildingOf.get(page.storey!.id);
+    const candidates = level == null || !buildingId ? [] : pages.filter(item => item.storey && item.storey.id !== page.storey!.id
+      && buildingOf.get(item.storey.id) === buildingId && levelOf.get(item.storey.id) === level + step);
+    // Multiple pages/revisions for a neighbouring level are not an authority choice. Do not pick the first.
+    const other = candidates.length === 1 ? candidates[0] : undefined;
     const aligned = other && alignPlanOutline(exteriorRings(page), exteriorRings(other));
     if (!other || !aligned || aligned.fitM > STOREY_FIT_M) return undefined;
     const shift = ([x, y]: Point2): Point2 => [x + aligned.offset[0], y + aligned.offset[1]];
@@ -596,7 +650,7 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
     storeys.push({ id: storey.id, name: storey.name, sourceVersionId: page.sourceVersionId, fileName: page.fileName, page: page.page, clearHeight });
     const storeyCeilings = ceilingRows.filter(row => (covers.get(row.id) ?? []).some(id => roomIds.has(id)));
     const assembled = assembleInteriorSound({
-      storeyId: storey.id, clearHeight: typeof clearHeight?.value === "number" ? clearHeight.value : null,
+      storeyId: storey.id, clearHeight: resolveRoomHeight(null, clearHeight).calculationValue,
       rooms: rooms.map(room => ({ id: room.id, name: room.name, polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon.map(toMetres) : null,
         clearHeight: resolveRoomHeight(value<number>(room.id, "clearRoomHeight"), clearHeight).calculationValue,
         holes: Array.isArray(room.geometry?.holes) ? room.geometry.holes.filter(Array.isArray).map((hole: any[]) => hole.map(toMetres)) : [],
@@ -639,22 +693,11 @@ export async function readInteriorSoundProof(d: AppDeps, projectId: string): Pro
   if (ceilings.some(check => check.impact && "k1Db" in check.impact) || [...elements.values()].some(element => element.componentType === "ceiling" && !element.massive)) limitations.push("timber_impact_vertical");
   if (stairs.length) limitations.push("stairs_room_behind_wall");
   if (services.length) limitations.push("services_execution");
-  type Entity = [ProofSuggestion["entityType"], string, string];
-  // Doors carry their role and Rw, stairs and installations their own keys; walls and ceilings their build-up (an exterior wall's Rw belongs to the exterior check).
-  const own = new Set([...doorKeys, ...stairKeys, ...installationKeys, ...roomKeys]);
-  const checkedRooms = new Set([...walls.flatMap(check => check.rooms.map(room => room.id)), ...ceilings.map(check => check.room.id)]);
-  const suggestions = [
-    ...await suggestionsOf(d, values as Map<string, CurrentValue>, [...storeys.map(storey => ["storey", storey.id, storey.name] as Entity),
-      ...elementRows.filter(row => used.has(row.id)).map(row => ["element", row.id, row.name] as Entity)], interiorSoundInputKeys.filter(key => !own.has(key))),
-    ...await suggestionsOf(d, values as Map<string, CurrentValue>, doors.map(door => ["element", door.id, door.name] as Entity), doorKeys),
-    ...await suggestionsOf(d, values as Map<string, CurrentValue>, [...stairRows, ...installationRows].map(row => ["element", row.id, row.name] as Entity), [...stairKeys, ...installationKeys]),
-    ...await suggestionsOf(d, values as Map<string, CurrentValue>, roomRows.filter(room => checkedRooms.has(room.id)).map(room => ["room", room.id, room.name] as Entity), roomKeys),
-  ];
   return {
-    available: true, modelRevision: modelRow.model.revision, buildingId: building?.id ?? storeyRows[0]?.buildingId,
+    available: true, modelRevision: input.model.revision, buildingId: input.buildingId,
     storeys, level: agreed, requirementLevel: requirements.level, editions: { ...host.editions, requirements: requirements.edition },
     elements: [...elements.values()].filter(element => used.has(element.id)).sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true })),
-    walls, ceilings, doors, impacts, stairs, services, places, suggestions, limitations,
+    walls, ceilings, doors, impacts, stairs, services, places, suggestions: [], limitations,
   };
 }
 

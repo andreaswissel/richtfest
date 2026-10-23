@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **Assessment replay across floors:** Prepare source-pinned, building-scoped dossiers from multi-page PDF plans and replay existing sound and fire checks, with separate draft concepts, method receipts and visible missing or unsupported checks. Terrace-facing walls and traced openings reach acoustic previews without double-counting parallel layers; excluded geometry and incomplete envelopes remain visible. Agent guidance separates buildings, shared basements and site walls before calculations.
 - **Docs security update:** Updated Next.js to 16.4.2 to address the reported security advisories and remove the security-warning build interruption without disabling checks.
 - **Connected building inputs:** Reuse saved address and planning evidence without replacing existing values or carrying over approvals. Empty fields offer compact source links and explain remaining evidence gaps; partial apartment labels no longer imply a complete fire-protection unit count.
 - **Independent assessment preparation:** Candidate calculations preserve supported inputs while withholding unreviewed heights. Plan outlines recover source-supported boundary detail, IFC imports retain material evidence and correct units, and agent guidance checks plan/section mappings before requesting missing information. Source-only replays retain calculation receipts and explicit blockers rather than borrowing reference answers.

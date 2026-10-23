@@ -5,7 +5,7 @@ description: Prepare PDF/IFC cases, compare recorded noise and fire assessment r
 
 ## What is available
 
-The offline building backtest prepares a private evaluation dossier from local PDF/IFC files and scores **recorded outputs** from the existing project workflow. The **source-only plan replay** freshly extracts a PDF page and runs the read-only candidate preview without a saved project model or reference answers. The separate **fire-plan replay** executes the existing fire engine on a supplied, source-linked calculation snapshot and writes results for that scorer. These commands work without Railway, credentials or model calls; none approves a concept. Actual project runs still use the normal application, configured providers and human review gates.
+The offline building backtest prepares a private evaluation dossier from local PDF/IFC files and scores **recorded outputs** from the existing project workflow. The **source-only plan replay** freshly extracts a PDF page and runs the read-only candidate preview without a saved project model or reference answers. **Multi-page PDF preparation** builds a source-pinned dossier from explicit building/storey mappings. The **building-model replay** executes the existing acoustic and fire methods across that dossier or a declared multi-storey saved snapshot. The separate **fire-plan replay** accepts an already assembled fire calculation input. These commands work without Railway, credentials or model calls; none approves a concept. Actual project runs still use the normal application, configured providers and human review gates.
 
 The Knowledge app owns the scorer in `richtfest-apps/knowledge/src/building-backtest.ts`. There is no new database, operational state store or parallel upload UI. Project sources, runs, model proposals, calculation artifacts and reviews remain in their existing Postgres-backed workflows. Local dossiers are offline evaluation exports, not operational records.
 
@@ -91,6 +91,135 @@ Positive checks for `building:class`, `exterior:provided`, `interior:provided`, 
 Score `candidate.json` separately with `evaluate-building-backtest.ts`. **Source-only execution is not a blind or holdout experiment:** a previously inspected/tuned case remains calibration. There are no model IDs or token costs to compare in this deterministic run; model benchmarks require separate actual provider-run receipts.
 
 For IFC, new source imports retain each `IfcRelSpaceBoundary`, `IfcRelVoidsElement` and `IfcRelFillsElement` as its own source entity, with declared endpoint attributes and boundary classifications. Exact relation IDs preserve repeated or contradictory claims, including virtual boundaries without a related element. Connection geometry is only referenced. These records do not establish canonical side orientation, traversable door adjacency or calculation-ready geometry, and existing imported revisions are not silently rewritten. Inspect the source declarations before asking a reviewer to reconstruct missing relationships from a rendering.
+
+## Prepare a fresh multi-page PDF building
+
+The preparation CLI bridges original PDF bytes to the strict building-model replay.
+It reuses the production extractor and the same read-only candidate projection as
+the application; it does not import saved project facts or reference answers.
+
+```sh
+bun scripts/prepare-building-model-backtest.ts \
+  --config reference-project/mapping.json \
+  --source reference-project/plans.pdf \
+  --out reference-project/backtests/prepared-01
+
+bun scripts/run-building-model-backtest.ts \
+  --input reference-project/backtests/prepared-01/dossier.json \
+  --source reference-project/backtests/prepared-01/sources/plans.pdf \
+  --acoustic-pack reference-project/private-acoustic-pack.json \
+  --out reference-project/backtests/replay-01
+```
+
+`mapping.json` uses schema `richtfest-building-model-preparation`, version `1`,
+`caseId`, `building: { key, name }` and `sources: [{ id, pages }]`. Each source ID
+is its exact basename. Declare **every PDF page**, either as `{ page, omit: reason }`
+or `{ page, buildingKey, region, storey: { key, name, level } }`. `region` is a
+normalized `{ x, y, width, height }` rectangle with top-left origin. `buildingKey`
+must match the declared building; storey keys and known numeric levels must be
+unique. Unknown levels remain null. An optional `scaleDenominator` is an unreviewed
+operator declaration, not an approved printed scale. Each supplied PDF needs a
+mapped page; this command is for PDF floor-plan preparation, not IFC conversion.
+
+Inspect the actual source before choosing mappings. One sheet can contain several
+buildings, shared basements and site walls. Prepare separate dossiers for separate
+buildings, and account explicitly for shared areas without inventing another legal
+building or cross-building vertical connections. A candidate must fit entirely
+inside its declared region; crossing outlines are excluded, not clipped or assigned
+by their centre. The mapping is itself an unreviewed interpretation. Cropping does
+not establish exterior exposure, complete room inventory or legal building extent.
+
+The new private directory contains frozen sources, the original mapping,
+`dossier.json`, full `extractions.json`, compact `inventory.json`, `preparation.json`
+and a hashed `manifest.json`. Inventory retains included/excluded source identities,
+reasons and separate printed versus polygon areas; it applies no fitting or passing
+tolerance. The preparation receipt records code hashes, extractor and Bun versions,
+page omissions, scope declarations and zero provider/database/network calls.
+Files/directories are made read-only against accidental overwrite.
+
+Ceiling placeholders and consecutive-level links are inventory hypotheses, not
+source-proven slabs. Fire component/route checks, acoustic domains and separate
+concept checks remain declared even when inputs are absent. Whole-building and
+source-coverage gaps stay visible. No height, construction, rating, jurisdiction,
+fire role or approval is invented. Missing metric scale blocks that page while
+preserving its inventory and omissions. An exit code of 0 means preparation was
+exported, not that an assessment passed.
+
+## Replay a saved building across storeys
+
+```sh
+bun scripts/run-building-model-backtest.ts \
+  --input reference-project/building-dossier.json \
+  --source reference-project/plans.pdf \
+  --source reference-project/building.ifc \
+  --acoustic-pack reference-project/private-acoustic-pack.json \
+  --out reference-project/backtests/building-run-01
+```
+
+This is a **saved-model calculation replay**, not fresh PDF/IFC extraction. It reuses
+the production interior snapshot adapter, exterior assembly and fire snapshot
+engine. It can execute supported wall, ceiling airborne/impact, door, hallway,
+stair, installation and per-storey fire checks when the saved inputs and method
+pack support them. General services-noise prediction, arbitrary transmission
+graphs, IFC escape routing and the fire engine's other unsupported paths are not
+added by this command. Keep them in the declared check inventory.
+
+Prepare the strict portable projection defined by `dossierSchema` in
+`scripts/run-building-model-backtest.ts`; `fixture()` in
+`tests/building-model-backtest.test.ts` is an executable synthetic example.
+A raw building-model API response is **not** accepted: select the schema's fields
+without changing their values, identities, evidence or review state. In particular,
+retain only the selected completed extraction per source page, and keep multi-sheet
+or ambiguous storey mappings unresolved rather than choosing one silently.
+
+| Field | Required content |
+| --- | --- |
+| `schema`, `version`, `caseId`, `runIds` | `richtfest-building-model-backtest`, `1`, case identity, contributing root runs (empty for deterministic-only execution) |
+| `sources` | Unique original basenames with source-version UUID, SHA-256 and `pdf`/`ifc` format |
+| `model` | Model ID/revision; buildings, storeys, rooms, elements, property versions, relationships, conflicts, plan sources and completed extraction scales |
+| `pages` | `SitePlanPage` records with non-null storey and metric wall rings; normalized source polygons and extraction scales must reproduce every ring |
+| `scope` | Explicit `buildingId`, `storeyIds`, `roomIds`, `elementIds`; omitted items are not assessed |
+| `fireMode` | `reviewed` or `candidate_preview`; no automatic geometry approval |
+| `exterior` | `enabled` and `levels`; each level needs wall ID, source locator, day/sleeping La, compass, basis and review status |
+| `checks` | Nonempty declarations `{ id, kind, resultId, entityIds, unit }`, with `id` equal to `kind:resultId` |
+
+Check kinds are `fire`, `interior_wall`, `interior_ceiling_airborne`,
+`interior_ceiling_impact`, `interior_door`, `interior_impact`, `interior_stair`,
+`interior_service` and `exterior_room`. Use existing engine result IDs; exterior
+checks use the room UUID. Declare `fire_concept:draft` and `noise_concept:draft`
+with their respective `fire_concept`/`noise_concept` kinds, `resultId: "draft"`,
+the building ID and a null unit to bind separate concept reviews to their actual
+artifact hashes. Unknown kinds remain unsupported, and absent results of known
+kinds remain visible. Extra computed result IDs are listed separately, never
+silently added to the declared denominator.
+
+The runner rejects inconsistent source references, duplicate identities, foreign
+connections, page/storey mismatches, contradictory scales and wall rings that do
+not match the saved source polygon. These checks establish snapshot consistency,
+**not the truth of its extraction claims**. IFC files and locators are retained,
+but the runner does not convert IFC geometry into PDF page coordinates. Approved
+versions precede newer pending or rejected proposals; conflicts withhold values.
+Rejected connections stay excluded. Missing room heights, neighbour alignment,
+material data and receiving uses are never established by a method pack. Existing
+floor/upper-wall assumptions remain explicit in the assessment limitations.
+
+The private, new export directory contains the original `input.json`, frozen
+`sources/`, `request.json`, `assessment.json`, `candidate.json`, separate
+`fire-concept.md` and `noise-concept.md` worksheets, `execution.json` and
+`manifest.json`. Calculation input receipts hash `request.json`, which binds the
+dossier hash and the separately supplied pack ID/hash. The output receipt hashes
+the full assessment; the manifest also hashes the execution receipt and both
+worksheets. Pack coefficients are not exported. Files become owner-read-only
+(0400), directories 0500; this prevents accidental overwrites, not alteration by
+an owner who deliberately changes permissions.
+
+Exit 0 means the export was written, including blocked checks; exit 2 means invalid
+input or execution failure. All supported observations remain **blocked pending
+independent review**, even when they retain a draft numerical value. Unsupported
+checks remain unsupported. A successful replay is not a passing whole-building
+backtest, and a completeness flag cannot hide scoped-out openings or unresolved
+exterior hosts. The scorer can inspect the recorded values and gaps separately;
+it does not turn these draft observations into approved concepts.
 
 ## Replay a fire plan without Railway
 

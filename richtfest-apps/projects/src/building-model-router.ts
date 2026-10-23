@@ -1062,7 +1062,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
         if (!scales.has(key) && row.mask.metresPerPageHeight != null) scales.set(key, { pageAspectRatio: Number(row.mask.pageAspectRatio),
           metresPerPageHeight: Number(row.mask.metresPerPageHeight), denominator: row.job.result?.scaleObservation?.denominator ?? null });
       }
-      const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[], candidateRooms, scales });
+      const walls = planWallAdjacency({ rooms: data.rooms as any[], elements: data.elements as any[], properties: data.properties as any[],
+        conflicts: data.conflicts as any[], candidateRooms, scales });
       const storeyOf = new Map((data.elements as any[]).map(element => [element.id, element.storeyId]));
       // Storey levels from each plan page's printed title, so ceilings know the storey above.
       const storeyPages = (data.planSources as any[]).filter(source => source.storeyId);
@@ -1100,7 +1101,8 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           return { id: wall.wallId, storeyId: element?.storeyId, sourceVersionId: wall.sourceVersionId, page: wall.page,
             footprintKeys: Array.isArray(element?.geometry?.sourceFootprintKeys) ? element.geometry.sourceFootprintKeys : [],
             polygon: element?.geometry?.polygon,
-            exterior: wall.sides.includes("exterior") || wall.role === "exterior", roomIds: wall.sides.flatMap(side => Array.isArray(side) ? side.map(room => room.roomId) : []) };
+            exterior: wall.exteriorSides.some(Boolean) ? true : wall.sides.every(side => side !== null) ? false : null,
+            roomIds: wall.sides.flatMap(side => Array.isArray(side) ? side.map(room => room.roomId) : []) };
         }),
         rooms: (data.rooms as any[]).map(room => ({ id: room.id, storeyId: room.storeyId, polygon: Array.isArray(room.geometry?.polygon) ? room.geometry.polygon : null,
           holes: room.geometry?.holes, sourceVersionId: room.geometry?.source?.sourceVersionId, page: room.geometry?.source?.page,
@@ -1120,9 +1122,9 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
           inArray(buildingRelationships.relationshipType, ["separates", "faces_exterior"]), eq(buildingRelationships.reviewStatus, "unreviewed"), sql`${buildingRelationships.metadata}->>'method' like 'plan_side_probe_%'`));
         const relationships = walls.flatMap(wall => wall.sides.flatMap((side, sideIndex) => {
           const metadata = { method: wallAdjacencyMethod, side: sideIndex, sourceVersionId: wall.sourceVersionId, page: wall.page };
-          if (side === "exterior") return storeyOf.get(wall.wallId) ? [{ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
+          if (wall.exteriorSides[sideIndex]) return storeyOf.get(wall.wallId) ? [{ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
             toEntityType: "storey", toEntityId: storeyOf.get(wall.wallId), relationshipType: "faces_exterior", metadata, createdBy: d.actorId }] : [];
-          return (side ?? []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
+          return (Array.isArray(side) ? side : []).map(room => ({ tenantId: d.tenantId, modelId: modelRow.model.id, fromEntityType: "element", fromEntityId: wall.wallId,
             toEntityType: "room", toEntityId: room.roomId, relationshipType: "separates", metadata: { ...metadata, probeHits: room.hits }, createdBy: d.actorId }));
         }));
         const newWallConnections = newConnections(relationships);
