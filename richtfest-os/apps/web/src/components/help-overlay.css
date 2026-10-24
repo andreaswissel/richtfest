@@ -4,7 +4,7 @@
   right: var(--page);
   bottom: var(--page);
   width: min(30rem, calc(100vw - 2 * var(--page)));
-  height: min(42rem, calc(100dvh - 2 * var(--page)));
+  height: min(42rem, calc(100dvh - 7rem));
   max-height: calc(100dvh - 2 * var(--page));
   display: flex;
   flex-direction: column;
@@ -15,13 +15,26 @@
   outline: none;
 }
 
+.help-overlay-header {
+  padding: var(--stack) var(--page);
+}
+
+.help-conversation {
+  flex: none;
+  height: clamp(24rem, 60dvh, 42rem);
+}
+
+.help-embedded .help-conversation {
+  height: clamp(20rem, 45dvh, 32rem);
+}
+
 .help-embedded .page-header {
   flex-wrap: wrap;
   gap: var(--stack);
   margin-bottom: 0;
 }
 .help-embedded .page-header h1 {
-  font-size: var(--ui-lg);
+  font-size: var(--ui);
 }
 .help-embedded .header-actions {
   flex-wrap: wrap;
@@ -32,15 +45,12 @@
   height: 100%;
   min-height: 0;
 }
-.help-overlay .help-conversation,
-.help-overlay .help-chat {
+.help-overlay .help-conversation {
   flex: 1;
   min-height: 0;
-}
-.help-overlay .help-embedded [data-slot="message-scroller"] {
-  flex: 1;
   height: auto;
-  min-height: 8rem;
+  border: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
 }
 .help-embedded button {
   max-width: 100%;

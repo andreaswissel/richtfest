@@ -33,22 +33,20 @@ import { Button } from "../components/ui/button";
 import { NativeSelect } from "../components/ui/native-select";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
-import {
-  Message,
-  MessageContent,
-  MessageHeader,
-} from "../components/ui/message";
+import { Message, MessageContent } from "../components/ui/message";
 import { Bubble, BubbleContent } from "../components/ui/bubble";
 import { ChatMarkdown } from "../components/chat-markdown";
 import { Marker, MarkerContent } from "../components/ui/marker";
 import {
-  MessageScrollerProvider,
   MessageScroller,
-  MessageScrollerViewport,
   MessageScrollerContent,
   MessageScrollerItem,
-  MessageScrollerButton,
 } from "../components/ui/message-scroller";
+import {
+  ChatScrollerProvider,
+  ChatScrollerViewport,
+  ChatLatest,
+} from "../components/project-workspace/chat-scroller";
 
 import { LazyOpenUI } from "../components/project-workspace/lazy-openui";
 import { buildProjectViewPath } from "@richtfest/shared/project-view-context";
@@ -139,9 +137,6 @@ export function Help({ embedded = false }: { embedded?: boolean }) {
         error={overview.error}
         retry={() => void overview.refetch()}
       />
-      {embedded && (
-        <p className="text-ui-xs text-muted-foreground">{t("helpScope")}</p>
-      )}
       {saved && (
         <Callout>
           <Link to={`/help?report=${saved.id}`}>
@@ -167,24 +162,13 @@ export function Help({ embedded = false }: { embedded?: boolean }) {
           />
         </>
       ) : (
-        <div className="help-conversation mx-auto flex w-full min-w-0 max-w-3xl flex-col justify-center gap-stack min-[701px]:flex-1">
-          {overview.data &&
-            (!overview.data.readiness.configured ||
-              !overview.data.readiness.canRun) && (
-              <Callout>
-                {overview.data.readiness.canRun
-                  ? t("helpUnconfigured")
-                  : t("helpNoPermission")}{" "}
-                {overview.data.readiness.canRun && (
-                  <Link to="/settings">{t("helpSettings")}</Link>
-                )}
-              </Callout>
-            )}
+        <div className="help-conversation project-workspace-grid">
           <SupportChat
             key={conversationId || "new"}
             id={conversationId}
             pagePath={pagePath}
             projectId={projectId}
+            readiness={overview.data?.readiness}
             canRun={
               overview.isSuccess &&
               overview.data?.readiness.configured === true &&
@@ -230,6 +214,7 @@ function SupportChat({
   pagePath,
   projectId,
   canRun,
+  readiness,
   onCreated,
   onProposal,
   onFileReport,
@@ -238,6 +223,7 @@ function SupportChat({
   pagePath: string;
   projectId?: string;
   canRun: boolean;
+  readiness: Overview["readiness"] | undefined;
   onCreated: (id: string) => void;
   onProposal: (proposal: Proposal, messageId: string) => void;
   onFileReport: () => void;
@@ -294,255 +280,278 @@ function SupportChat({
   return (
     <section
       aria-label={t("helpChat")}
-      className="help-chat flex min-h-0 min-w-0 flex-col gap-stack"
+      className="help-chat project-conversation"
     >
-      {!started && (
-        <div className="flex flex-wrap gap-stack">
-          {(
-            [
-              "helpExampleConcept",
-              "helpExampleFeature",
-              "helpExampleFeedback",
-            ] as const
-          ).map((key) => (
-            <Button
-              key={key}
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-auto whitespace-normal py-stack text-left"
-              disabled={!!request}
-              onClick={() => setBody(t(key))}
-            >
-              {t(key)}
-            </Button>
-          ))}
-        </div>
-      )}
-      <ErrorState
-        error={conversation.error}
-        retry={() => void conversation.refetch()}
-      />
-      {started && (
-        <MessageScrollerProvider
-          key={id || newId}
-          autoScroll={send.isPending}
-          defaultScrollPosition="last-anchor"
-        >
-          <MessageScroller className="h-[clamp(12rem,calc(100dvh-32rem),40rem)] min-[701px]:h-[clamp(12rem,calc(100dvh-29rem),40rem)]">
-            <MessageScrollerViewport>
-              <MessageScrollerContent className="gap-stack p-2">
-                {id && conversation.isPending && (
-                  <Marker>
-                    <MarkerContent>{t("loading")}</MarkerContent>
-                  </Marker>
-                )}
-                {!conversation.isPending && !messages.length && (
-                  <Marker>
-                    <MarkerContent>{t("noMessages")}</MarkerContent>
-                  </Marker>
-                )}
-                {messages.map((message) => (
-                  <MessageScrollerItem key={message.id}>
-                    <Message align={message.role === "user" ? "end" : "start"}>
-                      <MessageContent>
-                        <MessageHeader>
-                          {message.role === "user"
-                            ? t("helpYou")
-                            : t("helpAssistant")}
-                        </MessageHeader>
-                        <Bubble
-                          variant={message.role === "user" ? "muted" : "ghost"}
+      <ChatScrollerProvider key={id || newId}>
+        <MessageScroller className="project-transcript">
+          <ChatScrollerViewport aria-label={t("helpChat")}>
+            <MessageScrollerContent className="p-page gap-stack">
+              <ErrorState
+                error={conversation.error}
+                retry={() => void conversation.refetch()}
+              />
+              {!started && (
+                <MessageScrollerItem>
+                  <div className="flex flex-wrap gap-stack">
+                    {(
+                      [
+                        "helpExampleConcept",
+                        "helpExampleFeature",
+                        "helpExampleFeedback",
+                      ] as const
+                    ).map((key) => (
+                      <Button
+                        key={key}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-auto whitespace-normal py-stack text-left"
+                        disabled={!!request}
+                        onClick={() => setBody(t(key))}
+                      >
+                        {t(key)}
+                      </Button>
+                    ))}
+                  </div>
+                </MessageScrollerItem>
+              )}
+              {id && conversation.isPending && (
+                <Marker>
+                  <MarkerContent>{t("loading")}</MarkerContent>
+                </Marker>
+              )}
+              {started && !conversation.isPending && !messages.length && (
+                <Marker>
+                  <MarkerContent>{t("noMessages")}</MarkerContent>
+                </Marker>
+              )}
+              {messages.map((message) => (
+                <MessageScrollerItem key={message.id}>
+                  <Message align={message.role === "user" ? "end" : "start"}>
+                    <MessageContent>
+                      <Bubble
+                        variant={message.role === "user" ? "muted" : "ghost"}
+                        className="max-w-full"
+                      >
+                        <BubbleContent
+                          className={
+                            message.role === "user"
+                              ? "whitespace-pre-wrap"
+                              : undefined
+                          }
                         >
-                          <BubbleContent
-                            className={
-                              message.role === "user"
-                                ? "whitespace-pre-wrap"
-                                : undefined
+                          {message.role === "user" ? (
+                            message.body
+                          ) : (
+                            <ChatMarkdown>{message.body}</ChatMarkdown>
+                          )}
+                        </BubbleContent>
+                      </Bubble>
+                      {message.status !== "completed" && (
+                        <Marker>
+                          <MarkerContent>
+                            {t(messageStatusKeys[message.status])}
+                          </MarkerContent>
+                        </Marker>
+                      )}
+                      {message.openui && (
+                        <LazyOpenUI
+                          projectId=""
+                          response={message.openui}
+                          onReply={canRun && !request ? submit : undefined}
+                        />
+                      )}
+                      {!!message.sources?.length && (
+                        <div className="flex flex-wrap gap-stack text-ui-xs text-muted-foreground">
+                          {message.sources
+                            .filter(
+                              (source) => !source.path.startsWith("/docs/"),
+                            )
+                            .map((source, index) => (
+                              <Link
+                                key={`${source.path}:${index}`}
+                                to={source.path}
+                              >
+                                {source.title} ↗
+                              </Link>
+                            ))}
+                          {message.sources.some((source) =>
+                            source.path.startsWith("/docs/"),
+                          ) && (
+                            <details className="w-full">
+                              <summary className="cursor-pointer">
+                                {t("docs")}
+                              </summary>
+                              <div className="flex flex-wrap gap-stack py-stack">
+                                {message.sources
+                                  .filter((source) =>
+                                    source.path.startsWith("/docs/"),
+                                  )
+                                  .map((source, index) => (
+                                    <a
+                                      key={`${source.path}:${index}`}
+                                      href={source.path}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {source.title}
+                                    </a>
+                                  ))}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                      {message.reportId ? (
+                        <Link to={`/help?report=${message.reportId}`}>
+                          {t("helpSavedReport")}: {message.reportId}
+                        </Link>
+                      ) : (
+                        message.proposal && (
+                          <Button
+                            variant="outline"
+                            className="self-start"
+                            onClick={() =>
+                              onProposal(message.proposal!, message.id)
                             }
                           >
-                            {message.role === "user" ? (
-                              message.body
-                            ) : (
-                              <ChatMarkdown>{message.body}</ChatMarkdown>
-                            )}
+                            {t("helpReviewProposal")}
+                          </Button>
+                        )
+                      )}
+                    </MessageContent>
+                  </Message>
+                </MessageScrollerItem>
+              ))}
+              {request &&
+                !messages.some((message) => message.id === request.id) && (
+                  <MessageScrollerItem>
+                    <Message align="end">
+                      <MessageContent>
+                        <Bubble variant="muted">
+                          <BubbleContent className="whitespace-pre-wrap">
+                            {request.body}
                           </BubbleContent>
                         </Bubble>
-                        {message.status !== "completed" && (
-                          <Marker>
-                            <MarkerContent>
-                              {t(messageStatusKeys[message.status])}
-                            </MarkerContent>
-                          </Marker>
-                        )}
-                        {message.openui && (
-                          <LazyOpenUI
-                            projectId=""
-                            response={message.openui}
-                            onReply={canRun && !request ? submit : undefined}
-                          />
-                        )}
-                        {!!message.sources?.length && (
-                          <div className="flex flex-wrap gap-stack text-ui-xs text-muted-foreground">
-                            {message.sources
-                              .filter(
-                                (source) => !source.path.startsWith("/docs/"),
-                              )
-                              .map((source, index) => (
-                                <Link
-                                  key={`${source.path}:${index}`}
-                                  to={source.path}
-                                >
-                                  {source.title} ↗
-                                </Link>
-                              ))}
-                            {message.sources.some((source) =>
-                              source.path.startsWith("/docs/"),
-                            ) && (
-                              <details className="w-full">
-                                <summary className="cursor-pointer">
-                                  {t("docs")}
-                                </summary>
-                                <div className="flex flex-wrap gap-stack py-stack">
-                                  {message.sources
-                                    .filter((source) =>
-                                      source.path.startsWith("/docs/"),
-                                    )
-                                    .map((source, index) => (
-                                      <a
-                                        key={`${source.path}:${index}`}
-                                        href={source.path}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                      >
-                                        {source.title}
-                                      </a>
-                                    ))}
-                                </div>
-                              </details>
-                            )}
-                          </div>
-                        )}
-                        {message.reportId ? (
-                          <Link to={`/help?report=${message.reportId}`}>
-                            {t("helpSavedReport")}: {message.reportId}
-                          </Link>
-                        ) : (
-                          message.proposal && (
-                            <Button
-                              variant="outline"
-                              className="self-start"
-                              onClick={() =>
-                                onProposal(message.proposal!, message.id)
-                              }
-                            >
-                              {t("helpReviewProposal")}
-                            </Button>
-                          )
-                        )}
                       </MessageContent>
                     </Message>
                   </MessageScrollerItem>
-                ))}
-                {request &&
-                  !messages.some((message) => message.id === request.id) && (
-                    <MessageScrollerItem>
-                      <Message align="end">
-                        <MessageContent>
-                          <Bubble variant="muted">
-                            <BubbleContent className="whitespace-pre-wrap">
-                              {request.body}
-                            </BubbleContent>
-                          </Bubble>
-                        </MessageContent>
-                      </Message>
-                    </MessageScrollerItem>
-                  )}
-                {send.isPending && (
-                  <MessageScrollerItem>
-                    <Marker>
-                      <MarkerContent>{t("helpWorking")}</MarkerContent>
-                    </Marker>
-                  </MessageScrollerItem>
                 )}
-              </MessageScrollerContent>
-            </MessageScrollerViewport>
-            <MessageScrollerButton aria-label={t("helpLatest")} />
-          </MessageScroller>
-        </MessageScrollerProvider>
-      )}
-      <ErrorState error={send.error} />
-      {send.isError && request && (
-        <div className="flex flex-wrap gap-stack">
-          <p className="text-ui-sm">{t("helpRetryHint")}</p>
-          <Button
-            variant="outline"
-            onClick={() => send.mutate(request, { onSuccess: onSent })}
-          >
-            {t("retry")}
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setRequest(null);
-              setBody("");
-              send.reset();
-            }}
-          >
-            {t("helpNewMessage")}
-          </Button>
-        </div>
-      )}
+              {send.isPending && (
+                <MessageScrollerItem>
+                  <Marker>
+                    <MarkerContent>{t("helpWorking")}</MarkerContent>
+                  </Marker>
+                </MessageScrollerItem>
+              )}
+              {readiness && (!readiness.configured || !readiness.canRun) && (
+                <MessageScrollerItem>
+                  <Message>
+                    <MessageContent>
+                      <Callout tone="error">
+                        {readiness.canRun
+                          ? t("helpUnconfigured")
+                          : t("helpNoPermission")}{" "}
+                        {readiness.canRun && (
+                          <Link
+                            className="underline underline-offset-2"
+                            to="/settings"
+                          >
+                            {t("helpSettings")}
+                          </Link>
+                        )}
+                      </Callout>
+                    </MessageContent>
+                  </Message>
+                </MessageScrollerItem>
+              )}
+              <ErrorState error={send.error} />
+              {send.isError && request && (
+                <MessageScrollerItem>
+                  <div className="flex flex-wrap gap-stack">
+                    <p className="text-ui-sm">{t("helpRetryHint")}</p>
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        send.mutate(request, { onSuccess: onSent })
+                      }
+                    >
+                      {t("retry")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setRequest(null);
+                        setBody("");
+                        send.reset();
+                      }}
+                    >
+                      {t("helpNewMessage")}
+                    </Button>
+                  </div>
+                </MessageScrollerItem>
+              )}
+            </MessageScrollerContent>
+          </ChatScrollerViewport>
+        </MessageScroller>
+        <ChatLatest />
+      </ChatScrollerProvider>
       <form
-        className="workspace-composer-shell shrink-0"
+        className="workspace-composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit(body);
         }}
       >
-        <div className="workspace-composer-input">
-          <Textarea
-            aria-label={t("helpMessage")}
-            placeholder={t("helpPlaceholder")}
-            rows={1}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey &&
-                !e.nativeEvent.isComposing
-              ) {
-                e.preventDefault();
-                submit(body);
-              }
-            }}
-            disabled={!canRun || !!request}
-            maxLength={12000}
-            required
-          />
-        </div>
-        <div className="workspace-composer-controls">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("helpFileReport")}
-            title={t("helpFileReport")}
-            onClick={onFileReport}
-          >
-            <MessageSquarePlus aria-hidden="true" />
-          </Button>
-          <span className="flex-1" />
-          <Button
-            type="submit"
-            size="icon"
-            aria-label={t("helpSend")}
-            title={t("helpSend")}
-            disabled={!canRun || !!request || !body.trim()}
-          >
-            <ArrowUp aria-hidden="true" />
-          </Button>
+        <span className="text-ui-xs text-muted-foreground">
+          {t("helpScope")}
+        </span>
+        <div className="workspace-composer-shell">
+          <div className="workspace-composer-input">
+            <Textarea
+              aria-label={t("helpMessage")}
+              placeholder={t("helpPlaceholder")}
+              rows={1}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  submit(body);
+                }
+              }}
+              disabled={!canRun || !!request}
+              maxLength={12000}
+              required
+            />
+          </div>
+          <div className="workspace-composer-controls">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("helpFileReport")}
+              title={t("helpFileReport")}
+              onClick={onFileReport}
+            >
+              <MessageSquarePlus aria-hidden="true" />
+            </Button>
+            <span className="flex-1" />
+            <Button
+              type="submit"
+              size="icon"
+              className="workspace-send-button"
+              aria-label={t("helpSend")}
+              title={t("helpSend")}
+              disabled={!canRun || !!request || !body.trim()}
+            >
+              <ArrowUp aria-hidden="true" />
+            </Button>
+          </div>
         </div>
       </form>
     </section>

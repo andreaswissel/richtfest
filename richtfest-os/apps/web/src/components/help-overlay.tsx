@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ClipboardList, MessageCircle } from "lucide-react";
+import { ClipboardList, MessageCircle, X } from "lucide-react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Help } from "../screens/help";
 import { useT } from "../i18n";
@@ -40,7 +40,7 @@ export default function HelpOverlay({ onClose }: { onClose: () => void }) {
       id="help-overlay"
       className="help-overlay"
     >
-      <header className="flex items-center justify-between gap-stack border-b p-page">
+      <header className="help-overlay-header flex shrink-0 items-center justify-between gap-stack border-b">
         <strong className="min-w-0 text-ui-sm">{t("help")}</strong>
         <div className="flex shrink-0 items-center gap-stack">
           <Button asChild variant="ghost" size="icon-sm">
@@ -69,11 +69,11 @@ export default function HelpOverlay({ onClose }: { onClose: () => void }) {
             aria-label={t("close")}
             onClick={onClose}
           >
-            ×
+            <X aria-hidden="true" />
           </Button>
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-page">
+      <div className="flex min-h-0 flex-1 flex-col">
         <Help embedded />
       </div>
     </aside>
