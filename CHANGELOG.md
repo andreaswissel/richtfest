@@ -2,6 +2,7 @@
 
 ## 2026-10-24
 
+- **Assistant across views:** Open a floating project chat with saved view context, existing tools and reviewed delegation. Start-page guidance and private application help use a compact composer without thread/history controls, link to features and offer OpenUI follow-up forms. Submit feedback, bugs and feature requests for review in the shared report queue. Shared project conversations remain separate from private help; unsaved edits and voice are not included.
 - **Review work beside the plan:** A dockable task window brings source-linked values and review actions directly into the PDF editor. Preview and explicitly adopt eligible room outlines in a batch using transparent geometry-check coverage, without treating the score as a probability or approving engineering inputs.
 - **Focused assessment preparation:** Propose a source-linked clear height for one selected room without overwriting existing values. Compare explicit RP rescue-window opening criteria while keeping roof rescue, fire-brigade access and full second-route checks open. Agent guidance separates missing supplier evidence, software limitations and the decisions that need professional review.
 

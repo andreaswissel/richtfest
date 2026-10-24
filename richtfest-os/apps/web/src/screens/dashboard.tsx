@@ -8,14 +8,17 @@ import { Button } from "../components/ui/button";
 import { NativeSelect } from "../components/ui/native-select";
 import { Callout, Empty } from "../components/ui/primitives";
 import { LoadState, ProjectTable } from "./foundation";
+import { Help } from "./help";
+import "../components/help-overlay.css";
 
 export function Dashboard() {
   const t = useT(), query = useApi("/dashboard");
   const data = query.data;
   return <Page>
-    <PageHeader title={t("overview")} description={t("homeSubtitle")} actions={
-      <Button asChild variant="default"><Link to="/projects?create=1">＋ {t("newProject")}</Link></Button>
+    <PageHeader title={t("overview")} actions={
+      <Button asChild variant="outline"><Link to="/projects?create=1">＋ {t("newProject")}</Link></Button>
     } />
+    <Help embedded />
     <LoadState query={query} />
     {data && <>
       <div className="overview-metrics">

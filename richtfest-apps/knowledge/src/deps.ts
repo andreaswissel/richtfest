@@ -118,6 +118,8 @@ export function sanitizeProviderDiagnostics(raw: unknown) {
 }
 export type AppDeps = {
   db: any;
+  /** App-owned, permission-scoped saved view data. No browser state, writes or vendor queries. */
+  projectViewData?: (context: import("@richtfest/shared").ProjectViewContext) => Promise<import("@richtfest/shared").ProjectViewData>;
   /** Projects owns tenant authorization, bounded reviewed state and proposal persistence. */
   buildingModelContext?: (projectId: string, selection?: import("@richtfest/shared").BuildingEntityRef) => Promise<unknown>;
   proposeBuildingModelChange?: (projectId: string, input: import("@richtfest/shared").BuildingEntityRef & {

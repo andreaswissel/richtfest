@@ -3,8 +3,8 @@ import { Login } from "./screens/auth";
 import { Button } from "./components/ui/button";
 import { AppUpdateButton } from "./components/app-update-button";
 import { Page, PageHeader } from "./components/layout";
-import { useEffect, useLayoutEffect } from "react";
-import { Outlet, Link, NavLink, useLocation } from "react-router-dom";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef } from "react";
+import { Outlet, Link, NavLink, useLocation, useSearchParams } from "react-router-dom";
 import { queryClient, useApi } from "./query";
 import { api, ApiError } from "./api";
 import { useT } from "./i18n";
@@ -13,11 +13,25 @@ import { routesManifest } from "./routes-manifest";
 import { LoadState } from "./screens/foundation";
 import { persistWorkspaceCache } from "./query-cache";
 import { ArrowUpRight, BookOpen, LogOut } from "lucide-react";
+const HelpOverlay = lazy(() => import("./components/help-overlay"));
 export function App({ initializing = false }: { initializing?: boolean }) {
   const session = useApi("/auth/me"),
     t = useT(),
     preferences = usePreferences();
   const { pathname } = useLocation();
+  const [params, setParams] = useSearchParams();
+  const helpTrigger = useRef<HTMLButtonElement>(null);
+  const helpOpen = params.get("guide") === "1" && pathname !== "/" && pathname !== "/help";
+  const wasHelpOpen = useRef(helpOpen);
+  useEffect(() => {
+    if (wasHelpOpen.current && !helpOpen) helpTrigger.current?.focus();
+    wasHelpOpen.current = helpOpen;
+  }, [helpOpen]);
+  const closeHelp = () => {
+    const next = new URLSearchParams(params);
+    next.delete("guide");
+    setParams(next, { replace: true });
+  };
   const sessionUser = session.isError
     ? undefined
     : session.data?.user || session.data;
@@ -212,6 +226,14 @@ export function App({ initializing = false }: { initializing?: boolean }) {
           )}
         </main>
       </div>
+      {user?.id && pathname !== "/" && pathname !== "/help" && <>
+        {!helpOpen && params.get("assistant") !== "1" && <Button ref={helpTrigger} variant="outline" className="fixed bottom-4 right-4 z-40 shadow-sm" aria-expanded={helpOpen} aria-controls={helpOpen ? "help-overlay" : undefined} onClick={() => {
+          const next = new URLSearchParams(params);
+          next.set("guide", "1");
+          setParams(next, { replace: true });
+        }}>{t("help")}</Button>}
+        {helpOpen && <Suspense fallback={null}><HelpOverlay onClose={closeHelp} /></Suspense>}
+      </>}
     </div>
   );
 }

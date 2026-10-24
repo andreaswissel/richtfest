@@ -20,6 +20,8 @@ import {
 } from "../src/components/project-workspace/artifact-export";
 import { ProjectAnalytics } from "../src/components/project-workspace/analytics";
 import { ProjectWorkspace } from "../src/screens/project-workspace";
+import { Dashboard } from "../src/screens/dashboard";
+import { Help } from "../src/screens/help";
 import { formatSourceCitations } from "@richtfest/shared";
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
 const conversationId = "550e8400-e29b-41d4-a716-446655440001";
@@ -191,6 +193,132 @@ describe("registered OpenUI boundary", () => {
   });
 });
 describe("workspace records and navigation", () => {
+  test("home offers help while embedded help selects its private conversation, not the project's chat", () => {
+    const helpId = "550e8400-e29b-41d4-a716-446655440099";
+    const records = {
+      "/support": {
+        conversations: [],
+        readiness: { configured: true, canRun: true },
+        canManage: false,
+      },
+      "/dashboard": { projects: [], tasks: [], pendingReview: [] },
+      [`/support/conversations/${helpId}`]: {
+        conversation: { id: helpId },
+        messages: [
+          {
+            id: "answer",
+            role: "assistant",
+            status: "completed",
+            body: "Use the building model, then request a reviewed concept in project chat. Shall I help?",
+            sources: [
+              {
+                title: "Building model",
+                path: `/projects/${projectId}?view=building-model`,
+              },
+              {
+                title: "Project chat",
+                path: `/projects/${projectId}?view=workspace`,
+              },
+            ],
+          },
+        ],
+      },
+      [`/support/conversations/${conversationId}`]: {
+        conversation: { id: conversationId },
+        messages: [
+          {
+            id: "wrong",
+            role: "user",
+            body: "Wrong private conversation",
+            status: "completed",
+            sources: [],
+          },
+        ],
+      },
+    };
+    const home = render(<Dashboard />, "/", records);
+    expect(home).toContain("What would you like to do?");
+    expect(home).toContain("Where can I create a sound-insulation concept?");
+    expect(home).toContain("Give feedback or request a feature");
+    expect(home.match(/aria-label="Message"/g)).toHaveLength(1);
+    expect(home).not.toContain(">History<");
+    expect(home).not.toContain("New conversation");
+    expect(home).toContain('rows="1"');
+    const resumed = render(<Help embedded />, "/", {
+      ...records,
+      "/support": { ...records["/support"], conversations: [{ id: helpId }] },
+    });
+    expect(resumed).toContain(
+      "Use the building model, then request a reviewed concept",
+    );
+    expect(resumed).not.toContain("Wrong private conversation");
+    expect(resumed).not.toContain(">History<");
+    expect(resumed).not.toContain("New conversation");
+    const embedded = render(
+      <Help embedded />,
+      `/projects/${projectId}?conversation=${conversationId}&helpConversation=${helpId}`,
+      records,
+    );
+    expect(embedded).not.toContain("Wrong private conversation");
+    expect(embedded).toContain(
+      `href="/projects/${projectId}?view=building-model"`,
+    );
+    expect(embedded).toContain(`href="/projects/${projectId}?view=workspace"`);
+    expect(embedded).toContain("Private chat");
+  });
+
+  test("project assistant shares the selected chat, preserves it across views, and respects read access", () => {
+    const records = {
+      "/auth/me": {
+        permissions: ["projects:read", "knowledge:read", "knowledge:write"],
+      },
+      [`/projects/${projectId}`]: { id: projectId, name: "Assistant project" },
+      [`/knowledge/workspaces/${projectId}`]: {
+        conversations: [{ id: conversationId, title: "Facade questions" }],
+        runs: [],
+      },
+    };
+    const node = (
+      <Routes>
+        <Route path="/projects/:id" element={<ProjectWorkspace />} />
+      </Routes>
+    );
+    const open = render(
+      node,
+      `/projects/${projectId}?view=details&assistant=1&conversation=${conversationId}`,
+      records,
+    );
+    expect(open).toContain('aria-label="Project assistant"');
+    expect(open).toContain("Facade questions");
+    expect(open).toContain(
+      `href="/projects/${projectId}?view=workspace&amp;conversation=${conversationId}"`,
+    );
+    expect(open).toContain(
+      `href="/projects/${projectId}?view=building-model&amp;perspective=nerd&amp;assistant=1&amp;conversation=${conversationId}"`,
+    );
+    expect(open).toContain(`href="/projects/${projectId}?view=details"`);
+    expect(open).toContain("View context");
+    expect(open.match(/aria-label="Message"/g)).toHaveLength(1);
+
+    const full = render(
+      node,
+      `/projects/${projectId}?view=workspace&assistant=1&conversation=${conversationId}`,
+      records,
+    );
+    expect(full).not.toContain('aria-label="Project assistant"');
+    expect(full.match(/aria-label="Message"/g)).toHaveLength(1);
+    const denied = render(
+      node,
+      `/projects/${projectId}?view=details&assistant=1`,
+      {
+        ...records,
+        "/auth/me": { permissions: ["projects:read"] },
+      },
+    );
+    expect(denied).not.toContain("Ask agent");
+    expect(denied).not.toContain('aria-label="Project assistant"');
+  });
+
   test("fire protection has a direct project tab in every perspective and shares the saved building inputs", () => {
     for (const perspective of ["nerd", "planner", "coordinator"]) {
       const html = render(

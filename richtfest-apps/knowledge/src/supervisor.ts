@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppDeps } from "./deps";
 import { sanitizeProviderDiagnostics } from "./deps";
 import { buildingContextForRun } from "./building-model-context";
+import { projectViewForRun } from "./project-view-context";
 import { batchSectionSources, batchSpecialistSources } from "./source-batches";
 import {
   agentRuns,
@@ -367,6 +368,7 @@ export async function stepSupervisor(d: AppDeps, id: string) {
     if (!(await d.validateProject(run.projectId)))
       throw conflict("Project unavailable");
     if (!d.executeSupervisor) throw conflict("Supervisor unavailable");
+    const projectView = await projectViewForRun(d, run);
     const policy = agentPresetSnapshotSchema.parse(state.modelPolicy);
     const inputReassessmentOnly = state.review?.inputReassessmentOnly === true;
     if (inputReassessmentOnly) {
@@ -422,7 +424,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
       // Tool receipts change coverage during this very call. They must not change
       // its identity; all evidence, batch, findings and exact visual scope remain bound.
       const { visualReadCoverage: _coverage, ...specialistContext } = context as Record<string, unknown>;
-      const identity = { phase, goal, context: phase === "specialist" ? specialistContext : context, runId, revision: state.revision };
+      // Pin the selection, not live saved-data reads (analytics changes during the run itself).
+      const identity = { phase, goal, context: phase === "specialist" ? specialistContext : context, runId, revision: state.revision,
+        ...(projectView ? { projectView: { path: projectView.path, messageId: projectView.messageId } } : {}) };
       let callKey = checkpointHash(identity);
       const [sender] = runId === run.id ? [run] : await d.db.select().from(agentRuns).where(and(
         eq(agentRuns.id, runId), eq(agentRuns.tenantId, d.tenantId), eq(agentRuns.parentRunId, run.id),
@@ -488,8 +492,9 @@ export async function stepSupervisor(d: AppDeps, id: string) {
         && (fireRole === "requirements_reviewer" || fireRole === "construction_law") && (policy.specialists[fireRole]?.maxSteps ?? 1) >= 2;
       const providerContext = {
         ...(context as object),
+        ...(projectView ? { projectView } : {}),
         fireProtection: { toolAvailable: fireToolsAvailable, inputSource: "saved_building_model", draftOnly: true },
-        buildingModel: visualOnly || appendixWriter || editorialPacket || consolidation ? undefined : await buildingContextForRun(d, run),
+        buildingModel: visualOnly || appendixWriter || editorialPacket || consolidation ? undefined : await buildingContextForRun(d, run, projectView),
         buildingModelPolicy: "Read-only project context. Use current approved properties and stable object links; imported or proposed claims are not reviewed facts. No building-model mutation or approval is available in Team/Report. This context does not authorize engineering calculations.",
         companyKnowledge: (context as { companyKnowledge?: CompanyKnowledgeReceipt[] }).companyKnowledge ?? [],
         companyKnowledgeCategories: !visualOnly && phase === "specialist" && (policy.specialists[(context as { role: keyof typeof policy.specialists }).role]?.maxSteps ?? 1) >= 2

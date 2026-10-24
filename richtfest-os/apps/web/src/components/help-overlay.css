@@ -1,0 +1,56 @@
+.help-overlay {
+  position: fixed;
+  z-index: 40;
+  right: var(--page);
+  bottom: var(--page);
+  width: min(30rem, calc(100vw - 2 * var(--page)));
+  height: min(42rem, calc(100dvh - 2 * var(--page)));
+  max-height: calc(100dvh - 2 * var(--page));
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.14);
+  outline: none;
+}
+
+.help-embedded .page-header {
+  flex-wrap: wrap;
+  gap: var(--stack);
+  margin-bottom: 0;
+}
+.help-embedded .page-header h1 {
+  font-size: var(--ui-lg);
+}
+.help-embedded .header-actions {
+  flex-wrap: wrap;
+}
+.help-overlay .help-embedded {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.help-overlay .help-conversation,
+.help-overlay .help-chat {
+  flex: 1;
+  min-height: 0;
+}
+.help-overlay .help-embedded [data-slot="message-scroller"] {
+  flex: 1;
+  height: auto;
+  min-height: 8rem;
+}
+.help-embedded button {
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  .help-overlay {
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 90dvh;
+  }
+}

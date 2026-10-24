@@ -45,6 +45,22 @@ The project bar and module tabs stay in place while switching modules or scrolli
 
 The shared project shell owns the viewport and navigation layout. Modules render inside its content slot: regular views scroll there, while the conversation and full-bleed editors manage their internal panels. Module styles must not change the enclosing page's height, padding or overflow. Switching modules starts the new content at the top without remounting the navigation.
 
+### Ask the project assistant from a view
+
+Choose **Ask agent / Agent fragen** in the project bar to open the assistant as a floating overlay over the current module, without resizing the underlying view. On narrow screens the overlay spans the content width. The project navigation stays accessible. Escape closes the panel and returns focus to its button.
+
+The assistant uses the project's existing **shared conversations**, not a private or cross-project chat. Select an active conversation or choose **Start conversation**. **Open full conversation** opens that same thread with its documents and delegated work. In the Conversation module, use the normal composer rather than a second assistant panel. Moving between project modules retains the selected thread; closing the panel does not cancel its runs.
+
+Choose **Help & feedback** for private application guidance, feature discovery or a reviewed feedback submission. **Conversation** switches back to project work. These surfaces do not copy private help history into the shared project chat. The same application-help chat is available on the home page; project execution still requires choosing a project.
+
+The composer shows a **View context** link. Sending a message saves the bounded project view and supported selections with that message. Subsequent navigation changes the context of the next message, not earlier requests. A saved link identifies the view; it is not a screenshot or a historical snapshot of all its data. The agent uses authorized saved records at execution time. Unsaved forms, browser DOM, hidden fields and arbitrary query text are not sent. A source-version or page selection does not by itself attach evidence or authorize citations; use the existing source attachment and review controls.
+
+Saved context covers project details, planning items, inquiries, noise inputs, location records, feasibility inputs and project analytics. Large records are excerpted with explicit limits. Feasibility results are not recalculated, and financial inputs remain feature-gated. Building, fire protection, sources and conversations use their existing agent context; Reviewed knowledge does not yet supply the current view's records automatically. The agent must report missing data instead of pretending to see the screen.
+
+Quick questions use the existing Chat workflow. Requests for team work, reports or calculations retain the existing workflow proposal, confirmation, allowance and review controls in the same conversation. Closing or navigating away from the panel does not commission a duplicate run. Existing project/knowledge access and agent execution permissions still apply. Without a configured provider/model, messages can be saved but the UI explicitly reports that agent replies are unavailable.
+
+This is a text interface. It does not enable microphone access, speech processing or a new voice provider.
+
 ### Coordinator, Planner and Nerd views
 
 The project bar's **View** switcher changes the perspective, not access rights. **Nerd** preserves all existing module tabs and is the default for existing project links. **Coordinator** adds a project overview across disciplines; **Planner** adds a discipline overview with direct access to the same 3D location and building-model workbenches. Switching perspective inside a workbench leaves the editor and its unsaved inputs in place. Use the overview tab to return to its dashboard, or **All modules** for the full navigation. The switcher stays visible on narrow conversation screens too.

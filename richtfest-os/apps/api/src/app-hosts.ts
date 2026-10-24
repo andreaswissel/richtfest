@@ -15,6 +15,7 @@ import { readSourceEvidence, readSourceModel } from "@richtfest/projects/source-
 import { readSourceDocumentModel } from "@richtfest/projects/source-document";
 import { researchProjectEnvironment } from "@richtfest/projects/environment";
 import { readBuildingModelAgentContext, proposeBuildingModelChange, readFireProtectionSnapshot } from "@richtfest/projects/building-model";
+import { readProjectViewData } from "@richtfest/projects/project-view-data";
 import { querySourceImage } from "@richtfest/projects/source-image-query";
 import { extractSourceVisual } from "@richtfest/projects/source-text";
 import { readPdfRepresentations } from "@richtfest/projects/source-representations";
@@ -224,6 +225,15 @@ export const knowledgeDeps = (
   };
   return {
     ...base(db, req),
+    projectViewData: async context => {
+      if (context.view === "feasibility") {
+        const [{ readFeasibilityProjectViewData }, { feasibilityDeps }] = await Promise.all([
+          import("@richtfest/feasibility/project-view-data"), import("./feasibility-host"),
+        ]);
+        return readFeasibilityProjectViewData(feasibilityDeps(db, req), context);
+      }
+      return readProjectViewData(projectsDeps(db, req), context);
+    },
     // Only agent source access is evidence-only. Other apps retain generic validation.
     exteriorNoiseProof: projectId => readExteriorNoiseProof(projectsDeps(db, req), projectId),
     buildingModelContext: (projectId, selection) => readBuildingModelAgentContext(projectsDeps(db, req), projectId,

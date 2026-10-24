@@ -1,0 +1,73 @@
+.project-assistant {
+  position: fixed;
+  z-index: 40;
+  right: var(--page);
+  bottom: var(--page);
+  width: min(30rem, calc(100vw - 2 * var(--page)));
+  height: min(42rem, calc(100dvh - 7rem));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.14);
+  overflow: hidden;
+  background: var(--background);
+  outline: none;
+}
+
+.project-assistant > .project-conversation {
+  flex: 1;
+}
+
+.project-assistant-header,
+.project-assistant-threads {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--stack);
+  padding: var(--stack) var(--page);
+}
+
+.project-assistant-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.project-assistant-threads [data-slot="native-select-wrapper"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-assistant-threads select {
+  height: var(--control-sm);
+  font-size: var(--ui-sm);
+}
+
+.project-assistant-scope {
+  margin: 0;
+  padding: 0 var(--page) var(--stack);
+}
+
+.project-view-context {
+  display: flex;
+  align-items: center;
+  gap: var(--stack);
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: var(--ui-xs);
+}
+
+.project-view-context a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .project-assistant {
+    right: 0;
+    bottom: 0;
+    width: 100%;
+  }
+}

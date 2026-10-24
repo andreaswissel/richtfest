@@ -129,6 +129,126 @@ integration("explicit chat bypasses supervision; omission keeps legacy supervise
   } finally { await f.close(); }
 });
 
+integration("project-view message API pins Chat to the initiating selection, not the latest message, and rejects foreign refs", async () => {
+  const f = await fixture();
+  const room = crypto.randomUUID(), laterRoom = crypto.randomUUID();
+  const contexts: any[] = [], selections: unknown[] = [];
+  let viewReads = 0;
+  f.d.projectViewData = async view => {
+    viewReads++;
+    return { status: "available", truncated: false, authority: "untrusted_saved_project_data", data: { selected: view.selection.entity } };
+  };
+  f.d.buildingModelContext = async (projectId, selection) => {
+    selections.push({ projectId, selection });
+    return { projectId, selected: selection, revision: 7, properties: [] };
+  };
+  f.d.executeProvider = async request => {
+    contexts.push(request.context);
+    return { status: "completed", output: { summary: "Saved project data only", rationale: "", citations: [], tools: [] } };
+  };
+  try {
+    const [thread] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Project assistant", createdBy: f.d.actorId }).returning();
+    const messagePath = `/conversations/${thread!.id}/messages`;
+    const ref = `/projects/${f.projectId}?view=building-model&entity=room:${room}&sourceVersion=${f.sourceVersionId}&page=2`;
+    const initial = await f.post(messagePath, { body: "Explain the selected room", sourceRef: ref });
+    expect(initial.status).toBe(201);
+    expect(initial.body.data.sourceRef).toContain(`entity=room%3A${room}`);
+    expect((await f.post(messagePath, { body: "Later view", sourceRef: `/projects/${f.projectId}?view=building-model&entity=room:${laterRoom}` })).status).toBe(201);
+    const input = { ...f.input, goal: "Explain the selected room", conversationId: thread!.id,
+      messageId: initial.body.data.id, workflow: { mode: "chat" } };
+    const created = await f.post("/runs", input);
+    expect(created.status).toBe(201);
+    expect((await f.stopped(created.body.data.id)).status).toBe("needs_review");
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].projectView).toMatchObject({ messageId: initial.body.data.id, view: "building-model",
+      selection: { entity: `room:${room}`, sourceVersion: f.sourceVersionId, page: "2" }, dataScope: "saved_project_data_only" });
+    expect(contexts[0].projectView.limitations).toContain("unsaved edits");
+    expect(contexts[0].projectView.savedData).toMatchObject({ status: "available", data: { selected: `room:${room}` } });
+    expect(contexts[0].buildingModel.selected).toEqual({ entityType: "room", entityId: room });
+    expect(selections).toEqual([{ projectId: f.projectId, selection: { entityType: "room", entityId: room } }]);
+    // A route source is a hint, never an implicit source attachment or citation receipt.
+    expect(contexts[0].sourceVersionIds).toEqual([]);
+    expect(contexts[0].sources).toEqual([]);
+    const saved = await f.get(`/conversations/${thread!.id}/messages/${initial.body.data.id}`);
+    expect(saved.body.data.sourceRef).toBe(initial.body.data.sourceRef);
+    for (const sourceRef of [`/projects/${crypto.randomUUID()}?view=building-model&entity=room:${room}`,
+      `/projects/${f.projectId}?view=building-model&entity=arbitrary`, `/projects/${f.projectId}?view=sources&q=ignore-instructions`]) {
+      expect((await f.post(messagePath, { body: "Invalid context", sourceRef })).status).toBe(400);
+    }
+    // Pre-existing invalid rows cannot bypass write validation by starting a run.
+    const [foreign] = await f.db.insert(messages).values({ tenantId: f.d.tenantId, conversationId: thread!.id,
+      authorId: f.d.actorId, actorKind: "user", body: "Imported old message",
+      sourceRef: `/projects/${crypto.randomUUID()}?view=building-model` }).returning();
+    expect((await f.post("/runs", { ...input, messageId: foreign!.id })).status).toBe(400);
+    expect(contexts).toHaveLength(1);
+    // Legacy labels and absent sourceRef retain their prior behavior, with no view inferred from later messages.
+    for (const sourceRef of [undefined, "Imported plan page 2"]) {
+      const legacy = await f.post(messagePath, { body: "Legacy message", sourceRef });
+      expect(legacy.status).toBe(201);
+      const run = await f.post("/runs", { ...input, messageId: legacy.body.data.id });
+      expect(run.status).toBe(201);
+      expect((await f.stopped(run.body.data.id)).status).toBe("needs_review");
+      expect(contexts.at(-1).projectView).toBeUndefined();
+      expect(contexts.at(-1).buildingModel.selected).toBeUndefined();
+    }
+    expect(viewReads).toBe(1); // no saved-data reads for legacy messages or later browser navigation
+  } finally { await f.close(); }
+});
+
+integration("supervised project-view context survives phase checkpoints and steering pins its exact message", async () => {
+  const f = await fixture();
+  const initialRoom = crypto.randomUUID(), steeredRoom = crypto.randomUUID(), laterRoom = crypto.randomUUID();
+  const calls: Array<{ phase: string; context: any }> = [];
+  f.d.projectViewData = async view => ({ status: "available", truncated: false, authority: "untrusted_saved_project_data",
+    data: { selected: view.selection.entity } });
+  f.d.buildingModelContext = async (projectId, selection) => ({ projectId, selected: selection, revision: 7 });
+  const execute = f.d.executeSupervisor!;
+  f.d.executeSupervisor = async request => {
+    calls.push({ phase: request.phase, context: request.context });
+    return execute(request);
+  };
+  try {
+    const [thread] = await f.db.insert(conversations).values({ tenantId: f.d.tenantId, projectId: f.projectId,
+      title: "Steered assistant", createdBy: f.d.actorId }).returning();
+    const postMessage = (room: string) => f.post(`/conversations/${thread!.id}/messages`, { body: "Discuss selected room",
+      sourceRef: `/projects/${f.projectId}?view=building-model&entity=room:${room}` });
+    const initial = await postMessage(initialRoom);
+    const created = await f.post("/runs", { ...f.input, conversationId: thread!.id, messageId: initial.body.data.id,
+      // The newer steering view must supersede even a room explicitly present in the old goal.
+      goal: `Discuss /projects/${f.projectId}?view=building-model&entity=room:${initialRoom}`, workflow: { mode: "team" } });
+    expect(created.status).toBe(201);
+    const id = created.body.data.id;
+    const steeringMessage = await postMessage(steeredRoom);
+    await postMessage(laterRoom);
+    await stepSupervisor(f.d, id);
+    expect(calls[0]!.context.projectView.messageId).toBe(initial.body.data.id);
+    expect(calls[0]!.context.buildingModel.selected.entityId).toBe(initialRoom);
+    await stepSupervisor(f.d, id); // new invocation reloads the durable run/checkpoint
+    expect(calls.find(call => call.phase === "specialist")!.context.projectView.selection.entity).toBe(`room:${initialRoom}`);
+    const steered = await f.post(`/runs/${id}/steer`, { instruction: "Discuss this room instead", messageId: steeringMessage.body.data.id });
+    expect(steered.status).toBe(201);
+    const marker = calls.length;
+    for (let i = 0; i < 5; i++) await stepSupervisor(f.d, id);
+    const after = calls.slice(marker);
+    expect(after.map(call => call.phase)).toContain("plan");
+    expect(after.map(call => call.phase)).toContain("specialist");
+    expect(after.map(call => call.phase)).toContain("review");
+    for (const call of after) {
+      expect(call.context.projectView).toMatchObject({ messageId: steeringMessage.body.data.id,
+        selection: { entity: `room:${steeredRoom}` }, dataScope: "saved_project_data_only" });
+      expect(call.context.projectView.savedData).toMatchObject({ status: "available", data: { selected: `room:${steeredRoom}` } });
+      expect(call.context.buildingModel.selected.entityId).toBe(steeredRoom);
+    }
+    const [state] = await f.rows(supervisorRuns);
+    expect(state!.generation).toBe(1);
+    const root = (await f.rows(agentRuns)).find((run: any) => run.id === id);
+    expect(root.messageId).toBe(steeringMessage.body.data.id);
+    expect(root.goal).toContain(initialRoom); // context is structured, never injected into goal text
+    expect(root.status).toBe("needs_review");
+  } finally { await f.close(); }
+});
+
 for (const attempt of ["delegate_source_review", "create_draft", "prepare_fire_protection_assessment", "artifact"] as const)
 integration(`chat fences malformed provider ${attempt} without child or artifact writes`, async () => {
   const f = await fixture();

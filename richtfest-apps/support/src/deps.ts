@@ -1,4 +1,4 @@
-import type { SupportProposal, SupportSource } from "@richtfest/shared";
+import type { SupportContext, SupportProposal, SupportSource } from "@richtfest/shared";
 
 export type AppDeps = {
   db: any;
@@ -7,7 +7,8 @@ export type AppDeps = {
   canManage: boolean;
   canRun: boolean;
   readiness: () => Promise<{ configured: boolean; provider: string }>;
-  answer: (history: { role: string; body: string }[]) => Promise<
+  validateContext: (context: SupportContext) => Promise<SupportContext>;
+  answer: (history: { role: string; body: string }[], context: SupportContext) => Promise<
     | { status: "unconfigured" }
     | { status: "completed"; summary: string; openui?: string | null; proposal: SupportProposal | null; sources: SupportSource[] }
   >;

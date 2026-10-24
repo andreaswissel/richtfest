@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { ArrowUp, MessageSquarePlus } from "lucide-react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   useInfiniteQuery,
   useMutation,
@@ -15,7 +16,9 @@ import type {
 } from "@richtfest/shared";
 import { api, ApiError } from "../api";
 import { useApi } from "../query";
-import { useT } from "../i18n";
+import { registerMessages, useT } from "../i18n";
+import en from "../components/help-locales/en.json";
+import de from "../components/help-locales/de.json";
 import { Page, PageHeader, Section } from "../components/layout";
 import {
   Badge,
@@ -27,6 +30,7 @@ import {
   Table,
 } from "../components/ui/primitives";
 import { Button } from "../components/ui/button";
+import { NativeSelect } from "../components/ui/native-select";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import {
@@ -47,7 +51,10 @@ import {
 } from "../components/ui/message-scroller";
 
 import { LazyOpenUI } from "../components/project-workspace/lazy-openui";
-type Kind = "bug" | "feature";
+import { buildProjectViewPath } from "@richtfest/shared/project-view-context";
+import "../components/help-overlay.css";
+registerMessages({ en, de });
+type Kind = "bug" | "feature" | "feedback";
 type Status = "open" | "in_progress" | "resolved";
 const supportQuery = {
   queryKey: ["/support"],
@@ -89,44 +96,59 @@ function dateLabel(value: string) {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
-export function Help() {
+export function Help({ embedded = false }: { embedded?: boolean }) {
   const t = useT();
+  const location = useLocation();
   const [params, setSearchParams] = useSearchParams();
-  const conversationId = params.get("conversation"),
-    reportId = params.get("report");
-  const reportsView = !!reportId || params.get("tab") === "reports";
+  const conversationKey = embedded ? "helpConversation" : "conversation";
   const overview = useQuery(supportQuery);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const conversationId =
+    params.get(conversationKey) || overview.data?.conversations[0]?.id || null;
+  const reportId = params.get("report");
+  const reportsView =
+    !embedded && (!!reportId || params.get("tab") === "reports");
+  const projectId = /^\/projects\/([0-9a-f-]{36})$/i.exec(
+    location.pathname,
+  )?.[1];
+  const pagePath = projectId
+    ? buildProjectViewPath(projectId, params)
+    : location.pathname;
+  const [saved, setSaved] = useState<Report | null>(null);
   const [editor, setEditor] = useState<{
     proposal?: Proposal;
     messageId?: string;
   } | null>(null);
+  const Container = embedded ? "section" : Page;
   return (
-    <Page>
-      <PageHeader
-        title={t("help")}
-        actions={
-          <>
-            {(conversationId || reportsView) && (
-              <Button asChild variant="ghost">
-                <Link to="/help">{t("helpNewChat")}</Link>
-              </Button>
-            )}
-            <Button variant="ghost" onClick={() => setHistoryOpen(true)}>
-              {t("helpHistory")}
+    <Container
+      className={embedded ? "help-embedded grid min-w-0 gap-stack" : undefined}
+    >
+      {(!embedded || location.pathname === "/") && (
+        <PageHeader
+          title={t(embedded ? "helpWelcome" : "help")}
+          actions={
+            <Button asChild variant="ghost">
+              <Link to={reportsView ? "/help" : "/help?tab=reports"}>
+                {t(reportsView ? "helpChat" : "helpReports")}
+              </Link>
             </Button>
-            {!reportsView && (
-              <Button asChild variant="ghost">
-                <Link to="/help?tab=reports">{t("helpReports")}</Link>
-              </Button>
-            )}
-          </>
-        }
-      />
+          }
+        />
+      )}
       <ErrorState
         error={overview.error}
         retry={() => void overview.refetch()}
       />
+      {embedded && (
+        <p className="text-ui-xs text-muted-foreground">{t("helpScope")}</p>
+      )}
+      {saved && (
+        <Callout>
+          <Link to={`/help?report=${saved.id}`}>
+            {t("helpSavedReport")}: {saved.title}
+          </Link>
+        </Callout>
+      )}
       {reportsView ? (
         <>
           <div className="flex flex-wrap items-center gap-stack text-ui-sm">
@@ -145,7 +167,7 @@ export function Help() {
           />
         </>
       ) : (
-        <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col justify-center gap-stack min-[701px]:flex-1">
+        <div className="help-conversation mx-auto flex w-full min-w-0 max-w-3xl flex-col justify-center gap-stack min-[701px]:flex-1">
           {overview.data &&
             (!overview.data.readiness.configured ||
               !overview.data.readiness.canRun) && (
@@ -153,7 +175,6 @@ export function Help() {
                 {overview.data.readiness.canRun
                   ? t("helpUnconfigured")
                   : t("helpNoPermission")}{" "}
-                {t("helpManualAvailable")}{" "}
                 {overview.data.readiness.canRun && (
                   <Link to="/settings">{t("helpSettings")}</Link>
                 )}
@@ -162,13 +183,18 @@ export function Help() {
           <SupportChat
             key={conversationId || "new"}
             id={conversationId}
+            pagePath={pagePath}
+            projectId={projectId}
             canRun={
+              overview.isSuccess &&
               overview.data?.readiness.configured === true &&
               overview.data.readiness.canRun
             }
-            onCreated={(id) =>
-              setSearchParams({ conversation: id }, { replace: true })
-            }
+            onCreated={(id) => {
+              const next = new URLSearchParams(embedded ? params : undefined);
+              next.set(conversationKey, id);
+              setSearchParams(next, { replace: true });
+            }}
             onProposal={(proposal, messageId) =>
               setEditor({ proposal, messageId })
             }
@@ -176,43 +202,18 @@ export function Help() {
           />
         </div>
       )}
-      {historyOpen && (
-        <Modal title={t("helpHistory")} onClose={() => setHistoryOpen(false)}>
-          <div className="grid max-h-[60dvh] gap-stack overflow-y-auto">
-            {overview.isPending && <p role="status">{t("loading")}</p>}
-            {overview.data?.conversations.map((conversation) => (
-              <Link
-                className="min-w-0 rounded-lg p-2 text-ui-sm hover:bg-muted"
-                key={conversation.id}
-                to={`/help?conversation=${conversation.id}`}
-                onClick={() => setHistoryOpen(false)}
-                aria-current={
-                  conversationId === conversation.id ? "page" : undefined
-                }
-              >
-                <strong className="block truncate">
-                  {conversation.title || t("helpNewChat")}
-                </strong>
-                <span className="text-ui-xs text-muted-foreground">
-                  {dateLabel(conversation.createdAt)}
-                </span>
-              </Link>
-            ))}
-            {overview.data?.conversations.length === 0 && (
-              <p className="text-ui-sm text-muted-foreground">
-                {t("helpNoHistory")}
-              </p>
-            )}
-          </div>
-        </Modal>
-      )}
       {editor && (
         <ReportForm
           proposal={editor.proposal}
+          pagePath={pagePath.length <= 500 ? pagePath : location.pathname}
           messageId={editor.messageId}
           onClose={() => setEditor(null)}
           onSaved={(report) => {
             setEditor(null);
+            if (embedded) {
+              setSaved(report);
+              return;
+            }
             const next = new URLSearchParams(params);
             next.delete("conversation");
             next.set("report", report.id);
@@ -220,18 +221,22 @@ export function Help() {
           }}
         />
       )}
-    </Page>
+    </Container>
   );
 }
 
 function SupportChat({
   id,
+  pagePath,
+  projectId,
   canRun,
   onCreated,
   onProposal,
   onFileReport,
 }: {
   id: string | null;
+  pagePath: string;
+  projectId?: string;
   canRun: boolean;
   onCreated: (id: string) => void;
   onProposal: (proposal: Proposal, messageId: string) => void;
@@ -275,20 +280,43 @@ function SupportChat({
   };
   const submit = (text: string) => {
     if (send.isPending || request || !canRun || !text.trim()) return;
-    const input = { id: crypto.randomUUID(), body: text.trim() };
+    const input = {
+      id: crypto.randomUUID(),
+      body: text.trim(),
+      pagePath,
+      projectId,
+    };
     setRequest(input);
     send.mutate(input, { onSuccess: onSent });
   };
   const messages = conversation.data?.messages || [];
   const started = !!id || !!request;
   return (
-    <section aria-label={t("helpChat")} className="grid min-w-0 gap-stack">
+    <section
+      aria-label={t("helpChat")}
+      className="help-chat flex min-h-0 min-w-0 flex-col gap-stack"
+    >
       {!started && (
-        <div className="mb-4 text-center">
-          <h2 className="text-ui-lg font-semibold">{t("helpWelcome")}</h2>
-          <p className="mt-2 text-ui-sm text-muted-foreground">
-            {t("helpStart")}
-          </p>
+        <div className="flex flex-wrap gap-stack">
+          {(
+            [
+              "helpExampleConcept",
+              "helpExampleFeature",
+              "helpExampleFeedback",
+            ] as const
+          ).map((key) => (
+            <Button
+              key={key}
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-auto whitespace-normal py-stack text-left"
+              disabled={!!request}
+              onClick={() => setBody(t(key))}
+            >
+              {t(key)}
+            </Button>
+          ))}
         </div>
       )}
       <ErrorState
@@ -301,7 +329,7 @@ function SupportChat({
           autoScroll={send.isPending}
           defaultScrollPosition="last-anchor"
         >
-          <MessageScroller className="h-[clamp(12rem,calc(100dvh-32rem),40rem)] min-[701px]:h-[clamp(12rem,calc(100dvh-22rem),40rem)]">
+          <MessageScroller className="h-[clamp(12rem,calc(100dvh-32rem),40rem)] min-[701px]:h-[clamp(12rem,calc(100dvh-29rem),40rem)]">
             <MessageScrollerViewport>
               <MessageScrollerContent className="gap-stack p-2">
                 {id && conversation.isPending && (
@@ -356,17 +384,43 @@ function SupportChat({
                         )}
                         {!!message.sources?.length && (
                           <div className="flex flex-wrap gap-stack text-ui-xs text-muted-foreground">
-                            <span>{t("docs")}:</span>
-                            {message.sources.map((source) => (
-                              <a
-                                key={source.path}
-                                href={source.path}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {source.title}
-                              </a>
-                            ))}
+                            {message.sources
+                              .filter(
+                                (source) => !source.path.startsWith("/docs/"),
+                              )
+                              .map((source, index) => (
+                                <Link
+                                  key={`${source.path}:${index}`}
+                                  to={source.path}
+                                >
+                                  {source.title} ↗
+                                </Link>
+                              ))}
+                            {message.sources.some((source) =>
+                              source.path.startsWith("/docs/"),
+                            ) && (
+                              <details className="w-full">
+                                <summary className="cursor-pointer">
+                                  {t("docs")}
+                                </summary>
+                                <div className="flex flex-wrap gap-stack py-stack">
+                                  {message.sources
+                                    .filter((source) =>
+                                      source.path.startsWith("/docs/"),
+                                    )
+                                    .map((source, index) => (
+                                      <a
+                                        key={`${source.path}:${index}`}
+                                        href={source.path}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        {source.title}
+                                      </a>
+                                    ))}
+                                </div>
+                              </details>
+                            )}
                           </div>
                         )}
                         {message.reportId ? (
@@ -440,39 +494,54 @@ function SupportChat({
         </div>
       )}
       <form
-        className="grid gap-stack"
+        className="workspace-composer-shell shrink-0"
         onSubmit={(e) => {
           e.preventDefault();
           submit(body);
         }}
       >
-        <Textarea
-          aria-label={t("helpMessage")}
-          placeholder={t("helpPlaceholder")}
-          className="text-ui-sm md:text-ui-sm"
-          rows={3}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !e.nativeEvent.isComposing
-            ) {
-              e.preventDefault();
-              submit(body);
-            }
-          }}
-          disabled={!canRun || !!request}
-          maxLength={12000}
-          required
-        />
-        <div className="flex flex-wrap items-center justify-between gap-stack">
-          <Button type="button" variant="ghost" onClick={onFileReport}>
-            {t("helpFileReport")}
+        <div className="workspace-composer-input">
+          <Textarea
+            aria-label={t("helpMessage")}
+            placeholder={t("helpPlaceholder")}
+            rows={1}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                submit(body);
+              }
+            }}
+            disabled={!canRun || !!request}
+            maxLength={12000}
+            required
+          />
+        </div>
+        <div className="workspace-composer-controls">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("helpFileReport")}
+            title={t("helpFileReport")}
+            onClick={onFileReport}
+          >
+            <MessageSquarePlus aria-hidden="true" />
           </Button>
-          <Button disabled={!canRun || !!request || !body.trim()}>
-            {send.isPending ? t("helpWorking") : t("helpSend")}
+          <span className="flex-1" />
+          <Button
+            type="submit"
+            size="icon"
+            aria-label={t("helpSend")}
+            title={t("helpSend")}
+            disabled={!canRun || !!request || !body.trim()}
+          >
+            <ArrowUp aria-hidden="true" />
           </Button>
         </div>
       </form>
@@ -482,11 +551,13 @@ function SupportChat({
 
 function ReportForm({
   proposal,
+  pagePath,
   messageId,
   onClose,
   onSaved,
 }: {
   proposal?: Proposal;
+  pagePath: string;
   messageId?: string;
   onClose: () => void;
   onSaved: (report: Report) => void;
@@ -495,7 +566,7 @@ function ReportForm({
     client = useQueryClient();
   const [id] = useState(() => crypto.randomUUID());
   const [draft, setDraft] = useState<Proposal>(
-    proposal || { kind: "bug", title: "", description: "", pagePath: "" },
+    proposal || { kind: "feedback", title: "", description: "", pagePath },
   );
   const [submitted, setSubmitted] = useState<Proposal | null>(null);
   const save = useMutation({
@@ -540,16 +611,17 @@ function ReportForm({
       >
         <Callout>{t("helpExplicitSubmit")}</Callout>
         <Field label={t("helpKind")}>
-          <Segmented
+          <NativeSelect
             value={draft.kind}
-            items={[
-              { value: "bug", label: t("helpBug") },
-              { value: "feature", label: t("helpFeature") },
-            ]}
-            onChange={(kind) => {
-              if (!locked) setDraft({ ...draft, kind: kind as Kind });
-            }}
-          />
+            disabled={locked}
+            onChange={(event) =>
+              setDraft({ ...draft, kind: event.target.value as Kind })
+            }
+          >
+            <option value="feedback">{t("helpFeedback")}</option>
+            <option value="bug">{t("helpBug")}</option>
+            <option value="feature">{t("helpFeature")}</option>
+          </NativeSelect>
         </Field>
         <Field label={t("helpTitle")}>
           <Input
@@ -635,6 +707,7 @@ function Reports({
                 { value: "all", label: t("helpAll") },
                 { value: "bug", label: t("helpBug") },
                 { value: "feature", label: t("helpFeature") },
+                { value: "feedback", label: t("helpFeedback") },
               ]}
             />
           </Field>
@@ -673,7 +746,13 @@ function Reports({
                   <RowLink to={`/help?report=${report.id}`}>
                     {report.title}
                   </RowLink>,
-                  t(report.kind === "bug" ? "helpBug" : "helpFeature"),
+                  t(
+                    report.kind === "bug"
+                      ? "helpBug"
+                      : report.kind === "feature"
+                        ? "helpFeature"
+                        : "helpFeedback",
+                  ),
                   <Badge>{t(statusKeys[report.status])}</Badge>,
                   dateLabel(report.createdAt),
                 ],
@@ -735,7 +814,15 @@ function ReportDetail({ id, canManage }: { id: string; canManage: boolean }) {
             </Link>
           </Callout>
           <div className="flex flex-wrap items-center gap-stack">
-            <Badge>{t(value.kind === "bug" ? "helpBug" : "helpFeature")}</Badge>
+            <Badge>
+              {t(
+                value.kind === "bug"
+                  ? "helpBug"
+                  : value.kind === "feature"
+                    ? "helpFeature"
+                    : "helpFeedback",
+              )}
+            </Badge>
             <Badge>{t(statusKeys[value.status])}</Badge>
             <span>{dateLabel(value.createdAt)}</span>
           </div>

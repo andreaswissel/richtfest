@@ -37,6 +37,7 @@ import { resolveRunSource } from "./source-evidence";
 import { recommendMode } from "./decision-routing";
 import { workflowProposalsRouter } from "./workflow-proposals";
 import { buildingContextForRun } from "./building-model-context";
+import { projectMessageSourceRef, projectViewForRun } from "./project-view-context";
 import { createExteriorNoiseNachweis } from "./exterior-noise-nachweis";
 import { createInteriorSoundNachweis } from "./interior-sound-nachweis";
 import { createFireProtectionAssessment } from "./fire-protection-assessment";
@@ -348,8 +349,10 @@ export async function executeRun(d: AppDeps, run: any) {
       })
       .filter((m: any) => m.body)
       .reverse();
+    const projectView = await projectViewForRun(d, run);
     const context = {
-      buildingModel: await buildingContextForRun(d, run),
+      ...(projectView ? { projectView } : {}),
+      buildingModel: await buildingContextForRun(d, run, projectView),
       exteriorNoise: await exteriorNoiseContextForRun(d, run.projectId),
       interiorSound: await interiorSoundContextForRun(d, run.projectId),
       fireProtection: { toolAvailable: !!d.fireProtectionSnapshot, inputSource: "saved_building_model", draftOnly: true },
@@ -577,6 +580,7 @@ export async function executeRun(d: AppDeps, run: any) {
               conversationId: run.conversationId,
               taskId: task.id,
               parentRunId: run.id,
+              messageId: run.messageId,
               specialistRole: "source_reviewer",
               goal: input.goal,
               sourceVersionIds: input.sourceVersionIds,
@@ -975,6 +979,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
           ),
         );
       if (!message) throw missing("Message not found in conversation");
+      projectMessageSourceRef(input.projectId, message.sourceRef);
     }
     if (input.taskId) {
       const [task] = await d.db
@@ -1270,6 +1275,7 @@ export function runsRouter(getDeps: (req: Request) => AppDeps) {
             ),
           );
         if (!message) throw missing("User message not found in conversation");
+        projectMessageSourceRef(run.projectId, message.sourceRef);
       }
       // Bound the accumulated context before any message/write/cancellation.
       const steering = appendSteering(state.steering, instruction);

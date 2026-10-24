@@ -2,11 +2,21 @@ import en from "./locales/en.json";
 import de from "./locales/de.json";
 import type feasibility from "./components/feasibility/locales/en.json";
 import type buildingModel from "./components/building-model/locales/en.json";
+import type projectWorkspace from "./components/project-workspace/locales/en.json";
+import type help from "./components/help-locales/en.json";
 import { usePreferences } from "./store";
 
-type Key = keyof typeof en | keyof typeof feasibility | keyof typeof buildingModel;
+type Key =
+  | keyof typeof en
+  | keyof typeof feasibility
+  | keyof typeof buildingModel
+  | keyof typeof projectWorkspace
+  | keyof typeof help;
 type Messages = Record<string, string>;
-const messages: Record<"en" | "de", Messages> = { en: { ...en }, de: { ...de } };
+const messages: Record<"en" | "de", Messages> = {
+  en: { ...en },
+  de: { ...de },
+};
 
 /**
  * Adds a screen's strings when its route chunk loads, so the boot bundle carries only shell strings.

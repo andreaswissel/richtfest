@@ -26,6 +26,7 @@ import {
 import { AgentEffortControl } from "../agent-effort-control";
 import { AgentRunRetryActions } from "../agent-run-retry-actions";
 import { AgentSourcePicker } from "../agent-source-picker";
+import { ProjectViewContext } from "./project-view-context";
 import type { WorkflowProposal } from "@richtfest/shared";
 import {
   ArrowUp,
@@ -223,6 +224,8 @@ export function Transcript({
   conversationId,
   conversationTitle,
   projectId,
+  sourceRef,
+  readOnly = false,
   readState,
   runs = [],
   initialMessage,
@@ -231,6 +234,8 @@ export function Transcript({
   conversationId: string;
   conversationTitle: string;
   projectId: string;
+  sourceRef?: string;
+  readOnly?: boolean;
   readState?: ReadState;
   runs?: RecordData[];
   initialMessage?: string;
@@ -243,6 +248,8 @@ export function Transcript({
         conversationId={conversationId}
         conversationTitle={conversationTitle}
         projectId={projectId}
+        sourceRef={sourceRef}
+        readOnly={readOnly}
         readState={readState}
         runs={runs}
         initialMessage={initialMessage}
@@ -255,6 +262,8 @@ function Conversation({
   conversationId,
   conversationTitle,
   projectId,
+  sourceRef,
+  readOnly,
   readState,
   runs: allRuns,
   initialMessage,
@@ -263,6 +272,8 @@ function Conversation({
   conversationId: string;
   conversationTitle: string;
   projectId: string;
+  sourceRef?: string;
+  readOnly: boolean;
   readState?: ReadState;
   runs: RecordData[];
   initialMessage?: string;
@@ -538,6 +549,7 @@ function Conversation({
   const send = useMutation({
     mutationFn: (body: {
       body: string;
+      sourceRef?: string;
       parentMessageId?: string;
       sourceVersionIds: string[];
       effort: string;
@@ -545,6 +557,7 @@ function Conversation({
     }) =>
       api<WorkspaceMessage>(`${path}/messages`, {
         body: body.body,
+        sourceRef: body.sourceRef,
         parentMessageId: body.parentMessageId,
         sourceVersionIds: body.sourceVersionIds,
       }),
@@ -613,6 +626,7 @@ function Conversation({
     initialMessageSubmitted.current = true;
     send.mutate({
       body: initialMessage,
+      sourceRef,
       sourceVersionIds: [],
       effort: selectedEffort,
     });
@@ -989,9 +1003,15 @@ function Conversation({
         className="workspace-composer"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (draft.trim() && !send.isPending && !startRun.isPending) {
+          if (
+            !readOnly &&
+            draft.trim() &&
+            !send.isPending &&
+            !startRun.isPending
+          ) {
             const submitted = {
               body: draft,
+              sourceRef,
               parentMessageId: reply,
               sourceVersionIds: attachments,
               effort: selectedEffort,
@@ -1001,6 +1021,7 @@ function Conversation({
           }
         }}
       >
+        <ProjectViewContext projectId={projectId} path={sourceRef} />
         <div className="workspace-composer-shell">
           {reply && (
             <div className="workspace-composer-context">
@@ -1064,6 +1085,7 @@ function Conversation({
             <Textarea
               ref={composer}
               rows={1}
+              disabled={readOnly}
               value={draft}
               required
               aria-label={t("message")}
@@ -1174,7 +1196,7 @@ function Conversation({
                 className="workspace-send-button"
                 aria-label={t("workspaceStop")}
                 title={t("workspaceStop")}
-                disabled={stopRun.isPending}
+                disabled={readOnly || stopRun.isPending}
                 onClick={() => stopRun.mutate()}
               >
                 <Square aria-hidden="true" />
@@ -1186,7 +1208,12 @@ function Conversation({
                 className="workspace-send-button"
                 aria-label={t("workspaceUiSendMessage")}
                 title={t("workspaceUiSendShortcut")}
-                disabled={send.isPending || startRun.isPending || !draft.trim()}
+                disabled={
+                  readOnly ||
+                  send.isPending ||
+                  startRun.isPending ||
+                  !draft.trim()
+                }
               >
                 <ArrowUp aria-hidden="true" />
               </Button>
@@ -1295,6 +1322,7 @@ const MessageRow = memo(function MessageRow({
             )}
           </BubbleContent>
         </Bubble>
+        <ProjectViewContext projectId={projectId} path={message.sourceRef} />
         {(message.openui || message.metadata?.openui) && (
           <LazyOpenUI
             projectId={projectId}

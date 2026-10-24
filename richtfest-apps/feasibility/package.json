@@ -8,6 +8,7 @@
     "./deps": "./src/deps.ts",
     "./schema": "./src/schema.ts",
     "./evidence": "./src/evidence.ts",
+    "./project-view-data": "./src/project-view-data.ts",
     "./project-deletion": "./src/project-deletion.ts"
   },
   "scripts": {

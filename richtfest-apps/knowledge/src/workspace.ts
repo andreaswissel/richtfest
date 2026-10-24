@@ -22,6 +22,7 @@ import {
 import { attachUsageSummaries } from "./usage";
 import { prepareArtifactPdf, queueArtifactPdf } from "./artifact-pdf-exports";
 import { projectAgentAnalytics } from "./analytics";
+import { projectMessageSourceRef } from "./project-view-context";
 
 export const missing = (message = "Record not found") =>
   Object.assign(new Error(message), { status: 404, code: "not_found" });
@@ -530,6 +531,7 @@ export function workspaceRouter(getDeps: (req: Request) => AppDeps) {
           sourceVersionIds: z.array(z.string().uuid()).max(100).default([]),
         })
         .parse(req.body);
+      input.sourceRef = projectMessageSourceRef(thread.projectId, input.sourceRef) ?? undefined;
       await sources(d, thread.projectId, input.sourceVersionIds);
       if (input.parentMessageId) {
         const [parent] = await d.db

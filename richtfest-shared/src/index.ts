@@ -40,3 +40,5 @@ export * from "./planning-regime-model";
 export * from "./site-references";
 export * from "./project-planning";
 export * from "./ifc-building-model";
+export type { ProjectViewContext, ProjectView } from "./project-view-context";
+export * from "./project-view-data";

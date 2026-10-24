@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import {
   Link,
   Navigate,
@@ -9,6 +9,7 @@ import {
 } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { formatProjectAddress } from "@richtfest/shared";
+import { buildProjectViewPath } from "@richtfest/shared/project-view-context";
 import { api, ApiError, list } from "../api";
 import { queryClient, useApi, useWrite } from "../query";
 import { projectStatusLabel, useT } from "../i18n";
@@ -41,7 +42,8 @@ import { NoiseSources } from "../components/noise-sources";
 import { Feasibility } from "../components/feasibility";
 import { AddressSelect } from "../components/address-select";
 import { ProjectOverview } from "../components/project-workspace/project-overview";
-import { ArrowUp } from "lucide-react";
+import { ProjectAssistant } from "../components/project-workspace/project-assistant";
+import { ArrowUp, MessageCircle } from "lucide-react";
 
 const MIN_ARTIFACT_WIDTH = 25;
 const MAX_ARTIFACT_WIDTH = 60;
@@ -126,6 +128,15 @@ export function ProjectWorkspace() {
     params.get("view") === "overview" && perspective === "nerd"
       ? "workspace"
       : params.get("view") || "workspace";
+  const assistantOpen = view !== "workspace" && params.get("assistant") === "1" && params.get("guide") !== "1";
+  const assistantTrigger = useRef<HTMLButtonElement>(null);
+  const sourceRef = buildProjectViewPath(
+    id!,
+    new URLSearchParams({
+      ...Object.fromEntries(params),
+      view,
+    }),
+  );
   const workspaceNavigation = useOutletContext<
     { workspaceNavigation: ReactNode } | undefined
   >()?.workspaceNavigation;
@@ -147,14 +158,15 @@ export function ProjectWorkspace() {
   const project = useApi(`/projects/${id}`),
     workspace = useApi(
       `/knowledge/workspaces/${id}`,
-      view !== "overview" &&
-        view !== "location" &&
-        view !== "analytics" &&
-        view !== "building-model" &&
-        view !== "fire-protection" &&
-        view !== "inquiries" &&
-        view !== "noise" &&
-        view !== "feasibility",
+      assistantOpen ||
+        (view !== "overview" &&
+          view !== "location" &&
+          view !== "analytics" &&
+          view !== "building-model" &&
+          view !== "fire-protection" &&
+          view !== "inquiries" &&
+          view !== "noise" &&
+          view !== "feasibility"),
     ),
     customers = useApi("/crm/customers", view === "details" || editingDetails);
   const conversations = list(workspace.data?.conversations);
@@ -214,6 +226,14 @@ export function ProjectWorkspace() {
     me.data?.user?.permissions ||
     []
   ).includes("projects:write");
+  const permissions = me.data?.permissions || me.data?.user?.permissions || [];
+  const canUseAssistant = permissions.includes("knowledge:read");
+  const closeAssistant = () => {
+    const next = new URLSearchParams(params);
+    next.delete("assistant");
+    setParams(next, { replace: true });
+    assistantTrigger.current?.focus({ preventScroll: true });
+  };
   const [deleteOpen, setDeleteOpen] = useState(false);
   const deleteProject = useMutation({
     mutationFn: () => api(`/projects/${id}`, undefined, "DELETE"),
@@ -282,10 +302,10 @@ export function ProjectWorkspace() {
     const search = new URLSearchParams();
     search.set("view", key);
     search.set("perspective", perspective);
-    for (const context of ["phase", "discipline", "planningItem"])
+    for (const context of ["phase", "discipline", "planningItem", "guide", "helpConversation"])
       if (params.has(context)) search.set(context, params.get(context)!);
-    if (key === "workspace" && selected)
-      search.set("conversation", selected.id);
+    if (params.get("assistant") === "1") search.set("assistant", "1");
+    if (selected) search.set("conversation", selected.id);
     return `/projects/${id}?${search}`;
   };
   const allModules = [
@@ -384,6 +404,27 @@ export function ProjectWorkspace() {
         </div>
         {perspectiveNavigation}
         <div className="project-bar-actions">
+          {canUseAssistant && view !== "workspace" && (
+            <Button
+              ref={assistantTrigger}
+              variant="outline"
+              size="sm"
+              aria-expanded={assistantOpen}
+              aria-controls={assistantOpen ? "project-assistant" : undefined}
+              onClick={() => {
+                if (assistantOpen) closeAssistant();
+                else {
+                  const next = new URLSearchParams(params);
+                  next.set("assistant", "1");
+                  next.delete("guide");
+                  setParams(next, { replace: true });
+                }
+              }}
+            >
+              <MessageCircle aria-hidden="true" />
+              {t("projectAssistantAsk")}
+            </Button>
+          )}
           {meUser?.id && <AppUpdateButton className="h-control-sm" />}
           {meUser?.id && (
             <Link
@@ -517,6 +558,7 @@ export function ProjectWorkspace() {
                       <Transcript
                         key={selected.id}
                         projectId={id!}
+                        sourceRef={sourceRef}
                         conversationId={selected.id}
                         conversationTitle={selected.title}
                         readState={selected.readState}
@@ -861,6 +903,28 @@ export function ProjectWorkspace() {
         {view === "feasibility" && <Feasibility projectId={id!} />}
         {view === "knowledge" && <Knowledge projectId={id!} />}
       </div>
+      {assistantOpen && canUseAssistant && project.isSuccess && (
+        <ProjectAssistant
+          key={id}
+          projectId={id!}
+          workspace={workspace}
+          selected={
+            selected?.archivedAt
+              ? conversations.find((conversation) => !conversation.archivedAt)
+              : selected
+          }
+          sourceRef={sourceRef}
+          canWrite={permissions.includes("knowledge:write")}
+          onSelect={(conversationId) => {
+            const next = new URLSearchParams(params);
+            next.set("conversation", conversationId);
+            next.delete("message");
+            next.delete("agentRun");
+            setParams(next, { replace: true });
+          }}
+          onClose={closeAssistant}
+        />
+      )}
     </Page>
   );
 }

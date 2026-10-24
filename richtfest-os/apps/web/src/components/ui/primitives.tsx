@@ -281,6 +281,8 @@ export function Modal({
   wide?: boolean;
 }) {
   const t = useT();
+  // This controlled wrapper has no DialogTrigger for Radix to restore focus to.
+  const [returnFocus] = useState(() => typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null);
   return (
     <Dialog
       open
@@ -293,6 +295,12 @@ export function Modal({
         style={wide ? { width: "min(900px, calc(100vw - 2rem))", maxWidth: "calc(100vw - 2rem)" } : undefined}
         showCloseButton={false}
         aria-describedby={undefined}
+        onCloseAutoFocus={(event) => {
+          if (returnFocus?.isConnected) {
+            event.preventDefault();
+            returnFocus.focus();
+          }
+        }}
       >
         <div className="modal-heading">
           <DialogTitle>{title}</DialogTitle>

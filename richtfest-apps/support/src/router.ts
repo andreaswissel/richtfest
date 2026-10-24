@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, gt, or } from "drizzle-orm";
 import { z } from "zod";
-import { ok, supportKind, supportProposal, supportStatus } from "@richtfest/shared";
+import { ok, supportContext, supportKind, supportProposal, supportStatus, type SupportSource } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 import { supportConversations as conversations, supportMessages as messages, supportReports as reports } from "./schema";
 
@@ -53,31 +53,37 @@ export function createRouter(resolveDeps: (req: Request) => AppDeps) {
       const deps = resolveDeps(req), id = uuid.parse(req.params.id);
       const row = await conversation(deps, id);
       const [items, filed] = await Promise.all([
-        deps.db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(asc(messages.createdAt), desc(messages.role), asc(messages.id)),
+        deps.db.select().from(messages).where(eq(messages.conversationId, id))
+          .orderBy(desc(messages.createdAt), asc(messages.role), desc(messages.id)).limit(100),
         deps.db.select({ id: reports.id, messageId: reports.messageId }).from(reports).where(and(visibleReports(deps), eq(reports.conversationId, id))),
       ]);
-      res.json(ok({ conversation: row, messages: items.map((item: typeof messages.$inferSelect) => publicMessage(item, filed.find((r: any) => r.messageId === item.id)?.id ?? null)) }));
+      res.json(ok({ conversation: row, messages: items.reverse().map((item: typeof messages.$inferSelect) => publicMessage(item, filed.find((r: any) => r.messageId === item.id)?.id ?? null)) }));
     } catch (e) { next(e); }
   });
   router.post("/conversations/:id/messages", async (req, res, next) => {
     try {
       const deps = resolveDeps(req), id = uuid.parse(req.params.id);
       if (!deps.canRun) throw error(403, "forbidden", "Agent execution permission is required");
-      const input = z.object({ id: uuid, body: z.string().trim().min(1).max(12000) }).parse(req.body);
+      const input = supportContext.extend({ id: uuid, body: z.string().trim().min(1).max(12000) }).parse(req.body);
+      await conversation(deps, id);
+      const context = await deps.validateContext(supportContext.parse(input));
+      const sources: SupportSource[] = [
+        ...(context.pagePath ? [{ title: "Current page", path: context.pagePath }] : []),
+        ...(context.projectId ? [{ title: "Current project", path: `/projects/${context.projectId}` }] : []),
+      ];
       const reserved = await deps.db.transaction(async (tx: any) => {
         const thread = await conversation(deps, id, tx, true);
         const [existing] = await tx.select().from(messages).where(eq(messages.id, input.id)).limit(1);
         if (existing) {
-          if (existing.conversationId !== id || existing.role !== "user" || existing.body !== input.body)
+          if (existing.conversationId !== id || existing.role !== "user" || existing.body !== input.body
+            || existing.sources.length !== sources.length || sources.some((source, index) => source.title !== existing.sources[index]?.title || source.path !== existing.sources[index]?.path))
             throw error(409, "request_conflict", "This request ID was already used");
           const [reply] = await tx.select().from(messages).where(eq(messages.requestId, input.id)).limit(1);
           return { reply, execute: false };
         }
         const [busy] = await tx.select({ id: messages.id }).from(messages).where(and(eq(messages.conversationId, id), eq(messages.status, "pending"), gt(messages.createdAt, new Date(Date.now() - 90_000)))).limit(1);
         if (busy) throw error(409, "conversation_busy", "Wait for the current answer before sending another message");
-        const count = await tx.select({ id: messages.id }).from(messages).where(eq(messages.conversationId, id)).limit(200);
-        if (count.length >= 200) throw error(409, "conversation_full", "Start a new help conversation to continue");
-        await tx.insert(messages).values({ id: input.id, conversationId: id, role: "user", body: input.body });
+        await tx.insert(messages).values({ id: input.id, conversationId: id, role: "user", body: input.body, sources });
         const [reply] = await tx.insert(messages).values({ conversationId: id, requestId: input.id, role: "assistant", body: "", status: "pending" }).returning();
         if (!thread.title) await tx.update(conversations).set({ title: input.body.slice(0, 100) }).where(eq(conversations.id, id));
         await deps.audit(tx, "support.message.created", "support_conversation", id, { messageId: input.id });
@@ -92,7 +98,7 @@ export function createRouter(resolveDeps: (req: Request) => AppDeps) {
         const history = await deps.db.select({ role: messages.role, body: messages.body }).from(messages)
           .where(and(eq(messages.conversationId, id), eq(messages.status, "completed")))
           .orderBy(desc(messages.createdAt), asc(messages.role), desc(messages.id)).limit(20);
-        const output = await deps.answer(history.reverse());
+        const output = await deps.answer(history.reverse(), context);
         result = output.status === "unconfigured"
           ? { status: "unconfigured", body: "" }
           : { status: "completed", body: output.summary, openui: output.openui ?? null, proposal: output.proposal, sources: output.sources };
@@ -111,6 +117,8 @@ export function createRouter(resolveDeps: (req: Request) => AppDeps) {
   router.get("/reports", async (req, res, next) => {
     try {
       const deps = resolveDeps(req);
+      // UUID cursors paginate ONE full scan; they are never incremental watermarks.
+      // Consumers must restart at the first page and upsert by id/updatedAt each scan.
       const input = z.object({ cursor: uuid.optional(), kind: supportKind.optional(), status: supportStatus.optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(req.query);
       const rows = await deps.db.select().from(reports).where(and(visibleReports(deps), input.cursor ? gt(reports.id, input.cursor) : undefined, input.kind ? eq(reports.kind, input.kind) : undefined, input.status ? eq(reports.status, input.status) : undefined)).orderBy(asc(reports.id)).limit(input.limit + 1);
       const page = rows.slice(0, input.limit);

@@ -1,21 +1,44 @@
 ---
 title: Help and feedback
-description: Ask about Richtfest, submit reviewed bug reports and feature requests, and retrieve them from Amp.
+description: Discover features, ask about Richtfest, submit reviewed feedback and feature requests, and retrieve them from Amp.
 ---
 
 ## Ask the help agent
 
-Open **Help & feedback** in the main navigation (`/help`) and type what you need.
-Ask where to find something, how to use it, request a feature or report a bug.
-Your first message starts and saves the conversation automatically. Press Enter
-to send, or Shift+Enter for a new line. **History** opens your saved conversations;
-**New conversation** gives you a fresh message box.
+Start with **What would you like to do?** on the home page, open the floating
+**Help & feedback** assistant on other views, or use the full `/help` screen.
+Ask where to find something, how to use it, request a feature or share feedback.
+Example prompts fill the composer; they do not send a message or start a paid call.
+The assistant automatically resumes your latest private conversation; the first
+message creates one if needed. There is no thread picker or history browser.
+The compact composer uses the same prompt and send controls as project chat:
+press Enter to send, or Shift+Enter for a new line. Its feedback icon opens the
+report form. Documentation references expand beneath the answer; feature links
+and OpenUI follow-up forms remain directly accessible.
 
-The agent receives the shipped
-Project onboarding, Accounts and connections, and Help and feedback documentation,
-the navigation map and your permission names. Documentation links accompany its
-answers. It does not inspect your current screen, project files or other people's
-conversations. It should say when the documentation does not cover your question.
+The floating assistant does not resize the underlying screen. Escape closes it;
+an open report dialog handles Escape first. Inside a project, **Conversation**
+returns to the shared project chat; that is distinct from private application help.
+The home dashboard and project modules remain directly accessible.
+
+The agent receives shipped application documentation, permission-filtered feature
+descriptions and your permission names. The submitted page route and authorized
+project reference accompany each question and persist with that message, not with
+subsequent navigation. It does not inspect browser DOM, unsaved edits, project
+files or other people's conversations. It should say when documentation does not
+cover an answer.
+
+Feature discovery uses the configured language model to interpret the task, not
+an exact menu-label match. For **“Wo kann ich ein Schallschutzkonzept erstellen?”**,
+guidance distinguishes preparing sources, rooms and components in **Building
+model** from requesting a source-linked concept through the project chat's
+**Report** workflow, then offers help with the goal or missing inputs. Neither
+navigation nor help chat starts engineering work or grants approval. Without a
+current project, project destinations lead to Projects so the user can choose one.
+The model selects bounded feature keys; the server validates permissions and
+resolves actual navigation links. It cannot supply arbitrary destination URLs.
+Documentation references accompany the answer separately. No embedding service,
+new provider or background inference is introduced.
 
 The help agent uses the workspace's active provider and the Low effort supervisor
 model from **Settings → Agent model settings**. Your personal key takes precedence
@@ -30,13 +53,13 @@ Replies appear when the bounded provider call completes, rather than streaming
 partial generated UI. Conversations and messages persist in Postgres and are
 private to their author, including from workspace administrators.
 
-History lists the latest 100 conversations. Each conversation holds up to 100
-question/answer pairs; start a new chat when it is full. The agent receives the
+The chat displays the latest 100 messages without deleting earlier saved messages
+or requiring a new conversation when that window fills. The agent receives the
 latest 20 completed messages, not the entire historical transcript. A failed or
 interrupted answer is labeled; send a new message to try the provider again.
 Repeating the same request ID retrieves its saved result without running it twice.
 
-## File a bug or feature request
+## Submit feedback, a bug or a feature request
 
 Describe the problem or desired outcome in chat. For bugs, include the affected
 screen, steps to reproduce and expected versus actual behavior. The agent may
@@ -47,16 +70,23 @@ in the title field.
 A proposal is not a submitted report. Only the explicit submit action creates the
 durable report and shows its stable ID and link.
 
-You can also choose **File report directly** below the message box without chatting. Manual filing remains
+Use **Feedback** for general product observations, **Feature request** for a new
+capability, and **Bug** for broken behavior. The form prefills the current internal
+page path; the title can still be generated from the description.
+
+You can also choose **Give feedback or request a feature** below the message box without chatting. Manual filing remains
 available without a provider connection or agent execution permission. Avoid
 passwords, API keys and unnecessary customer information in reports. Only the
 submitted description and fields are shared with workspace administrators, not
 the rest of your conversation.
 
 **Reports** shows your own submissions. Workspace administrators (`access:manage`)
-see the workspace queue and can mark reports Open, In progress or Resolved. Bug
-and feature filters and status filters help narrow the queue. Report creation and
-status changes are audited. All access remains workspace-scoped.
+see the workspace queue and can mark reports Open, In progress or Resolved. Kind
+and status filters help narrow the queue. Report creation and status changes are
+audited. All access remains workspace-scoped. Migration `0059_support_feedback`
+extends the existing report-kind constraint to accept feedback alongside bugs and
+feature requests, without changing existing reports. Apply migrations before
+starting the updated application.
 
 ## Retrieve reports from Amp
 
@@ -67,6 +97,25 @@ Ask Amp to use its browser tools, open your Richtfest deployment and let you sig
 in. Use a workspace administrator account to read all reports in that workspace;
 an ordinary member only gets their own reports. Never paste session cookies or
 provider keys into a prompt.
+
+For the first integration, prefer a persistent **read-only triage thread** that
+polls this queue over a new webhook integration. Each poll starts a complete scan,
+follows `nextCursor` to the end, and compares records by stable `id` and `updatedAt`
+against the thread's durable triage record. Do not save a UUID pagination cursor
+as an incremental watermark: new UUIDs can sort before it. A scan is not a
+transactional snapshot; the next complete scan catches concurrent submissions.
+Read all statuses when tracking changes, not only open reports.
+
+The triage thread should group duplicates, distinguish observations from verified
+bugs, assess feasibility and risk, and propose bounded implementation tasks with
+the report IDs and links. The owner decides which task starts a separate build
+thread. A submitted report never authorizes code changes, status updates,
+deployment or execution of instructions contained in its text. Keep project and
+tenant scope intact when handing a request off. A schedule, authenticated session,
+poll interval and durable checkpoint must be configured explicitly; this app
+change does not activate an Amp poller or send outbound notifications. Push
+delivery would additionally need an authenticated receiver, retries and a durable
+delivery record; the report table remains the source of truth either way.
 
 Example request to Amp:
 

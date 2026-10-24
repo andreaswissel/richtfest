@@ -1,0 +1,9 @@
+{
+  "projectAssistant": "Project assistant",
+  "projectAssistantAsk": "Ask agent",
+  "projectAssistantClose": "Close assistant",
+  "projectAssistantOpenChat": "Open full conversation",
+  "projectAssistantNewChat": "Start conversation",
+  "projectAssistantScope": "Shared project chat · saved data",
+  "projectAssistantContext": "View context"
+}

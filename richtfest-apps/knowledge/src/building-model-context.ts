@@ -1,4 +1,4 @@
-import { buildingDeepLink, buildingEntityRefSchema } from "@richtfest/shared";
+import { buildingDeepLink, buildingEntityRefSchema, type ProjectViewContext } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
 
 /** Selection is only a hint: Projects reauthorizes the exact object in this project. */
@@ -10,6 +10,12 @@ export function selectedBuildingObject(projectId: string, text: string) {
   return selected && selected.success ? selected.data : undefined;
 }
 
-export async function buildingContextForRun(d: AppDeps, run: { projectId: string; goal: string }) {
-  return d.buildingModelContext?.(run.projectId, selectedBuildingObject(run.projectId, run.goal));
+export async function buildingContextForRun(d: AppDeps, run: { projectId: string; goal: string }, projectView?: ProjectViewContext | null) {
+  const entity = projectView && ["building-model", "fire-protection"].includes(projectView.view)
+    ? projectView.selection.entity?.split(":") : undefined;
+  const parsed = entity && buildingEntityRefSchema.safeParse({ entityType: entity[0], entityId: entity[1] });
+  // An explicit saved view supersedes selection inferred from old goal text.
+  const selection = projectView ? (parsed && parsed.success ? parsed.data : undefined)
+    : selectedBuildingObject(run.projectId, run.goal);
+  return d.buildingModelContext?.(run.projectId, selection);
 }

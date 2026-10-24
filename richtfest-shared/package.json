@@ -17,6 +17,7 @@
     "./fire-protection": "./src/fire-protection.ts",
     "./fire-plan": "./src/fire-plan.ts",
     "./building-codes": "./src/building-codes.ts",
+    "./project-view-context": "./src/project-view-context.ts",
     "./plan-heights": "./src/plan-heights.ts"
   },
   "scripts": {

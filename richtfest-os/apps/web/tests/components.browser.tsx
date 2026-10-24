@@ -1,7 +1,8 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { useState } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { RowLink, Table } from "../src/components/ui/primitives";
+import { Modal, RowLink, Table } from "../src/components/ui/primitives";
 import "../src/screens/components.css";
 
 /** Run through Vite: import('/tests/components.browser.tsx').then(m => m.testComponentRowLinks()) */
@@ -89,5 +90,55 @@ export async function testComponentRowLinks() {
     if (previousDensity)
       document.documentElement.dataset.density = previousDensity;
     else delete document.documentElement.dataset.density;
+  }
+}
+
+/** Controlled modals must return keyboard users to their actual opening control. */
+export async function testModalReturnFocus() {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  function Fixture() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>Open report</button>
+        {open && (
+          <Modal title="Report" onClose={() => setOpen(false)}>
+            <input aria-label="Report description" />
+          </Modal>
+        )}
+      </>
+    );
+  }
+  try {
+    flushSync(() => root.render(<Fixture />));
+    const trigger = host.querySelector("button")!;
+    trigger.focus();
+    flushSync(() => trigger.click());
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) throw new Error("Report dialog must open");
+    flushSync(() =>
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    const deadline = Date.now() + 1000;
+    while (document.activeElement !== trigger && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    if (
+      document.querySelector('[role="dialog"]') ||
+      document.activeElement !== trigger
+    )
+      throw new Error("Closing the report must restore focus to its launcher");
+    return "PASS: Escape closes the controlled modal and restores launcher focus";
+  } finally {
+    root.unmount();
+    host.remove();
   }
 }

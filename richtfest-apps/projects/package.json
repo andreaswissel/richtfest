@@ -11,6 +11,7 @@
     "./address-points": "./src/address-points.ts",
     "./location-worker": "./src/location-worker.ts",
     "./location-images": "./src/location-images.ts",
+    "./project-view-data": "./src/project-view-data.ts",
     "./source-text": "./src/source-text.ts",
     "./source-representations": "./src/source-representations.ts",
     "./source-extraction": "./src/source-extraction.ts",
