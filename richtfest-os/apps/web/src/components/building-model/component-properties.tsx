@@ -34,17 +34,19 @@ const enumOptions: Record<string, readonly string[]> = {
   referenceBuildUpConfirmed: ["true", "false"], installationConditionsConfirmed: ["true", "false"],
   fireDetached: ["true", "false"], loadBearing: ["true", "false"], fireSpecialUse: fireSpecialUseSchema.options, garageEnclosure: garageEnclosureSchema.options,
   stairwellSmokeVent: stairwellSmokeVentSchema.options, fireRoomRole: fireRoomRoleSchema.options, fireResistance: fireRatingSchema.options, fireClosure: fireClosureSchema.options,
+  fireRescueWindow: ["true", "false"], fireRescueOpenableInside: ["true", "false"], fireRescueLocation: ["facade", "roof"],
 };
 // Yes/no properties are stored as booleans and edited as a two-option select.
-const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars", "referenceBuildUpConfirmed", "installationConditionsConfirmed", "fireDetached", "loadBearing"]);
+const booleanKeys = new Set(["exteriorSurfacesComplete", "glazingBars", "referenceBuildUpConfirmed", "installationConditionsConfirmed", "fireDetached", "loadBearing", "fireRescueWindow", "fireRescueOpenableInside"]);
 // Unitless numbers, such as how many of a small element sit in a wall.
 const countKeys = new Set(["elementCount", "rebateSeals", "fireDwellings", "fireOtherUnits"]);
 // Numbers where zero is a meaningful entry rather than a typo.
-const zeroAllowed = new Set(["countableFloorArea", "soundReductionIndex", "fireDwellings", "fireOtherUnits", "garageArea"]);
+const zeroAllowed = new Set(["countableFloorArea", "soundReductionIndex", "fireDwellings", "fireOtherUnits", "garageArea", "fireRescueClearWidth", "fireRescueClearHeight", "fireRescueSillHeight"]);
 const units: Record<string, string> = { thickness: "cm", bulkDensity: "kg/m³", parcelArea: "m²", footprintArea: "m²", grossFloorArea: "m²", countableFloorArea: "m²",
   soundReductionIndex: "dB", openingArea: "m²", surfaceArea: "m²", normalizedLevelDifference: "dB", clearRoomHeight: "m", screedMass: "kg/m²", screedStiffness: "MN/m³", flankingLevelDifference: "dB",
   glassSoundReduction: "dB", frameShare: "%", openingWidth: "m", openingHeight: "m", liningMass: "kg/m²", liningStiffness: "MN/m³", liningCavity: "cm", impactSoundReduction: "dB",
   serviceSoundLevel: "dB", doorLeafSoundReduction: "dB", rebateSealSoundReduction: "dB", floorSealSoundReduction: "dB",
+  fireRescueClearWidth: "m", fireRescueClearHeight: "m", fireRescueSillHeight: "m",
   fireHeight: "m", fireUsableArea: "m²", fireLargestUnitArea: "m²", fireUnitsGrossArea: "m²", garageArea: "m²" };
 const elementKeys = ["componentType", "construction", "material", "thickness", "bulkDensity", "wallRole"];
 const acousticKeys = ["soundReductionIndex", "soundReductionIndexBasis"];

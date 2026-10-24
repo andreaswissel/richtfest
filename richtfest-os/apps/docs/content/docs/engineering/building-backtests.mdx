@@ -259,11 +259,22 @@ Freeze independent reference checks with these stable IDs:
 | `building:class`, `building:deliverable`, `building:review` | GK number, `nachweis`/`konzept`, review route |
 | `component:STOREY/ELEMENT:required` | Engine rating/closure enum, or `none` when no covered requirement applies |
 | `component:STOREY/ELEMENT:status` | `none`, `open`, `met`, `not_met` |
+| `rescue-window:STOREY/ELEMENT:designated` | Explicit rescue designation; unknown stays blocked |
+| `rescue-window:STOREY/ELEMENT:openingCriteria` | Conditional RP facade-opening comparison; not a second-route result |
+| `rescue-window:STOREY/ELEMENT:clearWidth`, `clearHeight`, `sillHeight`, `openableInside` | Individual booleans; missing inputs stay blocked, other states unsupported |
 | `route:STOREY/ROOM:length` | First-route length in m |
 | `route:STOREY/ROOM:withinLimit` | Separate boolean check against 35 m |
 | `building:water` | Basic demand in l/min; not supply availability |
 | `scope:second-escape-route`, `scope:fire-brigade-access`, `scope:garage-components` | Always unsupported; not executed |
 | `fire-concept` | Qualitative artifact review, always requiring independent human review |
+
+Optional storey `rescueWindows` contain explicit rescue designation, facade/roof
+location, usable clear dimensions, internal sill height and inside operability.
+Omission preserves historical snapshot compatibility, not inventory completeness.
+Acoustic opening sizes and RWA labels never populate these fields. Test the exact
+0.90/1.20/1.20 m boundaries, unknown operation, rotated dimensions and roof
+limitations; retain all three unsupported scope checks even when supplied opening
+criteria are met. The rule comparison does not establish project applicability.
 
 Use tool name `richtfest-fire-protection` and pin the exact `engineVersion` from execution metadata. Do not derive expected values from the assessment. Every emitted ID needs a reference check; keep applicable unsupported capabilities as positive failures, and mark truly out-of-scope capability checks as expected unsupported safety controls. An unreachable room remains `blocked`, not omitted or assigned a zero-length route. Unknown geometry or connections block that storey's routes; IFC routes remain unsupported. Route lengths are the engine's sampled results rounded to 0.01 m, and the limit check follows those rounded results. Near-limit cases require independent geometric review, not an inference of compliance from rounding.
 

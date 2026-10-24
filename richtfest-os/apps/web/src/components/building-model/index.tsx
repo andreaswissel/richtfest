@@ -1267,7 +1267,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
                   derivation={{ pending: deriveWallRoles.isPending, result: deriveWallRoles.data?.summary, onDerive: () => deriveWallRoles.mutate() }}
                   copy={{ pending: copyWallType.isPending, result: copyWallType.variables?.region.id === selected.id ? copyWallType.data?.summary : undefined, onCopy: (keys) => copyWallType.mutate({ region: selected, keys }),
                     sameRoleCount: [...wallRoles].filter(([id, role]) => id !== selected.id && role != null && role === wallRoles.get(selected.id)).length }} /> : undefined}
-                fire={(selected.entityType === "room" || fireAssessment.components.has(selected.id)) ? <FireComponentSection region={selected} assessment={fireAssessment} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
+                fire={(selected.entityType === "room" || fireAssessment.components.has(selected.id) || fireAssessment.rescueWindows.has(selected.id)) ? <FireComponentSection region={selected} assessment={fireAssessment} t={t} pending={saveComponentProperty.isPending || reviewComponentProperty.isPending}
                   onSave={(save) => saveComponentProperty.mutate({ region: selected, save })} onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} /> : undefined}
                 wallType={wallRoles.get(selected.id) != null ? <WallTypeReview walls={modelWalls.filter((wall) => wallRoles.get(wall.id) === wallRoles.get(selected.id))} t={t} pending={reviewWallType.isPending} onApprove={(items) => reviewWallType.mutate(items)} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}

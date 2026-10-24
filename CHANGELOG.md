@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-24
+
+- **Focused assessment preparation:** Propose a source-linked clear height for one selected room without overwriting existing values. Compare explicit RP rescue-window opening criteria while keeping roof rescue, fire-brigade access and full second-route checks open. Agent guidance separates missing supplier evidence, software limitations and the decisions that need professional review.
+
 ## 2026-10-23
 
 - **Guided planner plan review:** Planners explicitly choose which PDF to view when several documents are available, see the selected source, and get a direct next action for preparation, scale or floor-plan review. Nerd controls remain available; viewing a plan does not approve it or change assessment inputs.

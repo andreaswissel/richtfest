@@ -16,3 +16,14 @@ export const garageEnclosureSchema = z.enum(["open", "closed"]);
 /** How a notwendiger Treppenraum is vented (§ 34 Abs. 11): openable windows on every storey, or an opening at its highest point. */
 export const stairwellSmokeVentSchema = z.enum(["windows", "top_opening"]);
 export type StairwellSmokeVent = z.infer<typeof stairwellSmokeVentSchema>;
+
+/** Actual usable rescue opening, not the rough opening or acoustic facade area. */
+export const fireRescueWindowSchema = z.object({
+  designated: z.boolean().nullable(),
+  location: z.enum(["facade", "roof"]).nullable(),
+  clearWidth: z.number().finite().nonnegative().nullable(),
+  clearHeight: z.number().finite().nonnegative().nullable(),
+  sillHeight: z.number().finite().nonnegative().nullable(),
+  openableInside: z.boolean().nullable(),
+}).strict();
+export type FireRescueWindow = z.infer<typeof fireRescueWindowSchema>;

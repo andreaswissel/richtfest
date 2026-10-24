@@ -193,7 +193,8 @@ ridge/eaves heights and possible fire-protection height. The receipt retains the
 source revision/page/quote, provider, model, preset, usage and input hash. Quotes
 and numbers must occur in the supplied page text; their meaning, units, endpoints
 and model-proposed regions still require visual review. A proposed region is not
-a verified crop and is not copied into canonical height evidence.
+a verified crop. Building fire-height transfers retain the page and quote;
+room-height proposals also retain the proposed region as unreviewed evidence.
 
 Height reading uses the active provider's low preset and honors its configured
 output-token budget and per-call timeout, rather than imposing the ordinary
@@ -213,6 +214,19 @@ existing value nor approves it for classification. Confirm the saved property
 separately after checking the original page and applicable height definition.
 Roof height, an isolated elevation and a printed dimension with unknown endpoints
 are not substitutes. This pass does not infer Sonderbau status.
+
+For a **finished floor-to-ceiling dimension**, choose one saved room and inspect
+its source page. Confirm that the dimension and both endpoints actually apply to
+that room, then choose **Propose room height**. The room must belong to the same
+active PDF revision and a registered storey page, with a compatible construction
+state. No room is selected automatically; neighbouring rooms and the storey
+default are unchanged. Converted values must fit the existing room-height range
+of 1.5–20 m. Existing or conflicting properties are never replaced.
+
+The proposal remains **inferred and unreviewed**, with the original observation,
+target room and confirmation retained in the audit record. Confirming source
+applicability is not engineering approval. An adjacent section or an ambiguous
+dimension must not be used to fill missing room evidence.
 
 Completed runs are retained rather than silently repeated. Explicit retries are
 available only when every attempted page stopped before provider execution

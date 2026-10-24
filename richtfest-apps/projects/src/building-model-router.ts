@@ -888,8 +888,14 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
     try {
       const d = getDeps(req); d.requirePermission("projects:read"); d.requirePermission("projects:write");
       const projectId = uuid.parse(id(req.params.projectId));
-      const input = z.object({ baseRevision: z.number().int().nonnegative(), buildingId: uuid, sourceVersionId: uuid,
-        page: z.number().int().positive(), observationIndex: z.number().int().min(0).max(11) }).strict().parse(req.body);
+      const selection = z.object({ baseRevision: z.number().int().nonnegative(), sourceVersionId: uuid,
+        page: z.number().int().positive(), observationIndex: z.number().int().min(0).max(11) });
+      // Keep the original fire-height payload; room transfer is deliberately singular and opt-in.
+      const input = z.union([selection.extend({ buildingId: uuid }).strict(),
+        selection.extend({ roomId: uuid, confirmRoomApplicability: z.literal(true) }).strict()]).parse(req.body);
+      const roomTransfer = "roomId" in input;
+      const targetType = roomTransfer ? "room" : "building", targetId = roomTransfer ? input.roomId : input.buildingId;
+      const propertyKey = roomTransfer ? "clearRoomHeight" : "fireHeight";
       const row = await modelForProject(d, projectId);
       if (!row) return send(res, 404, { data: null, error: { code: "not_found" }, message: "Building model not found" });
       if (!(await evidenceVersionsForProject(d.db, d, projectId, [{ kind: "page", sourceVersionId: input.sourceVersionId, page: input.page }])))
@@ -897,29 +903,62 @@ export function createBuildingModelRouter(getDeps: GetDeps) {
       const result = await modelTransaction(d.db, async (tx: any) => {
         const revision = await touchRevision(tx, d, row.model.id, input.baseRevision);
         if (revision === undefined) return { conflict: row.model.revision };
-        if (!(await entityExists(tx, d, row.model.id, "building", input.buildingId))) return { missing: true };
+        if (!(await entityExists(tx, d, row.model.id, targetType, targetId))) return { missing: true };
         const [source] = await tx.select().from(sourceModels).where(and(eq(sourceModels.versionId, input.sourceVersionId), eq(sourceModels.tenantId, d.tenantId),
           sql`not exists (select 1 from ${buildingSupersededSources} s where s.model_id=${row.model.id} and s.source_version_id=${input.sourceVersionId})`)).for("update");
         if (source?.metadata?.automaticBuildingModel?.modelId !== row.model.id) return { invalidSource: true };
         const page = source.metadata?.heightExtraction?.pages?.find((item: any) => item.page === input.page && item.status === "completed");
         const parsed = planHeightObservationSchema.safeParse(page?.observations?.[input.observationIndex]);
-        const metres = parsed.success ? fireHeightMetres(parsed.data) : null;
+        const { clearHeightMetres } = await import("@richtfest/shared/plan-heights");
+        const metres = parsed.success ? (roomTransfer ? clearHeightMetres(parsed.data) : fireHeightMetres(parsed.data)) : null;
         if (!parsed.success || metres === null) return { invalid: true };
-        const [existing] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, row.model.id),
-          eq(buildingProperties.entityId, input.buildingId), eq(buildingProperties.entityType, "building"), eq(buildingProperties.propertyKey, "fireHeight")));
-        if (existing) return { reviewConflict: true };
         const observation = parsed.data;
-        const { property, version } = await appendPropertyVersion(tx, d, row.model.id, { entityType: "building", entityId: input.buildingId,
-          propertyKey: "fireHeight", value: metres, unit: "m", provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: input.sourceVersionId,
-            page: input.page, quote: observation.quote }] });
+        let targetReceipt: Record<string, unknown> | undefined;
+        if (roomTransfer) {
+          const [target] = await tx.select({ room: buildingRooms, storey: buildingStoreys, building: buildingBuildings }).from(buildingRooms)
+            .innerJoin(buildingStoreys, and(eq(buildingStoreys.id, buildingRooms.storeyId), eq(buildingStoreys.modelId, row.model.id), eq(buildingStoreys.tenantId, d.tenantId)))
+            .innerJoin(buildingBuildings, and(eq(buildingBuildings.id, buildingStoreys.buildingId), eq(buildingBuildings.modelId, row.model.id), eq(buildingBuildings.tenantId, d.tenantId)))
+            .where(and(eq(buildingRooms.id, targetId), eq(buildingRooms.modelId, row.model.id), eq(buildingRooms.tenantId, d.tenantId))).limit(1);
+          if (!target) return { missing: true };
+          // A nearby label or a shared storey is not a source assignment. Require the room's own
+          // geometry page in this exact active PDF plan set; IFC and other documents cannot stand in.
+          const geometrySource = target.room.geometry?.source;
+          if (!geometrySource || geometrySource.sourceVersionId !== input.sourceVersionId
+            || (geometrySource.kind && geometrySource.kind !== "page") || !Number.isInteger(geometrySource.page) || geometrySource.page < 1)
+            return { invalidSource: true };
+          const [plan] = await tx.select({ id: buildingPlanSources.id }).from(buildingPlanSources)
+            .innerJoin(fileVersions, and(eq(fileVersions.id, buildingPlanSources.sourceVersionId), eq(fileVersions.tenantId, d.tenantId), eq(fileVersions.mimeType, "application/pdf")))
+            .where(and(eq(buildingPlanSources.tenantId, d.tenantId), eq(buildingPlanSources.modelId, row.model.id),
+              eq(buildingPlanSources.storeyId, target.storey.id), eq(buildingPlanSources.sourceVersionId, input.sourceVersionId),
+              eq(buildingPlanSources.page, geometrySource.page))).limit(1);
+          if (!plan) return { invalidSource: true };
+          const states = [target.room, target.storey, target.building].map(entity => entity.constructionState);
+          if (states.some(state => state === "demolished" || (observation.constructionState !== "unknown" && state !== "unknown"
+            && (state === "retained" ? "existing" : state) !== observation.constructionState))) return { invalid: true };
+          targetReceipt = { roomId: target.room.id, roomName: target.room.name, storeyId: target.storey.id, storeyName: target.storey.name,
+            buildingId: target.building.id, buildingName: target.building.name, geometrySource, constructionStates: states,
+            confirmRoomApplicability: true, reviewStatus: "unreviewed" };
+          const [conflict] = await tx.select({ id: buildingConflicts.id }).from(buildingConflicts).where(and(eq(buildingConflicts.modelId, row.model.id),
+            eq(buildingConflicts.entityId, targetId), eq(buildingConflicts.entityType, targetType), eq(buildingConflicts.propertyKey, propertyKey), eq(buildingConflicts.status, "unresolved"))).limit(1);
+          if (conflict) return { reviewConflict: true };
+        }
+        const [existing] = await tx.select({ id: buildingProperties.id }).from(buildingProperties).where(and(eq(buildingProperties.modelId, row.model.id),
+          eq(buildingProperties.entityId, targetId), eq(buildingProperties.entityType, targetType), eq(buildingProperties.propertyKey, propertyKey)));
+        if (existing) return { reviewConflict: true };
+        const { property, version } = await appendPropertyVersion(tx, d, row.model.id, { entityType: targetType, entityId: targetId,
+          propertyKey, value: metres, unit: "m", provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: input.sourceVersionId,
+            page: input.page, quote: observation.quote, ...(roomTransfer ? { region: observation.region } : {}) }] });
         await tx.insert(buildingRevisions).values({ tenantId: d.tenantId, modelId: row.model.id, revision, status: "draft", createdBy: d.actorId });
         await d.audit(tx, "projects.building.height.proposed", "building_property", property.id, { projectId, sourceVersionId: input.sourceVersionId,
-          page: input.page, observationIndex: input.observationIndex, observation, inference: page.metadata, modelRevision: revision });
+          page: input.page, observationIndex: input.observationIndex, observation, inference: page.metadata, modelRevision: revision,
+          ...(targetReceipt ? { target: targetReceipt } : {}) });
         return { property, version, revision };
       });
       if (result.conflict !== undefined) return revisionConflict(res, result.conflict);
       if (result.reviewConflict) return send(res, 409, { data: null, error: { code: "height_exists" }, message: "An existing height must be reviewed or corrected separately; it was not replaced" });
-      if (result.missing || result.invalidSource || result.invalid) return send(res, 422, { data: null, error: { code: "invalid_height_observation" }, message: "A saved observation identifying the highest habitable floor, mean terrain, units and floor basis is required" });
+      if (result.missing || result.invalidSource || result.invalid) return send(res, 422, { data: null, error: { code: "invalid_height_observation" }, message: roomTransfer
+        ? "Select one active room whose geometry belongs to this PDF plan set and storey, with compatible construction state. A saved positive finished floor-to-ceiling dimension with known units is required; applicability remains unreviewed."
+        : "A saved observation identifying the highest habitable floor, mean terrain, units and floor basis is required" });
       return send(res, 201, ok(result));
     } catch (e) { return next(e); }
   });

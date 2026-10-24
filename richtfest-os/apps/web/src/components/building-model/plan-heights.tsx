@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { fireHeightMetres } from "@richtfest/shared/plan-heights";
+import { clearHeightMetres, fireHeightMetres } from "@richtfest/shared/plan-heights";
 import { api, ApiError } from "../../api";
 import { registerMessages, useT } from "../../i18n";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Field } from "../ui/primitives";
 import type { BuildingModel } from "./types";
@@ -14,16 +15,22 @@ registerMessages({ en, de });
 
 /** Saved source observations only; transfer creates an unreviewed property, never approval. */
 export function PlanHeights({ projectId, model, onPage }: {
-  projectId: string; model: Pick<BuildingModel, "revision" | "buildings" | "automaticPlanProcessing" | "planSources">;
+  projectId: string; model: Pick<BuildingModel, "revision" | "buildings" | "storeys" | "states" | "supersededSources" | "automaticPlanProcessing" | "planSources">;
   onPage: (page: number, sourceVersionId: string) => void;
 }) {
   const t = useT(), client = useQueryClient();
   const sources = model.automaticPlanProcessing.filter(item => item.renderableSource?.mimeType === "application/pdf"
+    && !model.supersededSources.some(old => old.sourceVersionId === item.sourceVersionId)
     && model.planSources.some(plan => plan.source?.versionId === item.sourceVersionId));
   const [sourceId, setSourceId] = useState("");
   const source = sources.find(item => item.sourceVersionId === sourceId) ?? sources[0];
   const [buildingId, setBuildingId] = useState("");
   const building = model.buildings.length === 1 ? model.buildings[0] : model.buildings.find(item => item.id === buildingId);
+  const [roomSelection, setRoomSelection] = useState({ key: "", roomId: "", confirmed: false });
+  const rooms = [...new Map(Object.values(model.states).flat().filter(room => room.entityType === "room" && !room.isCandidate
+    && room.constructionState !== "demolished" && room.sourceVersionId === source?.sourceVersionId
+    && model.planSources.some(plan => plan.source?.versionId === room.sourceVersionId && plan.storeyId === room.storeyId && plan.page === room.page))
+    .map(room => [room.id, room])).values()];
   const extraction = source?.heightExtraction;
   const safeRetry = extraction?.status === "partial" && extraction.pages.length > 0
     && extraction.pages.every(page => ["unconfigured", "forbidden", "unavailable"].includes(page.status));
@@ -39,7 +46,8 @@ export function PlanHeights({ projectId, model, onPage }: {
     onSuccess: invalidate,
   });
   const transfer = useMutation({
-    mutationFn: (input: { sourceVersionId: string; page: number; observationIndex: number; buildingId: string }) =>
+    mutationFn: (input: { sourceVersionId: string; page: number; observationIndex: number } &
+      ({ buildingId: string } | { roomId: string; confirmRoomApplicability: true })) =>
       api(`/projects/${projectId}/building-model/height-observations`, { baseRevision: model.revision, ...input }),
     onSuccess: invalidate,
   });
@@ -49,7 +57,7 @@ export function PlanHeights({ projectId, model, onPage }: {
     <h3 className="building-model-panel-title">{t("buildingHeightTitle")}</h3>
     <Callout>{t("buildingHeightUnreviewed")}</Callout>
     {!source ? <p>{t("buildingHeightNoSource")}</p> : <>
-      {sources.length > 1 && <Field label={t("buildingHeightSource")}><NativeSelect value={source.sourceVersionId} onChange={event => { setSourceId(event.target.value); queue.reset(); transfer.reset(); }}>
+      {sources.length > 1 && <Field label={t("buildingHeightSource")}><NativeSelect value={source.sourceVersionId} onChange={event => { setSourceId(event.target.value); setRoomSelection({ key: "", roomId: "", confirmed: false }); queue.reset(); transfer.reset(); }}>
         {sources.map(item => <option key={item.sourceVersionId} value={item.sourceVersionId}>{item.fileName}</option>)}
       </NativeSelect></Field>}
       {sources.length === 1 && <p>{source.fileName}</p>}
@@ -70,6 +78,16 @@ export function PlanHeights({ projectId, model, onPage }: {
         {page.status === "completed" && !page.observations.length && <p>{t("buildingHeightNoObservations")}</p>}
         {page.observations.map((observation, observationIndex) => {
           const metres = page.status === "completed" ? fireHeightMetres(observation) : null;
+          const clearMetres = page.status === "completed" ? clearHeightMetres(observation) : null;
+          const key = `${source.sourceVersionId}:${page.page}:${observationIndex}:${model.revision}`;
+          const eligibleRooms = rooms.filter(room => {
+            const storey = model.storeys.find(item => item.id === room.storeyId);
+            const parent = model.buildings.find(item => item.id === storey?.buildingId);
+            return parent && [room.constructionState, parent.constructionState].every(state => state !== "demolished"
+              && (!state || state === "unknown" || observation.constructionState === "unknown"
+                || (state === "retained" ? "existing" : state) === observation.constructionState));
+          });
+          const room = roomSelection.key === key ? eligibleRooms.find(item => item.id === roomSelection.roomId) : undefined;
           return <div key={observationIndex} className="grid gap-stack border-t pt-2">
             <div><Badge>{label(observation.kind)}</Badge> <strong>{observation.value} {observation.unit === "unknown" ? label("unknown") : observation.unit}</strong> · {label(observation.unitBasis)}</div>
             <p>{[observation.buildingLabel, observation.storeyLabel, label(observation.constructionState)].filter(Boolean).join(" · ")}</p>
@@ -77,6 +95,30 @@ export function PlanHeights({ projectId, model, onPage }: {
             <blockquote className="border-l pl-2">{observation.quote}</blockquote>
             <p>{observation.reason}</p>
             {metres !== null && <Button size="sm" variant="outline" disabled={!building || Boolean(building.componentProperties.fireHeight) || transfer.isPending || transfer.isSuccess} onClick={() => building && transfer.mutate({ buildingId: building.id, sourceVersionId: source.sourceVersionId, page: page.page, observationIndex })}>{t("buildingHeightUse").replace("{value}", String(metres))}</Button>}
+            {clearMetres !== null && <>
+              <Field label={t("buildingHeightRoomTarget")}><NativeSelect value={room?.id ?? ""} onChange={event => {
+                setRoomSelection({ key, roomId: event.target.value, confirmed: false }); transfer.reset();
+              }}>
+                <option value="">{t("buildingHeightChooseRoom")}</option>
+                {eligibleRooms.map(item => {
+                  const storey = model.storeys.find(storey => storey.id === item.storeyId);
+                  const parent = model.buildings.find(parent => parent.id === storey?.buildingId);
+                  return <option key={item.id} value={item.id}>{parent?.name} · {storey?.name} · {item.label} · {item.id.slice(0, 8)}</option>;
+                })}
+              </NativeSelect></Field>
+              {!eligibleRooms.length && <Callout>{t("buildingHeightNoRooms")}</Callout>}
+              <Callout>{t("buildingHeightRoomScope")}</Callout>
+              {room && <>
+                <Button size="sm" variant="link" onClick={() => onPage(room.page, source.sourceVersionId)}>{t("buildingHeightRoomSource").replace("{page}", String(room.page))}</Button>
+                {room.componentProperties?.clearRoomHeight ? <Callout>{t("buildingHeightRoomExists")}</Callout> : <>
+                  <label className="flex items-start gap-2 text-ui-sm"><Checkbox checked={roomSelection.confirmed} onCheckedChange={checked => setRoomSelection({ key, roomId: room.id, confirmed: checked === true })} />{t("buildingHeightRoomConfirm")}</label>
+                  <Button size="sm" variant="outline" disabled={!roomSelection.confirmed || transfer.isPending || transfer.isSuccess}
+                    onClick={() => transfer.mutate({ roomId: room.id, confirmRoomApplicability: true, sourceVersionId: source.sourceVersionId, page: page.page, observationIndex })}>
+                    {t("buildingHeightUseRoom").replace("{value}", String(clearMetres))}
+                  </Button>
+                </>}
+              </>}
+            </>}
           </div>;
         })}
         {page.gaps.map((gap, index) => <Callout key={index}>{gap}</Callout>)}

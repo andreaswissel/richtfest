@@ -1,11 +1,11 @@
 import { Fragment, useMemo, useState } from "react";
 import { fireBuildingKeys, type BuildingAddressStateSuggestion } from "@richtfest/shared";
-import { classifyFireBuilding, closureSatisfies, ceilingRequirement, deriveFireRoomRole, escapeRouteLengths, fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireRequirement,
+import { assessRescueWindow, classifyFireBuilding, closureSatisfies, ceilingRequirement, deriveFireRoomRole, escapeRouteLengths, fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireRequirement,
   fireWallRequirement, fireWaterDemand, maxEscapeDistance, ratingSatisfies, type EscapeRoute, type FireBuildingClass, type FireClassification, type FireClosure, type FireComponentRequirement, type FireRating,
-  type FireRoomRole, type FireSpace, type StairwellSmokeVent } from "@richtfest/shared/fire-protection";
+  type FireRoomRole, type FireSpace, type StairwellSmokeVent, type FireRescueWindow } from "@richtfest/shared/fire-protection";
 import { useT } from "../../i18n";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/primitives";
+import { Badge, Callout } from "../ui/primitives";
 import { fieldLabel, optionLabel, PropertyRow, regionComponentType, type ComponentPropertySave } from "./component-properties";
 import { pointToMetres, type PageScale } from "./outline-geometry";
 import type { BuildingComponentPropertyState, BuildingModel, BuildingPlanPoint, BuildingRegion } from "./types";
@@ -37,6 +37,7 @@ export type FireAssessment = {
   derived: { dwellings: number | null; storeysAboveGround: number | null };
   roomRoles: Map<string, { role: FireRoomRole | null; entered: boolean }>;
   components: Map<string, FireComponentAssessment>;
+  rescueWindows: Map<string, FireRescueWindow>;
   fullStoreys: number | null;
   /** The building's default venting of its notwendige Treppenräume; a Treppenraum can override it. */
   smokeVent: StairwellSmokeVent | null;
@@ -73,7 +74,7 @@ export function doorSides(door: BuildingRegion, walls: Map<string, BuildingRegio
  * from the building model's reviewed and entered values. Computed in the
  * browser from the same shared rules the written part uses.
  */
-export function assessFireProtection(model: Pick<BuildingModel, "buildings" | "storeys" | "states">): FireAssessment {
+export function assessFireProtection(model: Pick<BuildingModel, "buildings" | "storeys" | "states" | "reviewStatus">): FireAssessment {
   const site = model.buildings[0]?.componentProperties;
   const all = [...new Map(Object.values(model.states).flat().filter((region) => !region.isCandidate).map((region) => [region.id, region])).values()];
   const rooms = all.filter((region) => region.entityType === "room");
@@ -123,8 +124,23 @@ export function assessFireProtection(model: Pick<BuildingModel, "buildings" | "s
       components.set(element.id, { kind: "door", requirement, actual, status: fireComponentStatus(requirement.required, actual, closureSatisfies) });
     }
   }
+  const rescueWindows = new Map(all.filter(region => region.entityType === "element" && regionComponentType(region) === "window").map(region => {
+    const get = (key: string) => {
+      // The browser has only a model-level conflict flag; withhold rather than
+      // presenting a conflicting rescue dimension as a successful comparison.
+      if (model.reviewStatus === "conflict") return null;
+      const p = region.componentProperties?.[key];
+      return p?.reviewedValue ?? (p && !["rejected", "superseded"].includes(p.reviewStatus)
+        && (p.reviewStatus === "approved" || p.provenance === "manual") ? p.value : null);
+    };
+    const location = get("fireRescueLocation");
+    const input: FireRescueWindow = { designated: bool(get("fireRescueWindow")), location: location === "facade" || location === "roof" ? location : null,
+      clearWidth: num(get("fireRescueClearWidth")), clearHeight: num(get("fireRescueClearHeight")),
+      sillHeight: num(get("fireRescueSillHeight")), openableInside: bool(get("fireRescueOpenableInside")) };
+    return [region.id, input] as const;
+  }));
   const stairwellVents = new Map(rooms.flatMap((room) => { const vent = str(live(room.componentProperties, "stairwellSmokeVent")) as StairwellSmokeVent | null; return vent ? [[room.id, vent] as const] : []; }));
-  return { classification, derived, roomRoles, components, fullStoreys, smokeVent, stairwellVents };
+  return { classification, derived, roomRoles, components, rescueWindows, fullStoreys, smokeVent, stairwellVents };
 }
 
 /** Escape route lengths for the rooms and doors on one plan page, at its printed scale. */
@@ -209,6 +225,7 @@ export function FireProtectionPanel({ model, addressState, assessment, routes, s
     const text = fireConceptDraft({ classification, height: num(live(states, "fireHeight")), dwellings: num(live(states, "fireDwellings")),
       garageEnclosure: str(live(states, "garageEnclosure")) as "open" | "closed" | null, stairwells,
       components: [...assessment.components].map(([id, item]) => ({ kind: item.kind, name: elementNames.get(id) ?? id, status: item.status, reasons: item.requirement.reasons })),
+      rescueWindows: [...assessment.rescueWindows].map(([id, input]) => ({ name: elementNames.get(id) ?? id, input })),
       routes: routes.map((route) => ({ room: roomNames.get(route.roomId) ?? route.roomId, length: route.length })), water });
     try { await navigator.clipboard.writeText(text); setCopied("done"); } catch { setCopied("failed"); }
   };
@@ -270,6 +287,22 @@ export function FireComponentSection({ region, assessment, t, pending, onSave, o
     const role = assessment.roomRoles.get(region.id);
     return <dl className="building-model-component-rows">{row("fireRoomRole", role && !role.entered && role.role ? role.role : undefined)}
       {role?.role === "necessary_stairwell" && row("stairwellSmokeVent", assessment.smokeVent ?? undefined)}</dl>;
+  }
+  const rescue = assessment.rescueWindows.get(region.id);
+  if (rescue) {
+    const result = assessRescueWindow(assessment.classification.state ?? (assessment.classification.gaps.includes("state") ? null : "unsupported"), rescue);
+    return <section className="grid gap-stack text-ui-sm" aria-label={t("buildingRescueTitle")}>
+      <Callout>{t("buildingRescueLimits")}</Callout>
+      <dl className="building-model-component-rows">
+        {row("fireRescueWindow")}
+        {rescue.designated !== false && <>{row("fireRescueLocation")}{row("fireRescueClearWidth")}{row("fireRescueClearHeight")}{row("fireRescueSillHeight")}{row("fireRescueOpenableInside")}</>}
+        <dt>{t("status")}</dt><dd><Badge className="h-auto max-w-full whitespace-normal text-left" variant={result.status === "not_met" ? "destructive" : "outline"}>{t(`buildingRescue_${result.status}` as Key)}</Badge></dd>
+      </dl>
+      {rescue.designated !== false && <>
+        {result.cite && <p>{t("buildingRescueThresholds")}</p>}
+        <p className="text-muted-foreground">{t("buildingRescueNext")}</p>
+      </>}
+    </section>;
   }
   const item = assessment.components.get(region.id);
   if (!item) return null;

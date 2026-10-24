@@ -49,6 +49,8 @@ export const federalStateSchema = z.enum(["BW", "BY", "BE", "BB", "HB", "HH", "H
 export const bebauungsplanSchema = z.enum(["applies", "none"]);
 /** Whether a storey is a Vollgeschoss under the Landesbauordnung. */
 export const fullStoreySchema = z.enum(["full", "not_full"]);
+/** Shared bounds for stored clear heights and source-observation proposals. */
+export const clearRoomHeightSchema = z.number().min(1.5).max(20);
 /** Fire protection inputs on the building, in the order the specialist settles them. */
 export const fireBuildingKeys = ["fireHeight", "fireDwellings", "fireOtherUnits", "fireDetached", "fireUsableArea", "fireLargestUnitArea", "fireUnitsGrossArea", "fireSpecialUse", "garageArea", "garageEnclosure", "stairwellSmokeVent"] as const;
 /** Regulatory basis keys, in the order the specialist checks them. */
@@ -133,6 +135,13 @@ export const buildingComponentProperties = {
     fireResistance: { value: fireRatingSchema, unit: null },
     fireResistanceBasis: { value: z.string().trim().min(1).max(500), unit: null },
     fireClosure: { value: fireClosureSchema, unit: null },
+    // Rescue-window clear passage is not an acoustic/rough opening dimension.
+    fireRescueWindow: { value: z.boolean(), unit: null },
+    fireRescueLocation: { value: z.enum(["facade", "roof"]), unit: null },
+    fireRescueClearWidth: { value: z.number().finite().min(0).max(100), unit: "m" },
+    fireRescueClearHeight: { value: z.number().finite().min(0).max(100), unit: "m" },
+    fireRescueSillHeight: { value: z.number().finite().min(0).max(100), unit: "m" },
+    fireRescueOpenableInside: { value: z.boolean(), unit: null },
   },
   building: {
     soundInsulationLevel: { value: soundInsulationLevelSchema, unit: null },
@@ -180,11 +189,11 @@ export const buildingComponentProperties = {
     grossFloorArea: { value: z.number().positive().max(1_000_000), unit: "m²" },
     countableFloorArea: { value: z.number().nonnegative().max(1_000_000), unit: "m²" },
     /** Clear room height: with the facade length it gives a room's exterior wall area. */
-    clearRoomHeight: { value: z.number().min(1.5).max(20), unit: "m" },
+    clearRoomHeight: { value: clearRoomHeightSchema, unit: "m" },
   },
   room: {
     /** Overrides the storey height; null returns to inheritance. Never a compliance classification. */
-    clearRoomHeight: { value: z.number().min(1.5).max(20), unit: "m" },
+    clearRoomHeight: { value: clearRoomHeightSchema, unit: "m" },
     apartmentUnit: { value: z.string().trim().min(1).max(80), unit: null },
     spaceType: { value: spaceTypeSchema, unit: null },
     exteriorNoiseRoom: { value: z.enum(["sleeping", "living", "office", "hospital_bedroom", "not_protected"]), unit: null },

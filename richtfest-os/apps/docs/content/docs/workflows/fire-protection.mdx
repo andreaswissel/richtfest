@@ -55,6 +55,32 @@ Select a wall, slab or door to see its requirement with the cited paragraphs. En
 
 Escape route lengths follow § 34 Abs. 2: the shortest walking line from the farthest point of each Aufenthaltsraum (and basement room) to a Treppenraum door or outside. The line goes around walls through doors, and furniture is ignored. It is drawn on the plan like the office's Brandschutzpläne, with its length at the farthest point. They need the plan scale and reviewed doors, and stay indicative until both are confirmed.
 
+## Rescue-window opening criteria (Rheinland-Pfalz)
+
+Select a saved window in the building model and open **Fire protection** in its
+inspector. Explicitly state whether it is designated for rescue, whether it is in
+the facade or roof, its usable clear width and height in the rescue-open position,
+its internal sill height above finished floor, and whether it is easily opened
+from inside. Source-help links explain the required window detail or product
+evidence. Generic opening dimensions, IFC dimensions and RWA labels are not
+substitutes for these rescue-specific properties.
+
+The subcheck compares supplied inputs against **LBauO RLP § 37 Abs. 2 Satz 1**:
+width ≥ 0.90 m, height ≥ 1.20 m, sill ≤ 1.20 m, and easy opening from inside.
+Values are compared before rounding, with no width/height rotation. Missing
+inputs remain open; a known failure remains visible even if another input is
+missing. Passing the supplied criteria still leaves a roof window's combined
+result open because rescue suitability under Satz 2 has not been checked.
+
+This is a conditional current-rule comparison, **not a second-escape-route
+Nachweis**. The [official provision](https://www.landesrecht.rlp.de/bsrp/document/jlr-NNLRP00005B3ENN00000000126)
+is effective from 13 February 2021; the consolidated law's amendment date does
+not establish the edition applicable to a project's permit. Window coverage,
+fire-brigade equipment/access, roof rescue suitability and any deviation still
+require separate evidence and disposition. A recorded deviation does not turn
+a failed standard comparison into a pass. Saved-model agent drafts and offline
+replays include the same per-window observations and exclusions.
+
 ## Written part
 
 **Copy written part (draft)** produces the text of the Brandschutzkonzept in German. For each requirement, it quotes the LBO text verbatim and then states how the building meets it. Each statement is built from the components' provided ratings, so material information such as "load-bearing walls are reinforced concrete" still comes from the user. Unmet or open requirements are collected as deviations (Abweichungen) for the specialist. The fire water demand (DVGW W 405, AGBF 2018-4: 48 m³/h for buildings with up to three Vollgeschosse, otherwise 96 m³/h, for 2 hours) is a summary, not a quote, and must be confirmed against the source.
@@ -74,7 +100,7 @@ The tool requires project-read and knowledge-write access. Team specialists need
 - States other than Rheinland-Pfalz and Berlin.
 - The Brandschutzplan and escape routes on [IFC-imported](/docs/workflows/project-onboarding#import-an-ifc-model) rooms and elements; they are drawn on PDF plan pages.
 - Compensation proposals for deviations. Deviations are detected only.
-- Second escape route and fire brigade access (Anleiterstellen, Rettungswegfenster) on the plan.
+- Complete second escape route and fire brigade access (Anleiterstellen) on the plan; the RP rescue-window subcheck above covers only supplied opening criteria.
 - GarStellVO component rules beyond the garage classification.
 - PDF export of the Brandschutzplan.
 - AHO fee calculation from the plan areas.

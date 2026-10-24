@@ -1,4 +1,4 @@
-import { fireRatingSchema, fireClosureSchema, type FireRating, type FireClosure, type FireRoomRole, type FireSpecialUse, type StairwellSmokeVent } from "./fire-protection-schema";
+import { fireRatingSchema, fireClosureSchema, type FireRating, type FireClosure, type FireRoomRole, type FireSpecialUse, type StairwellSmokeVent, type FireRescueWindow } from "./fire-protection-schema";
 export * from "./fire-protection-schema";
 
 /**
@@ -196,6 +196,27 @@ export type FireClassification = {
 };
 
 export const garageSize = (area: number | null): GarageSize | null => area === null || area <= 0 ? null : area <= 100 ? "small" : area <= 1000 ? "medium" : "large";
+
+/** RP § 37(2), opening dimensions/operation only. This does NOT establish an
+ * independent second route, ladder access, roof access or applicable edition.
+ * Missing measurements are not zero; width and height cannot be interchanged.
+ * Official provision effective 13 Feb 2021 (checked 24 Oct 2026):
+ * https://www.landesrecht.rlp.de/bsrp/document/jlr-NNLRP00005B3ENN00000000126
+ */
+export function assessRescueWindow(state: string | null, input: FireRescueWindow) {
+  const supported = state === "RP";
+  const enabled = supported && input.designated === true;
+  const checks = {
+    clearWidth: enabled && input.clearWidth !== null ? input.clearWidth >= 0.9 : null,
+    clearHeight: enabled && input.clearHeight !== null ? input.clearHeight >= 1.2 : null,
+    sillHeight: enabled && input.sillHeight !== null ? input.sillHeight <= 1.2 : null,
+    openableInside: enabled ? input.openableInside : null,
+  };
+  const status = !state ? "open" : !supported ? "unsupported" : input.designated === false ? "not_designated"
+    : Object.values(checks).some(value => value === false) ? "not_met"
+    : input.location === "facade" && Object.values(checks).every(value => value === true) ? "met" : "open";
+  return { status, checks, cite: supported ? "LBauO RLP § 37 Abs. 2 Satz 1" : null } as const;
+}
 
 /**
  * Building class under § 2 Abs. 2 LBauO RLP. Unlike the Musterbauordnung, RLP
@@ -667,6 +688,7 @@ export type FireConceptInput = {
   stairwells: Array<{ name: string; smokeVent: StairwellSmokeVent | null }>;
   components: Array<{ kind: "wall" | "ceiling" | "door"; name: string; status: "none" | "met" | "not_met" | "open"; reasons: Array<FireReason<FireRating | FireClosure>> }>;
   routes: Array<{ room: string; length: number }>;
+  rescueWindows?: Array<{ name: string; input: FireRescueWindow }>;
   water: { litresPerMinute: number; cubicMetresPerHour: number } | null;
 };
 const metres = (value: number) => value.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -787,6 +809,16 @@ export function fireConceptDraft(input: FireConceptInput): string {
   heading("4.3.3", "Zweiter Rettungsweg");
   quote("rescueWindows");
   text(`Umsetzung: ${todo("je Geschoss: Rettung über tragbare Leitern oder Hubrettungsgerät, anleiterbare Stellen, Fenster mit lichten Maßen und Brüstungshöhen")}`);
+  if (input.rescueWindows?.length) {
+    text("Teilprüfung der erfassten Fenster – keine Freigabe und kein Nachweis des zweiten Rettungswegs. Anleiterbarkeit, Unabhängigkeit, Dachzugang und Vollständigkeit bleiben ungeprüft.");
+    const labels = { met: "Einzelkriterien rechnerisch erfüllt", not_met: "mindestens ein Einzelkriterium nicht erfüllt", open: "Eingaben offen", unsupported: "Landesregel nicht unterstützt", not_designated: "nicht als Rettungsfenster vorgesehen" };
+    for (const window of input.rescueWindows) {
+      const result = assessRescueWindow(c.state, window.input);
+      const dimension = (value: number | null) => value === null ? "offen" : `${metres(value)} m`;
+      text(`${window.name}: ${labels[result.status]}; lichte Breite ${dimension(window.input.clearWidth)}, lichte Höhe ${dimension(window.input.clearHeight)}, Brüstung ${dimension(window.input.sillHeight)}; von innen leicht zu öffnen: ${window.input.openableInside === null ? "offen" : window.input.openableInside ? "ja" : "nein"}.`);
+      if (result.status === "not_met") deviations.add(window.name);
+    }
+  }
   if (gk && gk >= 3) {
     heading("4.3.5", `Notwendige Treppenräume – ${law.stairwells}`);
     quote("stairwellRequired");

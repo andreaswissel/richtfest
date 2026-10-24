@@ -57,6 +57,42 @@ function available(data: Input) {
 }
 
 describe("assembleFireProtectionSnapshot", () => {
+  test("rescue-window receipts require rescue-specific inputs, preserve review fences and never complete the second route", () => {
+    const data = fixture(), windowId = id(8);
+    data.properties.find(p => p.propertyKey === "federalState")!.current.value = "RP";
+    data.elements.push({ id: windowId, storeyId: storey, kind: "window", constructionState: "existing" });
+    data.properties.push(property(windowId, "openingWidth", 1.1), property(windowId, "openingHeight", 1.4));
+    const run = () => assessFirePlan(available(data).plan);
+    const observation = (key: string) => run().observations.find(o => o.id === `rescue-window:${storey}/${windowId}:${key}`)!;
+    expect(observation("clearWidth")).toMatchObject({ value: null, outcome: "blocked" });
+    data.properties.push(...Object.entries({ fireRescueWindow: true, fireRescueLocation: "facade", fireRescueClearWidth: .9,
+      fireRescueClearHeight: 1.2, fireRescueSillHeight: 1.2, fireRescueOpenableInside: true }).map(([key, value]) => property(windowId, key, value)));
+    expect(observation("openingCriteria")).toMatchObject({ value: true, outcome: "complete" });
+    const assessment = run();
+    for (const scope of ["second-escape-route", "fire-brigade-access", "garage-components"])
+      expect(assessment.observations.find(o => o.id === `scope:${scope}`)).toMatchObject({ value: null, outcome: "unsupported" });
+    expect(assessment.concept).toContain("keine Freigabe und kein Nachweis des zweiten Rettungswegs");
+    expect(assessment.concept).toContain("lichte Breite 0,90 m");
+    const width = data.properties.find(p => p.propertyKey === "fireRescueClearWidth")!;
+    width.current = { ...width.current, value: .5, reviewStatus: "unreviewed" };
+    expect(observation("clearWidth").value).toBe(true); // Last approved version wins.
+    data.conflicts.push({ entityId: windowId, propertyKey: "fireRescueClearWidth" });
+    expect(observation("clearWidth")).toMatchObject({ value: null, outcome: "blocked" });
+    data.conflicts = [];
+    width.reviewed = null;
+    expect(observation("clearWidth").value).toBeNull(); // Pending extraction is not an input.
+    width.current.reviewStatus = "approved";
+    width.reviewed = width.current;
+    expect(observation("openingCriteria")).toMatchObject({ value: false, outcome: "complete" });
+    width.current.value = .9;
+    const location = data.properties.find(p => p.propertyKey === "fireRescueLocation")!;
+    location.current.value = "roof";
+    expect(observation("openingCriteria")).toMatchObject({ value: null, outcome: "blocked" });
+    expect(observation("clearWidth").value).toBe(true);
+    data.elements.find(e => e.id === windowId)!.constructionState = "demolished";
+    expect(run().observations.some(o => o.id.includes(windowId))).toBe(false);
+  });
+
   test("assembles saved revision, asymmetric metre geometry, approved adjacency and source links without mutating the model", () => {
     const data = fixture(), before = structuredClone(data);
     const result = available(data), floor = result.plan.storeys[0]!;

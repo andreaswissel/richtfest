@@ -213,6 +213,9 @@ async function run() {
       for (const element of declared) for (const key of ["required", "status"])
         check("fire", `component:${storey.id}/${element.resultId}:${key}`, [element.entityId]);
     }
+    const windows = model.elements.filter(e => e.storeyId === storey.id && e.kind === "window");
+    for (const window of windows) for (const key of ["designated", "openingCriteria", "clearWidth", "clearHeight", "sillHeight", "openableInside"])
+      check("fire", `rescue-window:${storey.id}/${window.id}:${key}`, [window.id]);
     const rooms = model.rooms.filter(r => r.storeyId === storey.id);
     const declared = rooms.length ? rooms.map(r => ({ resultId: r.id, entityId: r.id }))
       : [{ resultId: "declared_room_inventory", entityId: storey.id }];

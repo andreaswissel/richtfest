@@ -104,6 +104,10 @@ export function assembleFireProtectionSnapshot(data: {
         roomUse: get(r.id, "roomUse"), smokeVent: get(r.id, "stairwellSmokeVent"), polygon: polygon(r) })),
       walls: local.filter(e => kind(e) === "wall").map(e => ({ id: e.id, basement, loadBearing: get(e.id, "loadBearing"), faces: faces(e.id), actual: get(e.id, "fireResistance") })),
       ceilings: local.filter(e => kind(e) === "ceiling").map(e => ({ id: e.id, basement, actual: get(e.id, "fireResistance") })),
+      rescueWindows: local.filter(e => kind(e) === "window").map(e => ({ id: e.id,
+        designated: get(e.id, "fireRescueWindow"), location: get(e.id, "fireRescueLocation"),
+        clearWidth: number(e.id, "fireRescueClearWidth"), clearHeight: number(e.id, "fireRescueClearHeight"),
+        sillHeight: number(e.id, "fireRescueSillHeight"), openableInside: get(e.id, "fireRescueOpenableInside") })),
       doors: local.filter(e => kind(e) === "door").map(e => {
         const hosts = relations.filter(r => r.fromEntityId === e.id && r.relationshipType === "opening_in");
         for (const host of hosts) cite(host.metadata);

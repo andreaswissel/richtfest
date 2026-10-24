@@ -34,6 +34,7 @@ const buildingInputSources: SourceGroup[] = [
   { fields: ["stairwellSmokeVent"], reason: "buildingInputSmokeVent", documents: ["fire_safety_concept", "plans", "construction_description"] },
   { fields: ["loadBearing"], reason: "buildingInputLoadBearing", documents: ["plans", "construction_description"] },
   { fields: ["fireResistance", "fireResistanceBasis", "fireClosure"], reason: "buildingInputFireProof", documents: ["fire_safety_concept", "construction_description"] },
+  { fields: ["fireRescueWindow", "fireRescueLocation", "fireRescueClearWidth", "fireRescueClearHeight", "fireRescueSillHeight", "fireRescueOpenableInside"], reason: "buildingInputRescueWindow", documents: ["fire_safety_concept", "plans", "construction_description"] },
   { fields: ["fullStorey"], reason: "buildingInputFullStorey", documents: ["plans", "permit"] },
   { fields: ["parcelArea"], reason: "buildingInputParcel", documents: ["plans", "permit"], view: "feasibility&study=site&step=limits" },
   { fields: ["footprintArea"], reason: "buildingInputFootprint", documents: ["plans"] },

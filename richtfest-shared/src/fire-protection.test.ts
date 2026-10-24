@@ -1,8 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { classifyFireBuilding, deriveFireRoomRole, fireConceptDraft, escapeRouteLengths, fireDoorRequirement, fireWallRequirement, ratingSatisfies, type FireBuildingInput, type FireSpace } from "./fire-protection";
+import { assessRescueWindow, classifyFireBuilding, deriveFireRoomRole, fireConceptDraft, escapeRouteLengths, fireDoorRequirement, fireWallRequirement, ratingSatisfies, type FireBuildingInput, type FireSpace, type FireRescueWindow } from "./fire-protection";
 
 const building = (overrides: Partial<FireBuildingInput>): FireBuildingInput => ({ state: "RP", height: null, detached: false, dwellings: 6, otherUnits: 0, usableArea: null,
   storeysAboveGround: 4, specialUse: "none", garageArea: null, ...overrides });
+
+test("RP rescue-opening comparison keeps exact, oriented thresholds and unresolved roof/operation evidence", () => {
+  const input: FireRescueWindow = { designated: true, location: "facade", clearWidth: .9, clearHeight: 1.2, sillHeight: 1.2, openableInside: true };
+  expect(assessRescueWindow("RP", input)).toMatchObject({ status: "met", checks: { clearWidth: true, clearHeight: true, sillHeight: true, openableInside: true } });
+  for (const [patch, failed] of [
+    [{ clearWidth: .8999 }, "clearWidth"], [{ clearHeight: 1.1999 }, "clearHeight"],
+    [{ sillHeight: 1.2001 }, "sillHeight"], [{ openableInside: false }, "openableInside"],
+    [{ clearWidth: 1.2, clearHeight: .9 }, "clearHeight"],
+    [{ clearWidth: .85, clearHeight: null }, "clearWidth"],
+  ] as const) {
+    const result = assessRescueWindow("RP", { ...input, ...patch });
+    expect(result.status).toBe("not_met");
+    expect(result.checks[failed]).toBe(false);
+  }
+  for (const key of ["designated", "location", "clearWidth", "clearHeight", "sillHeight", "openableInside"] as const)
+    expect(assessRescueWindow("RP", { ...input, [key]: null }).status).toBe("open");
+  expect(assessRescueWindow("RP", { ...input, location: "roof" })).toMatchObject({ status: "open", checks: { clearWidth: true } });
+  expect(assessRescueWindow("RP", { ...input, designated: false })).toMatchObject({ status: "not_designated", checks: { clearWidth: null } });
+  expect(assessRescueWindow(null, input).status).toBe("open");
+  for (const state of ["BE", "BY"]) expect(assessRescueWindow(state, input)).toMatchObject({ status: "unsupported", checks: { clearWidth: null } });
+});
 
 describe("building class and deliverable (LBauO RLP)", () => {
   test("Bendenweg: 9.54 m to the highest possible Aufenthaltsraum is GK 4 and needs a reviewed written concept", () => {

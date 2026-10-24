@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ceilingRequirement, classifyFireBuilding, closureSatisfies, escapeRouteLengths, fireCodeEditions,
   fireComponentStatus, fireConceptDraft, fireDoorRequirement, fireWallRequirement, fireWaterDemand,
   fireRatingSchema, fireClosureSchema, fireRoomRoleSchema, fireSpecialUseSchema, garageEnclosureSchema,
-  stairwellSmokeVentSchema, ratingSatisfies, maxEscapeDistance, type FireConceptInput } from "./fire-protection";
+  stairwellSmokeVentSchema, fireRescueWindowSchema, assessRescueWindow, ratingSatisfies, maxEscapeDistance, type FireConceptInput } from "./fire-protection";
 
 const text = z.string().trim().min(1);
 const quantity = z.number().finite().nonnegative().nullable();
@@ -41,6 +41,8 @@ export const firePlanSchema = z.object({
     ceilings: z.array(z.object({ id: text, basement: z.boolean().nullable(), actual: fireRatingSchema.nullable() }).strict()),
     doors: z.array(z.object({ id: text, point: point.nullable(), rooms: z.tuple([text.nullable(), text.nullable()]).nullable(),
       actual: fireClosureSchema.nullable() }).strict()),
+    // Optional for historical snapshots; omission does not establish a complete window inventory.
+    rescueWindows: z.array(fireRescueWindowSchema.extend({ id: text })).optional(),
   }).strict()).min(1),
 }).strict();
 export type FirePlan = z.infer<typeof firePlanSchema>;
@@ -52,7 +54,7 @@ export function validateFirePlan(value: FirePlan, ctx: z.RefinementCtx) {
   const problem = (message: string) => ctx.addIssue({ code: "custom", message });
   if (new Set(value.storeys.map(s => s.id)).size !== value.storeys.length) problem("Storey IDs must be unique");
   for (const storey of value.storeys) {
-    const items = [...storey.rooms, ...storey.walls, ...storey.ceilings, ...storey.doors];
+    const items = [...storey.rooms, ...storey.walls, ...storey.ceilings, ...storey.doors, ...storey.rescueWindows ?? []];
     if (new Set(items.map(item => item.id)).size !== items.length) problem("Element IDs must be unique within a storey");
     // Delimiters are reserved for stable check IDs.
     if ([storey, ...items].some(item => /[:/]/.test(item.id))) problem("IDs cannot contain : or /");
@@ -75,6 +77,7 @@ export function assessFirePlan(raw: unknown, mode: "reviewed" | "candidate_previ
   const observations: Observation[] = [];
   const components: FireConceptInput["components"] = [];
   const routes: Array<{ storeyId: string; roomId: string; length: number; path: z.infer<typeof point>[] }> = [];
+  const rescueWindows: NonNullable<FireConceptInput["rescueWindows"]> = [];
   const add = (id: string, value: Observation["value"], unit: string | null, evidence: Observation["evidence"],
     outcome: Observation["outcome"] = "complete", note = "Deterministic replay of supplied inputs; not approval.") => {
     observations.push({ id, value, unit, evidence, outcome, note });
@@ -124,6 +127,19 @@ export function assessFirePlan(raw: unknown, mode: "reviewed" | "candidate_previ
       add(`component:${prefix}${element.id}:required`, outcome === "complete" ? required ?? "none" : null, null, storey.evidence, outcome);
       add(`component:${prefix}${element.id}:status`, status, null, storey.evidence, outcome);
     }
+    for (const { id, ...window } of storey.rescueWindows ?? []) {
+      const result = assessRescueWindow(building.input.state, window);
+      rescueWindows.push({ name: prefix + id, input: window });
+      const note = "RP § 37(2), clear opening and operation only; no second-route, ladder/roof access, inventory completeness or applicability approval.";
+      add(`rescue-window:${prefix}${id}:designated`, window.designated, null, storey.evidence, window.designated === null ? "blocked" : "complete", note);
+      if (window.designated === false) continue;
+      const criteria = result.status === "met" ? true : result.status === "not_met" ? false : null;
+      add(`rescue-window:${prefix}${id}:openingCriteria`, criteria, null, storey.evidence,
+        result.status === "unsupported" ? "unsupported" : criteria === null ? "blocked" : "complete", note);
+      for (const [key, value] of Object.entries(result.checks))
+        add(`rescue-window:${prefix}${id}:${key}`, value, null, storey.evidence,
+          result.status === "unsupported" ? "unsupported" : value === null ? "blocked" : "complete", note);
+    }
     // IFC routes remain unsupported, even if an operator supplies a 2D polygon.
     const routeOutcome = baseOutcome !== "complete" ? baseOutcome : storey.evidence.some(item => item.kind === "ifc") ? "unsupported"
       : !storey.evidence.length || mode !== "candidate_preview" && !storey.geometryReviewed || storey.rooms.some(room => room.role === null || room.polygon === null || room.basement === null)
@@ -152,7 +168,7 @@ export function assessFirePlan(raw: unknown, mode: "reviewed" | "candidate_previ
     + (mode === "candidate_preview" ? "CANDIDATE PREVIEW — geometry, connections and inferred inputs may be unreviewed. Results are conditional, not approval or demonstrated compliance.\n\n" : "")
     + "Unperformed or blocked checks:\n" + gaps.map(gap => `- ${gap.id}: ${gap.outcome}`).join("\n") + "\n\n"
     + fireConceptDraft({ classification, height: building.input.height, dwellings: building.input.dwellings,
-      garageEnclosure: building.garageEnclosure, components, routes: routes.map(route => ({ room: `${route.storeyId}/${route.roomId}`, length: route.length })),
+      garageEnclosure: building.garageEnclosure, components, rescueWindows, routes: routes.map(route => ({ room: `${route.storeyId}/${route.roomId}`, length: route.length })),
       stairwells: input.storeys.flatMap(s => s.rooms.filter(r => r.role === "necessary_stairwell").map(r => ({ name: `${s.id}/${r.id}`, smokeVent: r.smokeVent ?? building.smokeVent }))), water }) + "\n" : null;
   return { ...(mode === "candidate_preview" ? { mode, reviewStatus: "unreviewed" as const } : {}),
     classification, codeEditions: state ? fireCodeEditions[state] : null, components, routes, gaps, observations, concept };
