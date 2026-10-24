@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { ProjectPlanning } from "@richtfest/shared";
-import { GripVertical, X } from "lucide-react";
+import { GripVertical, PanelRight, PanelsTopLeft, X } from "lucide-react";
 import { api } from "../../api";
 import { registerMessages, useT } from "../../i18n";
 import { Button } from "../ui/button";
@@ -16,6 +16,7 @@ registerMessages({ en, de });
 
 export type PlannerTask = {
   id: string;
+  subject?: string;
   title: string;
   detail: string;
   href: string;
@@ -27,6 +28,7 @@ export type BuildingTaskPanelProps = {
   tasks: PlannerTask[];
   activeTaskId?: string;
   review?: ReactNode;
+  actions?: ReactNode;
   batch?: ReactNode;
   discipline: "physics" | "fire";
   onDiscipline: (value: "physics" | "fire") => void;
@@ -46,7 +48,7 @@ const statusLabels = {
 } as const;
 
 /** Read-only planning list; model review actions are supplied by the workbench. */
-export function BuildingTaskPanel({ projectId, tasks, activeTaskId, review, batch, discipline, onDiscipline, placement, onPlacement, onClose }: BuildingTaskPanelProps) {
+export function BuildingTaskPanel({ projectId, tasks, activeTaskId, review, actions, batch, discipline, onDiscipline, placement, onPlacement, onClose }: BuildingTaskPanelProps) {
   const t = useT();
   const id = useId();
   const panel = useRef<HTMLElement>(null);
@@ -164,24 +166,26 @@ export function BuildingTaskPanel({ projectId, tasks, activeTaskId, review, batc
           <GripVertical className="size-icon-sm" aria-hidden="true" />
         </Button>}
         <h2 id={`${id}-title`}>{t("buildingTaskTitle")}</h2>
-        <Button type="button" variant="outline" size="sm" aria-label={t(placement === "sidebar" ? "buildingTaskFloatLabel" : "buildingTaskDockLabel")}
+        <Button type="button" variant="ghost" size="icon-sm" aria-label={t(placement === "sidebar" ? "buildingTaskFloatLabel" : "buildingTaskDockLabel")}
+          title={t(placement === "sidebar" ? "buildingTaskFloatLabel" : "buildingTaskDockLabel")}
           onClick={() => onPlacement(placement === "sidebar" ? "floating" : "sidebar")}>
-          {t(placement === "sidebar" ? "buildingTaskFloat" : "buildingTaskDock")}
+          {placement === "sidebar" ? <PanelsTopLeft className="size-icon-sm" aria-hidden="true" /> : <PanelRight className="size-icon-sm" aria-hidden="true" />}
         </Button>
         <Button type="button" variant="ghost" size="icon-sm" aria-label={t("buildingTaskClose")} title={t("buildingTaskClose")} onClick={onClose}>
           <X className="size-icon-sm" aria-hidden="true" />
         </Button>
       </header>
-      <div className="building-task-panel-body">
+      <div className="building-task-panel-toolbar">
         <Segmented aria-label={t("buildingTaskDiscipline")} value={discipline} onChange={value => { if (value === "physics" || value === "fire") { onDiscipline(value); setPage(0); } }}
           items={[{ value: "physics", label: t("planningPhysics") }, { value: "fire", label: t("planningFire") }]} />
-        {batch}
+      </div>
+      <div className="building-task-panel-body">
         {(active || review) && <section tabIndex={-1} className="building-task-panel-section building-task-panel-review" aria-label={t("buildingTaskSelected")}>
-          {active && <><h3><Link to={active.href}>{active.title}</Link></h3><p className="text-ui-xs text-muted-foreground">{active.detail}</p></>}
+          {active && <header className="building-task-context"><p className="text-ui-xs text-muted-foreground">{active.detail}</p><h3><Link to={active.href}>{active.subject ?? active.title}</Link></h3></header>}
           {review}
         </section>}
-        <section className="building-task-panel-section" aria-labelledby={`${id}-needs`}>
-          <h3 id={`${id}-needs`}>{t("buildingTaskNeeds")} <span className="muted">({tasks.length})</span></h3>
+        <details key={active ? "review-queue" : "queue"} open={!active} className="building-task-panel-section building-task-disclosure" aria-labelledby={`${id}-needs`}>
+          <summary id={`${id}-needs`}>{t("buildingTaskNeeds")} <span className="text-ui-xs text-muted-foreground">{tasks.length}</span></summary>
           <Input type="search" value={search} aria-label={t("buildingTaskSearch")} placeholder={t("buildingTaskSearch")}
             onChange={event => { setSearch(event.target.value); setPage(0); }} />
           <p className="muted text-ui-xs">{t("buildingTaskScope")}</p>
@@ -201,9 +205,9 @@ export function BuildingTaskPanel({ projectId, tasks, activeTaskId, review, batc
               </>}
             </div>
           </>}
-        </section>
-        <section className="building-task-panel-section" aria-labelledby={`${id}-saved`}>
-          <h3 id={`${id}-saved`}>{t("buildingTaskSaved")}{planning.data && <span className="muted"> ({saved.length})</span>}</h3>
+        </details>
+        <details className="building-task-panel-section building-task-disclosure" aria-labelledby={`${id}-saved`}>
+          <summary id={`${id}-saved`}>{t("buildingTaskSaved")}{planning.data && <span className="text-ui-xs text-muted-foreground">{saved.length}</span>}{planning.isError && <Badge variant="outline">{t("planningLoadError")}</Badge>}</summary>
           {planning.isPending && <p role="status" className="muted">{t("planningLoading")}</p>}
           {planning.isError && <Callout tone="error"><p>{t("planningLoadError")}</p><Button type="button" variant="outline" size="sm" disabled={planning.isFetching} onClick={() => void planning.refetch()}>{t("planningReload")}</Button></Callout>}
           {planning.data && <>
@@ -218,8 +222,10 @@ export function BuildingTaskPanel({ projectId, tasks, activeTaskId, review, batc
               </li>)}
             </ul>}
           </>}
-        </section>
+        </details>
+        {batch}
       </div>
+      {actions && <footer className="building-task-panel-actions">{actions}</footer>}
     </aside>
     {dockCue && placement === "floating" && <div className="building-task-panel-drop-cue" role="status">{t("buildingTaskDropDock")}</div>}
   </>;

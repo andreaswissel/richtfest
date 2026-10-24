@@ -20,7 +20,7 @@ import { buildingPresentation, buildingSiteTransform } from "../src/components/b
 import { geometryArea } from "@richtfest/shared/site-geometry";
 import { BuildingConnections } from "../src/components/building-model/connections";
 import { buildingComponentProperties, createEmptySiteAssessmentInput } from "@richtfest/shared";
-import { modelReviewNeeds } from "../src/components/building-model/review-needs";
+import { candidateReviewRecords, modelReviewNeeds } from "../src/components/building-model/review-needs";
 
 const en = { ...commonEn, ...buildingEn };
 const de = { ...commonDe, ...buildingDe };
@@ -90,6 +90,44 @@ test("a review task opens the exact saved value and source page without changing
     const next = new URL(sourceLink!.replaceAll("&amp;", "&"), "https://app.example").searchParams;
     expect([next.get("page"), next.get("sourceVersion"), next.get("task")]).toEqual(["6", "v", "room:room:clearRoomHeight"]);
   }
+});
+
+test("planner findings use source evidence and latest saved decisions, not project or room names", () => {
+  const polygon = [{ x: .1, y: .1 }, { x: .4, y: .1 }, { x: .4, y: .5 }, { x: .1, y: .5 }];
+  const raw = { planSources: [{ id: "plan", page: 3, pageCount: 4, storeyId: "s", source: { versionId: "v", fileName: "Workshop.pdf" } }],
+    extractionCandidates: [
+      { id: "a", name: "Workshop", entityType: "room", sourceVersionId: "v", page: 3, storeyId: "s", status: "unreviewed", geometry: { quality: "enclosed_region", polygon, printedScaleQc: { status: "conflict", estimatedArea: 14.7, printedArea: 11.2, toleranceM2: .56 } } },
+      { id: "b", name: "Archives", entityType: "room", sourceVersionId: "v", page: 3, storeyId: "s", status: "unreviewed", geometry: { quality: "anchor", box: { x: .1, y: .1, width: .1, height: .1 } } },
+      { id: "c", name: "Hall", entityType: "room", sourceVersionId: "v", page: 4, storeyId: "s", status: "unreviewed", geometry: { quality: "approximate_partition", polygon } },
+      { id: "d", name: "Not this plan", entityType: "room", sourceVersionId: "other", page: 3, status: "unreviewed", geometry: { quality: "anchor" } },
+    ], proposals: [
+      { proposalType: "plan_room_candidate", createdAt: "2026-10-24T13:00:00Z", payload: { candidateId: "c", outcome: "deferred", note: "Check partition with architect", reviewSnapshot: { sourceVersionId: "v" } } },
+      { proposalType: "plan_room_candidate", createdAt: "2026-10-24T12:00:00Z", payload: { candidateId: "c", outcome: "deferred", note: "Old note", reviewSnapshot: { sourceVersionId: "v" } } },
+      { proposalType: "plan_room_candidate", createdAt: "2026-10-24T14:00:00Z", payload: { candidateId: "a", outcome: "deferred", note: "Wrong source", reviewSnapshot: { sourceVersionId: "other" } } },
+    ] };
+  const model = adaptBuildingModel(raw);
+  const needs = modelReviewNeeds(model, "v", "existing", "physics");
+  expect(needs.map(need => [need.id, need.finding, need.lastReview?.note])).toEqual([
+    ["candidate:a", "area_conflict", undefined], ["candidate:b", "outline_missing", undefined],
+    ["candidate:c", "boundary_review", "Check partition with architect"],
+  ]);
+  expect(candidateReviewRecords(model, "v").size).toBe(1);
+  const search = "?view=building-model&perspective=planner&sourceVersion=v&sourceSelection=manual&storey=s&page=3&candidate=candidate:a&task=candidate:a";
+  const html = render(raw, search);
+  expect(html).toContain(en.buildingTaskAreaConflictHint);
+  expect(html).toContain("14.7 m²");
+  expect(html).toContain("11.2 m²");
+  expect(html).toContain(en.buildingModelEditOutline);
+  expect(html).toContain(en.buildingTaskReviewNote);
+  expect(html).toContain("Adopt &amp; next");
+  const anchorHtml = render(raw, search.replaceAll("candidate:a", "candidate:b"));
+  expect(anchorHtml).toContain(en.buildingTaskOutlineMissingHint);
+  expect(anchorHtml).toMatch(/<button[^>]*disabled=""[^>]*>Adopt &amp; next<\/button>/);
+  expect(anchorHtml).toMatch(/<button[^>]*disabled=""[^>]*>Leave open &amp; next<\/button>/);
+  const deferred = render(raw, search.replaceAll("candidate:a", "candidate:c").replace("page=3", "page=4"));
+  expect(deferred).toContain("Check partition with architect");
+  expect(deferred).not.toContain("Old note");
+  expect(deferred).not.toContain("Wrong source");
 });
 
 test("planner chooses a source explicitly without changing Nerd mode or blocking evidence links", () => {
@@ -1207,7 +1245,7 @@ test("review status stays needs-review while any extraction candidate remains un
   expect(complete.reviewStatus).toBe("reviewed");
 });
 
-test("candidate sidebar and inspector stay scoped to the explicit source page, revision, and storey", () => {
+test("candidate sidebar and inspector stay scoped while collapsed navigation retains other storeys", async () => {
   const html = render({
     model: { id: "model-1", revision: 4 },
     rooms: [{ id: "room-page-3", name: "Canonical page three", storeyId: "storey-3", geometry: { source: { sourceVersionId: "version-1", page: 3 } } }],
@@ -1226,10 +1264,25 @@ test("candidate sidebar and inspector stay scoped to the explicit source page, r
       { id: "candidate-page-3", jobId: "job-3", entityType: "room", name: "Page three candidate", status: "unreviewed", geometry: { quality: "enclosed_region", planRegion: { x: .3, y: .3, width: .2, height: .2 } } },
     ],
   }, "?view=building-model&page=1&sourceVersion=version-1&storey=storey-1&entity=room%3Aroom-page-3");
-  expect(html).toContain("Page one candidate");
-  expect(html).not.toContain("Page three candidate");
-  expect(html).toContain("Select a room or element");
-  expect(html).not.toContain("<h2>Canonical page three</h2>");
+  expect(html).toContain("Page three candidate");
+  const visible = await new HTMLRewriter().on("[hidden]", { element(element) { element.remove(); } }).transform(new Response(html)).text();
+  expect(visible).toContain("Page one candidate");
+  expect(visible).not.toContain("Page three candidate");
+  expect(visible).toContain("Select a room or element");
+  expect(visible).not.toContain("<h2>Canonical page three</h2>");
+});
+
+test("candidate source coordinates fall back to their extraction job without replacing explicit pages", () => {
+  const model = adaptBuildingModel({
+    extractions: [{ id: "job", sourceVersionId: "version", storeyId: "upper", page: 3, status: "complete" }],
+    extractionCandidates: [
+      { id: "inherited", jobId: "job", name: "Inherited" },
+      { id: "explicit", jobId: "job", name: "Explicit", page: 2 },
+      { id: "evidence", jobId: "job", name: "Evidence", evidence: [{ page: 4, sourceVersionId: "version" }] },
+    ],
+  });
+  expect(model.extractionCandidates.map(candidate => ({ page: candidate.page, storey: candidate.storeyId, source: candidate.sourceVersionId })))
+    .toEqual([{ page: 3, storey: "upper", source: "version" }, { page: 2, storey: "upper", source: "version" }, { page: 4, storey: "upper", source: "version" }]);
 });
 
 test("magic selection targets the room under the click, then label-only candidates inside the detected outline, selected first", () => {

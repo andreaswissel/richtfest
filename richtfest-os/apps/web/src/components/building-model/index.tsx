@@ -8,6 +8,7 @@ import { Page, PageHeader, Section } from "../layout";
 import { LoadState } from "../../screens/foundation";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
 import { NativeSelect } from "../ui/native-select";
 import { Badge, Callout, Empty, Field, NoticeStack, Segmented } from "../ui/primitives";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -34,7 +35,7 @@ import { PlanHeights } from "./plan-heights";
 import { CandidateCalculationPreview } from "./calculation-preview";
 import { BuildingTaskPanel } from "./task-panel";
 import { CandidateBatchReview } from "./candidate-batch-review";
-import { modelReviewNeeds } from "./review-needs";
+import { candidateReviewRecords, modelReviewNeeds, type ModelReviewNeed } from "./review-needs";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -233,7 +234,7 @@ type OutlineSession = {
   future: OutlineDraft[];
 };
 type PlanTool = "select" | "magic" | "pan" | "measure";
-type CandidateEdit = { name?: string; targetEntityId?: string };
+type CandidateEdit = { name?: string; targetEntityId?: string; note?: string };
 const toolKeys: Record<string, PlanTool | "edit"> = { v: "select", w: "magic", e: "edit", h: "pan", m: "measure" };
 
 const magicPageScale = (session: OutlineSession | null) => session?.magic?.scale ?? null;
@@ -320,6 +321,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     return () => window.removeEventListener("keydown", listener);
   }, []);
   const paramsKey = params.toString();
+  const currentNavigation = useRef(paramsKey);
+  const reviewingTask = useRef<string | null>(null);
+  currentNavigation.current = paramsKey;
   useBrowserLayoutEffect(() => {
     const nextPage = Math.max(1, Number(params.get("page") || 1));
     const nextStorey = params.get("storey") || "";
@@ -459,6 +463,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     || sourceStoreyId !== (currentSource.storeyId || "") || (currentSource.source?.versionId && sourceVersionId !== currentSource.source.versionId))));
   useEffect(() => {
     if (deepLinkPending || modelQuery.isLoading) return;
+    // A successful review removes its candidate before the next-task URL lands.
+    // Do not let that intermediate render overwrite the navigation with an old task.
+    if (reviewingTask.current && params.get("task") === reviewingTask.current) return;
     const next = new URLSearchParams(params);
     next.set("modelState", state);
     next.set("page", String(page));
@@ -475,6 +482,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     next.delete("object");
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
   }, [state, page, selected?.id, selectedCandidate?.id, sourceStoreyId, sourceVersionId, sourceSelectionPinned, deepLinkPending, modelQuery.isLoading]);
+  useEffect(() => {
+    if (params.get("task") !== reviewingTask.current) reviewingTask.current = null;
+  }, [paramsKey]);
 
   const updateObject = useMutation({
     mutationFn: ({ id, entityType, body }: { id: string; entityType: string; body: RecordData }) =>
@@ -639,15 +649,33 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
   });
   const reviewCandidate = useMutation({
-    mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData }) => modelApi<{ entity: { id: string } | null; candidate: { entityType: string }; revision: number }>(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
-    onSuccess: async (data) => {
+    mutationFn: ({ candidateId, body }: { candidateId: string; body: RecordData; advance?: boolean }) => modelApi<{ entity: { id: string } | null; candidate: { entityType: string }; revision: number }>(`/projects/${projectId}/building-model/extraction-candidates/${candidateId}/review`, { ...body, baseRevision: model.revision }, "POST"),
+    onMutate: ({ candidateId, advance }) => {
+      setConflict(undefined);
+      reviewingTask.current = advance ? `candidate:${candidateId}` : null;
+      return { navigation: currentNavigation.current };
+    },
+    onSuccess: async (data, variables, context) => {
       await queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] });
-      setSelectedCandidateId(undefined);
-      const next = new URLSearchParams(params); next.delete("candidate");
+      const before = new URLSearchParams(context?.navigation), current = new URLSearchParams(currentNavigation.current);
+      // Refresh removes an accepted/rejected candidate from the URL. That is not
+      // a user navigation; changing task/source/page or selecting another one is.
+      if (["task", "sourceVersion", "page", "storey", "modelState", "view", "discipline"].some(key => before.get(key) !== current.get(key))
+        || (current.get("candidate") && current.get("candidate") !== before.get("candidate"))) { reviewingTask.current = null; return; }
+      if (variables.advance && params.get("task") === `candidate:${variables.candidateId}`) {
+        const refreshed = adaptBuildingModel(queryClient.getQueryData([`/projects/${projectId}/building-model`]));
+        const nextNeed = modelReviewNeeds(refreshed, evidence.sourceVersionId, state, taskDiscipline)
+          .find(need => need.region?.isCandidate && need.id !== `candidate:${variables.candidateId}` && need.lastReview?.outcome !== "deferred");
+        if (nextNeed?.region) {
+          setParams(new URLSearchParams(taskHref(nextNeed).slice(1)), { replace: true });
+          return;
+        }
+      }
+      const next = new URLSearchParams(params); next.delete("candidate"); next.delete("task");
       if (data.entity) next.set("entity", `${data.candidate.entityType}:${data.entity.id}`);
       setParams(next, { replace: true });
     },
-    onError: (error) => setConflict(error instanceof Error ? error.message : String(error)),
+    onError: (error) => { reviewingTask.current = null; setConflict(error instanceof Error ? error.message : String(error)); },
   });
   const candidateKey = (candidate: BuildingExtractionCandidate) => candidate.candidateId || candidate.id.replace(/^candidate:/, "");
   const mergeRooms = useMutation({
@@ -945,11 +973,11 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const outlineBlocked = outlineSession ? outlineSelfIntersects(outlineSession.draft.polygon) || (outlineSession.target.type === "new_room" && (!outlineSession.name.trim() || !canCreateRoom)) : true;
   const canSaveOutline = Boolean(outlineSession) && !outlineBlocked && !saveOutline.isPending;
   const candidateEdit = selectedCandidate ? candidateEdits[selectedCandidate.id] ?? {} : {};
-  const reviewSelected = (decision: "approved" | "rejected") => {
-    if (!selectedCandidate || reviewCandidate.isPending) return;
+  const reviewSelected = (decision: "approved" | "rejected" | "deferred", advance = false) => {
+    if (!selectedCandidate || reviewCandidate.isPending || outlineSession) return;
     const name = candidateEdit.name?.trim();
     const correction = decision === "approved" ? { ...(name && name !== selectedCandidate.label ? { name } : {}), ...(candidateEdit.targetEntityId ? { targetEntityId: candidateEdit.targetEntityId } : {}) } : {};
-    reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), body: { decision, ...correction } });
+    reviewCandidate.mutate({ candidateId: selectedCandidate.candidateId || selectedCandidate.id.replace(/^candidate:/, ""), advance, body: { decision, ...correction, ...(candidateEdit.note?.trim() ? { note: candidateEdit.note.trim() } : {}) } });
   };
   const editVertex = (index: number, point: BuildingPlanPoint) => {
     const move = (draft: OutlineDraft) => ({ ...draft, polygon: draft.polygon.map((current, i) => i === index ? point : current) });
@@ -1038,6 +1066,9 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const preparationNeedsAttention = currentAutomaticActive || extractionActive || activeExtraction?.status === "failed" || currentAutomaticProcessing?.status === "failed";
   const reviewNeeds = modelReviewNeeds(model, evidence.sourceVersionId, state, taskDiscipline);
   const activeNeed = reviewNeeds.find(need => need.id === params.get("task"));
+  const findingLabel = (need: ModelReviewNeed) => need.finding ? t(({ area_conflict: "buildingTaskAreaConflict", outline_missing: "buildingTaskOutlineMissing",
+    boundary_review: "buildingTaskBoundaryReview", corrected_outline: "buildingTaskCorrectedOutline", outline_review: "buildingTaskCheckOutline" } as const)[need.finding]) : need.field === "outline" ? t("plannerPlanReview") : fieldLabel(need.field, t);
+  const reviewRecords = [...candidateReviewRecords(model, evidence.sourceVersionId).values()];
   const taskHref = (need: (typeof reviewNeeds)[number]) => {
     const next = new URLSearchParams(params);
     next.delete("candidate");
@@ -1061,19 +1092,52 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
     setParams(next);
   };
   const taskCandidate = activeNeed?.region?.isCandidate ? activeNeed.region as BuildingExtractionCandidate : undefined;
-  const taskReview = activeNeed && (taskCandidate ? <div className="grid gap-stack">
-    <Callout>{t(candidateRole(taskCandidate) === "draft-wall" ? "buildingModelDraftWallWarning" : candidateRole(taskCandidate) === "unresolved-anchor" ? "buildingModelAnchorWarning" : "buildingTaskOutlineHint")}</Callout>
-    <Link className="underline underline-offset-2 text-ui-xs" to={taskHref(activeNeed)}>{t("buildingTaskSource")} · {evidence.fileName} · {taskCandidate.page}</Link>
-    {typeof taskCandidate.roomUseProposal?.confidence === "number" && taskCandidate.roomUseProposal.confidence >= 0 && taskCandidate.roomUseProposal.confidence <= 1 && <p className="text-ui-xs text-muted-foreground">{t("buildingTaskUseConfidence")}: {Math.floor(taskCandidate.roomUseProposal.confidence * 100)}% · {taskCandidate.roomUseProposal.roomUse?.replaceAll("_", " ")} · {taskCandidate.roomUseProposal.provider} / {taskCandidate.roomUseProposal.model}</p>}
-    <Field label={t("buildingModelLabel")}><Input aria-label={t("buildingModelLabel")} value={candidateEdits[taskCandidate.id]?.name ?? taskCandidate.label}
-      onChange={event => setCandidateEdits(current => ({ ...current, [taskCandidate.id]: { ...current[taskCandidate.id], name: event.target.value } }))} /></Field>
-    <div className="flex flex-wrap gap-stack">
-      <Button size="sm" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => reviewSelected("approved")}>{t("buildingModelAcceptCandidate")}</Button>
-      <Button size="sm" variant="outline" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => reviewSelected("rejected")}>{t("buildingModelRejectCandidate")}</Button>
-      <Button size="sm" variant="ghost" onClick={() => setTaskPlacement("closed")}>{t("buildingModelProperties")}</Button>
+  const taskActions = taskCandidate && <>
+    {outlineSession ? <div className="flex flex-wrap gap-stack">
+      <Button size="sm" disabled={!canSaveOutline} onClick={() => saveOutline.mutate(outlineSession)}>{t("buildingModelSaveOutline")}</Button>
+      <Button size="sm" variant="outline" disabled={saveOutline.isPending} onClick={() => setOutlineSession(null)}>{t("cancel")}</Button>
+    </div> : <>
+      <Field label={t("buildingTaskReviewNote")}><Textarea aria-label={t("buildingTaskReviewNote")} placeholder={t("buildingTaskNoteHint")} rows={1} maxLength={2000} value={candidateEdits[taskCandidate.id]?.note ?? ""}
+        onChange={event => setCandidateEdits(current => ({ ...current, [taskCandidate.id]: { ...current[taskCandidate.id], note: event.target.value } }))} /></Field>
+      <div className="building-task-decisions">
+        <Button size="sm" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id || (taskCandidate.entityType === "room" && !taskCandidate.polygon?.length)} onClick={() => reviewSelected("approved", true)}>{t("buildingTaskAdoptNext")}</Button>
+        <Button size="sm" variant="outline" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => reviewSelected("rejected", true)}>{t("buildingTaskRejectNext")}</Button>
+        <Button size="sm" variant="outline" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id || !candidateEdits[taskCandidate.id]?.note?.trim()} onClick={() => reviewSelected("deferred", true)}>{t("buildingTaskDeferNext")}</Button>
+      </div>
+    </>}
+    <details className="building-task-limits text-ui-2xs text-muted-foreground"><summary>{t("buildingTaskNoApproval")}</summary><p>{t(taskCandidate.entityType === "room" ? "buildingBatchLimits" : "buildingModelDraftWallWarning")}</p></details>
+  </>;
+  const taskReview = activeNeed && (taskCandidate ? <div className="building-task-review-content">
+    <div className="building-task-finding">
+      <h4 className="text-ui-sm font-medium">{findingLabel(activeNeed)}</h4>
+      <p className="text-ui-xs text-muted-foreground">{t(activeNeed.finding === "area_conflict" ? "buildingTaskAreaConflictHint" : activeNeed.finding === "outline_missing" ? "buildingTaskOutlineMissingHint"
+      : activeNeed.finding === "boundary_review" ? "buildingTaskBoundaryReviewHint" : activeNeed.finding === "corrected_outline" ? "buildingTaskCorrectedHint"
+      : candidateRole(taskCandidate) === "draft-wall" ? "buildingModelDraftWallWarning" : "buildingTaskOutlineHint")}</p>
     </div>
-    <p className="text-ui-2xs text-muted-foreground">{t("buildingTaskNoApproval")}</p>
+    {taskCandidate.areaComparison && <div className="building-task-comparison">
+      <dl>
+        <div><dt>{t("buildingTaskExtractedArea")}</dt><dd>{taskCandidate.areaComparison.estimatedArea.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²</dd></div>
+        <div><dt>{t("buildingTaskPrintedArea")}</dt><dd>{taskCandidate.areaComparison.printedArea.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²</dd></div>
+      </dl>
+      <p className="text-ui-2xs text-muted-foreground">{t("buildingTaskAreaHistory")}</p>
+    </div>}
+    {activeNeed.lastReview?.note && <blockquote className="border-l-2 border-border pl-2 text-ui-xs"><strong>{t("buildingTaskSavedNote")}</strong> {activeNeed.lastReview.note}</blockquote>}
+    <Link className="building-task-source text-ui-xs" to={taskHref(activeNeed)} aria-label={`${t("buildingTaskSource")} · ${evidence.fileName} · ${taskCandidate.page}`}>
+      <FileText className="size-icon-sm shrink-0" aria-hidden="true" /><span>{evidence.fileName} · {t("buildingModelPage")} {taskCandidate.page}</span><ChevronRight className="size-icon-sm shrink-0" aria-hidden="true" />
+    </Link>
+    {!plannerView && typeof taskCandidate.roomUseProposal?.confidence === "number" && taskCandidate.roomUseProposal.confidence >= 0 && taskCandidate.roomUseProposal.confidence <= 1 && <p className="text-ui-xs text-muted-foreground">{t("buildingTaskUseConfidence")}: {Math.floor(taskCandidate.roomUseProposal.confidence * 100)}% · {taskCandidate.roomUseProposal.roomUse?.replaceAll("_", " ")} · {taskCandidate.roomUseProposal.provider} / {taskCandidate.roomUseProposal.model}</p>}
+    {taskCandidate.entityType === "room" && <div className="building-task-tools">
+      <Button size="sm" variant="outline" disabled={!canEditOutline || Boolean(outlineSession) || reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => chooseTool("edit")}><Spline className="size-icon-sm" aria-hidden="true" />{t(taskCandidate.polygon?.length ? "buildingModelEditOutline" : "buildingModelDrawOutline")}</Button>
+      {!taskCandidate.polygon?.length && <Button size="sm" variant="outline" disabled={Boolean(outlineSession) || reviewCandidate.isPending} onClick={() => chooseTool("magic")}><WandSparkles className="size-icon-sm" aria-hidden="true" />{t("buildingModelToolMagic")}</Button>}
+    </div>}
+    <details key={taskCandidate.id} className="building-task-rename">
+      <summary>{t("buildingTaskRename")}</summary>
+      <Field label={t("buildingModelLabel")}><Input aria-label={t("buildingModelLabel")} value={candidateEdits[taskCandidate.id]?.name ?? taskCandidate.label}
+        onChange={event => setCandidateEdits(current => ({ ...current, [taskCandidate.id]: { ...current[taskCandidate.id], name: event.target.value } }))} /></Field>
+    </details>
+    {planTool === "magic" && <p role="status">{t("buildingModelMagicHint")}</p>}
   </div> : <div className="grid gap-stack">
+    <h4 className="text-ui-sm font-medium">{findingLabel(activeNeed)}</h4>
     <p>{t(activeNeed.status === "review" ? "buildingTaskReviewValue" : "buildingTaskMissingValue")}</p>
     {activeNeed.property?.evidence?.length ? activeNeed.property.evidence.map((item, index) => {
       const version = "sourceVersionId" in item ? item.sourceVersionId : undefined;
@@ -1108,15 +1172,11 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
 
   return (
     <div className="building-model is-workbench" data-model-view={params.get("modelView") === "3d" ? "3d" : "2d"}>
-      {plannerView && modelQuery.isSuccess && <section className="grid shrink-0 gap-stack border-b border-border px-page py-cell" aria-label={t("plannerPlanNext")}>
+      {plannerView && modelQuery.isSuccess && <section className="grid shrink-0 gap-[calc(var(--stack)/2)] border-b border-border px-page py-[calc(var(--cell)/2)]" aria-label={t("plannerPlanNext")}>
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-stack">
-          <p className="min-w-0 break-words text-ui-sm"><span className="text-muted-foreground">{t("plannerPlanShown")}: </span>{evidence.fileName}</p>
-          {sourceDocuments.length > 1 && <Button asChild variant="ghost" size="sm"><Link to={`?${choosePlanParams}`}>{t("plannerPlanChange")}</Link></Button>}
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-stack">
-          <div className="min-w-0 flex-1 basis-64">
-            <h2 className="text-ui font-medium">{t("plannerPlanNext")}: {t(preparationNeedsAttention ? "plannerPlanPreparation" : !pageScale ? "plannerPlanScale" : "plannerPlanReview")}</h2>
-            <p className="text-ui-xs text-muted-foreground">{t(preparationNeedsAttention ? "plannerPlanPreparationHint" : !pageScale ? "plannerPlanScaleHint" : "plannerPlanReviewHint")}</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-stack">
+            <p className="min-w-0 break-words text-ui-sm"><span className="text-muted-foreground">{t("plannerPlanShown")}: </span>{evidence.fileName}</p>
+            {sourceDocuments.length > 1 && <Button asChild variant="ghost" size="sm"><Link to={`?${choosePlanParams}`}>{t("plannerPlanChange")}</Link></Button>}
           </div>
           {preparationNeedsAttention
             ? <Button variant="outline" size="sm" onClick={() => setPlanContextOpen(true)}>{t("plannerPlanStatus")}</Button>
@@ -1128,6 +1188,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
               </PopoverContent>
             </Popover> : <Button asChild variant="outline" size="sm"><Link to={`?${reviewPlanParams}`}>{t("plannerPlanReview")}</Link></Button>}
         </div>
+        <p className="text-ui-xs text-muted-foreground">{t(preparationNeedsAttention ? "plannerPlanPreparationHint" : !pageScale ? "plannerPlanScaleHint" : "plannerPlanReviewHint")}</p>
         <details className="text-ui-2xs text-muted-foreground">
           <summary className="cursor-pointer">{t("plannerPlanViewOnly")}</summary>
           <p>{t("plannerPlanScope")}</p>
@@ -1301,7 +1362,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           <div className={`building-model-automatic-canvas is-tool-${activeTool}`}>
             <Suspense fallback={<div className="building-model-pdf-empty"><ScanLine aria-hidden="true" /><p>{t("buildingModelLoadingEvidence")}</p></div>}>
               <LazyPdfEvidenceRenderer projectId={projectId} evidence={evidence} page={page} selectedId={selectedCandidate?.id || selected?.id} regions={[...visibleRegions, ...visibleCandidates]} layerVisibility={layers} transform={viewerTransform} onTransform={setViewerTransform} onLayers={setPdfLayers} onSelect={(id) => { const candidate = sourceCandidates.find((item) => item.id === id); if (candidate) selectCandidate(candidate); else selectRegion(id); }} labels={{ empty: t("buildingModelPdfEmpty"), loading: t("buildingModelPdfLoading"), region: t("buildingModelSelectableRegions"), zoom: t("buildingModelZoomControls"), zoomIn: t("buildingModelZoomIn"), zoomOut: t("buildingModelZoomOut"), fit: t("buildingModelFitView"), magicSurface: planTool === "measure" ? t("buildingModelMeasureHint") : t("buildingModelMagicHint"), point: t("buildingModelOutlinePoint"), addPoint: t("buildingModelOutlineAddPoint") }}
-                hideViewControls colorWallRoles={colorWallRoles} fire={fireOverlayData} tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
+                focusRegion={activeNeed?.region} hideViewControls colorWallRoles={colorWallRoles} fire={fireOverlayData} tool={planTool} measure={planTool === "measure" ? { points: measurePoints, label: measureLabel } : null}
                 onPlanPick={(point) => { if (planTool === "measure") setMeasurePoints((current) => current.length >= 2 ? [point] : [...current, point]); else if (!magicSelect.isPending) magicSelect.mutate(point); }}
                 outline={outlineSession ? { draft: outlineSession.draft, snap: snapToWalls, onBegin: beginOutlineChange, onChange: (draft) => updateOutline((session) => ({ ...session, draft })) } : null} />
             </Suspense>
@@ -1350,10 +1411,20 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
         </aside>}
         {taskPlacement !== "closed" && <BuildingTaskPanel projectId={projectId} placement={taskPlacement} onPlacement={setTaskPlacement} onClose={() => setTaskPlacement("closed")}
           discipline={taskDiscipline} onDiscipline={discipline => { const next = new URLSearchParams(params); next.set("discipline", discipline); next.delete("task"); setParams(next); }}
-          tasks={reviewNeeds.map(need => ({ id: need.id, title: `${need.label} · ${need.field === "outline" ? t("plannerPlanReview") : fieldLabel(need.field, t)}`, detail: [need.region?.groupLabel, need.region?.storeyId && storeyNames.get(need.region.storeyId), need.region && `${t("buildingModelPage")} ${need.region.page}`].filter(Boolean).join(" · "), status: need.status, href: taskHref(need) }))}
-          batch={evidence.sourceVersionId && <CandidateBatchReview projectId={projectId} revision={model.revision ?? 0} sourceVersionId={evidence.sourceVersionId} modelState={state}
-            candidateHref={id => { const need = reviewNeeds.find(need => need.id === `candidate:${id}`); return need ? taskHref(need) : `?${params}`; }} />}
-          activeTaskId={activeNeed?.id} review={taskReview} />}
+          tasks={reviewNeeds.map(need => ({ id: need.id, subject: need.label, title: `${need.label} · ${findingLabel(need)}`, detail: [need.lastReview?.outcome === "deferred" && t("buildingTaskDeferred"), need.region?.groupLabel, need.region?.storeyId && storeyNames.get(need.region.storeyId), need.region && `${t("buildingModelPage")} ${need.region.page}`].filter(Boolean).join(" · "), status: need.status, href: taskHref(need) }))}
+          batch={<>
+            {evidence.sourceVersionId && <CandidateBatchReview projectId={projectId} revision={model.revision ?? 0} sourceVersionId={evidence.sourceVersionId} modelState={state}
+              candidateHref={id => { const need = reviewNeeds.find(need => need.id === `candidate:${id}`); return need ? taskHref(need) : `?${params}`; }} />}
+            {reviewRecords.length > 0 && <details className="text-ui-xs"><summary>{t("buildingTaskRecordedDecisions")}</summary>
+              <p>{t("buildingTaskDecisionCounts").replace("{unchanged}", String(reviewRecords.filter(r => r.outcome === "accepted_unchanged").length))
+                .replace("{corrected}", String(reviewRecords.filter(r => r.outcome === "accepted_corrected").length))
+                .replace("{rejected}", String(reviewRecords.filter(r => r.outcome === "rejected").length))
+                .replace("{deferred}", String(reviewRecords.filter(r => r.outcome === "deferred").length))
+                .replace("{matched}", String(reviewRecords.filter(r => r.outcome === "reconciled").length))}</p>
+              <p className="text-muted-foreground">{t("buildingTaskDecisionLimits")}</p>
+            </details>}
+          </>}
+          activeTaskId={activeNeed?.id} review={taskReview} actions={taskActions} />}
       </div>}
       <footer className="building-model-statusbar">
         <div className="building-model-statusbar-summary">{summary.map((part, index) => index === 0 ? <strong key={index}>{part}</strong> : <span key={index}>{part}</span>)}</div>

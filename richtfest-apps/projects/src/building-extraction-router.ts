@@ -1,5 +1,5 @@
 import { Router, type Request } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, buildingExtractionRequestSchema, buildingExtractionReviewSchema } from "@richtfest/shared";
 import type { AppDeps } from "./deps";
@@ -8,6 +8,7 @@ import { buildingModels, buildingStoreys, buildingRooms, buildingElements, build
 import { reviewedCandidateGeometry } from "./room-use-classifier";
 import { buildingExtractorVersion } from "./plan-extraction";
 import { candidateOutlinesOverlap, candidateReviewScore, candidateReviewScoreVersion } from "./candidate-review-score";
+import { outlineProblem } from "./plan-selection";
 
 const uuid=z.string().uuid();
 const error=(status:number,code:string,message:string)=>Object.assign(new Error(message),{status,code});
@@ -30,6 +31,24 @@ async function persistCandidateReview(tx: any, d: AppDeps, model: any, candidate
   input: z.infer<typeof buildingExtractionReviewSchema>) {
   if(candidate.status!=="unreviewed")throw error(409,"already_reviewed","Candidate was already reviewed");
   if(!job || !["room","element"].includes(candidate.entityType))throw error(422,"invalid_candidate","Unsupported extraction candidate");
+  if(job.status!=="complete")throw error(409,"extraction_incomplete","Wait for extraction to finish before reviewing this candidate");
+  // A worker may requeue a finished job without the model lock. Fence that
+  // transition until review commits; never wait behind its job -> model locks.
+  const [finished]=await tx.select({id:jobs.id}).from(jobs).where(and(eq(jobs.id,job.id),eq(jobs.modelId,model.id),
+    eq(jobs.tenantId,d.tenantId),eq(jobs.status,"complete"),eq(jobs.extractorVersion,job.extractorVersion))).for("share",{skipLocked:true});
+  if(!finished)throw error(409,"extraction_incomplete","Extraction changed or is busy; reload before reviewing this candidate");
+  const geometry=candidate.geometry??{}, score=candidateReviewScore(candidate);
+  if(candidate.entityType==="room" && (!Array.isArray(candidate.evidence) || !candidate.evidence.length
+    || candidate.evidence.some((item:any)=>item?.kind!=="page" || item.sourceVersionId!==job.sourceVersionId || item.page!==job.page)
+    || (geometry.source && (geometry.source.sourceVersionId!==job.sourceVersionId || geometry.source.page!==job.page))))
+    throw error(422,"invalid_candidate_source","Candidate evidence does not match its extraction source and page");
+  // Copy source-bound observations before any candidate name/status changes. Neither
+  // later extraction nor outline editing may rewrite this review's evidence.
+  const reviewSnapshot={jobId:job.id,sourceVersionId:job.sourceVersionId,page:job.page,storeyId:job.storeyId,
+    sourceKey:candidate.sourceKey,extractorVersion:job.extractorVersion,geometry,name:candidate.name,
+    scoreCoverage:score.score,scoreVersion:candidateReviewScoreVersion,scoreChecks:score.checks,scoreBlocked:score.blocked};
+  const outcome=input.decision!=="approved"?input.decision:input.targetEntityId?"reconciled"
+    :geometry.outlineEdit || geometry.merge || (input.name!==undefined && input.name!==candidate.name)?"accepted_corrected":"accepted_unchanged";
   const table=candidate.entityType==="room"?buildingRooms:buildingElements;
   const sourceEntityKey=sourceIdentity(candidate,job);
   const [reconciled]=await tx.select({id:buildingReconciliations.id}).from(buildingReconciliations).where(and(eq(buildingReconciliations.modelId,model.id),
@@ -41,6 +60,12 @@ async function persistCandidateReview(tx: any, d: AppDeps, model: any, candidate
       [entity]=await tx.select().from(table).where(and(eq(table.id,input.targetEntityId),eq(table.modelId,model.id),eq(table.storeyId,job.storeyId),eq(table.tenantId,d.tenantId)));
       if(!entity)throw error(422,"invalid_target","Reconciliation target must have the same entity type on the selected storey");
     } else {
+      // A label's anchor rectangle is not a room outline. Manual review may
+      // accept low QC coverage, but must first draw an actual usable polygon.
+      if(candidate.entityType==="room" && (geometry.quality==="anchor" || !Array.isArray(geometry.polygon)
+        || geometry.polygon.length>1000 || geometry.polygon.some((p:any)=>!p || !Number.isFinite(p.x) || !Number.isFinite(p.y))
+        || outlineProblem(geometry.polygon)))
+        throw error(422,"room_outline_required","Draw a usable room outline first, or reconcile to an existing room");
       const [storey]=await tx.select().from(buildingStoreys).where(and(eq(buildingStoreys.id,job.storeyId),eq(buildingStoreys.modelId,model.id),eq(buildingStoreys.tenantId,d.tenantId)));
       if(!storey)throw error(422,"invalid_storey","Source storey no longer exists");
       // Identity/geometry review does not approve separately inferred area or room use.
@@ -54,14 +79,17 @@ async function persistCandidateReview(tx: any, d: AppDeps, model: any, candidate
     }
   }
   // Explicit reconciliation never overwrites accepted geometry, name or use.
-  await tx.insert(buildingReconciliations).values({tenantId:d.tenantId,modelId:model.id,sourceVersionId:job.sourceVersionId,
+  // Deferral records an open issue, not a terminal source identity or entity.
+  if(input.decision!=="deferred")await tx.insert(buildingReconciliations).values({tenantId:d.tenantId,modelId:model.id,sourceVersionId:job.sourceVersionId,
     sourceEntityKey,targetEntityType:candidate.entityType,targetEntityId:entity?.id??null,
     method:"manual",status:input.decision==="approved"?"accepted":"rejected",reviewedBy:d.actorId,reviewedAt:new Date(),createdBy:d.actorId});
   const [proposal]=await tx.insert(buildingProposals).values({tenantId:d.tenantId,modelId:model.id,proposalType:`plan_${candidate.entityType}_candidate`,targetEntityType:entity?candidate.entityType:null,targetEntityId:entity?.id??null,
-    expectedRevision:input.baseRevision,payload:{candidateId:candidate.id,name:input.name??candidate.name,evidence:candidate.evidence,geometryQuality:(candidate.geometry as any).quality},status:input.decision,createdBy:d.actorId}).returning();
-  await tx.insert(buildingReviews).values({tenantId:d.tenantId,proposalId:proposal.id,decision:input.decision,reviewedBy:d.actorId});
+    expectedRevision:input.baseRevision,payload:{candidateId:candidate.id,name:input.name??candidate.name,evidence:candidate.evidence,geometryQuality:geometry.quality,
+      note:input.note??null,outcome,reviewSnapshot},status:input.decision,createdBy:d.actorId}).returning();
+  await tx.insert(buildingReviews).values({tenantId:d.tenantId,proposalId:proposal.id,decision:input.decision,note:input.note??null,reviewedBy:d.actorId});
+  if(input.decision==="deferred")return {candidate,entity,outcome};
   const [saved]=await tx.update(candidates).set({status:input.decision,name:input.name??candidate.name,targetEntityId:entity?.id??null,reviewedBy:d.actorId,reviewedAt:new Date()}).where(eq(candidates.id,candidate.id)).returning();
-  return {candidate:saved,entity};
+  return {candidate:saved,entity,outcome};
 }
 
 async function bulkPreview(tx: any, d: AppDeps, projectId: string, model: any, input: BulkScope, lock: boolean) {
@@ -74,7 +102,7 @@ async function bulkPreview(tx: any, d: AppDeps, projectId: string, model: any, i
   // Lock only candidates (model is already locked), avoiding the worker's job/model lock order.
   // Do not repeat the full page extraction result for every candidate on that page.
   const query=tx.select({candidate:candidates,job:{id:jobs.id,sourceVersionId:jobs.sourceVersionId,
-    storeyId:jobs.storeyId,page:jobs.page,status:jobs.status}}).from(candidates).innerJoin(jobs,eq(jobs.id,candidates.jobId))
+    storeyId:jobs.storeyId,page:jobs.page,status:jobs.status,extractorVersion:jobs.extractorVersion}}).from(candidates).innerJoin(jobs,eq(jobs.id,candidates.jobId))
     .where(and(eq(candidates.modelId,model.id),eq(candidates.tenantId,d.tenantId),eq(jobs.modelId,model.id),eq(jobs.tenantId,d.tenantId),eq(jobs.sourceVersionId,input.sourceVersionId)))
     .orderBy(candidates.id);
   const rows:any[]=await (lock?query.for("update",{of:candidates}):query);
@@ -93,6 +121,13 @@ async function bulkPreview(tx: any, d: AppDeps, projectId: string, model: any, i
   const reconciliations=await tx.select().from(buildingReconciliations).where(and(eq(buildingReconciliations.modelId,model.id),eq(buildingReconciliations.tenantId,d.tenantId),eq(buildingReconciliations.sourceVersionId,input.sourceVersionId)));
   const rooms=await tx.select().from(buildingRooms).where(and(eq(buildingRooms.modelId,model.id),eq(buildingRooms.tenantId,d.tenantId)));
   const storeys=await tx.select({id:buildingStoreys.id}).from(buildingStoreys).where(and(eq(buildingStoreys.modelId,model.id),eq(buildingStoreys.tenantId,d.tenantId)));
+  const proposals=await tx.select({candidateId:sql<string>`${buildingProposals.payload}->>'candidateId'`,
+    outcome:sql<string>`${buildingProposals.payload}->>'outcome'`}).from(buildingProposals)
+    .where(and(eq(buildingProposals.modelId,model.id),eq(buildingProposals.tenantId,d.tenantId),eq(buildingProposals.proposalType,"plan_room_candidate"),
+      sql`${buildingProposals.payload}->'reviewSnapshot'->>'sourceVersionId' = ${input.sourceVersionId}`))
+    .orderBy(desc(buildingProposals.createdAt),desc(buildingProposals.expectedRevision));
+  const latestOutcomes=new Map<string,string>();
+  for(const proposal of proposals)if(!latestOutcomes.has(proposal.candidateId))latestOutcomes.set(proposal.candidateId,proposal.outcome);
   const reconciled=new Set(reconciliations.map((row:any)=>row.sourceEntityKey)), storeyIds=new Set(storeys.map((row:any)=>row.id));
   const identities=new Map<string,number>();
   for(const {candidate,job} of rows)if(candidate.status!=="superseded"){
@@ -111,7 +146,7 @@ async function bulkPreview(tx: any, d: AppDeps, projectId: string, model: any, i
         && candidateOutlinesOverlap(candidate.geometry,room.geometry)))));
     const competingOutline=scopedRooms.some(other=>other.candidate.id!==candidate.id&&other.job.storeyId===job.storeyId&&other.job.page===job.page
       && candidateOutlinesOverlap(candidate.geometry,other.candidate.geometry));
-    if(scored.blocked || scored.score<input.threshold || !sourceMatches || !storeyIds.has(job.storeyId) || candidate.targetEntityId
+    if(scored.blocked || scored.score<input.threshold || !sourceMatches || !storeyIds.has(job.storeyId) || candidate.targetEntityId || latestOutcomes.get(candidate.id)==="deferred"
       || reconciled.has(key) || (identities.get(key)??0)>1 || canonicalRisk || competingOutline){excludedCount++;continue;}
     eligible.push({id:candidate.id,name:candidate.name,page:job.page,entityType:candidate.entityType,score:scored.score,checks:scored.checks});
   }
@@ -202,11 +237,21 @@ export function createBuildingExtractionRouter(getDeps:(req:Request)=>AppDeps) {
         if(!candidate)throw error(404,"not_found","Candidate not found");
         if(candidate.status!=="unreviewed")throw error(409,"already_reviewed","Candidate was already reviewed");
         const [job]=await tx.select().from(jobs).where(and(eq(jobs.id,candidate.jobId),eq(jobs.tenantId,d.tenantId),eq(jobs.modelId,model.id)));
-        const {candidate:saved,entity}=await persistCandidateReview(tx,d,model,candidate,job,input);
+        if(!job)throw error(422,"invalid_candidate","Extraction does not belong to this building model");
+        const [source]=await tx.select({id:fileVersions.id}).from(fileVersions).innerJoin(files,eq(files.id,fileVersions.fileId))
+          .where(and(eq(fileVersions.id,job.sourceVersionId),eq(fileVersions.tenantId,d.tenantId),eq(fileVersions.status,"ready"),eq(files.projectId,projectId),eq(files.tenantId,d.tenantId)));
+        const [superseded]=await tx.select({id:buildingSupersededSources.id}).from(buildingSupersededSources)
+          .where(and(eq(buildingSupersededSources.modelId,model.id),eq(buildingSupersededSources.tenantId,d.tenantId),eq(buildingSupersededSources.sourceVersionId,job.sourceVersionId))).limit(1);
+        if(!source || superseded)throw error(422,"invalid_source_revision","The source revision is not active and ready in this project");
+        const [storey]=await tx.select({id:buildingStoreys.id}).from(buildingStoreys)
+          .where(and(eq(buildingStoreys.id,job.storeyId),eq(buildingStoreys.modelId,model.id),eq(buildingStoreys.tenantId,d.tenantId)));
+        if(!storey)throw error(422,"invalid_storey","Source storey no longer exists in this building model");
+        const {candidate:saved,entity,outcome}=await persistCandidateReview(tx,d,model,candidate,job,input);
         const revision=model.revision+1;
         await tx.update(buildingModels).set({revision,updatedAt:new Date()}).where(eq(buildingModels.id,model.id));
-        await tx.insert(buildingRevisions).values({tenantId:d.tenantId,modelId:model.id,revision,status:input.decision==="approved"?"approved":"draft",createdBy:d.actorId});
-        await d.audit(tx,"projects.building.extraction_candidate.reviewed","building_extraction_candidate",candidate.id,{projectId,decision:input.decision,targetEntityId:entity?.id,modelRevision:revision});
+        await tx.insert(buildingRevisions).values({tenantId:d.tenantId,modelId:model.id,revision,status:candidate.entityType==="room"||input.decision!=="approved"?"draft":"approved",createdBy:d.actorId});
+        await d.audit(tx,"projects.building.extraction_candidate.reviewed","building_extraction_candidate",candidate.id,
+          {projectId,decision:input.decision,outcome,targetEntityId:entity?.id,modelRevision:revision,reviewScope:"identity_outline_only"});
         return {candidate:saved,entity,revision};
       });res.json(ok(result));
     }catch(e){if((e as any).code && (e as any).status)return res.status((e as any).status).json({data:null,error:{code:(e as any).code},message:(e as Error).message});next(e);}

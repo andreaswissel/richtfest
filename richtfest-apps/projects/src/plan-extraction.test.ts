@@ -37,8 +37,8 @@ test("OCR labels carry their text source and confidence",()=>{
 });
 
 const popplerAvailable=Bun.spawnSync(["which","pdftotext"]).exitCode===0;
-const extract=async(options:SyntheticPlanOptions={})=>{
-  const pdf=syntheticPlanPdf(options),result=await extractPlanLabels((async function*(){yield pdf;})(),1,new AbortController().signal);
+const extract=async(options:SyntheticPlanOptions={}, extractionOptions: Parameters<typeof extractPlanLabels>[3]={})=>{
+  const pdf=syntheticPlanPdf(options),result=await extractPlanLabels((async function*(){yield pdf;})(),1,new AbortController().signal,extractionOptions);
   const [width,height]=options.page??[1190.55,841.89],k=72/25.4*1000/(options.scale??100);
   const area=(g:any)=>g.polygon?(polygonArea(g.polygon)-(g.holes??[]).reduce((s:number,h:any)=>s+polygonArea(h),0))*width*height/k/k:null;
   const rooms=new Map(result.labels.map(l=>[l.name,{...l,area:area(l.geometry)}]));
@@ -61,6 +61,37 @@ test.skipIf(!popplerAvailable)("synthetic CAD plan: doors and windows close, L-s
   expect(connects("Wohnen","Küche")).toBeUndefined();
   expect(result.topologyCoverage).toMatchObject({openingCount:11,doorSwingCount:5,doorSwingSupportedOpeningCount:5});
 });
+test.skipIf(!popplerAvailable)("physical area QC requires dimension chains or planner scale, and preserves conflicts instead of improving the score",async()=>{
+  for(const options of [{}, {titleScale:null}]){
+    const {result}=await extract(options);
+    expect(result.labels).toHaveLength(5);
+    expect(result.labels.every(room=>(room.geometry as any).printedScaleQc==null)).toBe(true);
+  }
+  for(const [options,extractionOptions,source] of [
+    [{dimensionChains:true},{},"dimension_chains_and_title_block"],
+    [{dimensionChains:true,scale:200,titleScale:100},{},"dimension_chains"],
+    [{},{scaleDenominator:100},"planner"],
+  ] as const){
+    const {result,rooms}=await extract(options,extractionOptions);
+    expect(result.scaleObservation?.source).toBe(source);
+    for(const expected of syntheticPlanRooms){
+      const room=rooms.get(expected.label)!,qc=(room.geometry as any).printedScaleQc;
+      expect(qc).not.toBeNull();
+      // Independent fixture dimensions, not the extracted scale, define these ranges.
+      expect(qc.estimatedArea).toBeGreaterThan(expected.area*.88);
+      expect(qc.estimatedArea).toBeLessThan(expected.area*1.01);
+      expect(qc.printedArea).toBe(expected.area);
+      expect(qc.toleranceM2).toBe(Math.max(.5,expected.area*.1));
+      expect(qc.status).toBe(Math.abs(qc.estimatedArea-expected.area)>qc.toleranceM2?"conflict":"unreviewed");
+    }
+    expect(rooms.get("Schlafen")!.geometry).toMatchObject({quality:"enclosed_region",printedScaleQc:{status:"unreviewed"}});
+  }
+  const wrong=await extract({}, {scaleDenominator:200});
+  const conflict=wrong.rooms.get("Schlafen")!;
+  expect(conflict.geometry).toMatchObject({quality:"anchor",printedScaleQc:{status:"conflict",printedArea:27}});
+  expect((conflict.geometry as any).printedScaleQc.estimatedArea).toBeGreaterThan(90);
+  expect(conflict.geometry.polygon).toBeUndefined();
+},60_000);
 test.skipIf(!popplerAvailable)("synthetic CAD plan variants: corner door, curved bay, merged wall fill and other scales",async()=>{
   const corner=await extract({cornerDoor:true});
   expect(corner.connects("Wohnen","Küche")).toMatchObject({kind:"door_swing_jamb"});

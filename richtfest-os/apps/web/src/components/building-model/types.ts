@@ -50,6 +50,8 @@ export type BuildingRegion = {
   mergedFrom?: string[] | null;
   groupLabel?: string | null;
   sourceArea?: unknown;
+  /** Extraction diagnostics, never approved measurements. */
+  areaComparison?: { status: string; estimatedArea: number; printedArea: number; toleranceM2: number } | null;
   roomUseProposal?: {
     status?: string;
     provider?: string;
@@ -399,11 +401,12 @@ function regions(value: unknown, defaultKind?: BuildingRegion["kind"], entityTyp
   });
 }
 
-function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
+function extractionCandidates(value: unknown, jobs: Map<string, BuildingExtractionJob>): BuildingExtractionCandidate[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const row = item as RecordData;
+    const job = jobs.get(asString(row.jobId));
     const geometry = row.geometry && typeof row.geometry === "object" ? row.geometry as RecordData : undefined;
     const polygon = planPolygon(geometry?.polygon ?? row.polygon);
     const parts = planParts(geometry?.parts ?? geometry?.polygons ?? geometry?.sourcePolygons ?? row.sourcePolygons);
@@ -432,9 +435,9 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       label: asString(row.label || row.name, rawKind === "room" ? "Unknown room" : "Unnamed element"),
       roomUse: typeof row.roomUse === "string" ? row.roomUse : null,
       constructionState: typeof row.constructionState === "string" ? row.constructionState : (typeof geometry?.constructionState === "string" ? geometry.constructionState : null),
-      storeyId: typeof row.storeyId === "string" ? row.storeyId : null,
-      sourceVersionId: typeof row.sourceVersionId === "string" ? row.sourceVersionId : (typeof source?.sourceVersionId === "string" ? source.sourceVersionId : (typeof primaryEvidence?.sourceVersionId === "string" ? primaryEvidence.sourceVersionId : null)),
-      page: Math.max(1, asNumber(row.page || source?.page || primaryEvidence?.page, 1)),
+      storeyId: asString(row.storeyId) || job?.storeyId || null,
+      sourceVersionId: (typeof row.sourceVersionId === "string" ? row.sourceVersionId : (typeof source?.sourceVersionId === "string" ? source.sourceVersionId : (typeof primaryEvidence?.sourceVersionId === "string" ? primaryEvidence.sourceVersionId : null))) || job?.sourceVersionId || null,
+      page: Math.max(1, asNumber(row.page || source?.page || primaryEvidence?.page || job?.page, 1)),
       properties: row.properties && typeof row.properties === "object" ? row.properties : undefined,
       box,
       polygon,
@@ -444,6 +447,8 @@ function extractionCandidates(value: unknown): BuildingExtractionCandidate[] {
       mergedFrom: Array.isArray((geometry?.merge as RecordData | undefined)?.members) ? ((geometry!.merge as RecordData).members as RecordData[]).map((member) => asString(member.name)) : null,
       groupLabel: typeof row.groupLabel === "string" ? row.groupLabel : (typeof geometry?.groupLabel === "string" ? geometry.groupLabel : null),
       sourceArea: row.sourceArea ?? geometry?.sourceArea ?? geometry?.printedArea ?? null,
+      areaComparison: geometry?.printedScaleQc && ["estimatedArea", "printedArea", "toleranceM2"].every(key => typeof geometry.printedScaleQc[key] === "number" && Number.isFinite(geometry.printedScaleQc[key]))
+        ? geometry.printedScaleQc as BuildingRegion["areaComparison"] : null,
       roomUseProposal,
       algorithm: typeof row.algorithm === "string" ? row.algorithm : (typeof geometry?.algorithm === "string" ? geometry.algorithm : (typeof topology?.method === "string" ? topology.method : null)),
       competingLabels: Array.isArray(row.competingLabels) ? row.competingLabels.filter((item): item is string => typeof item === "string") : (Array.isArray(geometry?.competingLabels) ? geometry.competingLabels.filter((item): item is string => typeof item === "string") : (Array.isArray(topology?.competingSourceKeys) ? topology.competingSourceKeys.filter((item): item is string => typeof item === "string") : [])),
@@ -584,10 +589,7 @@ export function adaptBuildingModel(input: unknown): BuildingModel {
     proposals: Array.isArray(raw.proposals) ? raw.proposals : [],
     extraction: extractions[0] || undefined,
     extractions,
-    extractionCandidates: extractionCandidates(rawCandidates).map((candidate) => {
-      const job = candidate.jobId ? extractionJobsById.get(candidate.jobId) : undefined;
-      return { ...candidate, storeyId: candidate.storeyId || job?.storeyId || null, sourceVersionId: candidate.sourceVersionId || job?.sourceVersionId || null, page: candidate.page || job?.page || 1 };
-    }),
+    extractionCandidates: extractionCandidates(rawCandidates, extractionJobsById),
     extractionCoverage: coverage && typeof coverage === "object" ? coverage as BuildingExtractionCoverage : undefined,
     supersededSources: Array.isArray(raw.supersededSources) ? raw.supersededSources.flatMap((item: unknown) => {
       const row = item && typeof item === "object" ? item as RecordData : null;

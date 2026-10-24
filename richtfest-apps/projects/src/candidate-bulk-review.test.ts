@@ -182,10 +182,17 @@ const localDatabase = databaseUrl && ["localhost", "127.0.0.1", "[::1]"].include
     expect(audit).toHaveLength(1);
     expect(audit[0].receipt).toMatchObject({ ...scope, scoreVersion: candidateReviewScoreVersion, reviewScope: "identity_outline_only", modelRevision: 1 });
     expect(audit[0].receipt.candidates).toEqual(preview.body.data.eligible);
-    // The single review still accepts low-score candidates and keeps its approved revision semantics.
+    const batchProposals = (await pool.query("select payload from projects_building_proposals order by payload->>'candidateId'")).rows;
+    expect(batchProposals).toHaveLength(2);
+    for (const { payload } of batchProposals) expect(payload).toMatchObject({ note: null, outcome: "accepted_unchanged",
+      reviewSnapshot: { sourceVersionId: source, storeyId: storey, extractorVersion: "test-v1", geometry: geometry(),
+        scoreCoverage: 100, scoreVersion: candidateReviewScoreVersion, scoreBlocked: false, scoreChecks: candidateReviewScore({ entityType: "room", geometry: geometry() }).checks } });
+    // A low-score room may be individually reviewed, without blanket engineering approval.
     const single = await post(`${eighty.id}/review`, { baseRevision: 1, decision: "approved", name: "Individually reviewed" });
     expect(single.status).toBe(200); expect(single.body.data.revision).toBe(2); expect(single.body.data.entity.name).toBe("Individually reviewed");
-    expect((await pool.query("select status from projects_building_revisions where revision=2")).rows).toEqual([{ status: "approved" }]);
+    expect((await pool.query("select status from projects_building_revisions where revision=2")).rows).toEqual([{ status: "draft" }]);
+    expect((await pool.query("select payload from projects_building_proposals where payload->>'candidateId'=$1", [eighty.id])).rows[0].payload)
+      .toMatchObject({ name: "Individually reviewed", outcome: "accepted_corrected", reviewSnapshot: { name: eighty.id, scoreCoverage: 80 } });
     // Overflow is an explicit error, never a silently truncated selection.
     const batch = await add({}, { page: 1000 });
     await pool.query("delete from projects_building_extraction_candidates where id=$1", [batch.id]);
@@ -217,6 +224,129 @@ const localDatabase = databaseUrl && ["localhost", "127.0.0.1", "[::1]"].include
     expect((await pool.query("select count(*)::int n from projects_building_rooms")).rows[0].n).toBe(243);
     expect((await post(`${unknown.id}/review`, { baseRevision: 4, decision: "rejected" })).status).toBe(200);
     expect((await pool.query("select status from projects_building_revisions where revision=5")).rows).toEqual([{ status: "draft" }]);
+
+    // Generic room decisions: persist the unresolved issue without changing the candidate.
+    const pending = await add(), pendingReject = await add();
+    const decisions = ["approved", "rejected", "deferred"];
+    const review = async (id: string, decision: string, extra: any = {}, headers = {}) =>
+      post(`${id}/review`, { baseRevision: await revision(), decision, ...(decision === "deferred" ? { note: "Verify boundary against source" } : {}), ...extra }, headers);
+    const history = async (id: string) => (await pool.query("select * from projects_building_proposals where payload->>'candidateId'=$1 order by expected_revision desc", [id])).rows;
+    const state = async () => {
+      const result: any = {};
+      for (const table of ["projects_building_models", "projects_building_extraction_candidates", "projects_building_rooms", "projects_building_elements",
+        "projects_building_reconciliations", "projects_building_proposals", "projects_building_reviews", "projects_building_revisions"])
+        result[table] = (await pool.query(`select * from ${table} order by id`)).rows;
+      result.audit = (await pool.query("select * from bulk_audit order by receipt->>'modelRevision'")).rows;
+      return result;
+    };
+    const unchanged = async (act: () => Promise<any>, status: number, code?: string) => {
+      const before = await state(), response = await act();
+      expect(response.status).toBe(status);
+      if (code) expect(response.body.error.code).toBe(code);
+      expect(await state()).toEqual(before);
+    };
+    for (const note of [undefined, "", "  ", null, "x".repeat(4001)])
+      await unchanged(() => review(pending.id, "deferred", { note }), 422);
+    for (const extra of [{ outcome: "accepted_unchanged" }, { reviewSnapshot: {} }])
+      await unchanged(() => review(pending.id, "approved", extra), 422);
+    for (const decision of decisions) {
+      await unchanged(() => review(pending.id, decision, {}, { "x-denied": "1" }), 403);
+      await unchanged(() => review(pending.id, decision, {}, { "x-other": "1" }), 404);
+      await unchanged(() => review(foreign.id, decision), 404);
+      await unchanged(() => review(pending.id, decision, { baseRevision: 0 }), 409, "revision_conflict");
+    }
+    // Reject/defer cannot bypass source, job, model, storey or tenant checks either.
+    for (const [table, column, invalid, valid, id, code] of [
+      ["projects_files", "project_id", crypto.randomUUID(), project, file, "invalid_source_revision"],
+      ["projects_files", "tenant_id", otherTenant, tenant, file, "invalid_source_revision"],
+      ["projects_file_versions", "tenant_id", otherTenant, tenant, source, "invalid_source_revision"],
+      ["projects_file_versions", "status", "pending", "ready", source, "invalid_source_revision"],
+      ["projects_building_extractions", "tenant_id", otherTenant, tenant, pending.job, "invalid_candidate"],
+      ["projects_building_extractions", "model_id", crypto.randomUUID(), model, pending.job, "invalid_candidate"],
+      ["projects_building_storeys", "model_id", crypto.randomUUID(), model, storey, "invalid_storey"],
+    ]) {
+      await pool.query(`update ${table} set ${column}=$1 where id=$2`, [invalid, id]);
+      for (const decision of decisions) await unchanged(() => review(pending.id, decision), 422, code);
+      await pool.query(`update ${table} set ${column}=$1 where id=$2`, [valid, id]);
+    }
+    for (const status of ["queued", "running", "failed"]) {
+      await pool.query("update projects_building_extractions set status=$1 where id=$2", [status, pending.job]);
+      for (const decision of decisions) await unchanged(() => review(pending.id, decision), 409, "extraction_incomplete");
+    }
+    await pool.query("update projects_building_extractions set status='complete' where id=$1", [pending.job]);
+    await pool.query("insert into projects_building_superseded_sources (tenant_id,model_id,source_version_id,created_by) values ($1,$2,$3,$4)", [tenant, model, source, actor]);
+    for (const decision of decisions) await unchanged(() => review(pending.id, decision), 422, "invalid_source_revision");
+    await pool.query("delete from projects_building_superseded_sources");
+    const wrongEvidence = await add({}, { evidence: [{ kind: "page", sourceVersionId: otherSource, page: 1 }] });
+    for (const decision of decisions) await unchanged(() => review(wrongEvidence.id, decision), 422, "invalid_candidate_source");
+    for (const decision of decisions)
+      await unchanged(() => review(pending.id, decision, {}, { "x-audit-fail": "1" }), 500);
+    // Simulate a worker holding a completed job before requeue. Reviews fail
+    // closed rather than deadlock against its job -> model lock order.
+    const worker = await pool.connect();
+    try {
+      await worker.query("begin");
+      await worker.query("select id from projects_building_extractions where id=$1 for update", [pending.job]);
+      for (const decision of decisions) await unchanged(() => review(pending.id, decision), 409, "extraction_incomplete");
+      await unchanged(async () => post("adopt", { ...scope, baseRevision: await revision(), scoreVersion: candidateReviewScoreVersion,
+        candidateIds: [pending.id, pendingReject.id] }), 409, "extraction_incomplete");
+    } finally { await worker.query("rollback"); worker.release(); }
+    const candidateBefore = (await pool.query("select * from projects_building_extraction_candidates where id=$1", [pending.id])).rows;
+    const canonicalBeforeDefer = (await pool.query("select * from projects_building_rooms order by id")).rows;
+    const reconciliationsBeforeDefer = (await pool.query("select * from projects_building_reconciliations order by id")).rows;
+    const deferredBase = await revision();
+    const deferred = await review(pending.id, "deferred", { note: "  Boundary requires source check  " });
+    expect(deferred.status).toBe(200);
+    expect(deferred.body.data).toMatchObject({ entity: null, revision: deferredBase + 1, candidate: { status: "unreviewed", reviewedAt: null, reviewedBy: null } });
+    expect((await pool.query("select * from projects_building_extraction_candidates where id=$1", [pending.id])).rows).toEqual(candidateBefore);
+    expect((await pool.query("select * from projects_building_rooms order by id")).rows).toEqual(canonicalBeforeDefer);
+    expect((await pool.query("select * from projects_building_reconciliations order by id")).rows).toEqual(reconciliationsBeforeDefer);
+    const deferredHistory = await history(pending.id);
+    expect(deferredHistory).toHaveLength(1);
+    expect(deferredHistory[0]).toMatchObject({ proposal_type: "plan_room_candidate", status: "deferred", created_by: actor, expected_revision: deferredBase,
+      payload: { candidateId: pending.id, name: pending.id, note: "Boundary requires source check", outcome: "deferred", geometryQuality: "enclosed_region",
+        reviewSnapshot: { jobId: pending.job, sourceVersionId: source, page: pending.page, storeyId: storey, sourceKey: pending.id,
+          extractorVersion: "test-v1", geometry: geometry(), name: pending.id, scoreCoverage: 100, scoreVersion: candidateReviewScoreVersion } } });
+    expect((await pool.query("select decision,note from projects_building_reviews where proposal_id=$1", [deferredHistory[0].id])).rows)
+      .toEqual([{ decision: "deferred", note: "Boundary requires source check" }]);
+    await unchanged(() => review(pending.id, "deferred", { baseRevision: deferredBase }), 409, "revision_conflict");
+    const deferredPreview = await post("preview", { ...scope, baseRevision: await revision() });
+    expect(deferredPreview.status).toBe(200);
+    expect(deferredPreview.body.data.eligible.some((c: any) => c.id === pending.id)).toBe(false);
+    expect(deferredPreview.body.data.eligible.some((c: any) => c.id === pendingReject.id)).toBe(true);
+    await unchanged(async () => post("adopt", { ...scope, baseRevision: await revision(), scoreVersion: candidateReviewScoreVersion, candidateIds: [pending.id, pendingReject.id] }), 409, "candidate_eligibility_changed");
+    expect((await review(pending.id, "approved", { note: "Source checked" })).status).toBe(200);
+    expect((await history(pending.id))[0].payload).toMatchObject({ outcome: "accepted_unchanged", note: "Source checked" });
+    expect((await history(pending.id))[1]).toEqual(deferredHistory[0]);
+    for (const decision of decisions) await unchanged(() => review(pending.id, decision), 409, "already_reviewed");
+    expect((await review(pendingReject.id, "deferred")).status).toBe(200);
+    expect((await review(pendingReject.id, "rejected", { note: "Duplicate source label" })).status).toBe(200);
+    expect((await history(pendingReject.id)).map((p: any) => p.payload.outcome)).toEqual(["rejected", "deferred"]);
+    // A stored outline correction counts as corrected even without a rename; its
+    // exact review snapshot stays unchanged when mutable source observations change.
+    const correctedGeometry = { ...geometry(), quality: "manual_outline", outlineEdit: { method: "draw", editCount: 1 } };
+    const corrected = await add(correctedGeometry);
+    expect((await review(corrected.id, "approved")).status).toBe(200);
+    const correctedHistory = await history(corrected.id);
+    expect(correctedHistory[0].payload).toMatchObject({ outcome: "accepted_corrected", reviewSnapshot: { geometry: correctedGeometry } });
+    await pool.query("update projects_building_extraction_candidates set name='Later observation',geometry='{}' where id=$1", [corrected.id]);
+    await pool.query("update projects_building_extractions set extractor_version='test-v2' where id=$1", [corrected.job]);
+    expect(await history(corrected.id)).toEqual(correctedHistory);
+    // Anchors are reviewable issues, not confirmed geometry; reconcile is explicit
+    // and never overwrites the target. Elements retain their legacy approval path.
+    const anchor = await add({ quality: "anchor", polygon: null });
+    await unchanged(() => review(anchor.id, "approved"), 422, "room_outline_required");
+    await unchanged(() => review(anchor.id, "approved", { targetEntityId: crypto.randomUUID() }), 422, "invalid_target");
+    expect((await review(anchor.id, "deferred")).status).toBe(200);
+    expect((await review(anchor.id, "approved", { targetEntityId: target })).status).toBe(200);
+    expect((await history(anchor.id))[0].payload.outcome).toBe("reconciled");
+    expect((await pool.query("select * from projects_building_rooms where id=$1", [target])).rows).toEqual(targetBefore);
+    for (const polygon of [[], rectangle(-.1), [{ x: .1, y: .1 }, { x: .2, y: .2 }, { x: .3, y: .3 }], [{ x: null, y: .1 }, ...rectangle()]]) {
+      const unusable = await add({ polygon });
+      await unchanged(() => review(unusable.id, "approved"), 422, "room_outline_required");
+    }
+    expect((await review(wall.id, "approved")).status).toBe(200);
+    expect((await pool.query("select status from projects_building_revisions where revision=$1", [await revision()])).rows).toEqual([{ status: "approved" }]);
   } finally {
     server.close(); await pool.end(); await admin.query(`DROP SCHEMA ${namespace} CASCADE`); await admin.end();
   }

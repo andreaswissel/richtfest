@@ -112,8 +112,12 @@ export const buildingExtractionRequestSchema = z.object({
   page: z.number().int().positive().max(2147483647), storeyId: z.string().uuid(),
 }).strict();
 export type BuildingExtractionRequest = z.infer<typeof buildingExtractionRequestSchema>;
-export const buildingExtractionReviewSchema = z.object({
-  baseRevision: z.number().int().nonnegative(), decision: z.enum(["approved", "rejected"]),
+// The browser imports this module's domain helpers, not this server request validator.
+export const buildingExtractionReviewSchema = /* @__PURE__ */ (() => z.object({
+  baseRevision: z.number().int().nonnegative(), decision: z.enum(["approved", "rejected", "deferred"]),
   name: z.string().trim().min(1).max(300).optional(), targetEntityId: z.string().uuid().optional(),
-}).strict();
+  note: z.string().trim().min(1).max(4000).optional(),
+}).strict().refine(input => input.decision !== "deferred" || Boolean(input.note), {
+  path: ["note"], message: "A reason is required to defer a review",
+}))();
 export type BuildingExtractionReview = z.infer<typeof buildingExtractionReviewSchema>;

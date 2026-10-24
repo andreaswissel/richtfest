@@ -754,7 +754,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
     const estimatedArea=normalizedPageAreaM2&&physicalPrinted?effectiveRoomArea(g)*normalizedPageAreaM2:null;
     const physicalConflict=estimatedArea!==null&&physicalPrinted!==undefined&&Math.abs(estimatedArea-physicalPrinted)>Math.max(.5,physicalPrinted*.1);
     const inconsistent=(relative!==null&&(relative<.6||relative>1.4))||physicalConflict;
-    Object.assign(g,{printedScaleQc:estimatedArea!==null?{estimatedArea,printedArea:physicalPrinted,toleranceM2:Math.max(.5,physicalPrinted!*.1),status:physicalConflict?"conflict":"unreviewed",limitations:"Uses the source printed scale as unreviewed evidence, not a verified physical measurement."}:null});
+    Object.assign(g,{printedScaleQc:estimatedArea!==null?{estimatedArea,printedArea:physicalPrinted,toleranceM2:Math.max(.5,physicalPrinted!*.1),status:physicalConflict?"conflict":"unreviewed",limitations:"Uses the supplied plan scale for an unreviewed area comparison, not a verified physical measurement. Agreement does not establish the area basis or room boundary."}:null});
     Object.assign(g,{capacityQc:{relativeToPrintedTarget:relative,tolerance:.4,status:inconsistent?"conflict":"unreviewed"}});
     if(containsOther||inconsistent){
       const prior=g.topology.status as keyof typeof counts;if(prior in counts)counts[prior]=Math.max(0,counts[prior]-1);
@@ -762,7 +762,7 @@ export function inferPlanTopology(labels: PlanLabel[], footprints: PlanFootprint
       g.planRegion=g.labelRegion??g.planRegion;g.quality="anchor";
       delete g.polygon;delete g.holes;delete g.labelRegion;
       g.topology.status="area_ratio_outlier";
-      g.limitations=containsOther?"Source label only: candidate contained another room label center.":physicalConflict?"Source label only: polygon area at the printed source scale differs from the room annotation by more than 10% or 0.5 m². Scale, association and boundary require review.":"Source label only: constrained region differs by more than 40% from its printed-area capacity target. Association and boundary require review.";
+      g.limitations=containsOther?"Source label only: candidate contained another room label center.":physicalConflict?"Source label only: polygon area at the supplied plan scale differs from the room annotation by more than 10% or 0.5 m². Scale, area basis, association and boundary require review.":"Source label only: constrained region differs by more than 40% from its printed-area capacity target. Association and boundary require review.";
     }
   }
   return { rooms, assemblies, selectionMask: { gridSize: n, cells: selectionCells }, coverage: { ...counts, approximateRegionCount:rooms.filter(r=>r.geometry.polygon).length, unresolvedRegionCount:rooms.filter(r=>!r.geometry.polygon).length,labelCount: labels.length, groupedRoomCount:rooms.filter(r=>r.geometry.groupLabel).length, fillRegionCount:supportedFills.length, assemblyCount: assemblies.length, wallCount:walls.length,

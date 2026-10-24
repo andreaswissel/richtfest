@@ -58,6 +58,10 @@ export type SyntheticPlanOptions = {
   curvedBay?: boolean;
   /** Drawing scale denominator (default 1:100) and page size in points (default A3 landscape). */
   scale?: number; page?: [number, number];
+  /** Independent printed title; null omits it, allowing reduced-print and missing-scale checks. */
+  titleScale?: number | null;
+  /** Source dimension figures centred over contiguous known-length segments. */
+  dimensionChains?: boolean;
   /**
    * Walls drawn as stroked outlines only, door arcs as separate short line
    * strokes on the construction layer, and an apartment floor fill with
@@ -119,6 +123,13 @@ export function syntheticPlanPdf(options: SyntheticPlanOptions = {}) {
     return [`${X(hx)} ${Y(hy)} m ${X(ax)} ${Y(ay)} l S`, ...Array.from({ length: 10 }, (_, i) => `${X(p(i)[0])} ${Y(p(i)[1])} m ${X(p(i + 1)[0])} ${Y(p(i + 1)[1])} l S`)].join(" ");
   };
   const stroked = options.strokedWalls ?? false;
+  let dimensionEnd = 0;
+  const dimensions = options.dimensionChains ? [1, 2, 1.5, 3, 1, 2, 1.5, 2].map(value => {
+    const centre = dimensionEnd + value / 2;
+    dimensionEnd += value;
+    // Helvetica at 7 pt: three digits (556 units each) and one decimal point (278).
+    return [-4,-3,-2,-1].map(y=>`BT /F1 7 Tf ${X(centre)} ${Y(y)} Td -6.811 0 Td (${value.toFixed(2)}) Tj ET`).join("\n");
+  }) : [];
   const content = [
     ...(unitFill || stroked ? ["/OC /oc3 BDC 0.9 g", [rect([0, 0, 14, 10]), ...(stroked ? syntheticFurniture.map(rect) : [])].map(path).join(" "), "f* EMC"] : []),
     ...(stroked ? ["/OC /oc1 BDC 0.25 w 0 G", ...walls.map(path).map(p => p + " S"), ...doors.map(segmentedArc), "EMC"] : [
@@ -129,7 +140,9 @@ export function syntheticPlanPdf(options: SyntheticPlanOptions = {}) {
     ...rooms.flatMap(room => [text(latin(room.label), room.labelAt[0] - .4, room.labelAt[1]),
       text(latin(`${room.area.toFixed(2).replace(".", ",")} m²`), room.labelAt[0] - .4, room.labelAt[1] + .45, 7)]),
     ...(unitFill || stroked ? [text("WE 1", 12.5, 9.3)] : []),
-    `BT /F1 12 Tf ${width - 220} 60 Td (Grundriss EG) Tj ET`, `BT /F1 9 Tf ${width - 220} 40 Td (M 1:${options.scale ?? 100}) Tj ET`, "EMC",
+    ...dimensions,
+    `BT /F1 12 Tf ${width - 220} 60 Td (Grundriss EG) Tj ET`,
+    ...(options.titleScale === null ? [] : [`BT /F1 9 Tf ${width - 220} 40 Td (M 1:${options.titleScale ?? options.scale ?? 100}) Tj ET`]), "EMC",
   ].join("\n");
   const layers = ["Konstruktion", "Türen", "Füllflächen", "Beschriftung"];
   const objects = [

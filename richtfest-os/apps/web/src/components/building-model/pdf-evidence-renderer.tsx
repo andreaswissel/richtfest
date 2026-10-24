@@ -169,6 +169,7 @@ export function PdfEvidenceRenderer({
   evidence,
   page,
   selectedId,
+  focusRegion,
   regions,
   layerVisibility,
   onLayers,
@@ -188,6 +189,8 @@ export function PdfEvidenceRenderer({
   evidence: BuildingEvidence;
   page: number;
   selectedId?: string;
+  /** Centre a newly opened review task once; ordinary selection and editing keep the viewport. */
+  focusRegion?: BuildingRegion;
   regions: BuildingRegion[];
   layerVisibility: Record<string, boolean>;
   onLayers: (layers: PdfEvidenceLayer[]) => void;
@@ -318,6 +321,27 @@ export function PdfEvidenceRenderer({
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinchRef = useRef<{ distance: number; zoom: number; pan: { x: number; y: number }; mid: { x: number; y: number }; centre: { x: number; y: number } } | undefined>(undefined);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const focusedTask = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!focusRegion) { focusedTask.current = undefined; return; }
+    const key = `${source}:${page}:${focusRegion.id}`;
+    if (loading || error || outline || focusRegion.page !== page || !focusRegion.box || focusedTask.current === key) return;
+    const frame = requestAnimationFrame(() => {
+      const surface = surfaceRef.current?.getBoundingClientRect();
+      const viewport = evidenceCanvas.current?.getBoundingClientRect();
+      const box = focusRegion.box!;
+      if (!surface?.width || !surface.height || !viewport?.width || !viewport.height) return;
+      const width = surface.width / zoom, height = surface.height / zoom;
+      const nextZoom = Math.min(4, Math.max(1, Math.min(viewport.width / (Math.max(box.width, .05) * width * 1.6), viewport.height / (Math.max(box.height, .05) * height * 1.6))));
+      const centreX = surface.left + surface.width / 2 - pan.x, centreY = surface.top + surface.height / 2 - pan.y;
+      focusedTask.current = key;
+      updateTransform({ zoom: nextZoom, pan: {
+        x: viewport.left + viewport.width / 2 - centreX - (box.x + box.width / 2 - .5) * width * nextZoom,
+        y: viewport.top + viewport.height / 2 - centreY - (box.y + box.height / 2 - .5) * height * nextZoom,
+      } });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [source, page, focusRegion, loading, error, outline]);
   const pinchState = () => {
     const [a, b] = [...pointers.current.values()];
     return { distance: Math.hypot(b!.x - a!.x, b!.y - a!.y), mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 } };

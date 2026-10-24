@@ -4,6 +4,23 @@ import { regionComponentType } from "./component-properties";
 import { buildingInputSources } from "./input-sources";
 import { candidateRole, type BuildingComponentPropertyState, type BuildingModel, type BuildingModelState, type BuildingRegion } from "./types";
 
+export type CandidateReviewOutcome = "accepted_unchanged" | "accepted_corrected" | "reconciled" | "rejected" | "deferred";
+export type CandidateReviewRecord = { outcome: CandidateReviewOutcome; note: string | null; createdAt: string };
+/** Latest source-bound decisions, not accuracy labels or independent reference answers. */
+export function candidateReviewRecords(model: BuildingModel, sourceVersionId: string | undefined) {
+  const records = new Map<string, CandidateReviewRecord>();
+  if (!sourceVersionId || model.supersededSources.some(source => source.sourceVersionId === sourceVersionId)) return records;
+  const outcomes: string[] = ["accepted_unchanged", "accepted_corrected", "reconciled", "rejected", "deferred"];
+  for (const proposal of [...model.proposals].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))) {
+    const payload = proposal.payload;
+    if (!proposal.proposalType?.startsWith("plan_") || payload?.reviewSnapshot?.sourceVersionId !== sourceVersionId
+      || typeof payload.candidateId !== "string" || !outcomes.includes(payload.outcome)) continue;
+    const id = `candidate:${payload.candidateId}`;
+    if (!records.has(id)) records.set(id, { outcome: payload.outcome, note: typeof payload.note === "string" ? payload.note : null, createdAt: String(proposal.createdAt ?? "") });
+  }
+  return records;
+}
+
 export type ModelReviewNeed = {
   id: string;
   entityType: "building" | "storey" | "room" | "element";
@@ -13,6 +30,8 @@ export type ModelReviewNeed = {
   status: "missing" | "review";
   property?: BuildingComponentPropertyState;
   region?: BuildingRegion;
+  finding?: "area_conflict" | "outline_missing" | "boundary_review" | "corrected_outline" | "outline_review";
+  lastReview?: CandidateReviewRecord;
 };
 
 const fireField = (key: string) => key.startsWith("fire") || ["federalState", "stateBuildingCodeEdition", "loadBearing", "stairwellSmokeVent", "garageArea", "garageEnclosure"].includes(key);
@@ -89,7 +108,15 @@ export function modelReviewNeeds(model: BuildingModel, sourceVersionId: string |
     const phase = candidate.constructionState;
     if (candidate.entityType !== "room" && phase && phase !== "unknown" && (state === "proposed" ? !["proposed", "retained"].includes(phase) : state === "demolition" ? !["demolished", "retained"].includes(phase) : ["proposed", "demolished"].includes(phase))) continue;
     const id = candidate.id;
-    needs.set(id, { id, entityType: candidate.entityType === "element" ? "element" : "room", entityId: id, label: candidate.label, field: "outline", status: "review", region: candidate });
+    const finding = candidate.entityType !== "room" ? undefined : candidate.outlineEdit ? "corrected_outline" : candidate.areaComparison?.status === "conflict" ? "area_conflict"
+      : !candidate.polygon?.length && candidate.entityType === "room" ? "outline_missing"
+      : candidate.geometryQuality === "approximate_partition" || candidate.competingLabels?.length ? "boundary_review" : "outline_review";
+    needs.set(id, { id, entityType: candidate.entityType === "element" ? "element" : "room", entityId: id, label: candidate.label, field: "outline", status: "review", region: candidate, finding });
   }
-  return [...needs.values()].sort((a, b) => Number(b.status === "review") - Number(a.status === "review") || a.label.localeCompare(b.label) || a.field.localeCompare(b.field));
+  const records = candidateReviewRecords(model, sourceVersionId);
+  const priority = (need: ModelReviewNeed) => need.lastReview?.outcome === "deferred" ? 5
+    : need.finding === "area_conflict" ? 0 : need.finding === "outline_missing" || need.finding === "boundary_review" ? 1
+    : need.finding === "corrected_outline" ? 2 : 3;
+  return [...needs.values()].map(need => ({ ...need, lastReview: records.get(need.id) }))
+    .sort((a, b) => priority(a) - priority(b) || Number(b.status === "review") - Number(a.status === "review") || a.label.localeCompare(b.label) || a.field.localeCompare(b.field) || a.id.localeCompare(b.id));
 }

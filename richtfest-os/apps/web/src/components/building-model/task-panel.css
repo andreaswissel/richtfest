@@ -51,7 +51,7 @@
 .building-task-panel-body {
   display: flex;
   flex-direction: column;
-  gap: var(--stack);
+  gap: calc(var(--stack) / 2);
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
@@ -59,8 +59,11 @@
   scrollbar-gutter: stable;
 }
 
-.building-task-panel-body > .segmented { flex-shrink: 0; flex-wrap: wrap; max-width: 100%; }
-.building-task-panel-body > .segmented button { flex: 1; white-space: normal; padding-inline: 6px; }
+.building-task-panel-toolbar { flex: 0 0 auto; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.building-task-panel-toolbar > .segmented { width: 100%; flex-wrap: wrap; }
+.building-task-panel-toolbar > .segmented button { flex: 1; white-space: normal; padding-inline: 6px; }
+.building-task-panel-actions { display: grid; flex: 0 0 auto; gap: calc(var(--stack) / 2); padding: 8px; border-top: 1px solid var(--border); max-height: 55%; overflow: auto; }
+.building-task-panel-actions textarea { min-height: var(--control); max-height: calc(var(--control) * 3); font-size: var(--ui-xs); padding-block: calc(var(--cell) / 2); }
 .building-task-panel-section { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .building-task-panel-section + .building-task-panel-section { padding-top: 8px; border-top: 1px solid var(--border); }
 .building-task-panel-section h3 { font-size: var(--ui-xs); font-weight: 600; }
@@ -82,6 +85,33 @@
 .building-task-panel-review .building-model-component-rows > dt { display: flex; align-items: center; gap: 4px; color: var(--muted-foreground); }
 .building-task-panel-review .building-model-component-rows > dt > span { min-width: 0; overflow-wrap: anywhere; }
 .building-task-panel-review .building-model-component-rows > dd { min-width: 0; }
+.building-task-panel-review:focus { outline: none; }
+.building-task-panel-review .building-task-context { padding-bottom: 2px; }
+.building-task-panel-review .building-task-context h3 { font-size: var(--ui); margin-top: 2px; }
+.building-task-review-content { display: grid; gap: calc(var(--stack) / 2); }
+.building-task-finding { display: grid; gap: 4px; }
+.building-task-comparison { padding: calc(var(--stack) / 2); background: var(--muted); border-radius: calc(var(--radius) - 2px); }
+.building-task-comparison dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--stack); }
+.building-task-comparison dt { color: var(--muted-foreground); font-size: var(--ui-xs); }
+.building-task-comparison dd { font-size: calc(var(--ui-lg) * .8); line-height: 1.25; font-weight: 600; font-variant-numeric: tabular-nums; }
+.building-task-comparison p { margin-top: 6px; }
+.building-task-source { display: flex; align-items: center; gap: 6px; padding-block: calc(var(--cell) / 2); border-bottom: 1px solid var(--border); color: inherit; }
+.building-task-source span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.building-task-source:hover span { text-decoration: underline; }
+.building-task-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.building-task-tools > button { flex: 1 1 auto; }
+.building-task-decisions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.building-task-decisions > button:first-child { grid-column: 1 / -1; }
+.building-task-decisions > button { white-space: normal; height: auto; min-height: var(--control-sm); padding-block: calc(var(--cell) / 2); }
+.building-task-panel summary { cursor: pointer; }
+.building-task-panel summary:focus-visible, .building-task-source:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.building-task-panel-body > details { flex-shrink: 0; padding-block: var(--cell); border-top: 1px solid var(--border); }
+.building-task-panel-body > details > summary { font-weight: 500; font-size: var(--ui-xs); }
+.building-task-panel-body > details > summary > span { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.building-task-panel details[open] > summary { margin-bottom: var(--stack); }
+.building-task-rename { font-size: var(--ui-xs); }
+.building-task-limits { text-align: center; }
+.building-task-limits p { text-align: left; }
 .building-task-panel-saved { max-height: 16rem; overflow: auto; overscroll-behavior: contain; }
 .building-task-panel-drop-cue { position: absolute; z-index: 13; top: 0; right: 0; bottom: 0; display: flex; align-items: center; width: min(7rem, 30%); padding: 8px; pointer-events: none; border: 2px dashed var(--foreground); background: color-mix(in oklch, var(--background) 92%, transparent); color: var(--foreground); font-size: var(--ui-xs); font-weight: 600; }
 

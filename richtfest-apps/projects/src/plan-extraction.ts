@@ -138,12 +138,16 @@ export async function analysePlanFile(path: string, page: number, signal: AbortS
         quote: null, status: "confirmed", method: planScaleMethod, limitations: "Scale set by a person for this plan set." }
       : planScale({ words, aspect: pageAspectRatio, pageHeightPoints });
     const metresPerPageHeight = scaleObservation?.metresPerPageHeight ?? null;
-    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,undefined,{doorSwings,metresPerPageHeight,barrierLines,colourLegend:options.colourLegend});
+    // A title alone may describe an unreduced original. Physical-area QC needs
+    // dimension-chain evidence or an explicit planner scale; neither approves a room.
+    const normalizedPageAreaM2 = scaleObservation && scaleObservation.source !== "title_block"
+      ? pageAspectRatio * scaleObservation.metresPerPageHeight ** 2 : undefined;
+    const topology = inferPlanTopology(labels,footprintCandidates,words,1200,supplementaryBarriers,0,fillRegions,pageAspectRatio,normalizedPageAreaM2,{doorSwings,metresPerPageHeight,barrierLines,colourLegend:options.colourLegend});
     // The barrier raster goes to its own table (magic selection), never into the job result.
     const selectionMask = { gridSize: topology.selectionMask.gridSize, encoding: selectionMaskEncoding, data: encodeSelectionMask(topology.selectionMask.cells) };
     return { labels:topology.rooms, footprints: topology.assemblies, selectionMask, pageScale: { pageAspectRatio, metresPerPageHeight }, geometryExtraction:{...geometryExtraction,...(outline?{outlineWalls:outline.stats}:{})},topologyCoverage:topology.coverage, pageCount, method, coverage: "selected_page_source_constrained_topology", geometryQuality: "mixed",
       scaleObservation,
       truncated: allLabels.length > labels.length,
-      reason: "Unreviewed source labels, apartment-contained regions or explicitly approximate wall-constrained partitions, conservative draft-wall proposals from exact elongated rectangular construction fills, and separate unsupported construction fragments. Openings between facing wall ends (optionally supported by door-swing arcs) are closed for segmentation and recorded as unreviewed room connections. Alternative construction-state geometry is retained as evidence but never unioned into the active barrier scenario. Printed areas guide relative partition capacity and flag severe mismatches; the printed scale only bounds plausible opening widths and room sizes. Partition seams are not source walls. Verified doors, wall continuity, thickness, materials, state, physical scale and completeness remain unestablished." };
+      reason: "Unreviewed source labels, apartment-contained regions or explicitly approximate wall-constrained partitions, conservative draft-wall proposals from exact elongated rectangular construction fills, and separate unsupported construction fragments. Openings between facing wall ends (optionally supported by door-swing arcs) are closed for segmentation and recorded as unreviewed room connections. Alternative construction-state geometry is retained as evidence but never unioned into the active barrier scenario. Printed areas guide relative partition capacity and flag severe mismatches. Dimension-chain or planner scale also supports an unreviewed physical-area comparison; title-only scale merely bounds plausible opening widths and room sizes. Partition seams are not source walls. Verified doors, wall continuity, thickness, materials, state, physical scale and completeness remain unestablished." };
   }
 }
