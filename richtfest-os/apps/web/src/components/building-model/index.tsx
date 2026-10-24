@@ -20,7 +20,7 @@ import type { PdfViewerTransform } from "./pdf-evidence-renderer";
 import { wallRoleSchema } from "@richtfest/shared";
 import { maxEscapeDistance } from "@richtfest/shared/fire-protection";
 const wallRoleOptions: string[] = wallRoleSchema.options;
-import { ComponentProperties, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
+import { ComponentProperties, PropertyRow, fieldLabel, WallTypeReview, regionComponentType, wallRoleOf, type ComponentPropertySave } from "./component-properties";
 import { ZoningCheck } from "./zoning-check";
 import { assessFireProtection, FireComponentSection, FireLegend, fireMarks, FireProtectionPanel, fireSummary, pageEscapeRoutes, type FireAnnotation } from "./fire-protection";
 import { BebauungsplanReader, type BebauungsplanReadResult, componentRecord, DataRequest, DescriptionReader, RegulatoryBasis, ExteriorNoiseBasis, type ComponentSourceDocument, type DescriptionReadResult, SoundInsulationOverview, StoreyLevels, storeyLevelLabel } from "./sound-insulation";
@@ -32,6 +32,9 @@ import { IfcBuildingModel } from "./ifc-building-model";
 import { RoomVolumes } from "./room-volumes";
 import { PlanHeights } from "./plan-heights";
 import { CandidateCalculationPreview } from "./calculation-preview";
+import { BuildingTaskPanel } from "./task-panel";
+import { CandidateBatchReview } from "./candidate-batch-review";
+import { modelReviewNeeds } from "./review-needs";
 import "./building-model.css";
 
 const LazyPdfEvidenceRenderer = lazy(async () => import("./pdf-evidence-renderer").then((module) => ({ default: module.PdfEvidenceRenderer })));
@@ -278,6 +281,8 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const [params, setParams] = useSearchParams();
   const fireView = params.get("view") === "fire-protection";
   const plannerView = params.get("perspective") === "planner";
+  const taskPlacement = params.get("tasks") === "floating" ? "floating" : params.get("tasks") === "sidebar" || (plannerView && !params.has("tasks")) ? "sidebar" : "closed";
+  const taskDiscipline = params.get("discipline") === "fire" ? "fire" : "physics";
   const requestedState = params.get("modelState");
   const state: BuildingModelState = states.some((item) => item.value === requestedState) ? requestedState as BuildingModelState : "existing";
   const setModelState = (nextState: BuildingModelState) => {
@@ -496,7 +501,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
       const sourceVersion = region.sourceVersionId || evidence.sourceVersionId;
       return modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision, entityType: region.entityType || "room", entityId: region.id,
         propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual",
-        evidence: sourceVersion ? [{ kind: "page", sourceVersionId: sourceVersion, page: region.page, ...(region.box ? { region: region.box } : {}) }] : [] });
+        evidence: save.evidence ?? (sourceVersion ? [{ kind: "page", sourceVersionId: sourceVersion, page: region.page, ...(region.box ? { region: region.box } : {}) }] : []) });
     },
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
@@ -577,7 +582,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   });
   const saveStoreyProperty = useMutation({
     mutationFn: ({ storeyId, save }: { storeyId: string; save: ComponentPropertySave }) => modelApi(`/projects/${projectId}/building-model/properties`, { baseRevision: model.revision,
-      entityType: "storey", entityId: storeyId, propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual", evidence: [] }),
+      entityType: "storey", entityId: storeyId, propertyKey: save.key, value: save.value, unit: save.unit, provenance: "manual", evidence: save.evidence ?? [] }),
     onMutate: () => setConflict(undefined),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: [`/projects/${projectId}/building-model`] }),
     onError: (error) => setConflict(error instanceof ApiError && error.status === 409 ? t("buildingModelOptimisticConflict") : error.message),
@@ -1031,6 +1036,75 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
   const reviewPlanParams = new URLSearchParams(params);
   reviewPlanParams.set("modelView", "2d");
   const preparationNeedsAttention = currentAutomaticActive || extractionActive || activeExtraction?.status === "failed" || currentAutomaticProcessing?.status === "failed";
+  const reviewNeeds = modelReviewNeeds(model, evidence.sourceVersionId, state, taskDiscipline);
+  const activeNeed = reviewNeeds.find(need => need.id === params.get("task"));
+  const taskHref = (need: (typeof reviewNeeds)[number]) => {
+    const next = new URLSearchParams(params);
+    next.delete("candidate");
+    next.set("task", need.id);
+    next.set("tasks", taskPlacement === "closed" ? "sidebar" : taskPlacement);
+    next.set("modelView", "2d");
+    next.set("sourceSelection", "manual");
+    if (evidence.sourceVersionId) next.set("sourceVersion", evidence.sourceVersionId);
+    if (need.region) {
+      if (need.region.isCandidate) { next.set("candidate", need.region.id); next.delete("entity"); }
+      else next.set("entity", `${need.entityType}:${need.entityId}`);
+      next.set("page", String(need.region.page));
+      if (need.region.storeyId) next.set("storey", need.region.storeyId); else next.delete("storey");
+    }
+    return `?${next}`;
+  };
+  const setTaskPlacement = (placement: "closed" | "sidebar" | "floating") => {
+    const next = new URLSearchParams(params);
+    next.set("tasks", placement);
+    if (placement !== "closed") next.set("modelView", "2d");
+    setParams(next);
+  };
+  const taskCandidate = activeNeed?.region?.isCandidate ? activeNeed.region as BuildingExtractionCandidate : undefined;
+  const taskReview = activeNeed && (taskCandidate ? <div className="grid gap-stack">
+    <Callout>{t(candidateRole(taskCandidate) === "draft-wall" ? "buildingModelDraftWallWarning" : candidateRole(taskCandidate) === "unresolved-anchor" ? "buildingModelAnchorWarning" : "buildingTaskOutlineHint")}</Callout>
+    <Link className="underline underline-offset-2 text-ui-xs" to={taskHref(activeNeed)}>{t("buildingTaskSource")} · {evidence.fileName} · {taskCandidate.page}</Link>
+    {typeof taskCandidate.roomUseProposal?.confidence === "number" && taskCandidate.roomUseProposal.confidence >= 0 && taskCandidate.roomUseProposal.confidence <= 1 && <p className="text-ui-xs text-muted-foreground">{t("buildingTaskUseConfidence")}: {Math.floor(taskCandidate.roomUseProposal.confidence * 100)}% · {taskCandidate.roomUseProposal.roomUse?.replaceAll("_", " ")} · {taskCandidate.roomUseProposal.provider} / {taskCandidate.roomUseProposal.model}</p>}
+    <Field label={t("buildingModelLabel")}><Input aria-label={t("buildingModelLabel")} value={candidateEdits[taskCandidate.id]?.name ?? taskCandidate.label}
+      onChange={event => setCandidateEdits(current => ({ ...current, [taskCandidate.id]: { ...current[taskCandidate.id], name: event.target.value } }))} /></Field>
+    <div className="flex flex-wrap gap-stack">
+      <Button size="sm" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => reviewSelected("approved")}>{t("buildingModelAcceptCandidate")}</Button>
+      <Button size="sm" variant="outline" disabled={reviewCandidate.isPending || selectedCandidate?.id !== taskCandidate.id} onClick={() => reviewSelected("rejected")}>{t("buildingModelRejectCandidate")}</Button>
+      <Button size="sm" variant="ghost" onClick={() => setTaskPlacement("closed")}>{t("buildingModelProperties")}</Button>
+    </div>
+    <p className="text-ui-2xs text-muted-foreground">{t("buildingTaskNoApproval")}</p>
+  </div> : <div className="grid gap-stack">
+    <p>{t(activeNeed.status === "review" ? "buildingTaskReviewValue" : "buildingTaskMissingValue")}</p>
+    {activeNeed.property?.evidence?.length ? activeNeed.property.evidence.map((item, index) => {
+      const version = "sourceVersionId" in item ? item.sourceVersionId : undefined;
+      const sourcePage = "page" in item ? item.page : undefined;
+      const source = model.planSources.find(source => source.source?.versionId === version)?.source;
+      const sourceParams = new URLSearchParams(taskHref(activeNeed).slice(1));
+      if (sourcePage) sourceParams.set("page", String(sourcePage));
+      sourceParams.delete("storey");
+      return <div key={index} className="grid gap-stack">
+        {"quote" in item && item.quote && <blockquote className="border-l-2 border-border pl-2 text-ui-xs">{item.quote}</blockquote>}
+        {source && sourcePage && (version === evidence.sourceVersionId
+          ? <Link className="underline underline-offset-2 text-ui-xs" to={`?${sourceParams}`}>{t("buildingTaskSource")} · {source.fileName} · {sourcePage}</Link>
+          : <a className="underline underline-offset-2 text-ui-xs" href={`${source.downloadUrl}#page=${sourcePage}`} target="_blank" rel="noreferrer">{t("buildingTaskSource")} · {source.fileName} · {sourcePage}</a>)}
+      </div>;
+    }) : <p className="text-ui-xs text-muted-foreground">{t("buildingTaskNoEvidence")}</p>}
+    <fieldset disabled={saveComponentProperty.isPending || saveBuildingProperty.isPending || saveStoreyProperty.isPending || reviewComponentProperty.isPending}>
+      <dl className="building-model-component-rows">
+        <PropertyRow key={activeNeed.id} propertyKey={activeNeed.field} state={activeNeed.property} t={t}
+          pending={saveComponentProperty.isPending || saveBuildingProperty.isPending || saveStoreyProperty.isPending || reviewComponentProperty.isPending}
+          onSave={save => {
+            const sourced = { ...save, evidence: activeNeed.property?.evidence ?? [] };
+            if (activeNeed.region) saveComponentProperty.mutate({ region: activeNeed.region, save: sourced });
+            else if (activeNeed.entityType === "building") saveBuildingProperty.mutate({ buildingId: activeNeed.entityId, save: sourced });
+            else if (activeNeed.entityType === "storey") saveStoreyProperty.mutate({ storeyId: activeNeed.entityId, save: sourced });
+          }}
+          onReview={decision => activeNeed.property && reviewComponentProperty.mutate({ state: activeNeed.property, decision })} />
+      </dl>
+    </fieldset>
+    {(activeNeed.field === "clearRoomHeight" || activeNeed.field === "fireHeight") && <PlanHeights projectId={projectId} model={model} onPage={selectSourcePage} />}
+    <p className="text-ui-2xs text-muted-foreground">{t("buildingTaskNoApproval")}</p>
+  </div>);
 
   return (
     <div className="building-model is-workbench" data-model-view={params.get("modelView") === "3d" ? "3d" : "2d"}>
@@ -1060,6 +1134,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
         </details>
       </section>}
       <div className="building-model-toolbar" role="toolbar" aria-label={t("buildingModelControls")}>
+        <Button variant="outline" size="sm" type="button" aria-label={t("buildingTaskOpen")} aria-pressed={taskPlacement !== "closed"} onClick={() => setTaskPlacement(taskPlacement === "closed" ? "sidebar" : "closed")}>{t("buildingTaskTitle")} · {reviewNeeds.length}</Button>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelOutliner")} title={t("buildingModelOutliner")} aria-pressed={panels.outliner} onClick={() => setPanels((current) => ({ ...current, outliner: !current.outliner }))}><PanelLeft className="size-icon-sm" aria-hidden="true" /></Button>
         <Button variant="ghost" size="icon-sm" type="button" className="building-model-panel-toggle" aria-label={t("buildingModelProperties")} title={t("buildingModelProperties")} aria-pressed={panels.properties} onClick={() => setPanels((current) => ({ ...current, properties: !current.properties }))}><PanelRight className="size-icon-sm" aria-hidden="true" /></Button>
         {!plannerView && <div className="building-model-toolbar-source">
@@ -1203,7 +1278,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           onReviewOutline={reviewSelected} onConfigureScale={() => setPlanContextOpen(true)}
           onSave={(entityType, entityId, value) => saveGeometryHeight.mutate({ entityType, entityId, value })}
           onReview={(state, decision) => reviewComponentProperty.mutate({ state, decision })} />
-      </> : <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}`}>
+      </> : <div className={`building-model-workbench${panels.outliner ? " show-outliner" : ""}${panels.properties ? " show-properties" : ""}${taskPlacement === "sidebar" ? " has-task-sidebar" : ""}`}>
         <Outliner t={t} sections={outlinerSections} grouping={outlinerGrouping} onGrouping={setOutlinerGrouping} groups={outlinerGroups} categories={outlinerCategories} otherPages={unlistedRegions}
           layers={sourceLayers} layerVisible={(layer) => layers[layer.id] ?? layer.visible !== false} onLayer={(id, visible) => setLayers((current) => ({ ...current, [id]: visible }))}
           selectedId={selectedCandidate?.id || selected?.id} isVisible={regionVisible} onVisible={setVisible} areaOf={areaOf}
@@ -1246,7 +1321,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
             </div>}
           </div>
         </section>
-        <aside className="building-model-inspector building-model-properties" aria-label={t("buildingModelInspector")}>
+        {taskPlacement !== "sidebar" && <aside className="building-model-inspector building-model-properties" aria-label={t("buildingModelInspector")}>
           <div className="building-model-panel-header">
             <h2 className="building-model-panel-title">{t("buildingModelProperties")}</h2>
             {selected && !selectedCandidate && !outlineSession && <Link className="building-model-panel-action" to={referenceHref} title={t("buildingModelOpenReference")} aria-label={t("buildingModelOpenReference")}><Link2 className="size-icon-sm" aria-hidden="true" /></Link>}
@@ -1272,7 +1347,13 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
                 wallType={wallRoles.get(selected.id) != null ? <WallTypeReview walls={modelWalls.filter((wall) => wallRoles.get(wall.id) === wallRoles.get(selected.id))} t={t} pending={reviewWallType.isPending} onApprove={(items) => reviewWallType.mutate(items)} /> : undefined} />
               : <Empty>{t("buildingModelSelectObject")}</Empty>}
           </div>
-        </aside>
+        </aside>}
+        {taskPlacement !== "closed" && <BuildingTaskPanel projectId={projectId} placement={taskPlacement} onPlacement={setTaskPlacement} onClose={() => setTaskPlacement("closed")}
+          discipline={taskDiscipline} onDiscipline={discipline => { const next = new URLSearchParams(params); next.set("discipline", discipline); next.delete("task"); setParams(next); }}
+          tasks={reviewNeeds.map(need => ({ id: need.id, title: `${need.label} · ${need.field === "outline" ? t("plannerPlanReview") : fieldLabel(need.field, t)}`, detail: [need.region?.groupLabel, need.region?.storeyId && storeyNames.get(need.region.storeyId), need.region && `${t("buildingModelPage")} ${need.region.page}`].filter(Boolean).join(" · "), status: need.status, href: taskHref(need) }))}
+          batch={evidence.sourceVersionId && <CandidateBatchReview projectId={projectId} revision={model.revision ?? 0} sourceVersionId={evidence.sourceVersionId} modelState={state}
+            candidateHref={id => { const need = reviewNeeds.find(need => need.id === `candidate:${id}`); return need ? taskHref(need) : `?${params}`; }} />}
+          activeTaskId={activeNeed?.id} review={taskReview} />}
       </div>}
       <footer className="building-model-statusbar">
         <div className="building-model-statusbar-summary">{summary.map((part, index) => index === 0 ? <strong key={index}>{part}</strong> : <span key={index}>{part}</span>)}</div>
@@ -1281,7 +1362,7 @@ function PdfBuildingModelMode({ projectId }: { projectId: string }) {
           {outlineSession ? <>
             <Button size="sm" variant="ghost" type="button" disabled={saveOutline.isPending} onClick={() => setOutlineSession(null)}>{t("cancel")}</Button>
             <Button size="sm" type="button" disabled={!canSaveOutline} onClick={() => saveOutline.mutate(outlineSession)} title={t("buildingModelOutlineLogged")}>{saveOutline.isPending ? t("loading") : t("buildingModelSaveOutline")}<kbd>↵</kbd></Button>
-          </> : selectedCandidate && params.get("modelView") !== "3d" ? <>
+          </> : selectedCandidate && params.get("modelView") !== "3d" && !(taskPlacement !== "closed" && taskCandidate?.id === selectedCandidate.id) ? <>
             <Button size="sm" variant="outline" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("rejected")}>{t("buildingModelRejectCandidate")}</Button>
             <Button size="sm" type="button" disabled={reviewCandidate.isPending} onClick={() => reviewSelected("approved")}>{t("buildingModelAcceptCandidate")}<kbd>↵</kbd></Button>
           </> : null}

@@ -41,6 +41,47 @@ classified page numbers are shown. A truncated extraction remains explicitly mar
 Source descriptions and plan-set replacement controls have separate rows; replacing
 a plan set still requires an explicit choice and action.
 
+## Review work directly beside the plan
+
+In the PDF building editor, **Tasks** opens a discipline-specific review queue for
+the selected PDF and construction state. The Planner perspective opens it by default.
+Choose a task to open its object and source page, inspect the proposed value and
+confirm, correct or reject it in the same panel. Source-linked property evidence
+retains its original page; an inherited storey height is reviewed on the storey,
+not copied into every room. The queue shows known missing inputs and unreviewed
+proposals, not a complete assessment or a professional approval.
+
+**Float** moves the panel into the editor; drag its grip or use the arrow keys
+(Shift for larger steps). Drag to the right edge or choose **Dock** to return it
+to the sidebar. On narrow screens it overlays the editor and can be closed with
+the header control. Placement and the selected task stay in the URL; the floating
+position is temporary UI state. **Saved tasks** separately shows open project
+planning records for the chosen discipline, across phases. Completing a saved
+task does not approve a model value.
+
+### Batch-adopt room outlines without claiming statistical confidence
+
+**Adopt by check score** previews eligible room outlines from one active PDF
+revision. Five recorded checks contribute 20 points each: enclosed boundary,
+unambiguous source label, shape plausibility, printed-scale area comparison and
+page-local area consistency. This is check coverage, **not a calibrated probability
+of correctness**. The default threshold of 90 requires all five checks; a missing
+printed-scale comparison caps the score at 80. OCR and room-use classifier confidence
+never substitute for geometry checks. Walls and unsupported candidates remain unscored.
+
+Conflicting or invalid outlines, ambiguous source identities and possible matches
+to existing rooms remain excluded regardless of threshold. More than 1,000 pending
+rooms in the selected source returns an explicit limit error rather than a truncated
+preview; unscored wall fragments do not consume this room limit.
+
+After inspecting the preview, explicitly confirm and adopt the listed outlines.
+The server rechecks every selected candidate against the model revision and score
+version, then saves the entire batch atomically with an audit receipt. Existing
+geometry is never overwritten. The new revision remains a **draft**: room use,
+areas, measurements and engineering approvals are not granted by this action.
+Changed inputs require a fresh preview. A calibrated confidence threshold still
+needs independent, professionally reviewed backtest answers.
+
 ## Navigate floors and inspect the enclosure
 
 **All floors** shows the provisional stack. Without saved site alignment it is the initial view. Select a floor in the linked floor

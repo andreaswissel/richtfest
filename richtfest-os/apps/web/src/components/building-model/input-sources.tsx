@@ -11,7 +11,7 @@ type T = ReturnType<typeof useT>;
 type SourceGroup = { fields: string[]; reason: Parameters<T>[0]; documents: DocumentType[]; view?: string };
 
 /** Every component input has an evidence route. Document types identify candidates, never facts. */
-const buildingInputSources: SourceGroup[] = [
+export const buildingInputSources: SourceGroup[] = [
   { fields: ["federalState"], reason: "buildingInputAddress", documents: [], view: "details" },
   { fields: ["bebauungsplan", "bebauungsplanNoise", "bebauungsplanAreaType", "bebauungsplanGrz", "bebauungsplanGfz", "bebauungsplanStoreys", "bebauungsplanHeight", "bebauungsplanBauweise", "gfzCountingBasis"], reason: "buildingInputPlanning", documents: ["development_plan", "permit"], view: "feasibility&study=site&step=limits" },
   { fields: ["stateBuildingCodeEdition", "vvtbEdition", "din4109Edition"], reason: "buildingInputEdition", documents: ["permit", "acoustic_report", "fire_safety_concept"] },

@@ -20,10 +20,77 @@ import { buildingPresentation, buildingSiteTransform } from "../src/components/b
 import { geometryArea } from "@richtfest/shared/site-geometry";
 import { BuildingConnections } from "../src/components/building-model/connections";
 import { buildingComponentProperties, createEmptySiteAssessmentInput } from "@richtfest/shared";
+import { modelReviewNeeds } from "../src/components/building-model/review-needs";
 
 const en = { ...commonEn, ...buildingEn };
 const de = { ...commonDe, ...buildingDe };
 const projectId = "550e8400-e29b-41d4-a716-446655440000";
+
+test("model review needs stay within the chosen source and state, and review inherited heights at their owner", () => {
+  const raw = {
+    buildings: [{ id: "b", name: "House" }], storeys: [{ id: "s", buildingId: "b", name: "Ground" }],
+    rooms: [
+      { id: "a", name: "Office", storeyId: "s", constructionState: "existing", geometry: { source: { sourceVersionId: "v", page: 1 } } },
+      { id: "b", name: "Living", storeyId: "s", constructionState: "existing", geometry: { source: { sourceVersionId: "v", page: 1 } } },
+      { id: "other", name: "Other plan", storeyId: "s", geometry: { source: { sourceVersionId: "other", page: 1 } } },
+      { id: "future", name: "Future", storeyId: "s", constructionState: "proposed", geometry: { source: { sourceVersionId: "v", page: 1 } } },
+    ],
+    properties: [{ id: "height", entityType: "storey", entityId: "s", propertyKey: "clearRoomHeight", current: { value: 2.75, reviewStatus: "unreviewed", provenance: "inferred" } }],
+  };
+  const needs = modelReviewNeeds(adaptBuildingModel(raw), "v", "existing", "physics");
+  expect(needs.map(need => [need.id, need.status])).toEqual([["storey:s:clearRoomHeight", "review"]]);
+  raw.properties[0]!.current.reviewStatus = "approved";
+  expect(modelReviewNeeds(adaptBuildingModel(raw), "v", "existing", "physics")).toEqual([]);
+  const withoutHeight = adaptBuildingModel({ ...raw, properties: [] });
+  expect(modelReviewNeeds(withoutHeight, "v", "existing", "physics").map(need => need.entityId).sort()).toEqual(["a", "b"]);
+  expect(modelReviewNeeds(withoutHeight, "v", "proposed", "physics").map(need => need.entityId)).toEqual(["future"]);
+  expect(modelReviewNeeds({ ...withoutHeight, supersededSources: [{ sourceVersionId: "v", fileName: "old", supersededByVersionId: "new" }] }, "v", "existing", "physics")).toEqual([]);
+});
+
+test("model review needs separate disciplines, retain rejected data as missing, and do not infer rescue designation", () => {
+  const raw = { elements: [{ id: "w", name: "Window", kind: "window", geometry: { source: { sourceVersionId: "v", page: 1 } } }],
+    properties: [
+      { id: "type", entityType: "element", entityId: "w", propertyKey: "componentType", current: { value: "window", reviewStatus: "approved" } },
+      { id: "acoustic", entityType: "element", entityId: "w", propertyKey: "soundReductionIndex", current: { value: 38, reviewStatus: "rejected" } },
+      { id: "width", entityType: "element", entityId: "w", propertyKey: "openingWidth", current: { value: 1, reviewStatus: "approved" } },
+    ] };
+  const model = adaptBuildingModel(raw);
+  expect(modelReviewNeeds(model, "v", "existing", "physics").map(need => [need.field, need.status])).toEqual([["soundReductionIndex", "missing"]]);
+  expect(modelReviewNeeds(model, "v", "existing", "fire").map(need => need.field)).toEqual(["fireRescueWindow"]);
+  const designated = adaptBuildingModel({ ...raw, properties: [...raw.properties, { id: "rescue", entityType: "element", entityId: "w", propertyKey: "fireRescueWindow", current: { value: true, reviewStatus: "approved" } }] });
+  expect(modelReviewNeeds(designated, "v", "existing", "fire").map(need => need.field).sort()).toEqual(["fireRescueClearHeight", "fireRescueClearWidth", "fireRescueLocation", "fireRescueOpenableInside", "fireRescueSillHeight"]);
+});
+
+test("model review needs include source-scoped unreviewed room and wall proposals before canonical objects exist", () => {
+  const model = adaptBuildingModel({ extractionCandidates: [
+    { id: "room", entityType: "room", name: "Office", sourceVersionId: "v", page: 3, status: "unreviewed", geometry: { quality: "enclosed_region" } },
+    { id: "wall", entityType: "element", sourceVersionId: "v", page: 3, status: "unreviewed", constructionState: "proposed", geometry: { quality: "draft_wall" } },
+    { id: "other", entityType: "room", sourceVersionId: "other", page: 3, status: "unreviewed" },
+    { id: "done", entityType: "room", sourceVersionId: "v", page: 3, status: "accepted" },
+    { id: "footprint", entityType: "element", sourceVersionId: "v", page: 3, status: "unreviewed", geometry: { quality: "footprint" } },
+  ] });
+  expect(modelReviewNeeds(model, "v", "existing", "physics").map(need => need.id)).toEqual(["candidate:room"]);
+  expect(modelReviewNeeds(model, "v", "proposed", "fire").map(need => need.id).sort()).toEqual(["candidate:room", "candidate:wall"]);
+});
+
+test("a review task opens the exact saved value and source page without changing its target room", () => {
+  const raw = { planSources: [{ id: "plan", page: 1, pageCount: 8, storeyId: "s", source: { versionId: "v", fileName: "Plans.pdf" } }],
+    rooms: [{ id: "room", name: "Office", storeyId: "s", geometry: { source: { sourceVersionId: "v", page: 1 } } }],
+    properties: [{ id: "height", entityType: "room", entityId: "room", propertyKey: "clearRoomHeight", current: { value: 2.75, reviewStatus: "unreviewed", provenance: "inferred", evidence: [{ kind: "page", sourceVersionId: "v", page: 6, quote: "Clear height 2.75 m" }] } }],
+  };
+  const search = "?view=building-model&perspective=planner&sourceVersion=v&sourceSelection=manual&task=room:room:clearRoomHeight";
+  for (const page of [1, 6]) {
+    const html = render(raw, `${search}&page=${page}`);
+    expect(html).toContain('data-task-placement="sidebar"');
+    expect(html).toContain("Clear height 2.75 m");
+    expect(html).toContain('value="2.75"');
+    expect(html).toContain(en.buildingComponentApprove);
+    const sourceLink = [...html.matchAll(/href="([^"]+)"[^>]*>Open source page/g)][0]?.[1];
+    expect(sourceLink).toBeDefined();
+    const next = new URL(sourceLink!.replaceAll("&amp;", "&"), "https://app.example").searchParams;
+    expect([next.get("page"), next.get("sourceVersion"), next.get("task")]).toEqual(["6", "v", "room:room:clearRoomHeight"]);
+  }
+});
 
 test("planner chooses a source explicitly without changing Nerd mode or blocking evidence links", () => {
   const model = {

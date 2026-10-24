@@ -1,0 +1,96 @@
+.building-task-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  border-left: 1px solid var(--border);
+}
+
+.building-task-panel[data-task-placement="sidebar"] {
+  grid-column: -2 / -1;
+  grid-row: 1;
+}
+
+.building-task-panel[data-task-placement="floating"] {
+  position: absolute;
+  z-index: 12;
+  width: min(25rem, 100%);
+  height: min(36rem, 85%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgb(0 0 0 / .18));
+}
+
+.building-task-panel-header {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.building-task-panel-header h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ui-sm);
+  font-weight: 600;
+}
+
+.building-task-panel .building-task-panel-drag {
+  cursor: grab;
+  touch-action: none;
+}
+
+.building-task-panel .building-task-panel-drag:active { cursor: grabbing; }
+
+.building-task-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  scrollbar-gutter: stable;
+}
+
+.building-task-panel-body > .segmented { flex-shrink: 0; flex-wrap: wrap; max-width: 100%; }
+.building-task-panel-body > .segmented button { flex: 1; white-space: normal; padding-inline: 6px; }
+.building-task-panel-section { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.building-task-panel-section + .building-task-panel-section { padding-top: 8px; border-top: 1px solid var(--border); }
+.building-task-panel-section h3 { font-size: var(--ui-xs); font-weight: 600; }
+.building-task-panel-section > [data-slot="input"] { height: var(--control-sm); font-size: var(--ui-xs); }
+.building-task-panel-list { list-style: none; margin: 0; padding: 0; }
+.building-task-panel-list li + li { border-top: 1px solid var(--border); }
+.building-task-panel-link { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; min-width: 0; padding: var(--cell) 4px; border-radius: calc(var(--radius) - 4px); color: inherit; text-decoration: none; }
+.building-task-panel-link > span:first-child { min-width: 0; }
+.building-task-panel-link small { display: block; }
+.building-task-panel-link:hover, .building-task-panel-link[aria-current] { background: var(--muted); }
+.building-task-panel-link:focus-visible, .building-task-panel-review h3 a:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.building-task-panel-link [data-slot="badge"] { max-width: 45%; height: auto; white-space: normal; font-size: var(--ui-2xs); }
+.building-task-panel-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.building-task-panel-pagination > span { flex: 1; }
+.building-task-panel-review { min-width: 0; }
+.building-task-panel-review > * { min-width: 0; max-width: 100%; }
+.building-task-panel-review > .grid, .building-task-panel-review .flex { gap: calc(var(--stack) / 2); }
+.building-task-panel-review .building-model-component-rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--stack); }
+.building-task-panel-review .building-model-component-rows > dt { display: flex; align-items: center; gap: 4px; color: var(--muted-foreground); }
+.building-task-panel-review .building-model-component-rows > dt > span { min-width: 0; overflow-wrap: anywhere; }
+.building-task-panel-review .building-model-component-rows > dd { min-width: 0; }
+.building-task-panel-saved { max-height: 16rem; overflow: auto; overscroll-behavior: contain; }
+.building-task-panel-drop-cue { position: absolute; z-index: 13; top: 0; right: 0; bottom: 0; display: flex; align-items: center; width: min(7rem, 30%); padding: 8px; pointer-events: none; border: 2px dashed var(--foreground); background: color-mix(in oklch, var(--background) 92%, transparent); color: var(--foreground); font-size: var(--ui-xs); font-weight: 600; }
+
+@media (max-width: 1100px) {
+  .building-model-workbench > .building-task-panel[data-task-placement="sidebar"] { position: absolute; z-index: 12; inset: 0 0 0 auto; width: min(23rem, 100%); box-shadow: var(--shadow-lg); }
+}
+
+@media (max-width: 720px) {
+  /* Wrapped project controls must not consume the panel's entire available height. */
+  .building-model.is-workbench:has(.building-task-panel) { overflow-y: auto; }
+  .building-model-workbench:has(.building-task-panel) { min-height: min(28rem, 60dvh); flex-shrink: 0; }
+}

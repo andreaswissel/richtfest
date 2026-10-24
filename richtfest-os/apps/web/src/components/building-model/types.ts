@@ -245,6 +245,7 @@ export type BuildingComponentPropertyState = {
   /** Quote of the first evidence item, such as "Printed scale 1:100" or a Baubeschreibung sentence. */
   evidenceQuote?: string | null;
   evidenceKind?: string | null;
+  evidence?: import("@richtfest/shared").BuildingEvidence[];
 };
 
 export type BuildingModel = {
@@ -475,6 +476,7 @@ function componentStates(entityProperties: RecordData[]): Record<string, Buildin
     reviewedValue: property.reviewed ? property.reviewed.value : null,
     evidenceQuote: typeof property.current.evidence?.[0]?.quote === "string" ? property.current.evidence[0].quote : null,
     evidenceKind: typeof property.current.evidence?.[0]?.kind === "string" ? property.current.evidence[0].kind : null,
+    evidence: Array.isArray(property.current.evidence) ? property.current.evidence : [],
   }]));
 }
 
